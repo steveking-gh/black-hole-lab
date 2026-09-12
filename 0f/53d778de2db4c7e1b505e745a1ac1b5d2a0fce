@@ -1,0 +1,45 @@
+src/app.rs
+  s_5e464e0dde83ec::t_caa8852341f2ca 103-105
+  s_5e464e0dde83ec::t_876338ffbec356 332
+  s_5e464e0dde83ec::t_5a347f5fbe8aec 74-76,102,106,122,283,330-331,333
+  s_5e464e0dde83ec::t_891534af37ae4f 334-335
+src/gui/controls.rs
+  s_5e464e0dde83ec::t_876338ffbec356 37,211
+  s_5e464e0dde83ec::t_5a347f5fbe8aec 38-39,63,209-210,212
+src/physics/kerr_schild.rs
+  s_5e464e0dde83ec::t_7789341a0925d0 1069-1074,1076-1157
+  s_5e464e0dde83ec::t_90139bee3cdb78 1075
+  s_5e464e0dde83ec::t_0dded9072cadac 288-318
+src/gui/mod.rs
+  s_5e464e0dde83ec::t_00b749fb9111bd 6
+src/gui/river.rs
+  s_5e464e0dde83ec::t_08c3035166cdce 56-66
+  s_5e464e0dde83ec::t_136247328c07b9 1-47,55,67-150,152-156,158-162,164,166-202,204,206-241,243,255-296,300-318,331-332,334-346
+  s_5e464e0dde83ec::t_caa8852341f2ca 48-53
+  s_5e464e0dde83ec::t_c078940a516ec8 242,244-254
+  s_5e464e0dde83ec::t_19f2bb51aabe28 319-330,333
+  s_5e464e0dde83ec::t_fedca9c9f41b13 297-299
+  s_5e464e0dde83ec::t_3084e1e7edcd73 151,157,163,165
+  s_5e464e0dde83ec::t_afe1e0c5af6ba4 203,205
+  s_5e464e0dde83ec::t_6fd2d835d528c9 54
+src/gui/theme.rs
+  s_5e464e0dde83ec::t_88e1932550b26f 58-93
+src/gui/spatial_canvas.rs
+  s_5e464e0dde83ec::t_935f5441cfab47 2,14-16,25,38,266-272,314,327,361,376,402,427
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "0f53d778de2db4c7e1b505e745a1ac1b5d2a0fce",
+  "prompts": {},
+  "sessions": {
+    "s_5e464e0dde83ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc7a846d-d13c-4554-b9bf-dc2dee2f30eb",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
