@@ -2,11 +2,29 @@ use crate::physics::geodesic::GeodesicState;
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::tetrad::Tetrad;
 
-#[derive(Debug, Clone, PartialEq)]
+/// How an observer's worldline is generated. Every mode pins down a contravariant 4-velocity
+/// u^mu at the observer's current event, and all telemetry (coordinate velocity, proper velocity,
+/// proper acceleration) is derived from that single object rather than from per-mode formulas.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ObserverMode {
+    /// Timelike geodesic: ingoing free fall with conserved energy E and angular momentum L.
+    /// Exists everywhere in the equatorial plane, including at and inside both horizons, and has
+    /// identically zero proper acceleration (that is what "geodesic" means).
     FreeFall,
+    /// Worldline positioned by the user's mouse. For this step its telemetry uses the free-fall
+    /// 4-velocity; a later step defines it as a boost of the free-fall tetrad by (beta_r, beta_phi).
     ManualDrag,
-    Stationary,
+    /// Static observer: fixed r *and* fixed phi, u^mu = (1, 0, 0) / sqrt(-g_tt).
+    /// The Killing vector d/dt is timelike only outside the equatorial static limit, so this
+    /// observer exists only where g_tt = -(1 - 2M/r) < 0, i.e. r > 2M. Inside the ergosphere
+    /// frame dragging makes "holding phi fixed" a spacelike motion, so no rocket can do it.
+    Static,
+    /// Zero-angular-momentum observer (ZAMO): fixed r, but swept around by frame dragging at
+    /// omega(r) = -g_tphi / g_phiphi, so that u_phi = 0. A fixed-r worldline is timelike only where
+    /// the r direction is spacelike, i.e. outside the outer horizon r+ (between r+ and r- the
+    /// coordinate r is timelike and nothing can hover). Unlike the static observer, the ZAMO
+    /// survives the whole ergosphere 2M > r > r+.
+    Zamo,
 }
 
 #[allow(dead_code)]
@@ -122,6 +140,127 @@ impl Observer {
         self.phi + metric.a.atan2(self.r.max(1e-9))
     }
 
+    /// Can the currently selected mode exist at the observer's radius?
+    /// A static observer needs a timelike d/dt (g_tt < 0, i.e. r > 2M on the equator); a ZAMO
+    /// needs a timelike fixed-r worldline, which only exists outside the outer horizon r+.
+    /// Free fall and manual drag are always admissible.
+    pub fn mode_admissible(&self, metric: &KerrSchild) -> bool {
+        Self::mode_admissible_at(self.mode, metric, self.r)
+    }
+
+    fn mode_admissible_at(mode: ObserverMode, metric: &KerrSchild, r: f64) -> bool {
+        match mode {
+            ObserverMode::Static => metric.metric_components(r)[0][0] < 0.0,
+            ObserverMode::Zamo => r > metric.outer_horizon(),
+            ObserverMode::FreeFall | ObserverMode::ManualDrag => true,
+        }
+    }
+
+    /// Contravariant 4-velocity u^mu = (u^t, u^r, u^phi) at the observer's current event,
+    /// normalised so that g_{mu nu} u^mu u^nu = -1.
+    ///
+    /// If the selected mode cannot exist at the current radius (see `mode_admissible`) the
+    /// free-fall 4-velocity is returned instead, so the display never shows a spacelike "observer".
+    pub fn four_velocity(&self, metric: &KerrSchild) -> [f64; 3] {
+        self.four_velocity_at(metric, self.r)
+    }
+
+    /// `four_velocity` for the same family of worldlines evaluated at an arbitrary radius.
+    /// Because the metric depends on r alone, every mode's components are functions of r only,
+    /// which is what makes the 4-acceleration computable by differentiating in r.
+    fn four_velocity_at(&self, metric: &KerrSchild, r: f64) -> [f64; 3] {
+        let r = r.max(1e-4);
+        match self.mode {
+            ObserverMode::Static if Self::mode_admissible_at(ObserverMode::Static, metric, r) => {
+                // u^mu = (1, 0, 0) / sqrt(-g_tt): the normalised time-translation Killing vector.
+                let g_tt = metric.metric_components(r)[0][0];
+                [1.0 / (-g_tt).sqrt(), 0.0, 0.0]
+            }
+            ObserverMode::Zamo if Self::mode_admissible_at(ObserverMode::Zamo, metric, r) => {
+                // u^mu = gamma (1, 0, omega) with omega = -g_tphi/g_phiphi (so u_phi = 0) and
+                // gamma = 1 / sqrt(-(g_tt + 2 omega g_tphi + omega^2 g_phiphi)).
+                let g = metric.metric_components(r);
+                let omega = metric.frame_dragging_omega(r);
+                let norm_sq = -(g[0][0] + 2.0 * omega * g[0][2] + omega * omega * g[2][2]);
+                let gamma = 1.0 / norm_sq.max(1e-14).sqrt();
+                [gamma, 0.0, gamma * omega]
+            }
+            // TODO(step 2): ManualDrag should be a boost of the free-fall tetrad by
+            // (beta_r, beta_phi); until then it rides the free-fall 4-velocity.
+            // An inadmissible Static / Zamo selection also lands here.
+            _ => self.free_fall_four_velocity(metric, r),
+        }
+    }
+
+    /// Exact ingoing-geodesic 4-velocity at radius r for this observer's conserved (E, L).
+    fn free_fall_four_velocity(&self, metric: &KerrSchild, r: f64) -> [f64; 3] {
+        let geo = self
+            .geodesic
+            .unwrap_or_else(|| GeodesicState::new_infall(self.t, r, 1.0, 0.0));
+        let (dt_dtau, dr_dtau, dphi_dtau) = geo.derivatives(metric, r);
+        [dt_dtau, dr_dtau, dphi_dtau]
+    }
+
+    /// Proper 4-acceleration a^mu = du^mu/dtau + Gamma^mu_{alpha beta} u^alpha u^beta.
+    ///
+    /// Static and ZAMO observers sit at fixed r and their components depend on r alone, so
+    /// du^mu/dtau = 0 and only the connection term survives: their acceleration is exactly the
+    /// thrust needed to resist gravity. For free fall (and, for now, manual drag) u^r != 0, and
+    /// since u^mu = u^mu(r) along the worldline, du^mu/dtau = (du^mu/dr) u^r. The r derivative is
+    /// taken by a central difference with step h ~ 1e-5 max(r, 0.1), using the 5-point stencil
+    /// (-u(r+2h) + 8u(r+h) - 8u(r-h) + u(r-2h)) / 12h; its O(h^4) truncation error keeps the
+    /// residual below 1e-7 even at r ~ r-/2, where u varies on the scale of r itself. The two
+    /// terms then cancel to numerical noise, which is the statement that the coded geodesic
+    /// really is a geodesic of the coded metric.
+    pub fn four_acceleration(&self, metric: &KerrSchild) -> [f64; 3] {
+        let u = self.four_velocity(metric);
+        let gamma = metric.christoffel(self.r);
+
+        let mut accel = [0.0f64; 3];
+        for mu in 0..3 {
+            let mut sum = 0.0;
+            for alpha in 0..3 {
+                for beta in 0..3 {
+                    sum += gamma[mu][alpha][beta] * u[alpha] * u[beta];
+                }
+            }
+            accel[mu] = sum;
+        }
+
+        // du^mu/dtau = (du^mu/dr) u^r; identically zero for the fixed-r modes.
+        if u[1] != 0.0 {
+            let h = 1e-5 * self.r.max(0.1);
+            let u_p1 = self.four_velocity_at(metric, self.r + h);
+            let u_p2 = self.four_velocity_at(metric, self.r + 2.0 * h);
+            let u_m1 = self.four_velocity_at(metric, self.r - h);
+            let u_m2 = self.four_velocity_at(metric, self.r - 2.0 * h);
+            for mu in 0..3 {
+                let du_dr =
+                    (-u_p2[mu] + 8.0 * u_p1[mu] - 8.0 * u_m1[mu] + u_m2[mu]) / (12.0 * h);
+                accel[mu] += du_dr * u[1];
+            }
+        }
+
+        accel
+    }
+
+    /// Magnitude sqrt(g_{mu nu} a^mu a^nu) of the proper acceleration, in geometric units (1/M).
+    /// The 4-acceleration of a timelike worldline is spacelike, so the radicand is non-negative
+    /// up to round-off; it is clamped at zero.
+    pub fn proper_acceleration_geom(&self, metric: &KerrSchild) -> f64 {
+        let accel = self.four_acceleration(metric);
+        metric.norm(self.r, &accel).max(0.0).sqrt()
+    }
+
+    /// Is this worldline weightless, i.e. a geodesic?
+    /// The comparison is against a curvature-relative floor rather than an absolute one: the
+    /// residual left by the finite-difference du^mu/dtau grows with the local curvature scale
+    /// sqrt(K) = sqrt(48) M / r^3, and so does every honest acceleration near the singularity.
+    pub fn is_free_falling(&self, metric: &KerrSchild) -> bool {
+        let curvature_scale = metric.kretschmann_scalar(self.r).sqrt().max(1e-12);
+        self.proper_acceleration_geom(metric) < 1e-6 * curvature_scale
+    }
+
     /// Advance simulation by coordinate time delta dt
     pub fn step(&mut self, metric: &KerrSchild, current_sim_time: f64, dt: f64) {
         if current_sim_time < self.release_t {
@@ -151,15 +290,14 @@ impl Observer {
                 // Keep manual position, just advance t slightly if playing
                 self.t += dt;
             }
-            ObserverMode::Stationary => {
+            ObserverMode::Static | ObserverMode::Zamo => {
+                // Fixed r: advance along u^mu. dphi/dt = u^phi/u^t (zero for Static, the
+                // frame-dragging rate omega for the ZAMO) and dtau/dt = 1/u^t.
+                let u = self.four_velocity(metric);
+                let ut = u[0].max(1e-9);
                 self.t += dt;
-                // Frame dragging affects phi even for stationary radius
-                let omega = metric.frame_dragging_omega(self.r);
-                self.phi += omega * dt;
-                let g_tt = metric.metric_components(self.r)[0][0];
-                if g_tt < 0.0 {
-                    self.tau += (-g_tt).sqrt() * dt;
-                }
+                self.phi += (u[2] / ut) * dt;
+                self.tau += dt / ut;
             }
         }
     }
@@ -195,7 +333,7 @@ impl Observer {
                     self.tau = geo.tau;
                 }
             }
-            ObserverMode::ManualDrag | ObserverMode::Stationary => {
+            ObserverMode::ManualDrag | ObserverMode::Static | ObserverMode::Zamo => {
                 self.t = (self.t - dt.abs()).max(0.0);
             }
         }
@@ -230,10 +368,12 @@ impl Observer {
             ObserverMode::ManualDrag => {
                 self.t += dt_coord;
             }
-            ObserverMode::Stationary => {
+            ObserverMode::Static | ObserverMode::Zamo => {
+                let u = self.four_velocity(metric);
+                let ut = u[0].max(1e-9);
                 self.t += dt_coord;
-                let omega = metric.frame_dragging_omega(self.r);
-                self.phi += omega * dt_coord;
+                self.phi += (u[2] / ut) * dt_coord;
+                self.tau += dt_coord / ut;
             }
         }
     }
@@ -313,44 +453,18 @@ impl Observer {
         }
     }
 
-    /// Instantaneous radial coordinate velocity dr/dt as fraction of speed of light in Global Kerr-Schild foliation (-1.0c to 1.0c)
+    /// Instantaneous radial coordinate velocity dr/dt = u^r / u^t as a fraction of c, in the
+    /// global Kerr-Schild foliation. Always inside the local light cone (dr/dt > -1), because
+    /// the ingoing principal null ray travels at exactly dr/dt = -1 in this chart.
     pub fn velocity_c(&self, metric: &KerrSchild) -> f64 {
-        match self.mode {
-            ObserverMode::FreeFall => {
-                if let Some(ref geo) = self.geodesic {
-                    let (dt_dtau, dr_dtau, _) = geo.derivatives(metric, self.r);
-                    (dr_dtau / dt_dtau.max(1e-5)).clamp(-1.0, 1.0)
-                } else {
-                    0.0
-                }
-            }
-            ObserverMode::ManualDrag => {
-                self.beta_r.clamp(-0.99, 0.99)
-            }
-            ObserverMode::Stationary => {
-                0.0
-            }
-        }
+        let u = self.four_velocity(metric);
+        u[1] / u[0].max(1e-9)
     }
 
-    /// Instantaneous proper radial velocity dr/dtau (can exceed 1.0c inside horizon)
+    /// Instantaneous proper radial velocity dr/dtau = u^r. Unbounded: it exceeds 1.0c inside the
+    /// horizon, where r is a time coordinate and no local frame can hold r still.
     pub fn proper_velocity_c(&self, metric: &KerrSchild) -> f64 {
-        match self.mode {
-            ObserverMode::FreeFall => {
-                if let Some(ref geo) = self.geodesic {
-                    let (_, dr_dtau, _) = geo.derivatives(metric, self.r);
-                    dr_dtau
-                } else {
-                    0.0
-                }
-            }
-            ObserverMode::ManualDrag => {
-                self.beta_r / (1.0 - self.beta_r * self.beta_r).max(1e-4).sqrt()
-            }
-            ObserverMode::Stationary => {
-                0.0
-            }
-        }
+        self.four_velocity(metric)[1]
     }
 
     /// Physical radial velocity in km/s
@@ -358,28 +472,14 @@ impl Observer {
         self.velocity_c(metric) * 299792.458
     }
 
-    /// Proper acceleration felt by the observer in Earth g's (weightlessness = 0.0)
+    /// Proper acceleration felt by the observer in Earth g's (weightlessness = 0.0), for every
+    /// mode. This is |a^mu| in geometric units (1/M) converted with a_SI = a_geom c^2 / r_g,
+    /// r_g = GM/c^2 in metres, then divided by 9.80665 m/s^2.
     pub fn proper_acceleration_g(&self, metric: &KerrSchild) -> f64 {
-        match self.mode {
-            ObserverMode::FreeFall => {
-                0.0 // True weightlessness in geodesic motion
-            }
-            ObserverMode::Stationary => {
-                let g_tt = metric.metric_components(self.r)[0][0];
-                if g_tt < 0.0 && self.r > metric.outer_horizon() {
-                    let m_geom = metric.m;
-                    let accel_geom = m_geom / (self.r * self.r * (-g_tt).sqrt().max(1e-4));
-                    let c = 299792458.0;
-                    let rg_m = metric.r_grav_km() * 1000.0;
-                    (accel_geom * c * c / rg_m) / 9.80665
-                } else {
-                    0.0
-                }
-            }
-            ObserverMode::ManualDrag => {
-                (self.beta_r.abs() * 50.0).min(500.0)
-            }
-        }
+        let accel_geom = self.proper_acceleration_geom(metric);
+        let c = 299792458.0;
+        let rg_m = metric.r_grav_km() * 1000.0;
+        (accel_geom * c * c / rg_m) / 9.80665
     }
 
     /// Radial tidal stretching force across a 2-meter body in Earth g's
@@ -487,8 +587,13 @@ mod tests {
         assert!(v_kms.abs() <= 300_000.0, "Velocity magnitude in km/s must be <= c: {}", v_kms);
         assert!(v_kms < 0.0, "Inward velocity in km/s must be negative: {}", v_kms);
 
-        let a_prop = obs.proper_acceleration_g(&metric);
-        assert_eq!(a_prop, 0.0, "Free-falling geodesic observer must have zero proper acceleration");
+        // A geodesic observer is weightless: the proper acceleration vanishes to the accuracy of
+        // the central difference used for du^mu/dtau (see `four_acceleration`).
+        let a_geom = obs.proper_acceleration_geom(&metric);
+        assert!(
+            a_geom < 1e-6,
+            "Free-falling geodesic observer must have zero proper acceleration, got {a_geom}/M"
+        );
 
         let tidal = obs.tidal_force_g(&metric);
         assert!(tidal > 0.0, "Tidal force must be positive");
@@ -552,5 +657,197 @@ mod tests {
         // Step back
         obs.step_back(&metric, 0.1);
         assert!(obs.r > forward_r, "Stepping backward must restore previous outward radius");
+    }
+
+    /// Build an observer parked at radius r in the given mode (E = 1, L = 0 free-fall data).
+    fn observer_at(mode: ObserverMode, r: f64) -> Observer {
+        let mut obs = Observer::new("Probe", 0.0, r, 0.0);
+        obs.mode = mode;
+        obs
+    }
+
+    #[test]
+    fn test_static_observer_acceleration_schwarzschild() {
+        // Schwarzschild static observer: |a| = M / (r^2 sqrt(1 - 2M/r)).
+        let metric = KerrSchild::new(1.0, 0.0);
+        let r = 4.0;
+        let obs = observer_at(ObserverMode::Static, r);
+        assert!(obs.mode_admissible(&metric));
+
+        let u = obs.four_velocity(&metric);
+        assert!(u[1] == 0.0 && u[2] == 0.0, "static observer must not move: {u:?}");
+        assert!((metric.norm(r, &u) + 1.0).abs() < 1e-12, "u.u = {}", metric.norm(r, &u));
+
+        let expected = metric.m / (r * r * (1.0 - 2.0 * metric.m / r).sqrt());
+        let got = obs.proper_acceleration_geom(&metric);
+        assert!((got - expected).abs() < 1e-8, "|a| = {got} vs {expected}");
+    }
+
+    #[test]
+    fn test_static_observer_acceleration_kerr() {
+        // Equatorial Kerr static observer: |a| = sqrt(Delta) M / (r^2 (r - 2M)).
+        let metric = KerrSchild::new(1.0, 0.65);
+        let r = 5.0;
+        let obs = observer_at(ObserverMode::Static, r);
+        assert!(obs.mode_admissible(&metric));
+        assert!((metric.norm(r, &obs.four_velocity(&metric)) + 1.0).abs() < 1e-12);
+
+        let expected = metric.delta(r).sqrt() * metric.m / (r * r * (r - 2.0 * metric.m));
+        let got = obs.proper_acceleration_geom(&metric);
+        assert!((got - expected).abs() < 1e-8, "|a| = {got} vs {expected}");
+    }
+
+    #[test]
+    fn test_zamo_reduces_to_static_without_spin() {
+        // With a = 0 there is no frame dragging, so the ZAMO is the static observer.
+        let metric = KerrSchild::new(1.0, 0.0);
+        for &r in &[10.0, 6.0, 4.0, 2.5, 2.05] {
+            let stat = observer_at(ObserverMode::Static, r);
+            let zamo = observer_at(ObserverMode::Zamo, r);
+            assert!(stat.mode_admissible(&metric) && zamo.mode_admissible(&metric));
+            let us = stat.four_velocity(&metric);
+            let uz = zamo.four_velocity(&metric);
+            for mu in 0..3 {
+                assert!((us[mu] - uz[mu]).abs() < 1e-12, "u^{mu} differs at r={r}: {us:?} {uz:?}");
+            }
+            let a_s = stat.proper_acceleration_geom(&metric);
+            let a_z = zamo.proper_acceleration_geom(&metric);
+            assert!((a_s - a_z).abs() < 1e-12, "|a| differs at r={r}: {a_s} vs {a_z}");
+        }
+    }
+
+    #[test]
+    fn test_zamo_acceleration_is_the_lapse_gradient() {
+        // For an equatorial ZAMO the proper acceleration is the gradient of the lapse:
+        //     |a| = sqrt(g^rr) d(ln alpha)/dr,   alpha^2 = Delta r^2 / ((r^2 + a^2)^2 - a^2 Delta).
+        let metric = KerrSchild::new(1.0, 0.9);
+        let ln_alpha = |r: f64| {
+            let a2 = metric.a * metric.a;
+            let d = metric.delta(r);
+            let alpha_sq = d * r * r / ((r * r + a2) * (r * r + a2) - a2 * d);
+            0.5 * alpha_sq.ln()
+        };
+
+        for &r in &[3.0, 5.0, 8.0] {
+            let zamo = observer_at(ObserverMode::Zamo, r);
+            assert!(zamo.mode_admissible(&metric));
+
+            let u = zamo.four_velocity(&metric);
+            let n = metric.norm(r, &u);
+            assert!((n + 1.0).abs() < 1e-10, "ZAMO u.u = {n} at r={r}");
+            assert!(u[1] == 0.0 && u[2] > 0.0, "ZAMO must co-rotate at fixed r: {u:?}");
+
+            let got = zamo.proper_acceleration_geom(&metric);
+            assert!(got.is_finite() && got > 0.0, "|a| = {got} at r={r}");
+
+            let h = 1e-5 * r;
+            let dln = (ln_alpha(r + h) - ln_alpha(r - h)) / (2.0 * h);
+            let expected = metric.g_upper_rr(r).sqrt() * dln;
+            assert!((got - expected).abs() < 1e-6, "|a| = {got} vs lapse gradient {expected} at r={r}");
+        }
+    }
+
+    #[test]
+    fn test_free_fall_worldline_is_a_geodesic_of_the_coded_metric() {
+        // a^mu = du^mu/dtau + Gamma^mu_{ab} u^a u^b must vanish for the exact infall solution,
+        // everywhere including at r+ and deep inside the Cauchy horizon.
+        for &a in &[0.0, 0.65, 0.95] {
+            let metric = KerrSchild::new(1.0, a);
+            let rp = metric.outer_horizon();
+            let rm = metric.inner_horizon();
+            for &r in &[6.0, 3.0, rp, 1.0, (0.5 * rm).max(0.05)] {
+                let obs = observer_at(ObserverMode::FreeFall, r);
+                let u = obs.four_velocity(&metric);
+                assert!((metric.norm(r, &u) + 1.0).abs() < 1e-8, "u.u at r={r} (a={a})");
+
+                let acc = obs.four_acceleration(&metric);
+                let biggest = acc.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+                assert!(biggest < 1e-6, "a^mu = {acc:?} at r={r} (a={a})");
+                assert!(
+                    metric.norm(r, &acc).abs() < 1e-6,
+                    "|a|^2 = {} at r={r} (a={a})",
+                    metric.norm(r, &acc)
+                );
+                assert!(obs.proper_acceleration_geom(&metric) < 1e-6);
+            }
+        }
+    }
+
+    #[test]
+    fn test_inadmissible_modes_fall_back_to_free_fall() {
+        let metric = KerrSchild::new(1.0, 0.65);
+
+        // r = 1.5 is inside the equatorial static limit 2M: no static observer exists.
+        let stat = observer_at(ObserverMode::Static, 1.5);
+        assert!(!stat.mode_admissible(&metric));
+        let free = observer_at(ObserverMode::FreeFall, 1.5);
+        assert_eq!(stat.four_velocity(&metric), free.four_velocity(&metric));
+
+        // Inside r+ nothing can hover, so the ZAMO is inadmissible too.
+        let inside = 0.5 * (metric.outer_horizon() + metric.inner_horizon());
+        let zamo = observer_at(ObserverMode::Zamo, inside);
+        assert!(!zamo.mode_admissible(&metric));
+        let free_in = observer_at(ObserverMode::FreeFall, inside);
+        assert_eq!(zamo.four_velocity(&metric), free_in.four_velocity(&metric));
+
+        // ... but a ZAMO in the ergosphere (r+ < r < 2M), where no static observer exists, is fine.
+        let ergo = 0.5 * (metric.outer_horizon() + 2.0 * metric.m);
+        let zamo_ergo = observer_at(ObserverMode::Zamo, ergo);
+        assert!(zamo_ergo.mode_admissible(&metric));
+        assert!(!observer_at(ObserverMode::Static, ergo).mode_admissible(&metric));
+    }
+
+    #[test]
+    fn test_static_and_zamo_stepping_uses_the_four_velocity() {
+        let metric = KerrSchild::new(1.0, 0.8);
+        let dt = 0.1;
+
+        let mut stat = observer_at(ObserverMode::Static, 5.0);
+        let u_s = stat.four_velocity(&metric);
+        stat.step(&metric, dt, dt);
+        assert!((stat.r - 5.0).abs() < 1e-15, "static observer must not move radially");
+        assert!(stat.phi.abs() < 1e-15, "static observer must not rotate");
+        assert!((stat.tau - dt / u_s[0]).abs() < 1e-12);
+
+        let mut zamo = observer_at(ObserverMode::Zamo, 5.0);
+        let u_z = zamo.four_velocity(&metric);
+        zamo.step(&metric, dt, dt);
+        assert!((zamo.r - 5.0).abs() < 1e-15);
+        let omega = metric.frame_dragging_omega(5.0);
+        assert!((zamo.phi - omega * dt).abs() < 1e-12, "ZAMO must drift at omega");
+        assert!((zamo.tau - dt / u_z[0]).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_static_observer_acceleration_diverges_at_the_static_limit() {
+        // Hovering costs more and more thrust as r -> 2M, and becomes impossible below it.
+        let metric = KerrSchild::new(1.0, 0.5);
+        let far = observer_at(ObserverMode::Static, 20.0).proper_acceleration_geom(&metric);
+        let near = observer_at(ObserverMode::Static, 2.01).proper_acceleration_geom(&metric);
+        assert!(near > far * 100.0, "near = {near}, far = {far}");
+        // ZAMO acceleration stays finite through the ergosphere and diverges only at r+.
+        let ergo = observer_at(ObserverMode::Zamo, 2.0).proper_acceleration_geom(&metric);
+        assert!(ergo.is_finite() && ergo > 0.0, "ZAMO |a| at the static limit = {ergo}");
+    }
+
+    #[test]
+    fn test_is_free_falling_separates_geodesics_from_hovering() {
+        // The telemetry label "(Free Fall)" is driven by this predicate, so it must not be fooled
+        // by the numerical residual of a geodesic, nor call a hovering rocket weightless.
+        for &a in &[0.0, 0.65, 0.95] {
+            let metric = KerrSchild::with_solar_mass(1.0, a, 10.0);
+            let rp = metric.outer_horizon();
+            for &r in &[20.0, 6.0, 3.0, rp, 1.0, 0.2] {
+                assert!(
+                    observer_at(ObserverMode::FreeFall, r).is_free_falling(&metric),
+                    "geodesic at r={r} (a={a}) must read as weightless"
+                );
+            }
+            for &r in &[20.0, 6.0, 2.5] {
+                let stat = observer_at(ObserverMode::Static, r);
+                assert!(!stat.is_free_falling(&metric), "hovering at r={r} (a={a}) is not free fall");
+                assert!(stat.proper_acceleration_g(&metric) > 1.0);
+            }
+        }
     }
 }

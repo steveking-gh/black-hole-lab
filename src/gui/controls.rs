@@ -304,8 +304,25 @@ impl AppControls {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut bob.mode, ObserverMode::FreeFall, "Free Fall");
                 ui.selectable_value(&mut bob.mode, ObserverMode::ManualDrag, "Drag / Manual");
-                ui.selectable_value(&mut bob.mode, ObserverMode::Stationary, "Stationary");
+                ui.selectable_value(&mut bob.mode, ObserverMode::Static, "Static");
+                ui.selectable_value(&mut bob.mode, ObserverMode::Zamo, "ZAMO");
             });
+
+            // A static observer needs r > 2M (timelike d/dt); a ZAMO needs r > r+ (a fixed-r
+            // worldline can only be timelike outside the outer horizon). When the selection is
+            // impossible where Bob actually is, say so and fall back to the free-fall worldline.
+            if !bob.mode_admissible(metric) {
+                let why = match bob.mode {
+                    ObserverMode::Static => "(no static observer can exist here: r ≤ 2M)",
+                    ObserverMode::Zamo => "(no ZAMO inside r₊)",
+                    _ => "",
+                };
+                ui.label(
+                    egui::RichText::new(format!("{} — showing free fall", why))
+                        .small()
+                        .color(Theme::TEXT_MUTED),
+                );
+            }
 
             if bob.mode == ObserverMode::ManualDrag {
                 if self.use_km {

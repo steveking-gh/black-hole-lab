@@ -309,6 +309,94 @@ impl KerrSchild {
         self.delta(r) / (r * r)
     }
 
+    /// Radial derivative d g_{mu nu} / dr of the equatorial Kerr-Schild metric, analytic.
+    /// The metric depends on r alone, so this is the only non-zero derivative and it is all
+    /// that is needed to build the Christoffel symbols. With h = M/r and h' = -M/r^2:
+    ///   d g_tt/dr     =  2 h'
+    ///   d g_tr/dr     =  2 h'
+    ///   d g_rr/dr     =  2 h'
+    ///   d g_tphi/dr   = -2 a h'
+    ///   d g_rphi/dr   = -2 a h'
+    ///   d g_phiphi/dr =  2 r + 2 a^2 h'
+    pub fn metric_derivative_r(&self, r: f64) -> [[f64; 3]; 3] {
+        let r = r.max(1e-6);
+        let a = self.a;
+        let a2 = a * a;
+        // h = M / r  =>  dh/dr = -M / r^2
+        let dh = -self.m / (r * r);
+
+        let d_tt = 2.0 * dh;
+        let d_tr = 2.0 * dh;
+        let d_rr = 2.0 * dh;
+        let d_tphi = -2.0 * a * dh;
+        let d_rphi = -2.0 * a * dh;
+        let d_phiphi = 2.0 * r + 2.0 * a2 * dh;
+
+        [
+            [d_tt, d_tr, d_tphi],
+            [d_tr, d_rr, d_rphi],
+            [d_tphi, d_rphi, d_phiphi],
+        ]
+    }
+
+    /// Contravariant metric g^{mu nu} in equatorial Kerr-Schild coordinates (t, r, phi).
+    /// The 3-metric is regular (det g = -r^2) everywhere off the ring singularity, so the
+    /// inverse exists at and inside both horizons; g^{rr} = Delta / r^2 changes sign there.
+    pub fn inverse_metric(&self, r: f64) -> [[f64; 3]; 3] {
+        let g = self.metric_components(r);
+        let m = nalgebra::Matrix3::new(
+            g[0][0], g[0][1], g[0][2],
+            g[1][0], g[1][1], g[1][2],
+            g[2][0], g[2][1], g[2][2],
+        );
+        let inv = m.try_inverse().unwrap_or_else(nalgebra::Matrix3::zeros);
+        [
+            [inv[(0, 0)], inv[(0, 1)], inv[(0, 2)]],
+            [inv[(1, 0)], inv[(1, 1)], inv[(1, 2)]],
+            [inv[(2, 0)], inv[(2, 1)], inv[(2, 2)]],
+        ]
+    }
+
+    /// Christoffel symbols of the second kind, indexed [mu][alpha][beta] = Gamma^mu_{alpha beta}:
+    ///     Gamma^mu_{alpha beta} = 1/2 g^{mu nu} (d_alpha g_{nu beta} + d_beta g_{nu alpha} - d_nu g_{alpha beta})
+    /// Only d_r is non-zero because the equatorial Kerr-Schild metric is stationary and axisymmetric.
+    /// The equatorial plane is totally geodesic, so these 3-metric symbols coincide with the
+    /// projections of the full 4D ones for motion that stays in the plane.
+    pub fn christoffel(&self, r: f64) -> [[[f64; 3]; 3]; 3] {
+        let ginv = self.inverse_metric(r);
+        // dg[alpha][nu][beta] = d_alpha g_{nu beta}; only alpha = 1 (the r direction) survives.
+        let mut dg = [[[0.0f64; 3]; 3]; 3];
+        dg[1] = self.metric_derivative_r(r);
+
+        let mut gamma = [[[0.0f64; 3]; 3]; 3];
+        for mu in 0..3 {
+            for alpha in 0..3 {
+                for beta in 0..3 {
+                    let mut sum = 0.0;
+                    for nu in 0..3 {
+                        sum += ginv[mu][nu]
+                            * (dg[alpha][nu][beta] + dg[beta][nu][alpha] - dg[nu][alpha][beta]);
+                    }
+                    gamma[mu][alpha][beta] = 0.5 * sum;
+                }
+            }
+        }
+        gamma
+    }
+
+    /// Squared norm g_{mu nu} u^mu u^nu of a contravariant vector u = (u^t, u^r, u^phi) at radius r.
+    /// Negative for timelike, zero for null, positive for spacelike vectors.
+    pub fn norm(&self, r: f64, u: &[f64; 3]) -> f64 {
+        let g = self.metric_components(r);
+        let mut sum = 0.0;
+        for i in 0..3 {
+            for j in 0..3 {
+                sum += g[i][j] * u[i] * u[j];
+            }
+        }
+        sum
+    }
+
     /// Compute exact coordinate slopes dr/dt for ingoing and outgoing null geodesics
     /// with zero angular momentum (or along the principal null directions).
     pub fn radial_null_slopes(&self, r: f64) -> NullSlopes {
@@ -515,5 +603,130 @@ mod tests {
         let u1 = ks_sgr.format_grid_m(r_base, r_step_micro);
         let u2 = ks_sgr.format_grid_m(r_base + r_step_micro, r_step_micro);
         assert_ne!(u1, u2, "Labels must differ for microscopic M grid lines: {} vs {}", u1, u2);
+    }
+
+    /// Radii spanning every region: exterior, r+, between the horizons, r-, and inside r-.
+    fn probe_radii(ks: &KerrSchild) -> Vec<f64> {
+        let rp = ks.outer_horizon();
+        let rm = ks.inner_horizon().max(0.05);
+        vec![12.0, 6.0, 3.0, rp, 0.5 * (rp + rm), rm, 0.5 * rm, 0.1]
+    }
+
+    #[test]
+    fn test_inverse_metric_is_a_true_inverse() {
+        for &a in &[0.0, 0.5, 0.65, 0.95, 0.9999] {
+            let ks = KerrSchild::new(1.0, a);
+            for &r in probe_radii(&ks).iter() {
+                let g = ks.metric_components(r);
+                let gi = ks.inverse_metric(r);
+                for i in 0..3 {
+                    for j in 0..3 {
+                        let mut s = 0.0;
+                        for k in 0..3 {
+                            s += g[i][k] * gi[k][j];
+                        }
+                        let expected = if i == j { 1.0 } else { 0.0 };
+                        assert!(
+                            (s - expected).abs() < 1e-9,
+                            "g * g^-1 [{i}][{j}] = {s} at r={r} (a={a})"
+                        );
+                    }
+                }
+                // g^{rr} must reproduce the closed form Delta / r^2, including where it is negative.
+                assert!(
+                    (gi[1][1] - ks.g_upper_rr(r)).abs() < 1e-9 * (1.0 + gi[1][1].abs()),
+                    "g^rr = {} vs Delta/r^2 = {} at r={r} (a={a})",
+                    gi[1][1],
+                    ks.g_upper_rr(r)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_metric_derivative_matches_finite_difference() {
+        for &a in &[0.0, 0.65, 0.95] {
+            let ks = KerrSchild::new(1.0, a);
+            for &r in &[8.0, 4.0, 2.0, 1.0, 0.3] {
+                let h = 1e-6 * r;
+                let gp = ks.metric_components(r + h);
+                let gm = ks.metric_components(r - h);
+                let dg = ks.metric_derivative_r(r);
+                for i in 0..3 {
+                    for j in 0..3 {
+                        let fd = (gp[i][j] - gm[i][j]) / (2.0 * h);
+                        assert!(
+                            (dg[i][j] - fd).abs() < 1e-6 * (1.0 + fd.abs()),
+                            "dg[{i}][{j}] = {} vs FD {fd} at r={r} (a={a})",
+                            dg[i][j]
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_christoffel_symmetric_in_lower_indices() {
+        for &a in &[0.0, 0.65, 0.95] {
+            let ks = KerrSchild::new(1.0, a);
+            for &r in probe_radii(&ks).iter() {
+                let gam = ks.christoffel(r);
+                for mu in 0..3 {
+                    for al in 0..3 {
+                        for be in 0..3 {
+                            let d = (gam[mu][al][be] - gam[mu][be][al]).abs();
+                            assert!(
+                                d < 1e-12,
+                                "Gamma^{mu}_{{{al}{be}}} asymmetric by {d} at r={r} (a={a})"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_metric_compatibility_of_christoffels() {
+        // Nabla_alpha g_{mu nu} = 0: d_alpha g_{mu nu} - Gamma^l_{alpha mu} g_{l nu} - Gamma^l_{alpha nu} g_{mu l} = 0.
+        for &a in &[0.0, 0.65, 0.95] {
+            let ks = KerrSchild::new(1.0, a);
+            for &r in probe_radii(&ks).iter() {
+                let g = ks.metric_components(r);
+                let gam = ks.christoffel(r);
+                let mut dg = [[[0.0f64; 3]; 3]; 3];
+                dg[1] = ks.metric_derivative_r(r);
+                for al in 0..3 {
+                    for mu in 0..3 {
+                        for nu in 0..3 {
+                            let mut s = dg[al][mu][nu];
+                            let mut scale = dg[al][mu][nu].abs();
+                            for l in 0..3 {
+                                let term = gam[l][al][mu] * g[l][nu] + gam[l][al][nu] * g[mu][l];
+                                s -= term;
+                                scale += term.abs();
+                            }
+                            assert!(
+                                s.abs() < 1e-10 * (1.0 + scale),
+                                "Nabla_{al} g_{{{mu}{nu}}} = {s} at r={r} (a={a})"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_norm_of_ingoing_null_ray() {
+        // In ingoing Kerr-Schild coordinates the ingoing principal null ray has dr/dt = -1, dphi/dt = 0.
+        for &a in &[0.0, 0.65, 0.95] {
+            let ks = KerrSchild::new(1.0, a);
+            for &r in probe_radii(&ks).iter() {
+                let n = ks.norm(r, &[1.0, -1.0, 0.0]);
+                assert!(n.abs() < 1e-10, "ingoing null norm = {n} at r={r} (a={a})");
+            }
+        }
     }
 }

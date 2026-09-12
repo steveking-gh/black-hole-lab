@@ -20,6 +20,10 @@ pub fn draw_hovering_telemetry(
     let v_kms = obs.velocity_km_s(metric);
     let u_prop = obs.proper_velocity_c(metric);
     let a_prop = obs.proper_acceleration_g(metric);
+    // Decide "free fall" from the geometric magnitude, not from a_prop: the g-conversion
+    // multiplies by ~c^2/r_g (about 6e11 for a 10 M_sun hole), which would turn the numerical
+    // noise floor of a genuine geodesic into a few spurious g.
+    let is_geodesic = obs.is_free_falling(metric);
     let a_tidal_grad = obs.tidal_gradient_g_per_m(metric);
     let time_comp = obs.exterior_time_compression(metric);
 
@@ -29,7 +33,7 @@ pub fn draw_hovering_telemetry(
         format!("dr/dt = {:+.2}c | dr/dτ = {:+.2}c", v_c, u_prop)
     };
 
-    let a_str = if a_prop < 0.05 {
+    let a_str = if is_geodesic || a_prop < 0.05 {
         "a_prop = 0.00g (Free Fall)".to_string()
     } else {
         format!("a_thrust = {:.1}g", a_prop)
