@@ -25,7 +25,8 @@ pub fn draw_hovering_telemetry(
     // noise floor of a genuine geodesic into a few spurious g.
     let is_geodesic = obs.is_free_falling(metric);
     let a_tidal_grad = obs.tidal_gradient_g_per_m(metric);
-    let time_comp = obs.exterior_time_compression(metric);
+    // Exact shift of ingoing principal null light: nu_obs/nu_inf = -k.u = u^t + u^r - a u^phi.
+    let nu_ratio = obs.ingoing_frequency_ratio(metric);
 
     let v_str = if use_km {
         format!("dr/dt = {:+.0} km/s ({:+.2}c) | dr/dτ = {:+.2}c", v_kms, v_c, u_prop)
@@ -49,14 +50,11 @@ pub fn draw_hovering_telemetry(
         format!("Tidal = {:.2e} g/m", a_tidal_grad)
     };
 
-    let comp_str = if time_comp >= 1e6 {
-        format!("Ext Comp dt/dτ = {:.2e}x", time_comp)
-    } else if time_comp >= 100.0 {
-        format!("Ext Comp dt/dτ = {:.0}x", time_comp)
-    } else if time_comp > 1.05 {
-        format!("Ext Comp dt/dτ = {:.1}x", time_comp)
+    let shift_tag = if nu_ratio > 1.0 { "blueshift" } else { "redshift" };
+    let nu_str = if nu_ratio < 0.01 {
+        format!("ν_in/ν_∞ = {:.2e} ({})", nu_ratio, shift_tag)
     } else {
-        "Ext Comp dt/dτ = 1.0x (Normal)".to_string()
+        format!("ν_in/ν_∞ = {:.2} ({})", nu_ratio, shift_tag)
     };
 
     let rm = metric.inner_horizon();
@@ -82,9 +80,9 @@ pub fn draw_hovering_telemetry(
     let w_title = painter.layout_no_wrap(title_line.clone(), font_title.clone(), color).size().x;
     let w_a = painter.layout_no_wrap(a_str.clone(), font_body.clone(), color).size().x;
     let w_tidal = painter.layout_no_wrap(tidal_str.clone(), font_body.clone(), color).size().x;
-    let w_comp = painter.layout_no_wrap(comp_str.clone(), font_body.clone(), color).size().x;
+    let w_nu = painter.layout_no_wrap(nu_str.clone(), font_body.clone(), color).size().x;
 
-    let max_text_w = w_title.max(w_a).max(w_tidal).max(w_comp);
+    let max_text_w = w_title.max(w_a).max(w_tidal).max(w_nu);
     let pad_x = 10.0 * font_scale;
     let pad_y = 6.0 * font_scale;
     let line_spacing = 13.0 * font_scale;
@@ -127,9 +125,9 @@ pub fn draw_hovering_telemetry(
     painter.text(
         Pos2::new(badge_rect.left() + pad_x, badge_rect.top() + pad_y + line_spacing * 3.0),
         egui::Align2::LEFT_TOP,
-        comp_str,
+        nu_str,
         font_body,
-        if time_comp > 10.0 { Theme::HORIZON_CAUCHY } else { Color32::from_rgb(160, 210, 255) },
+        if nu_ratio > 1.0 { Theme::BLUESHIFT_BLUE } else { Theme::TEXT_MUTED },
     );
 }
 
@@ -171,7 +169,7 @@ impl SpacetimeCanvas {
         self.r_offset = (bob_r - 0.025).max(0.0);
     }
 
-    /// Render the (t, r) spacetime foliation canvas with integrated, perfectly aligned 1D Cauchy Compression Track
+    /// Render the (t, r) spacetime foliation canvas with an integrated, perfectly aligned 1D radial track
     pub fn render(
         &mut self,
         ui: &mut egui::Ui,
@@ -246,7 +244,7 @@ impl SpacetimeCanvas {
         }
 
         // =========================================================================
-        // 2. INTEGRATED 1D CAUCHY COMPRESSION TRACK (PIXEL-PERFECT HORIZONTAL ALIGNMENT)
+        // 2. INTEGRATED 1D RADIAL TRACK (PIXEL-PERFECT HORIZONTAL ALIGNMENT)
         // =========================================================================
         ui.add_space(3.0);
         let (t_resp, t_painter) = ui.allocate_painter(egui::Vec2::new(total_size.x, track_height), egui::Sense::hover());
@@ -323,10 +321,10 @@ impl SpacetimeCanvas {
 
         // Track header badge
         let track_badge = if use_km {
-            "1D CAUCHY COMPRESSION TRACK  |  Radial Axis r [Kilometers (km)]".to_string()
+            "1D RADIAL TRACK  |  Radial Axis r [Kilometers (km)]".to_string()
         } else {
             format!(
-                "1D CAUCHY COMPRESSION TRACK  |  Radial Axis r  [1M = GM/c² = {}]",
+                "1D RADIAL TRACK  |  Radial Axis r  [1M = GM/c² = {}]",
                 metric.format_physical_distance(1.0)
             )
         };
@@ -357,7 +355,7 @@ impl SpacetimeCanvas {
             t_painter.text(Pos2::new(bob_x, center_y + 9.0), egui::Align2::CENTER_TOP, "Bob", egui::FontId::proportional(10.0 * font_scale), Theme::BOB_COLOR);
         }
 
-        // Draw Coalescence indicator if Alice and Bob are both present
+        // Radial separation between Alice and Bob, if both are present
         if let Some(al) = alice {
             if al.is_active && bob.is_active {
                 let diff = (bob.r - al.r).abs();
@@ -367,31 +365,19 @@ impl SpacetimeCanvas {
                 // Distance bracket / line
                 t_painter.line_segment([Pos2::new(al_x, center_y), Pos2::new(bob_x, center_y)], Stroke::new(2.0, Color32::WHITE));
 
-                if diff < 0.15 && al.r <= rm + 0.15 {
-                    // Coalescence beacon
-                    let mid_x = (al_x + bob_x) * 0.5;
-                    t_painter.text(
-                        Pos2::new(mid_x, t_rect.top() + 4.0),
-                        egui::Align2::CENTER_TOP,
-                        "💥 COALESCENCE AT r₋ (ARRIVE AT SAME TIME)",
-                        egui::FontId::proportional(11.0 * font_scale),
-                        Theme::WARNING_RED,
-                    );
+                let mid_x = (al_x + bob_x) * 0.5;
+                let diff_text = if use_km {
+                    format!("Δr = {}", metric.format_km(metric.r_to_km(diff)))
                 } else {
-                    let mid_x = (al_x + bob_x) * 0.5;
-                    let diff_text = if use_km {
-                        format!("Δr = {}", metric.format_km(metric.r_to_km(diff)))
-                    } else {
-                        format!("Δr = {:.2}M", diff)
-                    };
-                    t_painter.text(
-                        Pos2::new(mid_x, t_rect.top() + 4.0),
-                        egui::Align2::CENTER_TOP,
-                        diff_text,
-                        egui::FontId::monospace(9.0 * font_scale),
-                        Theme::TEXT_BRIGHT,
-                    );
-                }
+                    format!("Δr = {:.2}M", diff)
+                };
+                t_painter.text(
+                    Pos2::new(mid_x, t_rect.top() + 4.0),
+                    egui::Align2::CENTER_TOP,
+                    diff_text,
+                    egui::FontId::monospace(9.0 * font_scale),
+                    Theme::TEXT_BRIGHT,
+                );
             }
         }
     }

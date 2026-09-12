@@ -4,8 +4,19 @@ use crate::physics::observer::Observer;
 
 pub struct CauchyEffects;
 
+/// Format the measured shift of ingoing principal null light, nu_obs / nu_inf = -k.u.
+/// Two decimals, dropping to scientific notation only where the ratio gets very small.
+fn fmt_nu(ratio: f64) -> String {
+    if ratio < 0.01 {
+        format!("{:.2e}", ratio)
+    } else {
+        format!("{:.2}", ratio)
+    }
+}
+
 impl CauchyEffects {
-    /// Render the dedicated Cauchy Horizon Relativistic Telemetry HUD panel
+    /// Render the dedicated relativistic telemetry HUD panel: proper clocks, radial separation and
+    /// the shift each observer measures for ingoing light.
     pub fn render_hud(
         ui: &mut egui::Ui,
         metric: &KerrSchild,
@@ -14,8 +25,6 @@ impl CauchyEffects {
         current_time: f64,
         use_km: bool,
     ) {
-        let rm = metric.inner_horizon();
-
         ui.vertical(|ui| {
             ui.add_space(2.0);
 
@@ -25,7 +34,7 @@ impl CauchyEffects {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("⏱ RELATIVISTIC TELEMETRY & PROPER CLOCKS").strong().color(Theme::HORIZON_OUTER));
 
-                    // Coalescence radial distance readout aligned to the right
+                    // Radial separation readout aligned to the right
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if let Some(al) = alice {
                             if al.is_active && bob.is_active {
@@ -35,15 +44,7 @@ impl CauchyEffects {
                                 } else {
                                     format!("{:.3}M", diff)
                                 };
-                                if diff < 0.15 && al.r <= rm + 0.15 {
-                                    ui.label(
-                                        egui::RichText::new(format!("Radial Separation: Δr = {} ➔ COALESCED AT r₋!", sep_str))
-                                            .strong()
-                                            .color(Theme::WARNING_RED),
-                                    );
-                                } else {
-                                    ui.label(format!("Radial Separation: Δr = {}", sep_str));
-                                }
+                                ui.label(format!("Radial Separation: Δr = {}", sep_str));
                             }
                         }
                     });
@@ -62,6 +63,10 @@ impl CauchyEffects {
                             format!("{:.2}M ({})", al.tau, metric.format_physical_time(al.tau))
                         };
                         ui.label(egui::RichText::new(format!("Alice τ: {} [r={}]", tau_str, al_r_str)).color(Theme::ALICE_COLOR));
+                        ui.label(
+                            egui::RichText::new(format!("ν_in/ν_∞ = {}", fmt_nu(al.ingoing_frequency_ratio(metric))))
+                                .color(Theme::ALICE_COLOR),
+                        );
                         ui.separator();
                     }
 
@@ -76,6 +81,10 @@ impl CauchyEffects {
                         format!("{:.2}M ({})", bob.tau, metric.format_physical_time(bob.tau))
                     };
                     ui.label(egui::RichText::new(format!("Bob τ: {} [r={}]", bob_tau_str, bob_r_str)).color(Theme::BOB_COLOR));
+                    ui.label(
+                        egui::RichText::new(format!("ν_in/ν_∞ = {}", fmt_nu(bob.ingoing_frequency_ratio(metric))))
+                            .color(Theme::BOB_COLOR),
+                    );
                     ui.separator();
 
                     let ext_t_str = if use_km {

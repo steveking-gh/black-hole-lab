@@ -360,12 +360,12 @@ impl AppControls {
 
         // 4. Dual Infall Simulation (Alice & Bob delta-T)
         ui.group(|ui| {
-            ui.label(egui::RichText::new("👥 DUAL OBSERVER (Δt RACE)").strong().color(Theme::ALICE_COLOR));
+            ui.label(egui::RichText::new("👥 DUAL OBSERVER (Δt RELEASE)").strong().color(Theme::ALICE_COLOR));
             ui.checkbox(&mut self.enable_dual_infall, "Enable Alice & Bob Infall");
 
             if self.enable_dual_infall {
                 ui.add(egui::Slider::new(&mut self.delta_t_delay, 2.0..=30.0).text("Release Delay Δt"));
-                ui.label(egui::RichText::new("Alice drops from r = 4.5M at t = 0; Bob hovers there and is released at t = Δt.").small().color(Theme::TEXT_MUTED));
+                ui.label(egui::RichText::new("Alice drops from r = 4.5M at t = 0; Bob hovers there and is released at t = Δt, so his worldline trails hers by about Δt in coordinate time the whole way in.").small().color(Theme::TEXT_MUTED));
                 if ui.button("Drop Observers").clicked() {
                     *current_time = 0.0;
                     *alice = Some(Observer::new_with_phi("Alice", 0.0, 4.5, 0.0, 0.25));

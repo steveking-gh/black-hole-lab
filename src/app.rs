@@ -326,14 +326,12 @@ impl eframe::App for SpacetimeApp {
                         ui.add_space(4.0);
 
                         ui.label(egui::RichText::new("5. Region III (0 < r < r₋): Inner Maneuverable Core").strong().color(Theme::BOB_COLOR));
-                        ui.label("The radial coordinate r reverts to being spacelike again (g^rr > 0). Bob's light cone un-tips, allowing dr/dt ≥ 0. In classical Kerr geometry, thrusters can stop Bob's descent or maneuver away from the ring singularity at r=0.");
+                        ui.label("The radial coordinate r reverts to being spacelike again (g^rr > 0). Bob's light cone un-tips, allowing dr/dt ≥ 0, so in classical Kerr geometry thrusters can stop his descent. The ring singularity at r = 0 is timelike rather than spacelike, so it can be steered around; but the equatorial L = 0 infall drawn here is aimed straight at it, and this worldline still ends on it.");
                         ui.add_space(8.0);
 
-                        ui.heading("Cauchy Horizon Time Compression & Mass Inflation");
+                        ui.heading("What an infaller sees near the Cauchy horizon");
                         ui.label(
-                            "Because the inner Cauchy horizon has negative surface gravity (κ₋ < 0), infalling radiation from the exterior universe arrives exponentially compressed in proper time (Δτ ~ e^{-|κ₋|t} Δt). \
-                            Two observers (Alice & Bob) falling in at widely different exterior times arrive at r₋ virtually simultaneously. \
-                            In physical astrophysics, this infinite blueshift destabilizes the Cauchy horizon (the Poisson-Israel mass inflation effect)."
+                            "The pale wavefront lines are ingoing principal null rays: lines of constant advanced time v = t + r, running at dr/dt = -1 everywhere in this chart. The ingoing Kerr-Schild chart is regular on the branch of r₋ that an infalling observer actually crosses, so Alice and Bob cross it at finite t and finite v: no signal stacks up there, and the exterior universe's whole future does not arrive as one flash. The shift they measure for that ingoing light is ν_obs/ν_∞ = -k·u = uᵗ + uʳ - a u^φ, finite and positive everywhere shown; for a Schwarzschild raindrop it is 1/(1 + √(2M/r)), exactly 1/2 at the horizon, a redshift, because running away from the light beats the gravitational blueshift. The infinite blueshift of Penrose and of Poisson-Israel lives on the OTHER branch of r₋, reached only as v → ∞, which this chart does not cover and which an infalling geodesic of finite v never reaches. In a real collapse that instability (mass inflation) is expected to turn r₋ into a singular surface, but that is a statement about the full spacetime, not about the worldlines drawn here."
                         );
                     });
                 });
@@ -418,7 +416,7 @@ mod tests {
             app.ui(ui, &mut frame);
         });
 
-        // Test running UI with compressed font scale (70%)
+        // Test running UI with reduced font scale (70%)
         app.controls.font_scale = 0.7;
         egui::__run_test_ui(|ui| {
             let mut frame = eframe::Frame::_new_kittest();

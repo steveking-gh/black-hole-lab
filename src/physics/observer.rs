@@ -365,45 +365,6 @@ impl Observer {
         }
     }
 
-    /// Advance observer using exterior coordinate time step dt_coord.
-    /// This accurately tracks observers (like Bob) whose arrival is compressed relative to an infalling observer (Alice).
-    pub fn step_exterior(&mut self, metric: &KerrSchild, current_sim_time: f64, dt_coord: f64) {
-        if current_sim_time < self.release_t {
-            self.hover(metric, current_sim_time, dt_coord);
-            return;
-        }
-        self.is_active = true;
-
-        match self.mode {
-            ObserverMode::FreeFall => {
-                if let Some(ref mut geo) = self.geodesic {
-                    if geo.r > 0.02 {
-                        geo.step_coord_time(metric, dt_coord);
-                        self.t = current_sim_time;
-                        self.r = geo.r;
-                        self.phi = geo.phi;
-                        self.tau = geo.tau;
-
-                        if self.trail.len() > 800 {
-                            self.trail.remove(0);
-                        }
-                        self.trail.push([self.t, self.r]);
-                    }
-                }
-            }
-            ObserverMode::ManualDrag => {
-                self.t += dt_coord;
-            }
-            ObserverMode::Static | ObserverMode::Zamo => {
-                let u = self.four_velocity(metric);
-                let ut = u[0].max(1e-9);
-                self.t += dt_coord;
-                self.phi += (u[2] / ut) * dt_coord;
-                self.tau += dt_coord / ut;
-            }
-        }
-    }
-
     /// Generate polygon coordinates for the light cone at the observer's event on the (t, r)
     /// diagram. `time_height`: height in coordinate time units to extend the cone upward (future)
     /// and downward (past).
@@ -510,9 +471,15 @@ impl Observer {
         metric.tidal_gradient_g_per_m(self.r)
     }
 
-    /// Time compression factor dt_exterior / dtau_proper relative to outside universe
-    pub fn exterior_time_compression(&self, metric: &KerrSchild) -> f64 {
-        metric.exterior_time_compression(self.r)
+    /// Frequency this observer measures for an ingoing principal null ray, as a multiple of the
+    /// frequency the same ray has at infinity: nu_obs / nu_inf = -k_mu u^mu = u^t + u^r - a u^phi.
+    ///
+    /// This is the honest replacement for the old exterior-time heuristic. It is exact for every
+    /// mode, and finite and positive everywhere in this chart, r+ and r- included: an infalling
+    /// observer sees the exterior universe *red*shifted (1/2 at the Schwarzschild horizon for a
+    /// raindrop), not squeezed into a flash.
+    pub fn ingoing_frequency_ratio(&self, metric: &KerrSchild) -> f64 {
+        metric.ingoing_frequency_ratio(self.r, &self.four_velocity(metric))
     }
 }
 
@@ -702,38 +669,104 @@ mod tests {
     }
 
     #[test]
-    fn test_cauchy_arrival_coalescence() {
-        let metric = KerrSchild::new(1.0, 0.6);
-        let rm = metric.inner_horizon(); // 0.2
-        let rp = metric.outer_horizon(); // 1.8
-
-        let mut alice = Observer::new("Alice", 0.0, 4.0, 0.0);
-        let mut bob = Observer::new("Bob", 0.0, 4.0, 4.0); // Bob released 4s later in coordinate time
-
-        let mut sim_time = 0.0;
-        let dt = 0.03;
-
-        // Step until Alice approaches Cauchy horizon
-        for _ in 0..600 {
-            if alice.r <= rm + 0.02 {
-                break;
-            }
-            let dist_to_rm = (alice.r - rm).max(0.002);
-            let compression = if alice.r <= rp && alice.r > rm {
-                (1.0 + 0.8 * ((rp - rm) / dist_to_rm).powf(1.8)).min(150.0)
-            } else {
-                1.0
-            };
-            let dt_ext = dt * compression;
-            sim_time += dt_ext;
-
-            alice.step(&metric, sim_time, dt);
-            bob.step_exterior(&metric, sim_time, dt_ext);
+    fn test_ingoing_frequency_ratio_schwarzschild_raindrop() {
+        // Raindrop (E = 1, L = 0) in Schwarzschild: u^t = 1 + 2M/r ... but the invariant answer is
+        // nu_obs / nu_inf = 1 / (1 + sqrt(2M/r)), exactly 1/2 at the horizon. The infaller
+        // *red*shifts the ingoing ray: running away from it beats the gravitational blueshift.
+        let metric = KerrSchild::new(1.0, 0.0);
+        for &r in &[10.0, 4.0, 2.0, 1.0, 0.3] {
+            let obs = observer_at(ObserverMode::FreeFall, r);
+            let got = obs.ingoing_frequency_ratio(&metric);
+            let expected = 1.0 / (1.0 + (2.0 * metric.m / r).sqrt());
+            assert!(
+                (got - expected).abs() < 1e-10,
+                "nu ratio = {got} vs {expected} at r={r}"
+            );
+            assert!(got < 1.0, "an ingoing raindrop must see a redshift, got {got} at r={r}");
         }
+        // The horizon value is exactly 1/2, and the ratio -> 0 at the singularity.
+        let at_horizon = observer_at(ObserverMode::FreeFall, 2.0).ingoing_frequency_ratio(&metric);
+        assert!((at_horizon - 0.5).abs() < 1e-12, "at r+ = 2M the ratio is 1/2: {at_horizon}");
+        let deep = observer_at(ObserverMode::FreeFall, 0.01).ingoing_frequency_ratio(&metric);
+        assert!(deep > 0.0 && deep < 0.1, "ratio -> 0 as r -> 0, got {deep}");
+    }
 
-        println!("At Cauchy arrival: Alice r = {:.3}, Bob r = {:.3}", alice.r, bob.r);
-        assert!(alice.r <= rm + 0.08, "Alice should reach near rm");
-        assert!(bob.r <= rm + 0.45, "Bob must catch up near rm, Bob was at {}", bob.r);
+    #[test]
+    fn test_ingoing_frequency_ratio_static_observer() {
+        // Static observer: u^mu = (1, 0, 0)/sqrt(-g_tt) and a u^phi = 0, so the ratio is
+        // 1 / sqrt(1 - 2M/r): a blueshift that diverges only at the static limit r = 2M.
+        let metric = KerrSchild::new(1.0, 0.0);
+        for &r in &[10.0, 4.0, 2.5] {
+            let obs = observer_at(ObserverMode::Static, r);
+            assert!(obs.mode_admissible(&metric));
+            let got = obs.ingoing_frequency_ratio(&metric);
+            let expected = 1.0 / (1.0 - 2.0 * metric.m / r).sqrt();
+            assert!(
+                (got - expected).abs() < 1e-10,
+                "nu ratio = {got} vs {expected} at r={r}"
+            );
+            assert!(got > 1.0, "a hovering observer must see a blueshift, got {got} at r={r}");
+        }
+    }
+
+    #[test]
+    fn test_ingoing_frequency_ratio_zamo() {
+        // ZAMO: u^mu = gamma (1, 0, omega), so the ratio is gamma (1 - a omega).
+        let metric = KerrSchild::new(1.0, 0.9);
+        for &r in &[3.0, 5.0] {
+            let obs = observer_at(ObserverMode::Zamo, r);
+            assert!(obs.mode_admissible(&metric));
+            let u = obs.four_velocity(&metric);
+            let omega = metric.frame_dragging_omega(r);
+            let gamma = u[0];
+            let expected = gamma * (1.0 - metric.a * omega);
+            let got = obs.ingoing_frequency_ratio(&metric);
+            assert!(
+                (got - expected).abs() < 1e-10,
+                "nu ratio = {got} vs gamma (1 - a omega) = {expected} at r={r}"
+            );
+            assert!(got > 0.0 && got.is_finite());
+        }
+    }
+
+    #[test]
+    fn test_ingoing_frequency_ratio_kerr_raindrop_is_finite_across_both_horizons() {
+        // There is no divergence on the branch of r- that an infalling observer actually crosses:
+        // the ratio stays finite and positive at r+, between the horizons, at r-, and below it.
+        for &a in &[0.65, 0.95] {
+            let metric = KerrSchild::new(1.0, a);
+            let rp = metric.outer_horizon();
+            let rm = metric.inner_horizon();
+            for &r in &[rp, 0.5 * (rp + rm), rm, 0.5 * rm] {
+                let ratio = observer_at(ObserverMode::FreeFall, r).ingoing_frequency_ratio(&metric);
+                assert!(
+                    ratio.is_finite() && ratio > 0.0,
+                    "nu ratio = {ratio} at r={r} (a={a}) must be finite and positive"
+                );
+                assert!(ratio < 1.0, "an infaller still sees a redshift: {ratio} at r={r} (a={a})");
+            }
+            // Closed form away from the horizons, where Delta != 0. With E = 1, L = 0 the only
+            // non-trivial covariant component is u_r = (2Mr - sqrt(2Mr(r^2 + a^2))) / Delta, and
+            // nu_obs/nu_inf = -k.u = E + u_r (because k^mu = (1, -1, 0) gives k^mu u_mu = u_t - u_r
+            // and u_t = -E). Its numerator has the opposite sign to Delta at every radius, which is
+            // why an infaller always measures a redshift, inside the horizons included.
+            let closed_form = |r: f64| {
+                let m = metric.m;
+                1.0 + (2.0 * m * r - (2.0 * m * r * (r * r + a * a)).sqrt()) / metric.delta(r)
+            };
+            for &r in &[9.0, 3.0, 0.5 * (rp + rm), 0.5 * rm, 0.05] {
+                let got = observer_at(ObserverMode::FreeFall, r).ingoing_frequency_ratio(&metric);
+                assert!(
+                    (got - closed_form(r)).abs() < 1e-10,
+                    "nu ratio = {got} vs {} at r={r} (a={a})",
+                    closed_form(r)
+                );
+            }
+            // Deep inside, the a = 0 raindrop's ratio runs to 0, but with spin Delta -> a^2 and the
+            // shift runs back up to 1: the ring's repulsion, not a blueshift catastrophe.
+            let deep = observer_at(ObserverMode::FreeFall, 0.02).ingoing_frequency_ratio(&metric);
+            assert!(deep > 0.5 && deep < 1.0, "spun-up core ratio -> 1, got {deep} (a={a})");
+        }
     }
 
     #[test]

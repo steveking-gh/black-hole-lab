@@ -239,48 +239,70 @@ impl KerrSchild {
         r * r - 2.0 * self.m * r + self.a * self.a
     }
 
-    /// Surface gravity of the outer event horizon: kappa+ > 0
+    /// Surface gravity of the outer event horizon: kappa+ = sqrt(M^2 - a^2) / (2 M r+) > 0.
+    /// It is the temperature scale of the horizon (T_H = kappa+ / 2 pi) and the rate at which
+    /// outgoing null generators diverge there. It is reported as the geometric quantity it is and
+    /// is deliberately *not* used to manufacture any observer-facing shift factor.
     pub fn surface_gravity_outer(&self) -> f64 {
         let rp = self.outer_horizon();
         let disc = (self.m * self.m - self.a * self.a).max(0.0);
         disc.sqrt() / (2.0 * self.m * rp)
     }
 
-    /// Surface gravity of the inner Cauchy horizon: kappa- < 0
-    /// The negative sign reflects the exponential blueshift pile-up at r-.
+    /// Surface gravity of the inner Cauchy horizon: kappa- = -sqrt(M^2 - a^2) / (2 M r-) < 0.
+    /// The sign is the standard convention for the inner horizon's null generators (they converge
+    /// rather than diverge); |kappa-| sets the e-folding rate of the perturbation growth behind the
+    /// *other* branch of r-, at advanced time v -> infinity. That branch is not covered by this
+    /// ingoing chart, so kappa- is likewise reported as a bare geometric quantity and is not used
+    /// to synthesise any observer-facing shift factor: see `ingoing_frequency_ratio` for the exact
+    /// shift an observer in this chart actually measures.
     pub fn surface_gravity_inner(&self) -> f64 {
         let rm = self.inner_horizon();
         let disc = (self.m * self.m - self.a * self.a).max(0.0);
         -disc.sqrt() / (2.0 * self.m * rm.max(1e-6))
     }
 
-    /// Exterior time compression factor dt_exterior / dtau_proper relative to distant universe.
-    /// In Region I (r > r+), dt/dtau ~ 1 / sqrt(1 - 2M/r).
-    /// In Region II (r- < r < r+), incoming signals pile up exponentially:
-    /// C(r) = dt_ext / dtau ~ ((r+ - r-) / (r - r-))^{2 * |kappa-| * M}
-    pub fn exterior_time_compression(&self, r: f64) -> f64 {
-        let rp = self.outer_horizon();
-        let rm = self.inner_horizon();
+    /// Covariant components k_mu of the ingoing principal null ray, normalised to unit conserved
+    /// energy at infinity E_gamma = -k_t = 1.
+    ///
+    /// The ray's tangent is k^mu = (1, -1, 0) at every radius (that is the defining property of the
+    /// ingoing Kerr-Schild chart). Lowering with `metric_components` and using h = M/r:
+    ///
+    ///     k_t   = g_tt - g_tr     = -(1 - 2h) - 2h        = -1
+    ///     k_r   = g_tr - g_rr     = 2h - (1 + 2h)         = -1
+    ///     k_phi = g_tphi - g_rphi = -2 h a + a (1 + 2h)   =  a
+    ///
+    /// So k_mu = (-1, -1, a), independent of r and of M: the ray's energy at infinity, its radial
+    /// covector component and its angular momentum are all constants of the motion, as they must be
+    /// for a null geodesic of a stationary, axisymmetric spacetime.
+    pub fn ingoing_null_covector(&self) -> [f64; 3] {
+        [-1.0, -1.0, self.a]
+    }
 
-        if r >= rp {
-            // Gravitational time dilation in exterior region
-            let g_tt = -(1.0 - 2.0 * self.h_scalar(r));
-            if g_tt < 0.0 {
-                1.0 / (-g_tt).sqrt().max(0.05)
-            } else {
-                1.0
-            }
-        } else if r > rm {
-            // Exponential blueshift pile-up in Region II approaching Cauchy horizon
-            let dist_to_rm = (r - rm).max(0.0001);
-            let kappa_m = self.surface_gravity_inner().abs();
-            let exponent = (kappa_m * 4.0 * self.m).clamp(0.8, 3.5);
-            let base = ((rp - rm) / dist_to_rm).max(1.0);
-            (1.0 + base.powf(exponent)).max(1.0)
-        } else {
-            // Region III: inside Cauchy horizon
-            1.0
-        }
+    /// Frequency of an ingoing principal null ray as measured by an observer with 4-velocity u,
+    /// divided by the frequency the same ray has at infinity:
+    ///
+    ///     nu_obs / nu_inf = -k_mu u^mu = u^t + u^r - a u^phi
+    ///
+    /// Values above 1 are a blueshift, below 1 a redshift. This is the exact, frame-independent
+    /// answer everywhere in the chart, including at r+ and at r-, where it stays finite and
+    /// positive. Closed forms worth remembering (M = 1):
+    ///
+    ///   * raindrop (E = 1, L = 0) in Schwarzschild: 1 / (1 + sqrt(2M/r)), so exactly 1/2 at the
+    ///     horizon: an ingoing observer *red*shifts the ingoing ray, because the Doppler term from
+    ///     running away from it beats the gravitational blueshift;
+    ///   * static observer: 1 / sqrt(1 - 2M/r), a blueshift diverging only at the static limit;
+    ///   * ZAMO: gamma (1 - a omega) with omega = -g_tphi/g_phiphi.
+    pub fn ingoing_frequency_ratio(&self, r: f64, u: &[f64; 3]) -> f64 {
+        // k_mu = g_{mu nu} k^nu with k^nu = (1, -1, 0). The result is the constant covector of
+        // `ingoing_null_covector`, but lowering it here keeps this in step with the coded metric.
+        let g = self.metric_components(r);
+        let k = [
+            g[0][0] - g[0][1],
+            g[1][0] - g[1][1],
+            g[2][0] - g[2][1],
+        ];
+        -(k[0] * u[0] + k[1] * u[1] + k[2] * u[2])
     }
 
     /// Equatorial frame-dragging angular velocity omega(r) = -g_{t phi} / g_{phi phi}
@@ -504,14 +526,6 @@ impl KerrSchild {
     pub fn kretschmann_scalar(&self, r: f64) -> f64 {
         let r = r.max(1e-4);
         48.0 * self.m * self.m / r.powi(6)
-    }
-
-    /// Calculate the blue-shift amplification factor for radiation emitted at exterior coordinate time t_ext
-    /// received near the Cauchy horizon r-:
-    /// Factor ~ exp(|kappa-| * t_ext)
-    pub fn cauchy_blueshift_factor(&self, t_ext: f64) -> f64 {
-        let kappa_abs = self.surface_gravity_inner().abs();
-        (kappa_abs * t_ext.min(50.0)).exp()
     }
 }
 
@@ -911,6 +925,33 @@ mod tests {
             "with spin the ingoing PND is strictly inside the wedge"
         );
         assert!(s.dr_dt_outgoing < w.dr_dt_out, "the wedge must bound the outgoing PND");
+    }
+
+    #[test]
+    fn test_ingoing_null_covector_is_the_lowered_ingoing_ray() {
+        // k_mu = g_{mu nu} (1, -1, 0)^nu must equal the constant (-1, -1, a) at every radius.
+        for &a in &[0.0, 0.3, 0.65, 0.95] {
+            let ks = KerrSchild::new(1.0, a);
+            let expected = ks.ingoing_null_covector();
+            assert_eq!(expected, [-1.0, -1.0, a]);
+            for &r in probe_radii(&ks).iter() {
+                let g = ks.metric_components(r);
+                let k_up = [1.0, -1.0, 0.0];
+                for mu in 0..3 {
+                    let mut lowered = 0.0;
+                    for nu in 0..3 {
+                        lowered += g[mu][nu] * k_up[nu];
+                    }
+                    assert!(
+                        (lowered - expected[mu]).abs() < 1e-10,
+                        "k_{mu} = {lowered} vs {} at r={r} (a={a})",
+                        expected[mu]
+                    );
+                }
+                // -k_mu k^mu must vanish: the ray is null, so its "frequency" for itself is zero.
+                assert!(ks.ingoing_frequency_ratio(r, &k_up).abs() < 1e-10);
+            }
+        }
     }
 
     #[test]
