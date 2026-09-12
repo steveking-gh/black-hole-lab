@@ -3,11 +3,11 @@ use crate::physics::kerr_schild::KerrSchild;
 /// Infalling geodesic state and numerical integrator for observers (Alice, Bob, etc.)
 #[derive(Debug, Clone, Copy)]
 pub struct GeodesicState {
-    /// Coordinate time t
+    /// Coordinate time t (ingoing Kerr-Schild)
     pub t: f64,
     /// Radial coordinate r
     pub r: f64,
-    /// Azimuthal angle phi
+    /// Azimuthal angle phi (ingoing Kerr-Schild azimuth, regular across both horizons)
     pub phi: f64,
     /// Proper time tau accumulated by the observer
     pub tau: f64,
@@ -16,6 +16,10 @@ pub struct GeodesicState {
     /// Angular momentum parameter L (zero for radial infall)
     pub l_ang: f64,
 }
+
+/// Radius at which integration stops (ring singularity at r = 0 on the equator).
+pub const R_STOP: f64 = 0.02;
+const R_FLOOR: f64 = 0.01;
 
 impl GeodesicState {
     pub fn new_infall(start_t: f64, start_r: f64, energy: f64, l_ang: f64) -> Self {
@@ -29,117 +33,121 @@ impl GeodesicState {
         }
     }
 
-    /// Step the geodesic forward by proper time step dtau using 4th-order Runge-Kutta (RK4)
-    /// or adaptive Euler step across Kerr-Schild metric.
+    fn normalize_phi(&mut self) {
+        let two_pi = 2.0 * std::f64::consts::PI;
+        self.phi = self.phi.rem_euclid(two_pi);
+    }
+
+    /// Step the geodesic forward by proper time step dtau using 4th-order Runge-Kutta (RK4).
+    /// Negative dtau integrates backward along the same worldline.
     pub fn step(&mut self, metric: &KerrSchild, dtau: f64) {
-        if self.r <= 0.02 {
-            // Reached near physical singularity ring
+        if self.r <= R_STOP && dtau > 0.0 {
             return;
         }
 
-        // Compute derivatives at current state
-        let (dt_dtau, dr_dtau, dphi_dtau) = self.derivatives(metric, self.r);
-
-        // RK4 integration for precision and stability
-        let k1_r = dr_dtau;
-        let k1_t = dt_dtau;
-        let k1_p = dphi_dtau;
-
-        let r_mid1 = (self.r + 0.5 * dtau * k1_r).max(0.01);
+        let (k1_t, k1_r, k1_p) = self.derivatives(metric, self.r);
+        let r_mid1 = (self.r + 0.5 * dtau * k1_r).max(R_FLOOR);
         let (k2_t, k2_r, k2_p) = self.derivatives(metric, r_mid1);
-
-        let r_mid2 = (self.r + 0.5 * dtau * k2_r).max(0.01);
+        let r_mid2 = (self.r + 0.5 * dtau * k2_r).max(R_FLOOR);
         let (k3_t, k3_r, k3_p) = self.derivatives(metric, r_mid2);
-
-        let r_end = (self.r + dtau * k3_r).max(0.01);
+        let r_end = (self.r + dtau * k3_r).max(R_FLOOR);
         let (k4_t, k4_r, k4_p) = self.derivatives(metric, r_end);
 
-        self.r = (self.r + (dtau / 6.0) * (k1_r + 2.0 * k2_r + 2.0 * k3_r + k4_r)).max(0.01);
+        self.r = (self.r + (dtau / 6.0) * (k1_r + 2.0 * k2_r + 2.0 * k3_r + k4_r)).max(R_FLOOR);
         self.t += (dtau / 6.0) * (k1_t + 2.0 * k2_t + 2.0 * k3_t + k4_t);
         self.phi += (dtau / 6.0) * (k1_p + 2.0 * k2_p + 2.0 * k3_p + k4_p);
         self.tau += dtau;
-
-        // Keep phi normalized in [0, 2*pi)
-        while self.phi >= 2.0 * std::f64::consts::PI {
-            self.phi -= 2.0 * std::f64::consts::PI;
-        }
-        while self.phi < 0.0 {
-            self.phi += 2.0 * std::f64::consts::PI;
-        }
+        self.normalize_phi();
     }
 
-    /// Advance geodesic by coordinate time dt (integrating coordinate velocities dr/dt and dphi/dt).
+    /// Coordinate-time rates (dr/dt, dphi/dt, dtau/dt) at radius r.
+    fn coord_rates(&self, metric: &KerrSchild, r: f64) -> (f64, f64, f64) {
+        let (dt_dtau, dr_dtau, dphi_dtau) = self.derivatives(metric, r);
+        let inv = 1.0 / dt_dtau.max(1e-9);
+        (dr_dtau * inv, dphi_dtau * inv, inv)
+    }
+
+    /// Advance geodesic by coordinate time dt using RK4 on the state (r, phi, tau) with t as the
+    /// independent variable. Sub-steps are capped so the integration stays accurate near r = 0.
     pub fn step_coord_time(&mut self, metric: &KerrSchild, dt: f64) {
-        if self.r <= 0.02 {
+        if self.r <= R_STOP || dt <= 0.0 {
             return;
         }
-        let dt_step = 0.05;
-        let mut t_acc = 0.0;
-        while t_acc < dt {
-            let step = (dt - t_acc).min(dt_step);
-            let (dt_dtau, dr_dtau, dphi_dtau) = self.derivatives(metric, self.r);
-            let dt_dtau = dt_dtau.max(0.01);
-            let dr_dt = dr_dtau / dt_dtau;
-            let dphi_dt = dphi_dtau / dt_dtau;
-            let dtau = step / dt_dtau;
+        let mut remaining = dt;
+        let mut guard = 0;
+        while remaining > 1e-12 && guard < 10_000 {
+            guard += 1;
+            let h = remaining.min(0.05).min((0.25 * self.r).max(1e-3));
 
-            self.r = (self.r + dr_dt * step).max(0.01);
-            self.phi += dphi_dt * step;
-            self.t += step;
-            self.tau += dtau;
-            t_acc += step;
-            if self.r <= 0.02 {
+            let (k1_r, k1_p, k1_tau) = self.coord_rates(metric, self.r);
+            let r2 = (self.r + 0.5 * h * k1_r).max(R_FLOOR);
+            let (k2_r, k2_p, k2_tau) = self.coord_rates(metric, r2);
+            let r3 = (self.r + 0.5 * h * k2_r).max(R_FLOOR);
+            let (k3_r, k3_p, k3_tau) = self.coord_rates(metric, r3);
+            let r4 = (self.r + h * k3_r).max(R_FLOOR);
+            let (k4_r, k4_p, k4_tau) = self.coord_rates(metric, r4);
+
+            self.r = (self.r + (h / 6.0) * (k1_r + 2.0 * k2_r + 2.0 * k3_r + k4_r)).max(R_FLOOR);
+            self.phi += (h / 6.0) * (k1_p + 2.0 * k2_p + 2.0 * k3_p + k4_p);
+            self.tau += (h / 6.0) * (k1_tau + 2.0 * k2_tau + 2.0 * k3_tau + k4_tau);
+            self.t += h;
+            remaining -= h;
+
+            if self.r <= R_STOP {
                 break;
             }
         }
-
-        while self.phi >= 2.0 * std::f64::consts::PI {
-            self.phi -= 2.0 * std::f64::consts::PI;
-        }
-        while self.phi < 0.0 {
-            self.phi += 2.0 * std::f64::consts::PI;
-        }
+        self.normalize_phi();
     }
 
-    /// Geodesic derivatives (dt/dtau, dr/dtau, dphi/dtau) on the equatorial plane
-    /// for infall with conserved energy E and angular momentum L.
+    /// Exact geodesic 4-velocity components (dt/dtau, dr/dtau, dphi/dtau) in ingoing
+    /// Kerr-Schild coordinates (t, r, phi) on the equatorial plane, for an ingoing timelike
+    /// geodesic with conserved energy E and axial angular momentum L.
+    ///
+    /// Starting from the Boyer-Lindquist first integrals (Sigma = r^2 on the equator)
+    ///     P      = E (r^2 + a^2) - a L
+    ///     R      = P^2 - Delta [ r^2 + (L - aE)^2 ]           (= r^4 (dr/dtau)^2)
+    ///     r^2 t' = (r^2 + a^2) P / Delta + a (L - aE)
+    ///     r^2 f' = a P / Delta + (L - aE)
+    /// and the chart change  dt_KS = dt_BL + (2Mr/Delta) dr,  dphi_KS = dphi_BL + (a/Delta) dr,
+    /// the 1/Delta poles cancel exactly for ingoing motion (dr/dtau = -sqrt(R)/r^2).
+    /// Rationalising gives the manifestly regular forms used below:
+    ///     r^2 t'_KS = [P^2 (r^2 + a^2 + 2Mr) + 4M^2 r^2 (r^2 + (L-aE)^2)] / [(r^2+a^2) P + 2Mr sqrt(R)] + a (L - aE)
+    ///     r^2 f'_KS = (L - aE) + a (r^2 + (L-aE)^2) / (P + sqrt(R))
+    /// These are finite and smooth through r+ and r- (Delta never appears).
     pub(crate) fn derivatives(&self, metric: &KerrSchild, r: f64) -> (f64, f64, f64) {
-        let r = r.max(0.01);
+        let r = r.max(R_FLOOR);
         let m = metric.m;
         let a = metric.a;
-        let a2 = a * a;
+        let e = self.energy;
+        let l = self.l_ang;
         let r2 = r * r;
+        let a2 = a * a;
+        let delta = metric.delta(r);
 
-        // Effective potential in equatorial Kerr:
-        // (dr/dtau)^2 = E^2 - 1 + 2M/r - (L^2 - a^2(E^2 - 1))/r^2 + 2M(L - aE)^2 / r^3
-        let term1 = self.energy * self.energy - 1.0;
-        let term2 = 2.0 * m / r;
-        let term3 = -(self.l_ang * self.l_ang - a2 * term1) / r2;
-        let diff = self.l_ang - a * self.energy;
-        let term4 = (2.0 * m * diff * diff) / (r2 * r);
+        let lae = l - a * e;
+        let p = e * (r2 + a2) - a * l;
+        let q = r2 + lae * lae;
+        let big_r = (p * p - delta * q).max(0.0);
+        let sqrt_r = big_r.sqrt();
 
-        let v_sq = (term1 + term2 + term3 + term4).max(0.0001);
-        // Infalling direction: dr/dtau is negative
-        let dr_dtau = -v_sq.sqrt();
+        // Ingoing branch: dr/dtau <= 0
+        let dr_dtau = -sqrt_r / r2;
 
-        // In Kerr-Schild coordinates, the coordinate dt/dtau remains positive and finite across horizons:
-        let h = metric.h_scalar(r);
-        let sqrt_2h = (2.0 * h).max(0.0).sqrt();
-        let dt_dtau = if self.energy > 0.0 {
-            let u_t_radial = self.energy + (2.0 * h * self.energy) / (1.0 + sqrt_2h).max(0.1);
-            let rot_corr = if a2 > 1e-6 {
-                (a * self.l_ang * h) / (r2 + a2)
-            } else {
-                0.0
-            };
-            (u_t_radial + rot_corr).max(0.1)
+        let denom_t = (r2 + a2) * p + 2.0 * m * r * sqrt_r;
+        let dt_dtau = if denom_t.abs() > 1e-12 {
+            ((p * p * (r2 + a2 + 2.0 * m * r) + 4.0 * m * m * r2 * q) / denom_t + a * lae) / r2
         } else {
-            1.0
+            // Degenerate case (P <= 0 at a horizon): fall back to the direct expression.
+            (((r2 + a2) * p - 2.0 * m * r * sqrt_r) / delta + a * lae) / r2
         };
 
-        // Frame dragging angular velocity contributes to dphi/dtau:
-        let omega = metric.frame_dragging_omega(r);
-        let dphi_dtau = omega * dt_dtau + self.l_ang / (r2 + a2).max(1e-4);
+        let denom_p = p + sqrt_r;
+        let dphi_dtau = if denom_p.abs() > 1e-12 {
+            (lae + a * q / denom_p) / r2
+        } else {
+            ((p - sqrt_r) * a / delta + lae) / r2
+        };
 
         (dt_dtau, dr_dtau, dphi_dtau)
     }
@@ -148,6 +156,50 @@ impl GeodesicState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn norm(metric: &KerrSchild, geo: &GeodesicState, r: f64) -> f64 {
+        let (ut, ur, up) = geo.derivatives(metric, r);
+        let g = metric.metric_components(r);
+        let u = [ut, ur, up];
+        let mut s = 0.0;
+        for i in 0..3 {
+            for j in 0..3 {
+                s += g[i][j] * u[i] * u[j];
+            }
+        }
+        s
+    }
+
+    #[test]
+    fn test_four_velocity_normalisation_across_horizons() {
+        // u.u must equal -1 everywhere, including at and inside both horizons.
+        for &(a, e, l) in &[(0.0, 1.0, 0.0), (0.65, 1.0, 0.0), (0.9, 1.2, 0.5), (0.998, 1.0, -1.0)] {
+            let metric = KerrSchild::new(1.0, a);
+            let geo = GeodesicState::new_infall(0.0, 6.0, e, l);
+            let rp = metric.outer_horizon();
+            let rm = metric.inner_horizon();
+            for &r in &[8.0, 3.0, 2.0, rp, 0.5 * (rp + rm), rm.max(0.05), 0.5 * rm.max(0.05), 0.05] {
+                let n = norm(&metric, &geo, r);
+                let (ut, _, _) = geo.derivatives(&metric, r);
+                assert!(ut > 0.0, "dt/dtau must be future-directed at r={r} (a={a}): {ut}");
+                assert!((n + 1.0).abs() < 1e-8, "u.u = {n} at r={r} (a={a}, E={e}, L={l})");
+            }
+        }
+    }
+
+    #[test]
+    fn test_schwarzschild_radial_closed_form() {
+        // Schwarzschild, E=1, L=0: dt_KS/dtau = (1 + x + x^2)/(1 + x), x = sqrt(2M/r)
+        let metric = KerrSchild::new(1.0, 0.0);
+        let geo = GeodesicState::new_infall(0.0, 6.0, 1.0, 0.0);
+        for &r in &[10.0, 4.0, 2.0, 1.0, 0.3] {
+            let x = (2.0_f64 / r).sqrt();
+            let expected = (1.0 + x + x * x) / (1.0 + x);
+            let (ut, ur, _) = geo.derivatives(&metric, r);
+            assert!((ut - expected).abs() < 1e-10, "r={r}: {ut} vs {expected}");
+            assert!((ur + x).abs() < 1e-10);
+        }
+    }
 
     #[test]
     fn test_geodesic_infall() {
@@ -158,11 +210,25 @@ mod tests {
         for _ in 0..50 {
             geo.step(&metric, 0.05);
         }
-
-        // Observer must have moved inward
         assert!(geo.r < initial_r);
-        // Proper time tau and coordinate time t must have advanced positively
         assert!(geo.tau > 0.0);
         assert!(geo.t > 0.0);
+    }
+
+    #[test]
+    fn test_coord_time_and_proper_time_steppers_agree() {
+        let metric = KerrSchild::new(1.0, 0.65);
+        let mut a = GeodesicState::new_infall(0.0, 4.5, 1.0, 0.0);
+        let mut b = a;
+        // Integrate A in coordinate time up to t = 3, then B in proper time up to the same tau.
+        a.step_coord_time(&metric, 3.0);
+        let n = 3000;
+        let dtau = a.tau / n as f64;
+        for _ in 0..n {
+            b.step(&metric, dtau);
+        }
+        assert!((a.t - b.t).abs() < 1e-4, "t: {} vs {}", a.t, b.t);
+        assert!((a.r - b.r).abs() < 1e-4, "r: {} vs {}", a.r, b.r);
+        assert!((a.phi - b.phi).abs() < 1e-4, "phi: {} vs {}", a.phi, b.phi);
     }
 }

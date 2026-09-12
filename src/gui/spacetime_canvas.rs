@@ -834,7 +834,7 @@ impl SpacetimeCanvas {
         font_scale: f32,
     ) {
         let center = rect.center();
-        let scale = ((rect.width() / (self.max_r as f32)) * 0.45).min((rect.height() / (self.time_window as f32)) * 0.9);
+        let scale = (rect.width() / (self.max_r as f32).max(1e-5)) * 0.45;
 
         // 1. Grid lines in observer rest frame (xi, tau)
         let grid_stroke = Stroke::new(0.8, Color32::from_rgba_premultiplied(45, 52, 72, 90));

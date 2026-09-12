@@ -12,7 +12,6 @@ impl CauchyEffects {
         bob: &Observer,
         alice: &Option<Observer>,
         current_time: f64,
-        delta_t_delay: f64,
         use_km: bool,
     ) {
         let rm = metric.inner_horizon();
@@ -84,13 +83,16 @@ impl CauchyEffects {
                     } else {
                         format!("{:.2}M ({})", current_time, metric.format_physical_time(current_time))
                     };
-                    let delay_str = if use_km {
-                        metric.format_physical_time(delta_t_delay)
-                    } else {
-                        format!("{:.1}M", delta_t_delay)
-                    };
                     ui.label(format!("Exterior Time t: {}", ext_t_str));
-                    ui.label(format!("(Bob Delay Δt: {})", delay_str));
+                    if bob.release_t > 0.0 {
+                        let delay_str = if use_km {
+                            metric.format_physical_time(bob.release_t)
+                        } else {
+                            format!("{:.1}M", bob.release_t)
+                        };
+                        let status = if bob.is_active { "released" } else { "hovering" };
+                        ui.label(format!("(Bob release t = {} • {})", delay_str, status));
+                    }
                 });
             });
         });

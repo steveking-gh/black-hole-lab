@@ -43,7 +43,7 @@ impl eframe::App for SpacetimeApp {
 
         // Calculate frame delta time
         let now = Instant::now();
-        let dt = (now - self.last_update).as_secs_f64().min(0.1);
+        let dt = (now - self.last_update).as_secs_f64().clamp(1.0 / 240.0, 0.1);
         self.last_update = now;
 
         // Advance simulation if playing
@@ -72,18 +72,17 @@ impl eframe::App for SpacetimeApp {
                 1.0
             };
 
-            // Base step is either fixed coordinate time Δt or dynamically calculated from fixed distance Δr
-            let base_step = match self.controls.step_mode {
-                StepMode::Time => self.controls.step_size,
+            // Time mode: frame-rate independent playback at `play_speed` units of M per real second.
+            // Distance mode: per-frame step chosen so Bob moves a fixed Δr (normalised to 60 fps).
+            let sim_dt = match self.controls.step_mode {
+                StepMode::Time => dt * self.controls.play_speed * adaptive_factor,
                 StepMode::Distance => {
                     let delta_r_m = self.metric.km_to_r(self.controls.step_distance_km);
                     let v_coord = self.bob.velocity_c(&self.metric).abs().max(0.01);
-                    (delta_r_m / v_coord).clamp(1e-8, 500.0)
+                    let base_step = (delta_r_m / v_coord).clamp(1e-8, 500.0);
+                    (dt / 0.01667).clamp(0.2, 3.0) * base_step * adaptive_factor
                 }
             };
-
-            // sim_dt is normalized by frame delta time relative to 60fps (1/60 ~ 0.01667s)
-            let sim_dt = (dt / 0.01667).clamp(0.2, 3.0) * base_step * adaptive_factor;
 
             self.current_time += sim_dt;
             self.bob.step(&self.metric, self.current_time, sim_dt);
@@ -171,7 +170,7 @@ impl eframe::App for SpacetimeApp {
                     if ui.button("🎯 Focus Bob").on_hover_text("Zoom and focus directly on Bob's current radius").clicked() {
                         self.spacetime_canvas.focus_bob(self.bob.r);
                         self.spatial_canvas.zoom = 400.0;
-                        let phi = self.bob.phi;
+                        let phi = self.bob.azimuth(&self.metric);
                         self.spatial_canvas.pan_offset = egui::Vec2::new(- (self.bob.r * phi.cos()) as f32 * 400.0, (self.bob.r * phi.sin()) as f32 * 400.0);
                     }
                     ui.checkbox(&mut self.controls.use_km, "📏 Kilometers (km)");
@@ -208,7 +207,6 @@ impl eframe::App for SpacetimeApp {
                 &self.bob,
                 &self.alice,
                 self.current_time,
-                self.controls.delta_t_delay,
                 self.controls.use_km,
             );
         });

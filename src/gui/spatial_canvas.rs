@@ -66,11 +66,13 @@ impl SpatialCanvas {
         // Center of the canvas with frame of reference tracking
         let frame_tracking_offset = match frame_of_ref {
             ReferenceFrame::Bob => {
-                Vec2::new((bob.r * bob.phi.cos()) as f32 * self.zoom, (bob.r * bob.phi.sin()) as f32 * self.zoom)
+                let psi = bob.azimuth(metric);
+                Vec2::new((bob.r * psi.cos()) as f32 * self.zoom, (bob.r * psi.sin()) as f32 * self.zoom)
             }
             ReferenceFrame::Alice => {
                 if let Some(al) = alice {
-                    Vec2::new((al.r * al.phi.cos()) as f32 * self.zoom, (al.r * al.phi.sin()) as f32 * self.zoom)
+                    let psi = al.azimuth(metric);
+                    Vec2::new((al.r * psi.cos()) as f32 * self.zoom, (al.r * psi.sin()) as f32 * self.zoom)
                 } else {
                     Vec2::ZERO
                 }
@@ -276,8 +278,9 @@ impl SpatialCanvas {
         // 4. Draw Alice's Spatial Position and Trail
         if let Some(al) = alice {
             if al.is_active {
-                let al_x = (al.r * al.phi.cos()) as f32 * self.zoom;
-                let al_y = (al.r * al.phi.sin()) as f32 * self.zoom;
+                let al_psi = al.azimuth(metric);
+                let al_x = (al.r * al_psi.cos()) as f32 * self.zoom;
+                let al_y = (al.r * al_psi.sin()) as f32 * self.zoom;
                 let al_pos = center + Vec2::new(al_x, al_y);
 
                 painter.circle_filled(al_pos, 5.0, Theme::ALICE_COLOR);
@@ -286,8 +289,9 @@ impl SpatialCanvas {
         }
 
         // 5. Draw Bob's Spatial Position & Local Null Fan
-        let bob_x = (bob.r * bob.phi.cos()) as f32 * self.zoom;
-        let bob_y = (bob.r * bob.phi.sin()) as f32 * self.zoom;
+        let bob_psi = bob.azimuth(metric);
+        let bob_x = (bob.r * bob_psi.cos()) as f32 * self.zoom;
+        let bob_y = (bob.r * bob_psi.sin()) as f32 * self.zoom;
         let bob_pos = center + Vec2::new(bob_x, bob_y);
 
         // Project Bob's null emission fan (only while outside singularity)
@@ -295,8 +299,8 @@ impl SpatialCanvas {
             let fan = metric.null_cone_fan(bob.r, 24);
             let ray_len = 28.0;
             for (dr_dt, dphi_dt) in fan {
-                let radial_dir = Vec2::new(bob.phi.cos() as f32, bob.phi.sin() as f32);
-                let azim_dir = Vec2::new(-bob.phi.sin() as f32, bob.phi.cos() as f32);
+                let radial_dir = Vec2::new(bob_psi.cos() as f32, bob_psi.sin() as f32);
+                let azim_dir = Vec2::new(-bob_psi.sin() as f32, bob_psi.cos() as f32);
 
                 let ray_vector = (radial_dir * (dr_dt as f32) + azim_dir * (dphi_dt as f32 * bob.r as f32)).normalized() * ray_len;
                 let ray_end = bob_pos + ray_vector;

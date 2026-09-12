@@ -365,16 +365,12 @@ impl KerrSchild {
         fan
     }
 
-    /// Kretschmann curvature scalar K(r) on equatorial plane.
-    /// Illustrates why the curvature remains finite at r+ and r-,
-    /// only diverging at the physical ring singularity (r -> 0).
+    /// Kretschmann curvature scalar K = R_{abcd} R^{abcd} on the equatorial plane.
+    /// For Kerr, K = 48 M^2 (r^2 - a^2 cos^2 th)[(r^2 + a^2 cos^2 th)^2 - 16 r^2 a^2 cos^2 th] / (r^2 + a^2 cos^2 th)^6,
+    /// which at th = pi/2 reduces to K = 48 M^2 / r^6: finite at r+ and r-, divergent only at the ring r = 0.
     pub fn kretschmann_scalar(&self, r: f64) -> f64 {
         let r = r.max(1e-4);
-        let r2 = r * r;
-        let a2 = self.a * self.a;
-        let denom = (r2 + a2).powi(6);
-        let num = 48.0 * self.m * self.m * (r2 - a2) * (r2.powi(2) - 14.0 * a2 * r2 + a2.powi(2));
-        num / denom.max(1e-12)
+        48.0 * self.m * self.m / r.powi(6)
     }
 
     /// Calculate the blue-shift amplification factor for radiation emitted at exterior coordinate time t_ext

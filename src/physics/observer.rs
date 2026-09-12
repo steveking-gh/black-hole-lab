@@ -42,7 +42,8 @@ impl Observer {
     }
 
     pub fn new_with_phi(name: &str, start_t: f64, start_r: f64, release_t: f64, start_phi: f64) -> Self {
-        let mut geodesic = GeodesicState::new_infall(start_t, start_r, 1.0, 0.0);
+        let release_t = release_t.max(start_t);
+        let mut geodesic = GeodesicState::new_infall(release_t, start_r, 1.0, 0.0);
         geodesic.phi = start_phi;
         let mut obs = Self {
             name: name.to_string(),
@@ -75,7 +76,8 @@ impl Observer {
         self.tau = 0.0;
         self.beta_r = 0.0;
         self.beta_phi = 0.0;
-        let mut geo = GeodesicState::new_infall(start_t, start_r, 1.0, 0.0);
+        self.release_t = self.release_t.max(start_t);
+        let mut geo = GeodesicState::new_infall(self.release_t, start_r, 1.0, 0.0);
         geo.phi = start_phi;
         self.geodesic = Some(geo);
         self.trail.clear();
@@ -95,10 +97,35 @@ impl Observer {
         self.trail.push([t, self.r]);
     }
 
+    /// While waiting for release the observer hovers at fixed (r, phi): coordinate time follows the
+    /// simulation clock and proper time ticks at the static-observer rate sqrt(-g_tt) dt.
+    /// The worldline is therefore a vertical segment that turns into the infall curve at t = release_t.
+    fn hover(&mut self, metric: &KerrSchild, current_sim_time: f64, dt: f64) {
+        self.is_active = false;
+        self.t = current_sim_time;
+        let g_tt = metric.metric_components(self.r)[0][0];
+        if g_tt < 0.0 {
+            self.tau += (-g_tt).sqrt() * dt.max(0.0);
+        }
+        if let Some(ref mut geo) = self.geodesic {
+            geo.t = self.release_t;
+            geo.tau = self.tau;
+        }
+        // Keep the trail as [start point, current hover point]
+        self.trail.truncate(1);
+        self.trail.push([self.t, self.r]);
+    }
+
+    /// Kerr-Schild Cartesian azimuth psi of the observer, x + i y = (r + i a) e^{i phi}.
+    /// Use this (not the raw chart angle phi) when plotting a top-down (x, y) view.
+    pub fn azimuth(&self, metric: &KerrSchild) -> f64 {
+        self.phi + metric.a.atan2(self.r.max(1e-9))
+    }
+
     /// Advance simulation by coordinate time delta dt
     pub fn step(&mut self, metric: &KerrSchild, current_sim_time: f64, dt: f64) {
         if current_sim_time < self.release_t {
-            self.is_active = false;
+            self.hover(metric, current_sim_time, dt);
             return;
         }
         self.is_active = true;
@@ -146,9 +173,12 @@ impl Observer {
                 self.t = prev_t;
                 self.r = prev_r;
                 if let Some(ref mut geo) = self.geodesic {
+                    // Rewind the geodesic clock to the recorded event; tau is re-derived from dtau/dt.
+                    let (dt_dtau, _, _) = geo.derivatives(metric, prev_r);
+                    geo.tau = (geo.tau - (geo.t - prev_t).abs() / dt_dtau.max(1e-6)).max(0.0);
                     geo.t = prev_t;
                     geo.r = prev_r;
-                    geo.tau = (geo.tau - dt.abs() * 0.5).max(0.0);
+                    self.tau = geo.tau;
                 }
                 return;
             }
@@ -175,7 +205,7 @@ impl Observer {
     /// This accurately tracks observers (like Bob) whose arrival is compressed relative to an infalling observer (Alice).
     pub fn step_exterior(&mut self, metric: &KerrSchild, current_sim_time: f64, dt_coord: f64) {
         if current_sim_time < self.release_t {
-            self.is_active = false;
+            self.hover(metric, current_sim_time, dt_coord);
             return;
         }
         self.is_active = true;
@@ -473,6 +503,37 @@ mod tests {
         let u_inside = obs_inside.proper_velocity_c(&metric);
         assert!(v_c_inside < 0.0 && v_c_inside > -1.0, "Coordinate velocity dr/dt stays causal: {}", v_c_inside);
         assert!(u_inside < -1.0, "Proper velocity dr/dtau exceeds -1.0c inside horizon: {}", u_inside);
+    }
+
+    #[test]
+    fn test_delayed_release_worldline_starts_at_release_event() {
+        // Bob released at t = 4 must sit at t = 4 (not t = 0) when he starts falling, so his
+        // worldline is NOT a copy of Alice's shifted down the diagram.
+        let metric = KerrSchild::new(1.0, 0.65);
+        let mut alice = Observer::new("Alice", 0.0, 4.5, 0.0);
+        let mut bob = Observer::new("Bob", 0.0, 4.5, 4.0);
+        let dt = 0.05;
+        let mut t = 0.0;
+        while t < 3.95 {
+            t += dt;
+            alice.step(&metric, t, dt);
+            bob.step(&metric, t, dt);
+        }
+        assert!(!bob.is_active);
+        assert!((bob.t - t).abs() < 1e-9, "hovering Bob must track the simulation clock");
+        assert!((bob.r - 4.5).abs() < 1e-12);
+        assert!(bob.tau > 0.0, "a hovering observer's clock still runs");
+        while t < 6.0 {
+            t += dt;
+            alice.step(&metric, t, dt);
+            bob.step(&metric, t, dt);
+        }
+        assert!(bob.is_active);
+        assert!((bob.t - t).abs() < 1e-9, "Bob's coordinate time must equal the simulation clock: {} vs {}", bob.t, t);
+        assert!(bob.r > alice.r + 0.5, "Bob released later must trail Alice: bob.r={} alice.r={}", bob.r, alice.r);
+        // First trail point is the initial hover event, then the release event follows.
+        assert_eq!(bob.trail[0], [0.0, 4.5]);
+        assert!((bob.trail[1][0] - 4.0).abs() < 0.06, "trail must show the release event near t=4: {:?}", bob.trail[1]);
     }
 
     #[test]

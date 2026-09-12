@@ -30,6 +30,8 @@ pub struct AppControls {
     pub is_playing: bool,
     pub step_mode: StepMode,
     pub step_size: f64,
+    /// Playback rate while playing: coordinate time (units of M) per wall-clock second.
+    pub play_speed: f64,
     pub step_distance_km: f64,
     pub auto_slow_cauchy: bool,
     pub show_wavefronts: bool,
@@ -48,6 +50,7 @@ impl Default for AppControls {
             is_playing: true,
             step_mode: StepMode::Time,
             step_size: 0.1,
+            play_speed: 1.0,
             step_distance_km: 1000.0,
             auto_slow_cauchy: true,
             show_wavefronts: true,
@@ -105,9 +108,9 @@ impl AppControls {
                 }
                 if ui.button("⏮ Reset").clicked() {
                     *current_time = 0.0;
-                    bob.reset(0.0, 4.5);
+                    bob.reset(0.0, 3.8);
                     if let Some(al) = alice {
-                        al.reset(0.0, 4.5);
+                        al.reset_with_phi(0.0, 4.5, 0.25);
                     }
                 }
                 let current_step = match self.step_mode {
@@ -141,6 +144,12 @@ impl AppControls {
                     }
                 }
             });
+
+            ui.add(
+                egui::Slider::new(&mut self.play_speed, 0.05..=20.0)
+                    .logarithmic(true)
+                    .text("Play Speed (M / real second)"),
+            );
 
             ui.horizontal(|ui| {
                 ui.label("Step Mode:");
@@ -227,23 +236,37 @@ impl AppControls {
 
             ui.label(egui::RichText::new("Presets (Sets Mass & Spin):").small());
             ui.horizontal_wrapped(|ui| {
+                let mut preset_changed = false;
                 if ui.button("Schwarzschild (10 M☉)").clicked() {
                     *metric = KerrSchild::with_solar_mass(1.0, 0.0, 10.0);
+                    preset_changed = true;
                 }
                 if ui.button("Cygnus X-1 (21.2 M☉)").clicked() {
                     *metric = KerrSchild::with_solar_mass(1.0, 0.97, 21.2);
+                    preset_changed = true;
                 }
                 if ui.button("Sagittarius A* (4.15M M☉)").clicked() {
                     *metric = KerrSchild::with_solar_mass(1.0, 0.90, 4.15e6);
+                    preset_changed = true;
                 }
                 if ui.button("M87* (6.5B M☉)").clicked() {
                     *metric = KerrSchild::with_solar_mass(1.0, 0.90, 6.5e9);
+                    preset_changed = true;
                 }
                 if ui.button("TON 618 (66B M☉)").clicked() {
                     *metric = KerrSchild::with_solar_mass(1.0, 0.88, 6.6e10);
+                    preset_changed = true;
                 }
                 if ui.button("Extreme Kerr (a=0.998)").clicked() {
                     *metric = KerrSchild::with_solar_mass(1.0, 0.998, 10.0);
+                    preset_changed = true;
+                }
+                if preset_changed {
+                    *current_time = 0.0;
+                    bob.reset(0.0, 3.8);
+                    if let Some(al) = alice {
+                        al.reset_with_phi(0.0, 4.5, 0.25);
+                    }
                 }
             });
 
@@ -315,9 +338,10 @@ impl AppControls {
 
             if self.enable_dual_infall {
                 ui.add(egui::Slider::new(&mut self.delta_t_delay, 2.0..=30.0).text("Release Delay Δt"));
+                ui.label(egui::RichText::new("Alice drops from r = 4.5M at t = 0; Bob hovers there and is released at t = Δt.").small().color(Theme::TEXT_MUTED));
                 if ui.button("Drop Observers").clicked() {
                     *current_time = 0.0;
-                    *alice = Some(Observer::new("Alice", 0.0, 4.5, 0.0));
+                    *alice = Some(Observer::new_with_phi("Alice", 0.0, 4.5, 0.0, 0.25));
                     *bob = Observer::new("Bob", 0.0, 4.5, self.delta_t_delay);
                 }
             } else {
