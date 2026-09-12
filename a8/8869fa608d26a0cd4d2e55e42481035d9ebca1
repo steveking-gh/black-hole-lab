@@ -1,0 +1,44 @@
+.gitignore
+  h_5b3f31968f5853 1
+Cargo.lock
+  h_5b3f31968f5853 1-4509
+Cargo.toml
+  h_5b3f31968f5853 1-11
+src/app.rs
+  h_5b3f31968f5853 1-473
+src/gui/cauchy_effects.rs
+  h_5b3f31968f5853 1-98
+src/gui/controls.rs
+  h_5b3f31968f5853 1-335
+src/gui/mod.rs
+  h_5b3f31968f5853 1-5
+src/gui/spacetime_canvas.rs
+  h_5b3f31968f5853 1-1145
+src/gui/spatial_canvas.rs
+  h_5b3f31968f5853 1-373
+src/gui/theme.rs
+  h_5b3f31968f5853 1-45
+src/main.rs
+  h_5b3f31968f5853 1-23
+src/physics/geodesic.rs
+  h_5b3f31968f5853 1-168
+src/physics/kerr_schild.rs
+  h_5b3f31968f5853 1-523
+src/physics/mod.rs
+  h_5b3f31968f5853 1-11
+src/physics/observer.rs
+  h_5b3f31968f5853 1-495
+src/physics/tetrad.rs
+  h_5b3f31968f5853 1-121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "a88869fa608d26a0cd4d2e55e42481035d9ebca1",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
