@@ -34,7 +34,6 @@ pub struct AppControls {
     /// Playback rate while playing: coordinate time (units of M) per wall-clock second.
     pub play_speed: f64,
     pub step_distance_km: f64,
-    pub show_wavefronts: bool,
     pub show_streamlines: bool,
     pub enable_dual_infall: bool,
     pub delta_t_delay: f64,
@@ -58,7 +57,6 @@ impl Default for AppControls {
             step_size: 0.1,
             play_speed: 1.0,
             step_distance_km: 1000.0,
-            show_wavefronts: true,
             show_streamlines: true,
             enable_dual_infall: true,
             delta_t_delay: 8.0,
@@ -204,7 +202,6 @@ impl AppControls {
                     });
                 }
             }
-            ui.checkbox(&mut self.show_wavefronts, "Incoming Wavefront Pulses");
             ui.checkbox(&mut self.show_streamlines, "Frame-Dragging Streamlines");
 
             ui.add_space(2.0);

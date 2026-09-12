@@ -55,8 +55,7 @@ impl Theme {
         )
     }
 
-    // Wavefronts & Grid
-    pub const WAVEFRONT_PULSE: Color32 = Color32::from_rgba_premultiplied(200, 240, 255, 160);
+    // Grid
     /// One stroke colour for every gridline in the (t, r) diagram: the time lines and the radial
     /// lines are the same kind of thing and now look it.
     pub const GRID_LINE: Color32 = Color32::from_rgba_premultiplied(45, 52, 72, 90);

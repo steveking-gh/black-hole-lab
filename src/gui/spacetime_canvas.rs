@@ -315,7 +315,6 @@ impl SpacetimeCanvas {
         bob: &mut Observer,
         alice: &Option<Observer>,
         current_time: f64,
-        show_wavefronts: bool,
         canvas_height: f32,
         use_km: bool,
         frame_of_ref: ReferenceFrame,
@@ -375,7 +374,6 @@ impl SpacetimeCanvas {
                     bob,
                     alice,
                     current_time,
-                    show_wavefronts,
                     use_km,
                     font_scale,
                 );
@@ -532,7 +530,6 @@ impl SpacetimeCanvas {
         bob: &mut Observer,
         alice: &Option<Observer>,
         current_time: f64,
-        show_wavefronts: bool,
         use_km: bool,
         font_scale: f32,
     ) {
@@ -838,23 +835,6 @@ impl SpacetimeCanvas {
                 egui::FontId::proportional(11.0 * font_scale),
                 Theme::ERGOSPHERE_LINE,
             );
-        }
-
-        // Ingoing Wavefront Pulses
-        if show_wavefronts {
-            let wave_spacing = 1.5;
-            let first_wave = ((t_min - self.max_r) / wave_spacing).floor() as i32;
-            let last_wave = ((t_max + self.max_r) / wave_spacing).ceil() as i32;
-
-            for i in first_wave..=last_wave {
-                let wave_t0 = (i as f64) * wave_spacing;
-                let p1 = Pos2::new(to_screen_x(self.max_r), to_screen_y(wave_t0));
-                let p2 = Pos2::new(to_screen_x(0.0), to_screen_y(wave_t0 + self.max_r));
-
-                if (p1.y >= rect.top() && p1.y <= rect.bottom()) || (p2.y >= rect.top() && p2.y <= rect.bottom()) {
-                    painter.line_segment([p1, p2], Stroke::new(1.0, Theme::WAVEFRONT_PULSE));
-                }
-            }
         }
 
         // Alice Worldline & Marker. The info boxes are registered last, below, so that a drag on
@@ -1343,7 +1323,7 @@ mod tests {
             events,
             ..Default::default()
         };
-        let _ = ctx.run_ui(input, |ui| {
+        let mut output = ctx.run_ui(input, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 // The canvas allocates its own drag response first, exactly as `render` does.
                 let (canvas, _painter) =
@@ -1356,6 +1336,9 @@ mod tests {
                 dragged = (canvas.dragged(), badge.dragged());
             });
         });
+        // No renderer here to upload the font atlas to, so drop the texture delta on purpose
+        // (epaint panics in debug builds if it is dropped unhandled).
+        output.textures_delta.clear();
         dragged
     }
 
