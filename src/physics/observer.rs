@@ -48,8 +48,9 @@ pub struct Observer {
     pub beta_phi: f64,
     /// Geodesic state for automated infall simulation
     pub geodesic: Option<GeodesicState>,
-    /// History of (t, r) positions for drawing worldline trail
-    pub trail: Vec<[f64; 2]>,
+    /// History of (t, r, phi) events for drawing the worldline trail. The (t, r) diagram uses
+    /// the first two entries; the top-down spatial view needs phi as well.
+    pub trail: Vec<[f64; 3]>,
     /// Release coordinate time t_release (e.g. 0 for Alice, delta_t for Bob)
     pub release_t: f64,
     /// Is the observer active/released yet?
@@ -79,7 +80,7 @@ impl Observer {
             release_t,
             is_active: start_t >= release_t,
         };
-        obs.trail.push([start_t, start_r]);
+        obs.trail.push([start_t, start_r, start_phi]);
         obs
     }
 
@@ -101,7 +102,7 @@ impl Observer {
         geo.phi = start_phi;
         self.geodesic = Some(geo);
         self.trail.clear();
-        self.trail.push([start_t, start_r]);
+        self.trail.push([start_t, start_r, start_phi]);
         self.is_active = self.t >= self.release_t;
     }
 
@@ -114,7 +115,7 @@ impl Observer {
         if self.trail.len() > 500 {
             self.trail.remove(0);
         }
-        self.trail.push([t, self.r]);
+        self.trail.push([t, self.r, self.phi]);
     }
 
     /// While waiting for release the observer hovers at fixed (r, phi): coordinate time follows the
@@ -133,13 +134,23 @@ impl Observer {
         }
         // Keep the trail as [start point, current hover point]
         self.trail.truncate(1);
-        self.trail.push([self.t, self.r]);
+        self.trail.push([self.t, self.r, self.phi]);
     }
 
-    /// Kerr-Schild Cartesian azimuth psi of the observer, x + i y = (r + i a) e^{i phi}.
-    /// Use this (not the raw chart angle phi) when plotting a top-down (x, y) view.
+    /// Kerr-Schild Cartesian azimuth psi of the observer, x + i y = (r + i a) e^{i phi}, i.e. the
+    /// polar angle of `cartesian_position`. It is a correct quantity, but it is *not* enough to
+    /// plot with: the matching radius is sqrt(r^2 + a^2), never r, so drawing at (r, psi) is what
+    /// `cartesian_position` exists to replace.
+    #[allow(dead_code)]
     pub fn azimuth(&self, metric: &KerrSchild) -> f64 {
         self.phi + metric.a.atan2(self.r.max(1e-9))
+    }
+
+    /// Kerr-Schild Cartesian position (x, y) of the observer, x + i y = (r + i a) e^{i phi}.
+    /// This, not (r cos psi, r sin psi), is where the observer belongs in a top-down view: the
+    /// point sits at Cartesian radius sqrt(r^2 + a^2), which is a for a body on the ring.
+    pub fn cartesian_position(&self, metric: &KerrSchild) -> (f64, f64) {
+        metric.cartesian_position(self.r, self.phi)
     }
 
     /// Can the currently selected mode exist at the observer's radius?
@@ -308,7 +319,7 @@ impl Observer {
                         if self.trail.len() > 800 {
                             self.trail.remove(0);
                         }
-                        self.trail.push([self.t, self.r]);
+                        self.trail.push([self.t, self.r, self.phi]);
                     }
                 }
             }
@@ -333,15 +344,17 @@ impl Observer {
     pub fn step_back(&mut self, metric: &KerrSchild, dt: f64) {
         if self.trail.len() > 1 {
             self.trail.pop();
-            if let Some(&[prev_t, prev_r]) = self.trail.last() {
+            if let Some(&[prev_t, prev_r, prev_phi]) = self.trail.last() {
                 self.t = prev_t;
                 self.r = prev_r;
+                self.phi = prev_phi;
                 if let Some(ref mut geo) = self.geodesic {
                     // Rewind the geodesic clock to the recorded event; tau is re-derived from dtau/dt.
                     let (dt_dtau, _, _) = geo.derivatives(metric, prev_r);
                     geo.tau = (geo.tau - (geo.t - prev_t).abs() / dt_dtau.max(1e-6)).max(0.0);
                     geo.t = prev_t;
                     geo.r = prev_r;
+                    geo.phi = prev_phi;
                     self.tau = geo.tau;
                 }
                 return;
@@ -832,8 +845,57 @@ mod tests {
         assert!((bob.t - t).abs() < 1e-9, "Bob's coordinate time must equal the simulation clock: {} vs {}", bob.t, t);
         assert!(bob.r > alice.r + 0.5, "Bob released later must trail Alice: bob.r={} alice.r={}", bob.r, alice.r);
         // First trail point is the initial hover event, then the release event follows.
-        assert_eq!(bob.trail[0], [0.0, 4.5]);
+        assert_eq!(bob.trail[0], [0.0, 4.5, 0.0]);
         assert!((bob.trail[1][0] - 4.0).abs() < 0.06, "trail must show the release event near t=4: {:?}", bob.trail[1]);
+    }
+
+    #[test]
+    fn test_observer_cartesian_position_and_trail_carries_phi() {
+        // The observer's top-down position is the Kerr-Schild embedding of (r, phi), so it sits at
+        // Cartesian radius sqrt(r^2 + a^2) and polar angle `azimuth`, and the trail records the
+        // azimuth needed to redraw that curve.
+        let metric = KerrSchild::new(1.0, 0.8);
+        let mut bob = Observer::new_with_phi("Bob", 0.0, 5.0, 0.0, 0.4);
+        assert_eq!(bob.trail[0], [0.0, 5.0, 0.4]);
+
+        let mut t = 0.0;
+        while bob.r > 0.021 && t < 400.0 {
+            t += 0.1;
+            bob.step(&metric, t, 0.1);
+        }
+        assert!(bob.r < 0.03, "the raindrop must reach the ring: r = {}", bob.r);
+        assert!(
+            (bob.phi - 0.4).abs() > 1e-3,
+            "the worldline must wind in phi, not fall straight in: {}",
+            bob.phi
+        );
+
+        for &[t, r, phi] in bob.trail.iter() {
+            let (x, y) = metric.cartesian_position(r, phi);
+            let rho = (x * x + y * y).sqrt();
+            assert!(
+                (rho - metric.cartesian_radius(r)).abs() < 1e-12,
+                "trail point (t={t}, r={r}) is off the constant-r circle"
+            );
+        }
+        // The last trail entry is the current event, and matches `cartesian_position`.
+        let last = *bob.trail.last().unwrap();
+        let (x, y) = bob.cartesian_position(&metric);
+        let (ex, ey) = metric.cartesian_position(last[1], last[2]);
+        assert!((x - ex).abs() < 1e-12 && (y - ey).abs() < 1e-12);
+        let psi = bob.azimuth(&metric);
+        assert!((y.atan2(x) - psi).sin().abs() < 1e-12, "polar angle must be `azimuth`");
+        // The infall ends *on the ring* rho = a, not at the Cartesian origin.
+        let rho_end = (x * x + y * y).sqrt();
+        assert!(
+            rho_end >= metric.a.abs() - 1e-12,
+            "no equatorial point lies inside the ring: rho = {rho_end}"
+        );
+        assert!(
+            (rho_end - metric.a.abs()).abs() < 1e-3,
+            "the trail must terminate on the ring rho = a = {}, got {rho_end}",
+            metric.a.abs()
+        );
     }
 
     #[test]

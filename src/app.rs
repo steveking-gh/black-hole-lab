@@ -170,8 +170,11 @@ impl eframe::App for SpacetimeApp {
                     if ui.button("🎯 Focus Bob").on_hover_text("Zoom and focus directly on Bob's current radius").clicked() {
                         self.spacetime_canvas.focus_bob(self.bob.r);
                         self.spatial_canvas.zoom = 400.0;
-                        let phi = self.bob.azimuth(&self.metric);
-                        self.spatial_canvas.pan_offset = egui::Vec2::new(- (self.bob.r * phi.cos()) as f32 * 400.0, (self.bob.r * phi.sin()) as f32 * 400.0);
+                        // Bob's screen position is the Kerr-Schild embedding of (r, phi); the canvas
+                        // draws Cartesian y upward (screen y is flipped), so the centring pan is (-x, +y).
+                        let (bx, by) = self.bob.cartesian_position(&self.metric);
+                        self.spatial_canvas.pan_offset =
+                            egui::Vec2::new(-(bx as f32) * 400.0, (by as f32) * 400.0);
                     }
                     ui.checkbox(&mut self.controls.use_km, "📏 Kilometers (km)");
 

@@ -316,6 +316,42 @@ impl KerrSchild {
         (2.0 * self.m * self.a * r) / sigma.max(1e-9)
     }
 
+    /// Cartesian radius rho of the chart radius r in the equatorial plane.
+    ///
+    /// The equatorial plane is embedded in Kerr-Schild Cartesian coordinates as
+    /// x + i y = (r + i a) e^{i phi}, so a surface of constant r is *not* a circle of radius r
+    /// but the circle rho = sqrt(r^2 + a^2). In particular the ring singularity r = 0 is the
+    /// circle rho = a, and every constant-r surface (r+, r-, the static limit 2M) is drawn at
+    /// its own rho.
+    pub fn cartesian_radius(&self, r: f64) -> f64 {
+        (r * r + self.a * self.a).sqrt()
+    }
+
+    /// Kerr-Schild Cartesian position of the equatorial chart point (r, phi):
+    ///     x + i y = (r + i a) e^{i phi}
+    ///     x = r cos phi - a sin phi,   y = r sin phi + a cos phi
+    /// Its modulus is `cartesian_radius(r)` and its polar angle is psi = phi + atan2(a, r).
+    pub fn cartesian_position(&self, r: f64, phi: f64) -> (f64, f64) {
+        let (s, c) = phi.sin_cos();
+        (r * c - self.a * s, r * s + self.a * c)
+    }
+
+    /// Jacobian of `cartesian_position`, i.e. the Cartesian velocity of a coordinate velocity
+    /// (dr/dt, dphi/dt) at the chart point (r, phi):
+    ///     d(x + i y)/dt = (dr/dt - a dphi/dt + i r dphi/dt) e^{i phi}
+    /// so the screen direction is the CHART angle phi rotation of (dr/dt - a dphi/dt, r dphi/dt),
+    /// not the polar angle psi rotation of (dr/dt, r dphi/dt).
+    ///
+    /// The ingoing principal null ray (dr/dt = -1, dphi/dt = 0) therefore maps to the direction
+    /// -e^{i phi} at *every* radius: ingoing Kerr-Schild rays are straight lines in these
+    /// Cartesian coordinates, and they run tangent to the ring singularity.
+    pub fn cartesian_velocity(&self, r: f64, phi: f64, dr_dt: f64, dphi_dt: f64) -> (f64, f64) {
+        let (s, c) = phi.sin_cos();
+        let radial = dr_dt - self.a * dphi_dt;
+        let tangential = r * dphi_dt;
+        (radial * c - tangential * s, radial * s + tangential * c)
+    }
+
     /// Kerr-Schild scalar function H(r) = M / r on equatorial plane.
     #[inline]
     pub fn h_scalar(&self, r: f64) -> f64 {
@@ -532,6 +568,82 @@ impl KerrSchild {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_cartesian_embedding_radius_and_angle() {
+        // |x + i y| = sqrt(r^2 + a^2) and arg(x + i y) = phi + atan2(a, r), for every (r, phi).
+        for &a in &[0.0, 0.3, 0.65, 0.95] {
+            let ks = KerrSchild::new(1.0, a);
+            for &r in &[12.0, 3.0, 1.0, 0.3, 0.0] {
+                for &phi in &[0.0, 0.7, 2.5, -1.3, 5.9] {
+                    let (x, y) = ks.cartesian_position(r, phi);
+                    let rho = (x * x + y * y).sqrt();
+                    assert!(
+                        (rho - ks.cartesian_radius(r)).abs() < 1e-12,
+                        "rho = {rho} vs {} at r={r} (a={a})",
+                        ks.cartesian_radius(r)
+                    );
+                    if rho > 1e-12 {
+                        let psi = y.atan2(x);
+                        let expected = phi + a.atan2(r);
+                        let d = (psi - expected).sin().abs();
+                        assert!(d < 1e-12, "psi = {psi} vs {expected} at r={r} phi={phi} (a={a})");
+                    }
+                }
+            }
+            // The ring singularity r = 0 sits at Cartesian radius exactly a.
+            assert!((ks.cartesian_radius(0.0) - a).abs() < 1e-15);
+        }
+    }
+
+    #[test]
+    fn test_cartesian_velocity_matches_finite_difference() {
+        for &a in &[0.0, 0.65, 0.95] {
+            let ks = KerrSchild::new(1.0, a);
+            for &r in &[9.0, 4.0, 1.0, 0.2] {
+                for &phi in &[0.0, 1.1, -2.2] {
+                    for &(dr_dt, dphi_dt) in &[(-1.0, 0.0), (0.5, 0.3), (0.0, -0.8), (-0.7, 0.2)] {
+                        let h = 1e-6;
+                        let (xp, yp) = ks.cartesian_position(r + h * dr_dt, phi + h * dphi_dt);
+                        let (xm, ym) = ks.cartesian_position(r - h * dr_dt, phi - h * dphi_dt);
+                        let fd = ((xp - xm) / (2.0 * h), (yp - ym) / (2.0 * h));
+                        let got = ks.cartesian_velocity(r, phi, dr_dt, dphi_dt);
+                        assert!(
+                            (got.0 - fd.0).abs() < 1e-8 && (got.1 - fd.1).abs() < 1e-8,
+                            "v = {got:?} vs FD {fd:?} at r={r} phi={phi} (a={a})"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_ingoing_null_ray_is_a_straight_line_tangent_to_the_ring() {
+        // (dr/dt, dphi/dt) = (-1, 0) maps to -e^{i phi} at every radius: the ingoing principal
+        // null rays are straight lines in Kerr-Schild Cartesian coordinates.
+        for &a in &[0.0, 0.5, 0.95] {
+            let ks = KerrSchild::new(1.0, a);
+            for &phi in &[0.0f64, 0.9, -2.0, 4.4] {
+                let expected = (-phi.cos(), -phi.sin());
+                for &r in &[20.0, 6.0, 2.0, 0.5, 0.01, 0.0] {
+                    let v = ks.cartesian_velocity(r, phi, -1.0, 0.0);
+                    assert!(
+                        (v.0 - expected.0).abs() < 1e-14 && (v.1 - expected.1).abs() < 1e-14,
+                        "ingoing ray direction {v:?} vs {expected:?} at r={r} (a={a})"
+                    );
+                }
+                // At r = 0 the ray is tangent to the ring: its direction is perpendicular to the
+                // position vector, which there has modulus a.
+                let p = ks.cartesian_position(0.0, phi);
+                let v = ks.cartesian_velocity(0.0, phi, -1.0, 0.0);
+                assert!(
+                    (p.0 * v.0 + p.1 * v.1).abs() < 1e-14,
+                    "ray must be tangent to the ring: p={p:?} v={v:?} (a={a})"
+                );
+            }
+        }
+    }
 
     #[test]
     fn test_schwarzschild_limit() {

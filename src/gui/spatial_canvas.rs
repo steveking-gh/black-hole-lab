@@ -64,19 +64,15 @@ impl SpatialCanvas {
         }
 
         // Center of the canvas with frame of reference tracking
+        // Every point of the equatorial plane is placed by the Kerr-Schild embedding
+        // x + i y = (r + i a) e^{i phi}, never by (r cos psi, r sin psi).
+        // Screen y grows downward; Cartesian y grows upward (matching the +Y tick labels), so flip it.
+        let to_offset = |(x, y): (f64, f64)| Vec2::new(x as f32 * self.zoom, -(y as f32) * self.zoom);
         let frame_tracking_offset = match frame_of_ref {
-            ReferenceFrame::Bob => {
-                let psi = bob.azimuth(metric);
-                Vec2::new((bob.r * psi.cos()) as f32 * self.zoom, (bob.r * psi.sin()) as f32 * self.zoom)
-            }
-            ReferenceFrame::Alice => {
-                if let Some(al) = alice {
-                    let psi = al.azimuth(metric);
-                    Vec2::new((al.r * psi.cos()) as f32 * self.zoom, (al.r * psi.sin()) as f32 * self.zoom)
-                } else {
-                    Vec2::ZERO
-                }
-            }
+            ReferenceFrame::Bob => to_offset(bob.cartesian_position(metric)),
+            ReferenceFrame::Alice => alice
+                .as_ref()
+                .map_or(Vec2::ZERO, |al| to_offset(al.cartesian_position(metric))),
             ReferenceFrame::DistantObserver => Vec2::ZERO,
         };
         let center = rect.center() + self.pan_offset - frame_tracking_offset;
@@ -88,7 +84,16 @@ impl SpatialCanvas {
         let rm = metric.inner_horizon();
         let re = metric.ergosphere_equatorial();
 
+        // A surface of constant r is the circle of Cartesian radius rho = sqrt(r^2 + a^2);
+        // the ring singularity r = 0 is the circle rho = |a|.
+        let rho_p = metric.cartesian_radius(rp);
+        let rho_m = metric.cartesian_radius(rm);
+        let rho_e = metric.cartesian_radius(re);
+        let rho_ring = metric.a.abs();
+
         let r_to_px = |r: f64| -> f32 { (r as f32) * self.zoom };
+        let to_screen =
+            |(x, y): (f64, f64)| center + Vec2::new(x as f32 * self.zoom, -(y as f32) * self.zoom);
 
         // 0. Spatial Coordinate Axes (X and Y)
         let axis_stroke = Stroke::new(1.0, Color32::from_rgba_premultiplied(55, 65, 88, 120));
@@ -209,32 +214,42 @@ impl SpatialCanvas {
             Theme::TEXT_MUTED,
         );
 
-        // 1. Concentric Zone Fills
-        // Ergosphere disc
-        painter.circle_filled(center, r_to_px(re), Theme::ERGOSPHERE_FILL);
+        // 1. Concentric Zone Fills, every boundary at its Cartesian radius sqrt(r^2 + a^2).
+        // Ergosphere: between r+ and the static limit 2M.
+        painter.circle_filled(center, r_to_px(rho_e), Theme::ERGOSPHERE_FILL);
 
-        // Region II disc (between rm and rp)
-        painter.circle_filled(center, r_to_px(rp), Theme::REGION_II_FILL);
+        // Region II: between r- and r+.
+        painter.circle_filled(center, r_to_px(rho_p), Theme::REGION_II_FILL);
 
-        // Region III disc (inside rm)
-        painter.circle_filled(center, r_to_px(rm), Theme::REGION_III_FILL);
+        // Region III: between the ring and r-.
+        painter.circle_filled(center, r_to_px(rho_m), Theme::REGION_III_FILL);
 
-        // Singularity core (r -> 0)
-        let ring_px = (metric.a.abs() as f32) * self.zoom * 0.4;
-        painter.circle_filled(center, ring_px.max(3.0), Theme::SINGULARITY_FILL);
+        // The disc rho < a is the hole of the ring: it is not part of this sheet of the equatorial
+        // plane at r > 0 at all, so it gets its own fill rather than a region colour.
+        let ring_px = r_to_px(rho_ring);
+        painter.circle_filled(center, ring_px.max(2.0), Theme::SINGULARITY_FILL);
 
         // 2. Concentric Boundary Rings
         // Ergosphere boundary
-        painter.circle_stroke(center, r_to_px(re), Stroke::new(1.5, Theme::ERGOSPHERE_LINE));
+        painter.circle_stroke(center, r_to_px(rho_e), Stroke::new(1.5, Theme::ERGOSPHERE_LINE));
 
         // Outer Horizon r+
-        painter.circle_stroke(center, r_to_px(rp), Stroke::new(2.5, Theme::HORIZON_OUTER));
+        painter.circle_stroke(center, r_to_px(rho_p), Stroke::new(2.5, Theme::HORIZON_OUTER));
 
         // Inner Cauchy Horizon r-
-        painter.circle_stroke(center, r_to_px(rm), Stroke::new(2.0, Theme::HORIZON_CAUCHY));
+        painter.circle_stroke(center, r_to_px(rho_m), Stroke::new(2.0, Theme::HORIZON_CAUCHY));
 
-        // Ring Singularity
+        // Ring singularity r = 0: the circle of Cartesian radius exactly a.
         painter.circle_stroke(center, ring_px.max(2.0), Stroke::new(2.0, Theme::SINGULARITY_LINE));
+        if ring_px >= 6.0 {
+            painter.text(
+                center + Vec2::new(0.0, ring_px + 4.0),
+                egui::Align2::CENTER_TOP,
+                "ring singularity r = 0 (ρ = a)",
+                egui::FontId::monospace(9.0 * font_scale),
+                Theme::SINGULARITY_LINE,
+            );
+        }
 
         // 3. Frame Dragging Swirl Vector Field
         if show_streamlines && metric.a.abs() > 0.01 {
@@ -244,16 +259,19 @@ impl SpatialCanvas {
                     continue;
                 }
                 let omega = metric.frame_dragging_omega(r);
-                let px_radius = r_to_px(r);
                 let num_arrows = 8;
                 for i in 0..num_arrows {
-                    let angle = (i as f32) * 2.0 * std::f32::consts::PI / (num_arrows as f32);
-                    let p_start = center + Vec2::new(angle.cos() * px_radius, angle.sin() * px_radius);
+                    // Step around the *chart* angle phi; the embedding then places the arrow on the
+                    // circle of Cartesian radius sqrt(r^2 + a^2) by itself.
+                    let phi = (i as f64) * 2.0 * std::f64::consts::PI / (num_arrows as f64);
+                    let p_start = to_screen(metric.cartesian_position(r, phi));
 
-                    // Tangential arrow length scaled by omega
-                    let arrow_len = (omega * 40.0).clamp(3.0, 22.0) as f32;
-                    let sign = if metric.a > 0.0 { 1.0 } else { -1.0 };
-                    let tangent = Vec2::new(-angle.sin() * sign, angle.cos() * sign) * arrow_len;
+                    // Tangential arrow length scaled by omega. The direction is the Cartesian image
+                    // of the frame-dragging coordinate velocity (dr/dt, dphi/dt) = (0, omega),
+                    // which carries the right handedness for either sign of the spin.
+                    let arrow_len = (omega.abs() * 40.0).clamp(3.0, 22.0) as f32;
+                    let drag = metric.cartesian_velocity(r, phi, 0.0, omega);
+                    let tangent = Vec2::new(drag.0 as f32, drag.1 as f32).normalized() * arrow_len;
                     let p_end = p_start + tangent;
 
                     let color = if r < rp {
@@ -277,11 +295,9 @@ impl SpatialCanvas {
 
         // 4. Draw Alice's Spatial Position and Trail
         if let Some(al) = alice {
+            draw_spatial_trail(&painter, metric, al, Theme::ALICE_COLOR, 1.2, &to_screen);
             if al.is_active {
-                let al_psi = al.azimuth(metric);
-                let al_x = (al.r * al_psi.cos()) as f32 * self.zoom;
-                let al_y = (al.r * al_psi.sin()) as f32 * self.zoom;
-                let al_pos = center + Vec2::new(al_x, al_y);
+                let al_pos = to_screen(al.cartesian_position(metric));
 
                 painter.circle_filled(al_pos, 5.0, Theme::ALICE_COLOR);
                 draw_hovering_telemetry(&painter, rect, al_pos, "Alice", Theme::ALICE_COLOR, al, metric, use_km, font_scale);
@@ -289,10 +305,8 @@ impl SpatialCanvas {
         }
 
         // 5. Draw Bob's Spatial Position & Local Null Fan
-        let bob_psi = bob.azimuth(metric);
-        let bob_x = (bob.r * bob_psi.cos()) as f32 * self.zoom;
-        let bob_y = (bob.r * bob_psi.sin()) as f32 * self.zoom;
-        let bob_pos = center + Vec2::new(bob_x, bob_y);
+        draw_spatial_trail(&painter, metric, bob, Theme::BOB_COLOR, 1.5, &to_screen);
+        let bob_pos = to_screen(bob.cartesian_position(metric));
 
         // Project Bob's null emission fan (only while outside singularity)
         if bob.r > 0.02 && bob.is_active {
@@ -303,10 +317,11 @@ impl SpatialCanvas {
             for i in 0..24 {
                 let alpha = 2.0 * std::f64::consts::PI * (i as f64) / 24.0;
                 let (dr_dt, dphi_dt) = tetrad.coordinate_velocity(&tetrad.null_direction(alpha));
-                let radial_dir = Vec2::new(bob_psi.cos() as f32, bob_psi.sin() as f32);
-                let azim_dir = Vec2::new(-bob_psi.sin() as f32, bob_psi.cos() as f32);
-
-                let ray_vector = (radial_dir * (dr_dt as f32) + azim_dir * (dphi_dt as f32 * bob.r as f32)).normalized() * ray_len;
+                // The screen direction is the Jacobian of the embedding applied to the coordinate
+                // velocity, so the ingoing ray (dr/dt = -1, dphi/dt = 0) comes out as the straight
+                // line -e^{i phi} tangent to the ring, as it must in this chart.
+                let (vx, vy) = metric.cartesian_velocity(bob.r, bob.phi, dr_dt, dphi_dt);
+                let ray_vector = Vec2::new(vx as f32, vy as f32).normalized() * ray_len;
                 let ray_end = bob_pos + ray_vector;
 
                 let ray_color = if dr_dt < 0.0 {
@@ -325,47 +340,57 @@ impl SpatialCanvas {
         draw_hovering_telemetry(&painter, rect, bob_pos, "Bob", Theme::BOB_COLOR, bob, metric, use_km, font_scale);
 
         // 6. Title and Legend Overlay
+        // Horizon angular velocity Ω_H = a / (2 M r₊) is a rate per unit coordinate time, so in
+        // geometric units it is a number per M; only dividing by t_g = GM/c³ makes it rad/s.
+        let omega_h = metric.a / (2.0 * metric.m * rp);
         let legend_text = if use_km {
             format!(
-                "Equatorial View (θ = π/2, x = r cos ϕ, y = r sin ϕ)\n\
+                "Equatorial View (θ = π/2, x + iy = (r + ia) e^{{iϕ}})\n\
+                 Cartesian radius ρ = √(r²+a²); ring singularity at ρ = a\n\
                  Units: Kilometers (km) & Seconds (s)\n\
                  Scale: 1M = {}\n\
                  Mass: {:.2e} M☉\n\
-                 Outer Horizon r₊: {} ({:.2}M)\n\
-                 Cauchy Horizon r₋: {} ({:.2}M)\n\
+                 Outer Horizon r₊: {} ({:.2}M, ρ = {:.2}M)\n\
+                 Cauchy Horizon r₋: {} ({:.2}M, ρ = {:.2}M)\n\
                  Spin a/M: {:.3}\n\
-                 Drag: Ω_H = {:.3} rad/s\n\
+                 Drag: Ω_H = {:.3}/M = {:.3e} rad/s\n\
                  🔍 Zoom: {:.0} px/M (Scroll to zoom, drag to pan)",
                 metric.format_physical_distance(1.0),
                 metric.m_solar,
                 metric.format_km(metric.r_to_km(rp)),
                 rp,
+                rho_p,
                 metric.format_km(metric.r_to_km(rm)),
                 rm,
+                rho_m,
                 metric.a_star(),
-                metric.a / (2.0 * metric.m * rp),
+                omega_h,
+                omega_h / metric.t_grav_seconds(),
                 self.zoom,
             )
         } else {
             format!(
-                "Equatorial View (θ = π/2, x = r cos ϕ, y = r sin ϕ)\n\
+                "Equatorial View (θ = π/2, x + iy = (r + ia) e^{{iϕ}})\n\
+                 Cartesian radius ρ = √(r²+a²); ring singularity at ρ = a\n\
                  Physical Scale: 1M = GM/c² = {}\n\
                  Time Scale:     1M/c = GM/c³ = {}\n\
                  Mass: {:.2e} M☉\n\
-                 Outer Horizon r₊: {:.2}M ({})\n\
-                 Cauchy Horizon r₋: {:.2}M ({})\n\
+                 Outer Horizon r₊: {:.2}M ({}), ρ = {:.2}M\n\
+                 Cauchy Horizon r₋: {:.2}M ({}), ρ = {:.2}M\n\
                  Spin a/M: {:.3}\n\
-                 Drag: Ω_H = {:.3} rad/s\n\
+                 Drag: Ω_H = {:.3}/M\n\
                  🔍 Zoom: {:.0} px/M (Scroll to zoom, drag to pan)",
                 metric.format_physical_distance(1.0),
                 metric.format_physical_time(1.0),
                 metric.m_solar,
                 rp,
                 metric.format_physical_distance(rp),
+                rho_p,
                 rm,
                 metric.format_physical_distance(rm),
+                rho_m,
                 metric.a_star(),
-                metric.a / (2.0 * metric.m * rp),
+                omega_h,
                 self.zoom,
             )
         };
@@ -378,4 +403,27 @@ impl SpatialCanvas {
             Theme::TEXT_BRIGHT,
         );
     }
+}
+
+/// Faint spatial trajectory of an observer: the recorded (t, r, phi) trail pushed through the
+/// Kerr-Schild embedding x + i y = (r + i a) e^{i phi}. With E = 1, L = 0 the curve spirals in and,
+/// for a spinning hole, terminates on the ring rho = a rather than at the origin.
+fn draw_spatial_trail<F: Fn((f64, f64)) -> Pos2>(
+    painter: &egui::Painter,
+    metric: &KerrSchild,
+    obs: &Observer,
+    color: Color32,
+    width: f32,
+    to_screen: &F,
+) {
+    if obs.trail.len() < 2 {
+        return;
+    }
+    let points: Vec<Pos2> = obs
+        .trail
+        .iter()
+        .map(|&[_t, r, phi]| to_screen(metric.cartesian_position(r, phi)))
+        .collect();
+    let faint = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 120);
+    painter.add(egui::Shape::line(points, Stroke::new(width, faint)));
 }
