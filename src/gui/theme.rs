@@ -22,6 +22,9 @@ impl Theme {
     pub const ERGOSPHERE_LINE: Color32 = Color32::from_rgb(255, 180, 0); // Amber
     pub const SINGULARITY_LINE: Color32 = Color32::from_rgb(255, 40, 60); // Crimson
 
+    /// Outgoing interior null rays on the (t, r) diagram: light salmon (255, 150, 200) at alpha 120, premultiplied here, so a ray hugging the magenta r- line still reads against it.
+    pub const OUTGOING_RAY: Color32 = Color32::from_rgba_premultiplied(120, 71, 94, 120);
+
     // Observers
     pub const BOB_COLOR: Color32 = Color32::from_rgb(0, 255, 200); // Bright Mint / Cyan
     pub const ALICE_COLOR: Color32 = Color32::from_rgb(255, 160, 40); // Amber Orange

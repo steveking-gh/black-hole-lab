@@ -122,7 +122,7 @@ impl CauchyEffects {
                     }
                 });
 
-                // Alice's outward signal: how much of it Bob has caught, and the exponential scale
+                // Alice's signal: how much of it Bob has caught, and the exponential scale
                 // exp(kappa_- Delta t) that the crossing of the stack on r- is measured against.
                 if alice.is_some() {
                     ui.horizontal(|ui| {

@@ -1,4 +1,5 @@
-//! Alice's outward signal: exact null geodesics carrying an exact frequency ratio.
+//! Alice's signal, broadcast into the whole of her light cone: exact null geodesics carrying an
+//! exact frequency ratio.
 //!
 //! Everything in this module is integrated in the *coordinate time* t of the ingoing Kerr-Schild
 //! chart rather than in an affine parameter. That choice is forced by the geometry, not by
@@ -57,9 +58,10 @@ use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::Observer;
 use crate::physics::tetrad::Tetrad;
 
-/// Directions per pulse: an odd count so that alpha = 0, Alice's own outward radial leg, is a ray
-/// rather than a gap between two.
-pub const RAYS_PER_PULSE: usize = 49;
+/// Directions per pulse: the whole of Alice's local light cone at five-degree spacing, with the
+/// count chosen so that alpha = 0, her own outward radial leg, lands on a ray rather than in a gap
+/// between two.
+pub const RAYS_PER_PULSE: usize = 72;
 
 /// Pulses kept alive at once. The oldest is dropped past this, which bounds both the drawing and
 /// the integration cost of a long run. A pulse whose every ray has died is dropped as soon as that
@@ -73,9 +75,10 @@ pub const MAX_PULSES: usize = 64;
 /// The interval is not just a display rate: it decides whether the transmission reads as continuous
 /// on r-. A pulse's frozen arc co-rotates with the inner horizon at Omega_- = a / (r-^2 + a^2) while
 /// it waits there, so consecutive arcs are offset in azimuth by roughly Omega_- (dt between
-/// emissions), which for this interval is about a quarter of a radian against an arc some half a
-/// radian wide. The arcs therefore overlap and the stack covers every azimuth, so an infaller meets
-/// several sheets of it wherever they happen to cross r-. At the half-M interval this started with,
+/// emissions), which for this interval is about a quarter of a radian against an arc of order two
+/// radians wide (at r = 1.2 and a = 0.65 the frozen arc runs from alpha = 35 to 150 degrees). The
+/// arcs therefore overlap and the stack covers every azimuth, so an infaller meets several sheets
+/// of it wherever they happen to cross r-. At the half-M interval this started with,
 /// consecutive arcs were more than a radian apart and left gaps: whether an infaller met the stack
 /// at all was then a matter of where they crossed, which is true of a single pulse but not of a
 /// transmission.
@@ -443,8 +446,10 @@ pub struct Pulse {
     pub emitted_r: f64,
     /// Azimuth of the emission event.
     pub emitted_phi: f64,
-    /// The outward half of Alice's light cone at emission, `RAYS_PER_PULSE` exact null geodesics
-    /// ordered by their emission angle alpha from -pi/2 to +pi/2.
+    /// The whole of Alice's light cone at emission, `RAYS_PER_PULSE` exact null geodesics ordered
+    /// by their emission angle alpha, from alpha = 0, her own outward radial leg, round to
+    /// alpha = 2 pi - 2 pi / `RAYS_PER_PULSE`. She broadcasts in every direction, so the polyline
+    /// these rays form is closed: the last ray joins back to the first.
     pub rays: Vec<NullRay>,
     /// The outgoing principal null ray from the emission event, as (t, r) pairs: the pulse's
     /// representative in the (t, r) diagram, where a fan of azimuths cannot be drawn.
@@ -494,15 +499,17 @@ impl Pulse {
 
     /// Record every crossing of Bob's worldline by this wavefront on this pass.
     ///
-    /// The rays of a pulse are an open polyline in the (r, phi) plane, ordered by their emission
-    /// angle. Bob is located on it through the *unwrapped* azimuth of each ray relative to his: the
-    /// first ray is placed within pi of Bob and every later one within pi of its predecessor, so a
-    /// front that frame dragging has wound through several turns is still one continuous curve. On
-    /// that unwrapped axis Bob is not one angle but the whole family 0, +/-2 pi, +/-4 pi, ...,
-    /// because a front that has wound one turn further passes over him again. Each polyline segment
-    /// straddling one of those angles is one *sheet* of the front standing across his azimuth, and
-    /// since every unwrapped step is folded into [-pi, pi] a segment can straddle at most one of
-    /// them, so the segment index alone names the sheet.
+    /// The rays of a pulse are a closed polyline in the (r, phi) plane, ordered by their emission
+    /// angle: Alice broadcasts into her whole light cone, so the last ray joins back to the first
+    /// and that closing segment is a sheet like any other. Bob is located on the polyline through
+    /// the *unwrapped* azimuth of each ray relative to his: the first ray is placed within pi of Bob
+    /// and every later one within pi of its predecessor, so a front that frame dragging has wound
+    /// through several turns is still one continuous curve. On that unwrapped axis Bob is not one
+    /// angle but the whole family 0, +/-2 pi, +/-4 pi, ..., because a front that has wound one turn
+    /// further passes over him again. Each polyline segment straddling one of those angles is one
+    /// *sheet* of the front standing across his azimuth, and since every unwrapped step is folded
+    /// into [-pi, pi] a segment can straddle at most one of them, so the segment index alone names
+    /// the sheet.
     ///
     /// A sheet gives r_front by linear interpolation along the segment, and the shift by the same
     /// linear interpolation of the two bracketing rays' own frequency ratios, each evaluated at its
@@ -532,12 +539,17 @@ impl Pulse {
             rel.push(prev + wrap(self.rays[i].phi - self.rays[i - 1].phi));
         }
 
+        // The closing segment runs from the last ray back to the first, its far end unwrapped by
+        // one more folded step so that the whole loop stays on the one continuous azimuth axis.
+        let n = self.rays.len();
+        let closing = rel[n - 1] + wrap(self.rays[0].phi - self.rays[n - 1].phi);
         let mut sheets = Vec::new();
-        for i in 0..self.rays.len() - 1 {
-            if !self.rays[i].alive || !self.rays[i + 1].alive {
+        for i in 0..n {
+            let j = (i + 1) % n;
+            if !self.rays[i].alive || !self.rays[j].alive {
                 continue;
             }
-            let (a, b) = (rel[i], rel[i + 1]);
+            let (a, b) = (rel[i], if i + 1 < n { rel[i + 1] } else { closing });
             let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
             let first = (lo / two_pi).ceil() as i64;
             let last = (hi / two_pi).floor() as i64;
@@ -549,7 +561,7 @@ impl Pulse {
                 } else {
                     ((target - a) / span).clamp(0.0, 1.0)
                 };
-                let r_front = self.rays[i].r + w * (self.rays[i + 1].r - self.rays[i].r);
+                let r_front = self.rays[i].r + w * (self.rays[j].r - self.rays[i].r);
                 let side = bob.r - r_front;
 
                 let was = self.sheets.iter().find(|s| s.segment == i).map(|s| s.side);
@@ -557,10 +569,10 @@ impl Pulse {
                     && prev * side < 0.0
                 {
                     let f0 = self.rays[i].frequency_ratio(metric, u_bob);
-                    let f1 = self.rays[i + 1].frequency_ratio(metric, u_bob);
+                    let f1 = self.rays[j].frequency_ratio(metric, u_bob);
                     let ratio = f0 + w * (f1 - f0);
                     if ratio.is_finite() && ratio > 0.0 {
-                        let nearer = if w < 0.5 { i } else { i + 1 };
+                        let nearer = if w < 0.5 { i } else { j };
                         self.receptions.push(Reception {
                             pulse_index: self.index,
                             t: bob.t,
@@ -642,11 +654,12 @@ impl SignalField {
 
         let tetrad = alice.tetrad(metric);
         let u = alice.four_velocity(metric);
-        let half_pi = 0.5 * std::f64::consts::PI;
+        let two_pi = 2.0 * std::f64::consts::PI;
         let rays = (0..RAYS_PER_PULSE)
             .map(|i| {
-                let frac = (i as f64) / ((RAYS_PER_PULSE - 1) as f64);
-                let alpha = -half_pi + 2.0 * half_pi * frac;
+                // alpha = 0 is her outward radial leg and the ray count divides the turn exactly,
+                // so the last ray stops one step short of alpha = 2 pi and the front closes.
+                let alpha = two_pi * (i as f64) / (RAYS_PER_PULSE as f64);
                 NullRay::from_local_direction(
                     metric, alice.t, alice.r, alice.phi, &tetrad, alpha, &u,
                 )
@@ -989,11 +1002,12 @@ mod tests {
     ///
     /// The step refines as Bob descends. Out in the open nothing needs resolving to better than a
     /// fiftieth of an M; the stack on r- is a few thousandths of an M thick and a sheet has to be
-    /// seen on two consecutive passes for its crossing to register, so the step drops by two orders
-    /// of magnitude over the last hundredth of an M. Coarsen that last stage and Bob jumps the whole
-    /// stack in one step: the crossings are still counted, but they are all recorded at the one
-    /// radius he happened to land on, which is usually just below r-. Ray accuracy itself does not
-    /// depend on any of this, since `NullRay::step` substeps internally on its own caps.
+    /// seen on two consecutive passes for its crossing to register, so over the last fiftieth of an
+    /// M the step becomes a fixed fraction of Bob's remaining offset above r-. He then approaches
+    /// the Cauchy horizon geometrically and never jumps across it, so every sheet is met at the
+    /// radius it actually stands at, outside r-, rather than being lumped onto the one radius below
+    /// r- that a fixed step happens to land on. Ray accuracy itself does not depend on any of this,
+    /// since `NullRay::step` substeps internally on its own caps.
     fn run_transmission(
         metric: &KerrSchild,
         alice_phi: f64,
@@ -1011,10 +1025,11 @@ mod tests {
                 0.02
             } else if bob.r > rm + 0.02 {
                 0.005
-            } else if bob.r > rm + 0.005 {
-                0.001
             } else {
-                0.0002
+                // A raindrop covers about 3 M of radius per M of coordinate time here, so a step of
+                // a twentieth of the offset moves him about 15% of the way to r-: fine enough to
+                // resolve the sheets and coarse enough to reach the cut-off in a few dozen steps.
+                0.05 * (bob.r - rm)
             };
             t += dt;
             alice.step(metric, t, dt);
@@ -1140,12 +1155,15 @@ mod tests {
         // `assert_transmission`; how much of the stack Bob meets on r- is the part that depends on
         // where he crosses, and the sweep pins down how often that happens.
         //
-        // Measured, with the emission interval of `EMISSION_INTERVAL_TAU`: three of the eight give
-        // him three or more sheets on r- (phi = 1.4 at Dt = 4 with 3, phi = 0.25 at Dt = 8 with 4,
-        // phi = 5.0 at Dt = 8 with 9), a fourth gives two, and the remaining four meet the frozen
-        // family further out, where it has not finished freezing and the shift is only single
-        // figures. See the module header: one emitter's transmission illuminates a band of the
-        // Cauchy horizon rather than all of it.
+        // Measured, with the emission interval of `EMISSION_INTERVAL_TAU` and Alice broadcasting
+        // into her whole light cone: six of the eight give him three or more sheets on r-, in job
+        // order (Dt = 4 at phi = 0.25, 1.4, 3.0, 5.0, then Dt = 8 at the same four azimuths) the
+        // counts are 30, 18, 0, 10, 3, 0, 35, 35. Two crossings still meet no sheet at all on r-
+        // and hear the frozen family further out instead, where it has not finished freezing and
+        // the shift is only single figures. See the module header: one emitter's transmission
+        // illuminates a band of the Cauchy horizon rather than all of it, and the band is a good
+        // deal wider now that the prograde arc is emitted whole rather than cut off at alpha = 90
+        // degrees, which is where the outward half of the cone used to end.
         let metric = KerrSchild::new(1.0, 0.65);
         let mut jobs = Vec::new();
         for &delta_t in &[4.0f64, 8.0] {
@@ -1179,9 +1197,11 @@ mod tests {
 
     #[test]
     fn test_the_frozen_stack_blueshifts_inward() {
-        // The radial structure of the stack, without any azimuth luck in the way. A pulse emitted
-        // in Region II is left to settle for 8M of coordinate time, by which point its frozen family
-        // is strung out along r- with the rays that froze earliest sitting deepest. Reading the
+        // The radial structure of the stack, without any azimuth luck in the way. A full pulse,
+        // the whole light cone, is emitted in Region II and left to settle for 8M of coordinate
+        // time, by which point its frozen family is strung out along r- with the rays that froze
+        // earliest sitting deepest. At r = 1.2 the frozen arc runs from alpha = 35 to 150 degrees,
+        // so a little under a third of the 72 rays end up on the surface. Reading the
         // shift each of them carries for a raindrop crossing at that ray's own radius gives the
         // profile an infaller sees as they fall through: deeper is later light, and later light has
         // spent longer on the exponential, so the blueshift climbs monotonically inward.
@@ -1190,11 +1210,10 @@ mod tests {
         let r0 = 1.2;
         let u = raindrop(&metric, r0);
         let tetrad = Tetrad::from_four_velocity(&metric, r0, &u);
-        let half_pi = 0.5 * std::f64::consts::PI;
+        let two_pi = 2.0 * std::f64::consts::PI;
         let mut rays: Vec<NullRay> = (0..RAYS_PER_PULSE)
             .map(|i| {
-                let frac = (i as f64) / ((RAYS_PER_PULSE - 1) as f64);
-                let alpha = -half_pi + 2.0 * half_pi * frac;
+                let alpha = two_pi * (i as f64) / (RAYS_PER_PULSE as f64);
                 NullRay::from_local_direction(&metric, 0.0, r0, 0.0, &tetrad, alpha, &u)
             })
             .collect();
@@ -1212,8 +1231,8 @@ mod tests {
             .map(|ray| (ray.r, ray.frequency_ratio(&metric, &raindrop(&metric, ray.r))))
             .collect();
         assert!(
-            profile.len() >= 10,
-            "the frozen family should be most of the prograde arc: {profile:?}"
+            profile.len() >= 20,
+            "the frozen family should be the whole prograde arc: {profile:?}"
         );
         profile.sort_by(|a, b| b.0.total_cmp(&a.0));
         for w in profile.windows(2) {

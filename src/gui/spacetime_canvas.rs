@@ -34,11 +34,19 @@ type CachedOutgoingRay = (f64, f64, Vec<(f64, f64)>);
 /// Coordinate-time spacing between consecutive members of the drawn outgoing null congruence
 /// inside r+, in units of M. The geometry is stationary, so the congruence is one curve repeated at
 /// this interval; the spacing is a drawing choice and nothing else depends on it.
-const OUTGOING_RAY_SPACING: f64 = 4.0;
+///
+/// It has to be small against the time a ray spends visibly off r-. With kappa_- = 1.58/M at
+/// a = 0.65 the offset r - r- decays by e every 0.63M, so a ray is inside one pixel of the r- line
+/// within a couple of M of arriving; at the 4M spacing this started with, at most one ray was ever
+/// mid-swing and the bunching that is the whole point of the picture could not be seen. At 1M
+/// several rays are in flight at once and the exponential crowding onto r- is drawn rather than
+/// asserted.
+const OUTGOING_RAY_SPACING: f64 = 1.0;
 
 /// Cap on how many members of that congruence are drawn in one frame, so that a very wide time
-/// window cannot turn a faint background hatch into thousands of polylines.
-const MAX_DRAWN_OUTGOING_RAYS: i64 = 120;
+/// window cannot turn a faint background hatch into thousands of polylines. At the spacing above
+/// this covers 400M of coordinate time, more than any window the canvas offers.
+const MAX_DRAWN_OUTGOING_RAYS: i64 = 400;
 
 /// The drag offsets of the hovering telemetry boxes on one canvas, keyed by canvas tag and
 /// observer name so that the same observer can have a different box position in each diagram.
@@ -889,7 +897,13 @@ impl SpacetimeCanvas {
         // Outgoing light trapped inside r+: the congruence of outgoing principal null rays.
         //
         // Each of these lines peels off r+, falls inward because Region II is trapped, and then
-        // asymptotes to r- from above without ever crossing it. The Cauchy horizon in this chart is
+        // asymptotes to r- from above without ever crossing it. They are one master curve
+        // translated in t, `wavefront::outgoing_ray_track`, which starts at r+(1 - 1e-3) rather
+        // than on r+ itself: the vertical run along the horizon is implicit, and drawing it would
+        // only lay a second line on top of the r+ line. The offset r - r- decays like
+        // exp(-kappa_- t), so the lines crowd exponentially onto r- and the last stretch of every
+        // one of them is inside a pixel of it; they carry their own colour for that reason, so the
+        // pile-up stays legible against the r- line itself. The Cauchy horizon in this chart is
         // therefore the accumulation surface of the interior's outgoing null congruence, and an
         // infalling worldline, which crosses r- at finite proper time, cuts through the whole stack
         // on its way. That is the geometry behind Bob's reception of Alice's entire transmission in
@@ -900,8 +914,6 @@ impl SpacetimeCanvas {
             && let Some((_, _, track)) = self.outgoing_rays.as_ref()
             && let Some(&(track_end, _)) = track.last()
         {
-            let c = Theme::HORIZON_CAUCHY;
-            let faint = Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 55);
             let k_lo = ((t_min - track_end) / OUTGOING_RAY_SPACING).ceil() as i64;
             let k_hi = (t_max / OUTGOING_RAY_SPACING).floor() as i64;
             for k in k_lo..=k_hi.min(k_lo + MAX_DRAWN_OUTGOING_RAYS) {
@@ -912,7 +924,7 @@ impl SpacetimeCanvas {
                     .map(|&(t, r)| Pos2::new(to_screen_x(r), to_screen_y(t + t0)))
                     .collect();
                 if points.len() >= 2 {
-                    painter.add(PathShape::line(points, Stroke::new(0.8, faint)));
+                    painter.add(PathShape::line(points, Stroke::new(1.0, Theme::OUTGOING_RAY)));
                 }
             }
         }

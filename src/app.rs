@@ -14,7 +14,7 @@ pub struct SpacetimeApp {
     alice: Option<Observer>,
     spacetime_canvas: SpacetimeCanvas,
     spatial_canvas: SpatialCanvas,
-    /// Alice's outward signal pulses. It lives here rather than in a canvas because it is advanced
+    /// Alice's signal pulses. They live here rather than in a canvas because they are advanced
     /// on the simulation clock and read by both diagrams and the HUD.
     signal: SignalField,
     controls: AppControls,
@@ -370,7 +370,7 @@ impl eframe::App for SpacetimeApp {
 
                         ui.heading("Alice's signal and the two branches of r₋");
                         ui.label(
-                            "Alice's outward pulses are exact null geodesics. Which rays of a pulse cross r₋ and which never do is decided by the sign of E − Ω₋L, the ray's energy relative to the null generator of the inner horizon, with Ω₋ = a/(r₋² + a²). Rays with positive relative energy fall straight through; rays with negative relative energy take infinite coordinate time and accumulate on r₋, so in this chart the inner horizon is the stack of all the outgoing light of the interior. In Alice's own frame the accumulating rays are the prograde ones, the arc dragged forward in ϕ around α = 90°, of which only the 45° to 90° half lies inside the outward hemisphere she emits, and the arc narrows as she approaches r₋. Bob meets each pulse twice: first its crossing sheet sweeps over him on the way down with an ordinary shift, then he cuts through its frozen arc, standing on r₋, in the last twentieth of an M above the horizon. Alice sends a pulse every 0.1 M of her proper time, so consecutive arcs overlap and he crosses several sheets in a row, each blueshifted on the scale exp(κ₋Δt) with κ₋ = (r₊ − r₋)/(2(r₋² + a²)): about 560 for Δt = 4M and 3×10⁵ for Δt = 8M at a = 0.65. The light she sends as she crosses is shifted by exactly that factor; a pulse sent earlier by some lead time is shifted by exp(κ₋ × lead) more, having had that long to freeze as well. Each arc co-rotates at Ω₋ while it waits, so one emitter's transmission illuminates a band of r₋ rather than all of it, and how much of the stack Bob meets depends on where he crosses; the surface that covers every azimuth is built from the whole history of the interior. The ratio is finite because both observers cross the same smooth surface of exact Kerr. It diverges only as Δt → ∞, which is the Marolf and Ori (2012) statement that a hole which lives forever meets every late infaller with an outgoing null shock on this branch of r₋. The other branch, reached only as v → ∞, suffers Poisson and Israel mass inflation instead. Both make the exact continuation past r₋ physically untrustworthy, which is the content of strong cosmic censorship."
+                            "Alice's pulses are exact null geodesics, and she broadcasts each one into the whole of her light cone, every direction at once. Which rays of a pulse cross r₋ and which never do is decided by the sign of E − Ω₋L, the ray's energy relative to the null generator of the inner horizon, with Ω₋ = a/(r₋² + a²). Rays with positive relative energy fall straight through; rays with negative relative energy take infinite coordinate time and accumulate on r₋, so in this chart the inner horizon is the stack of all the outgoing light of the interior. In her own frame the accumulating rays are the prograde ones, the arc dragged forward in ϕ around α = 90°: it runs from about α = 45° to α = 135° well inside r₊, is wider than that just below r₊, and narrows as she approaches r₋, its edges being exactly where E − Ω₋L changes sign. Bob meets each pulse twice: first its crossing sheet sweeps over him on the way down with an ordinary shift, then he cuts through its frozen arc, standing on r₋, in the last twentieth of an M above the horizon. Alice sends a pulse every 0.1 M of her proper time, so consecutive arcs overlap and he crosses several sheets in a row, each blueshifted on the scale exp(κ₋Δt) with κ₋ = (r₊ − r₋)/(2(r₋² + a²)): about 560 for Δt = 4M and 3×10⁵ for Δt = 8M at a = 0.65. The light she sends as she crosses is shifted by exactly that factor; a pulse sent earlier by some lead time is shifted by exp(κ₋ × lead) more, having had that long to freeze as well. Each arc co-rotates at Ω₋ while it waits, so one emitter's transmission illuminates a band of r₋ rather than all of it, and how much of the stack Bob meets depends on where he crosses; the surface that covers every azimuth is built from the whole history of the interior. The ratio is finite because both observers cross the same smooth surface of exact Kerr. It diverges only as Δt → ∞, which is the Marolf and Ori (2012) statement that a hole which lives forever meets every late infaller with an outgoing null shock on this branch of r₋. The other branch, reached only as v → ∞, suffers Poisson and Israel mass inflation instead. Both make the exact continuation past r₋ physically untrustworthy, which is the content of strong cosmic censorship."
                         );
                         ui.add_space(8.0);
 
@@ -451,14 +451,15 @@ mod tests {
     fn test_alice_signal_is_received_through_the_app_loop() {
         // The dual-observer layout the Drop Observers button builds: Alice released from r = 4.5M
         // at t = 0 and Bob held at the same radius until t = Delta t, so his worldline trails hers
-        // and her outward signal climbs to him. This walks the app's own wiring rather than the
-        // physics module: the field is advanced on the simulation clock, Alice emits on her proper
+        // and her signal climbs to him. This walks the app's own wiring rather than the physics
+        // module: the field is advanced on the simulation clock, Alice emits on her proper
         // clock, Bob's receptions are detected, and both canvases and the HUD draw the result.
         //
-        // A receiver *below* the emitter, which is the app's own default layout, hears nothing from
-        // this signal, and that is geometry rather than an oversight: the outward half of Alice's
-        // cone falls no faster than the raindrop congruence itself, so it never overtakes a
-        // raindrop that is already deeper and accelerating away.
+        // Alice broadcasts into her whole cone, so a receiver below her hears her too: the ingoing
+        // principal null ray of that cone runs at dr/dt = -1 in this chart, which no timelike
+        // worldline can match, so it overtakes a raindrop that is already deeper. What such a
+        // receiver never sees is the outward arc, which falls no faster than the raindrop
+        // congruence itself.
         let mut app = SpacetimeApp::default();
         let params = WorldlineParams::default();
         app.alice = Some(Observer::new_with_phi(&app.metric, "Alice", 0.0, 4.5, 0.0, 0.25, params));

@@ -315,7 +315,7 @@ impl SpatialCanvas {
             }
         }
 
-        // 5. Alice's outward signal pulses, drawn over the flow but under the worldlines and the
+        // 5. Alice's signal pulses, drawn over the flow but under the worldlines and the
         // markers, so the fronts read as something moving through the field rather than as part of
         // the observers' own trajectories.
         if show_signal {
@@ -450,12 +450,13 @@ impl SpatialCanvas {
 
 /// Draw every live wavefront of Alice's signal in the equatorial embedding.
 ///
-/// Each pulse is a polyline through the Kerr-Schild positions of its surviving rays, ordered by
-/// emission angle, and each segment is coloured by the frequency a *local raindrop* would measure on
-/// it against Alice's emission. The raindrop is the reference because it is the one frame that
-/// exists at every radius, inside both horizons included, so the colour means the same thing across
-/// the whole picture: it is the shift a body falling freely from rest at infinity would see, not a
-/// shift quoted against a frame that stops existing at r+. A segment takes the mean of its two
+/// Alice broadcasts into her whole light cone, so each pulse is a *closed* polyline through the
+/// Kerr-Schild positions of its surviving rays, ordered by emission angle and with the last ray
+/// joined back to the first. Each segment is coloured by the frequency a *local raindrop* would
+/// measure on it against Alice's emission. The raindrop is the reference because it is the one
+/// frame that exists at every radius, inside both horizons included, so the colour means the same
+/// thing across the whole picture: it is the shift a body falling freely from rest at infinity
+/// would see, not a shift quoted against a frame that stops existing at r+. A segment takes the mean of its two
 /// endpoints' ratios, so the ramp is continuous along the front.
 ///
 /// Segments with a dead endpoint are skipped: a ray that has reached the ring is gone, and the front
@@ -481,14 +482,20 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
                 ray.frequency_ratio(metric, &[ut, ur, up])
             })
             .collect();
-        for i in 0..pulse.rays.len().saturating_sub(1) {
-            let (a, b) = (&pulse.rays[i], &pulse.rays[i + 1]);
+        let n = pulse.rays.len();
+        if n < 2 {
+            continue;
+        }
+        // n segments rather than n - 1: the closing one runs from the last ray back to the first.
+        for i in 0..n {
+            let j = (i + 1) % n;
+            let (a, b) = (&pulse.rays[i], &pulse.rays[j]);
             if !a.alive || !b.alive {
                 continue;
             }
             let p0 = to_screen(metric.cartesian_position(a.r, a.phi));
             let p1 = to_screen(metric.cartesian_position(b.r, b.phi));
-            let colour = Theme::shift_colour(0.5 * (ratios[i] + ratios[i + 1]), Theme::SHIFT_ALPHA);
+            let colour = Theme::shift_colour(0.5 * (ratios[i] + ratios[j]), Theme::SHIFT_ALPHA);
             painter.line_segment([p0, p1], Stroke::new(1.2, colour));
         }
     }

@@ -38,7 +38,7 @@ pub struct AppControls {
     /// Draw the animated raindrop flow (the Painlevé-Gullstrand / Doran river) on the
     /// equatorial view.
     pub show_river: bool,
-    /// Draw Alice's outward signal pulses on the equatorial view and their principal-null tracks
+    /// Draw Alice's signal pulses on the equatorial view and their principal-null tracks
     /// in the (t, r) diagram.
     pub show_signal: bool,
     /// Draw the family of outgoing principal null rays trapped between r+ and r- in the (t, r)
@@ -82,6 +82,24 @@ impl Default for AppControls {
             font_scale: 1.0,
         }
     }
+}
+
+/// The black hole presets, as (label, M, a/M, M_solar). One of them is highlighted when the metric
+/// is that preset's, which is read off the metric rather than remembered: nothing can then drift out
+/// of step with the geometry, and moving the mass or spin slider drops the highlight by itself.
+const PRESETS: [(&str, f64, f64, f64); 6] = [
+    ("Schwarzschild (10 M☉)", 1.0, 0.0, 10.0),
+    ("Cygnus X-1 (21.2 M☉)", 1.0, 0.97, 21.2),
+    ("Sagittarius A* (4.15M M☉)", 1.0, 0.90, 4.15e6),
+    ("M87* (6.5B M☉)", 1.0, 0.90, 6.5e9),
+    ("TON 618 (66B M☉)", 1.0, 0.88, 6.6e10),
+    ("Extreme Kerr (a=0.998)", 1.0, 0.998, 10.0),
+];
+
+/// Agreement of two of those parameters to one part in a million, with an absolute floor of that
+/// same size so that a spin of zero can be compared at all. Every slider step is larger than this.
+fn same_to_a_millionth(x: f64, y: f64) -> bool {
+    (x - y).abs() <= 1e-6 * y.abs().max(1.0)
 }
 
 impl AppControls {
@@ -229,13 +247,13 @@ impl AppControls {
                 .on_hover_text(
                     "Each drop is an element of the E = 1, L = 0 raindrop flow of the Painlevé-Gullstrand / Doran river model, drawn at proper size and entering the field at r = 12M as a circle of proper diameter 0.1 M. The flow alone deforms that circle after that: length along the flow grows as √(12M/r), the ratio of Doran river speeds, and width across the flow shrinks as neighbouring flow lines converge, √g_φφ δφ. The drawn aspect ratio is therefore the tidal stretching of the fluid element, reaching about 16 at r₊ for a = 0.65. Colour is the flow speed past a local ZAMO, β = √(1 − α²), reaching c at r₊.",
                 );
-            ui.checkbox(&mut self.show_signal, "Alice's Signal (outward pulses)")
+            ui.checkbox(&mut self.show_signal, "Alice's Signal (pulses)")
                 .on_hover_text(
-                    "Alice sends a pulse into the outward half of her own light cone every 0.1 M of her proper time, and every ray of it is an exact null geodesic of the coded metric. Colour is the frequency a local raindrop measures against Alice's emission, from a tenfold redshift through white to a thousandfold blueshift. Inside r₊ the rays that never reach r₋ are the prograde ones, dragged forward in ϕ: that is the arc of the pulse around α = 90°, so only its 45° to 90° half lies inside the emitted outward hemisphere, and the arc narrows as Alice nears r₋. Those arcs stack up against the Cauchy horizon while the rest of the pulse falls through it, and because the pulses are close enough together for consecutive arcs to overlap there, an infaller crossing r₋ where they stand cuts through several sheets in a row, each blueshifted on the scale exp(κ₋Δt).",
+                    "Alice broadcasts a pulse into the whole of her own light cone every 0.1 M of her proper time, and every ray of it is an exact null geodesic of the coded metric. Colour is the frequency a local raindrop measures against Alice's emission, from a tenfold redshift through white to a thousandfold blueshift. Inside r₊ the rays that never reach r₋ are the prograde ones, dragged forward in ϕ: that is the arc of the pulse around α = 90°, running from about 45° to 135° well inside r₊, wider than that just below r₊ and narrowing as Alice nears r₋, its edges lying exactly where E − Ω₋L changes sign. Those arcs stack up against the Cauchy horizon while the rest of the pulse falls through it, and because the pulses are close enough together for consecutive arcs to overlap there, an infaller crossing r₋ where they stand cuts through several sheets in a row, each blueshifted on the scale exp(κ₋Δt).",
                 );
             ui.checkbox(&mut self.show_outgoing_rays, "Outgoing Light Inside r₊")
                 .on_hover_text(
-                    "The faint magenta lines in the (t, r) diagram are outgoing principal null rays of the interior. Each leaves r₊, falls, and piles onto r₋ without ever crossing it. The Cauchy horizon in this chart is where the outgoing light of the whole interior accumulates, and a worldline falling through r₋ cuts the whole pile in finite proper time.",
+                    "The pink lines in the (t, r) diagram are outgoing principal null rays of the interior. Each leaves r₊, falls, and piles onto r₋ without ever crossing it. Every line is the same ray translated in t, and r − r₋ shrinks like exp(−κ₋t), so the pile-up is exponential and the last stretch of every ray lies within a pixel of r₋. The Cauchy horizon in this chart is where the outgoing light of the whole interior accumulates, and a worldline falling through r₋ cuts the whole pile in finite proper time.",
                 );
             ui.checkbox(&mut self.show_streamlines, "Frame-Dragging Streamlines");
 
@@ -279,29 +297,14 @@ impl AppControls {
             ui.label(egui::RichText::new("Presets (Sets Mass & Spin):").small());
             ui.horizontal_wrapped(|ui| {
                 let mut preset_changed = false;
-                if ui.button("Schwarzschild (10 M☉)").clicked() {
-                    *metric = KerrSchild::with_solar_mass(1.0, 0.0, 10.0);
-                    preset_changed = true;
-                }
-                if ui.button("Cygnus X-1 (21.2 M☉)").clicked() {
-                    *metric = KerrSchild::with_solar_mass(1.0, 0.97, 21.2);
-                    preset_changed = true;
-                }
-                if ui.button("Sagittarius A* (4.15M M☉)").clicked() {
-                    *metric = KerrSchild::with_solar_mass(1.0, 0.90, 4.15e6);
-                    preset_changed = true;
-                }
-                if ui.button("M87* (6.5B M☉)").clicked() {
-                    *metric = KerrSchild::with_solar_mass(1.0, 0.90, 6.5e9);
-                    preset_changed = true;
-                }
-                if ui.button("TON 618 (66B M☉)").clicked() {
-                    *metric = KerrSchild::with_solar_mass(1.0, 0.88, 6.6e10);
-                    preset_changed = true;
-                }
-                if ui.button("Extreme Kerr (a=0.998)").clicked() {
-                    *metric = KerrSchild::with_solar_mass(1.0, 0.998, 10.0);
-                    preset_changed = true;
+                for (label, m, a_star, m_solar) in PRESETS {
+                    let active = same_to_a_millionth(metric.m, m)
+                        && same_to_a_millionth(metric.a_star(), a_star)
+                        && same_to_a_millionth(metric.m_solar, m_solar);
+                    if ui.selectable_label(active, label).clicked() {
+                        *metric = KerrSchild::with_solar_mass(m, a_star * m, m_solar);
+                        preset_changed = true;
+                    }
                 }
                 if preset_changed {
                     *current_time = 0.0;
