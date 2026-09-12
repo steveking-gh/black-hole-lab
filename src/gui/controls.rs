@@ -208,7 +208,7 @@ impl AppControls {
             }
             ui.checkbox(&mut self.show_river, "River of Space (raindrop flow)")
                 .on_hover_text(
-                    "Each drop is an element of the E = 1, L = 0 raindrop flow of the Painlevé-Gullstrand / Doran river model, drawn at proper size. Length is the separation of consecutive raindrops as those raindrops measure the gap, √(2M/r) per unit release interval: the Doran river speed, reaching c at the static limit r = 2M. Width is the proper spacing of neighbouring flow lines, √g_φφ δφ, thinning towards the hole. Colour is the flow speed past a local ZAMO, β = √(1 − α²), reaching c at r₊.",
+                    "Each drop is an element of the E = 1, L = 0 raindrop flow of the Painlevé-Gullstrand / Doran river model, drawn at proper size and entering the field at r = 12M as a circle of proper diameter 0.1 M. The flow alone deforms that circle after that: length along the flow grows as √(12M/r), the ratio of Doran river speeds, and width across the flow shrinks as neighbouring flow lines converge, √g_φφ δφ. The drawn aspect ratio is therefore the tidal stretching of the fluid element, reaching about 16 at r₊ for a = 0.65. Colour is the flow speed past a local ZAMO, β = √(1 − α²), reaching c at r₊.",
                 );
             ui.checkbox(&mut self.show_streamlines, "Frame-Dragging Streamlines");
 

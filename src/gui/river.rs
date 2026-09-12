@@ -26,26 +26,23 @@ const MAX_SUBSTEPS: usize = 64;
 /// `R_MAX` do not pop into view.
 const FADE_IN_T: f64 = 1.0;
 
-/// Release spacing of a drop, in M of coordinate time t: the drop's head and its tail are two
-/// raindrops of the same congruence launched DROP_DT of t apart, so the drawn element is the
-/// piece of the river laid down over that interval.
-const DROP_DT: f64 = 0.2;
-
-/// Azimuthal separation, in radians, of the two flow lines whose transverse gap sets the drop's
-/// width. Chosen so that sqrt(g_phiphi(12M)) DROP_DPHI comes out near 3 px at the default 48 px/M
-/// (sqrt(g_phiphi) ~ 12 there, so 12 * 0.005 * 48 ~ 2.9): a drawing choice about how thick the
-/// far field looks, and nothing else. Every drop then reports the proper spacing of the same two
-/// flow lines, so the thinning towards the hole is the geometry, not the constant.
-const DROP_DPHI: f64 = 0.005;
+/// Proper diameter, in units of M, of a drop at the radius where it enters the field. A drop is a
+/// circle of this diameter at `R_MAX` and nothing but the flow deforms it after that, so this is
+/// the only size choice in the drawing, and it is a drawing choice: at the default 48 px/M a fresh
+/// drop is 4.8 px across. The release spacings that produce it come from `drop_release_spacings`.
+const DROP_DIAMETER_AT_SPAWN: f64 = 0.1;
 
 /// Number of vertices in the polygon that stands in for each drop's ellipse.
 const DROP_VERTICES: usize = 16;
 
-/// Legibility floor and cap on the drawn semi-major axis, in pixels.
-const DROP_SEMI_MAJOR_PX: (f32, f32) = (1.0, 40.0);
+/// Cap on the drawn semi-major axis, in pixels. When it binds, both axes are scaled by the same
+/// factor, so the drop shrinks without changing shape.
+const DROP_SEMI_MAJOR_MAX_PX: f32 = 40.0;
 
-/// Legibility floor and cap on the drawn semi-minor axis, in pixels.
-const DROP_SEMI_MINOR_PX: (f32, f32) = (0.6, 12.0);
+/// Floor on the drawn semi-minor axis, in pixels. A floor necessarily breaks the aspect ratio, but
+/// it binds only once the width has dropped below a pixel, which happens deep inside where the
+/// element really is that thin.
+const DROP_SEMI_MINOR_MIN_PX: f32 = 0.6;
 
 /// Coordinate velocity (dr/dt, dphi/dt) of the river at radius r: the E = 1, L = 0 ingoing
 /// geodesic through that radius, which is the raindrop congruence the Painleve-Gullstrand and
@@ -159,6 +156,32 @@ pub fn proper_drop_width(metric: &KerrSchild, r: f64, dphi: f64) -> f64 {
     let u = [ut, ur, uphi];
     let xi = [0.0, 0.0, dphi];
     proper_length_sq(metric, r, &u, &xi).max(0.0).sqrt()
+}
+
+/// Release spacings of the two raindrop pairs that bound a drop: `dt` of coordinate time between
+/// the raindrop at its head and the one at its tail, and `dphi` of azimuth between the two flow
+/// lines that bound it sideways.
+///
+/// Both are derived from `DROP_DIAMETER_AT_SPAWN` rather than chosen by hand, which defines the
+/// element as a circle of that proper diameter D at the radius R_MAX where it enters the field:
+///     dt   = D / sqrt(2M/R_MAX)        so  length(R_MAX) = sqrt(2M/R_MAX) dt        = D,
+///     dphi = D / sqrt(g_phiphi(R_MAX)) so  width(R_MAX)  = sqrt(g_phiphi(R_MAX)) dphi = D.
+/// Both depend on the metric, g_phiphi through a, so they are computed per draw rather than
+/// written down as constants.
+///
+/// Thereafter the flow alone deforms that circle. The length scales as the ratio of Doran speeds,
+///     length(r) / D = sqrt(R_MAX / r),
+/// the tidal stretching along the flow of an element released from rest at infinity, and the width
+/// as
+///     width(r) / D = sqrt(g_phiphi(r) / g_phiphi(R_MAX)),
+/// the proper convergence of neighbouring flow lines. The drawn aspect ratio length/width is
+/// therefore the spaghettification factor of the fluid element itself, which is (R_MAX/r)^(3/2)
+/// wherever a is negligible. Particles seeded inside R_MAX at start-up obey the same rule, both
+/// sizes being functions of r alone, which is consistent with their having come from R_MAX.
+fn drop_release_spacings(metric: &KerrSchild) -> (f64, f64) {
+    let dt = DROP_DIAMETER_AT_SPAWN / metric.doran_river_speed(R_MAX);
+    let dphi = DROP_DIAMETER_AT_SPAWN / metric.metric_components(R_MAX)[2][2].sqrt();
+    (dt, dphi)
 }
 
 /// One tracer of the river, carried in chart coordinates so that the advection is exact and the
@@ -284,12 +307,15 @@ impl RiverField {
     /// element's own proper dimensions.
     ///
     /// The long axis is `proper_drop_length_closed_form`, the separation of two raindrops released
-    /// DROP_DT of coordinate time apart as those raindrops measure it, which at E = 1 is the Doran
-    /// river speed sqrt(2M/r) times DROP_DT and so reaches DROP_DT itself at the static limit
-    /// r = 2M. The short axis is `proper_drop_width`, the proper gap between two flow lines
-    /// DROP_DPHI apart in azimuth. Both are ruler readings in the drop's rest frame, taken from
-    /// the coded metric, so the stretching along the flow and the thinning across it are the
+    /// dt of coordinate time apart as those raindrops measure it, which at E = 1 is the Doran river
+    /// speed sqrt(2M/r) times dt. The short axis is `proper_drop_width`, the proper gap between two
+    /// flow lines dphi apart in azimuth. Both are ruler readings in the drop's rest frame, taken
+    /// from the coded metric, so the stretching along the flow and the thinning across it are the
     /// tidal deformation of the element itself.
+    ///
+    /// `drop_release_spacings` sets dt and dphi so that both axes come out at
+    /// `DROP_DIAMETER_AT_SPAWN` at R_MAX: every element enters the field as a circle, and whatever
+    /// shape it carries further in was put there by the flow.
     ///
     /// The colour stays keyed to `KerrSchild::river_speed`, the flow's speed against the local
     /// ZAMO, which reaches c at r+ rather than at 2M: the two river speeds are therefore both on
@@ -302,6 +328,7 @@ impl RiverField {
         px_per_m: f32,
     ) {
         let raindrop = raindrop_congruence(metric);
+        let (drop_dt, drop_dphi) = drop_release_spacings(metric);
         for p in &self.particles {
             let fade = (p.age / FADE_IN_T).clamp(0.0, 1.0);
             let alpha = (Theme::RIVER_ALPHA as f64 * fade).round() as u8;
@@ -325,14 +352,24 @@ impl RiverField {
             };
             let across = egui::vec2(-along.y, along.x);
 
-            // Proper sizes first, pixels second. The clamps are legibility floors and caps on the
-            // drawing alone: no integration, rate or invariant anywhere else sees them.
-            let length = proper_drop_length_closed_form(metric, p.r, raindrop.energy, DROP_DT);
-            let width = proper_drop_width(metric, p.r, DROP_DPHI);
-            let semi_major = ((0.5 * length) as f32 * px_per_m)
-                .clamp(DROP_SEMI_MAJOR_PX.0, DROP_SEMI_MAJOR_PX.1);
-            let semi_minor = ((0.5 * width) as f32 * px_per_m)
-                .clamp(DROP_SEMI_MINOR_PX.0, DROP_SEMI_MINOR_PX.1);
+            // Proper sizes first, pixels second. The limits are legibility bounds on the drawing
+            // alone: no integration, rate or invariant anywhere else sees them.
+            let length = proper_drop_length_closed_form(metric, p.r, raindrop.energy, drop_dt);
+            let width = proper_drop_width(metric, p.r, drop_dphi);
+            let mut semi_major = (0.5 * length) as f32 * px_per_m;
+            let mut semi_minor = (0.5 * width) as f32 * px_per_m;
+            // An oversized drop is scaled on both axes at once, so the aspect ratio, which is the
+            // physics on show here, survives the cap.
+            if semi_major > DROP_SEMI_MAJOR_MAX_PX {
+                let shrink = DROP_SEMI_MAJOR_MAX_PX / semi_major;
+                semi_major *= shrink;
+                semi_minor *= shrink;
+            }
+            // The floor on the minor axis is the one place the ratio is broken, and it binds only
+            // where the width has gone sub-pixel, deep inside where the element really is that
+            // thin. Nothing needs a floor on the major axis: a drop is 4.8 px across at spawn at
+            // the default 48 px/M, and it only grows on the way in.
+            let semi_minor = semi_minor.max(DROP_SEMI_MINOR_MIN_PX);
 
             let points: Vec<Pos2> = (0..DROP_VERTICES)
                 .map(|k| {
@@ -457,11 +494,12 @@ mod tests {
         let mut worst = 0.0f64;
         for &a in &[0.0, 0.65, 0.95] {
             let metric = KerrSchild::new(1.0, a);
+            let (dt, _) = drop_release_spacings(&metric);
             let rp = metric.outer_horizon();
             for &energy in &[1.0, 1.3] {
                 for &r in &[12.0, 6.0, 3.0, 2.0, rp, 1.0, 0.5, 0.2] {
-                    let projected = proper_drop_length(&metric, r, energy, DROP_DT);
-                    let closed = proper_drop_length_closed_form(&metric, r, energy, DROP_DT);
+                    let projected = proper_drop_length(&metric, r, energy, dt);
+                    let closed = proper_drop_length_closed_form(&metric, r, energy, dt);
                     let d = (projected - closed).abs();
                     worst = worst.max(d);
                     assert!(
@@ -481,19 +519,20 @@ mod tests {
         // directly and hits exactly dt at the static limit r = 2M, for every spin.
         for &a in &[0.0, 0.65, 0.95] {
             let metric = KerrSchild::new(1.0, a);
+            let (dt, _) = drop_release_spacings(&metric);
             for &r in &[12.0, 6.0, 3.0, 2.0, 1.0, 0.2] {
-                let expected = (2.0_f64 / r).sqrt() * DROP_DT;
-                let got = proper_drop_length_closed_form(&metric, r, 1.0, DROP_DT);
+                let expected = (2.0_f64 / r).sqrt() * dt;
+                let got = proper_drop_length_closed_form(&metric, r, 1.0, dt);
                 assert!((got - expected).abs() < 1e-12, "ell = {got} vs {expected} at r={r} (a={a})");
                 assert!(
-                    (got - metric.doran_river_speed(r) * DROP_DT).abs() < 1e-12,
+                    (got - metric.doran_river_speed(r) * dt).abs() < 1e-12,
                     "ell must be doran_river_speed * dt at r={r} (a={a})"
                 );
             }
-            let at_static_limit = proper_drop_length_closed_form(&metric, 2.0, 1.0, DROP_DT);
+            let at_static_limit = proper_drop_length_closed_form(&metric, 2.0, 1.0, dt);
             assert!(
-                (at_static_limit - DROP_DT).abs() < 1e-12,
-                "ell(2M) = {at_static_limit} must be dt = {DROP_DT} (a={a})"
+                (at_static_limit - dt).abs() < 1e-12,
+                "ell(2M) = {at_static_limit} must be dt = {dt} (a={a})"
             );
         }
     }
@@ -504,11 +543,12 @@ mod tests {
         // sqrt(g_phiphi) dphi exactly, read straight off the coded metric component.
         for &a in &[0.0, 0.65, 0.95] {
             let metric = KerrSchild::new(1.0, a);
+            let (_, dphi) = drop_release_spacings(&metric);
             let rp = metric.outer_horizon();
             for &r in &[12.0, 6.0, 3.0, 2.0, rp, 1.0, 0.5, 0.2] {
                 let g_phiphi = metric.metric_components(r)[2][2];
-                let expected = g_phiphi.sqrt() * DROP_DPHI;
-                let got = proper_drop_width(&metric, r, DROP_DPHI);
+                let expected = g_phiphi.sqrt() * dphi;
+                let got = proper_drop_width(&metric, r, dphi);
                 assert!(
                     (got - expected).abs() < 1e-12 * (1.0 + expected),
                     "w = {got} vs {expected} at r={r} (a={a})"
@@ -524,23 +564,24 @@ mod tests {
         // r -> 0 because g_phiphi ~ 2 M a^2 / r there: the ring has infinite proper circumference.
         for &a in &[0.65, 0.95] {
             let metric = KerrSchild::new(1.0, a);
+            let (_, dphi) = drop_release_spacings(&metric);
             let r_min_width = (metric.m * a * a).cbrt();
             assert!(
                 r_min_width > metric.inner_horizon() && r_min_width < metric.outer_horizon(),
                 "the width minimum at r={r_min_width} must sit between the horizons (a={a})"
             );
-            let w_min = proper_drop_width(&metric, r_min_width, DROP_DPHI);
+            let w_min = proper_drop_width(&metric, r_min_width, dphi);
             for &r in &[12.0, 3.0, 2.0, 1.5 * r_min_width, 0.5 * r_min_width, 0.05, 0.01] {
                 assert!(
-                    proper_drop_width(&metric, r, DROP_DPHI) > w_min,
+                    proper_drop_width(&metric, r, dphi) > w_min,
                     "w({r}) = {} must exceed the minimum {w_min} (a={a})",
-                    proper_drop_width(&metric, r, DROP_DPHI)
+                    proper_drop_width(&metric, r, dphi)
                 );
             }
             // Monotone growth on the way in from the turning point to the ring.
             let mut previous = w_min;
             for &r in &[0.5 * r_min_width, 0.1 * r_min_width, 0.01 * r_min_width] {
-                let w = proper_drop_width(&metric, r, DROP_DPHI);
+                let w = proper_drop_width(&metric, r, dphi);
                 assert!(w > previous, "w({r}) = {w} must exceed w at the larger radius {previous}");
                 previous = w;
             }
@@ -548,11 +589,67 @@ mod tests {
 
         // Without spin g_phiphi = r^2, so the width falls monotonically to zero instead.
         let schwarzschild = KerrSchild::new(1.0, 0.0);
+        let (_, dphi) = drop_release_spacings(&schwarzschild);
         let mut previous = f64::INFINITY;
         for &r in &[12.0, 6.0, 2.0, 0.5, 0.05] {
-            let w = proper_drop_width(&schwarzschild, r, DROP_DPHI);
+            let w = proper_drop_width(&schwarzschild, r, dphi);
             assert!(w < previous, "w({r}) = {w} must fall without spin");
             previous = w;
+        }
+    }
+
+    #[test]
+    fn test_drops_are_circles_where_they_enter_the_field() {
+        // The spacings are derived so that the two axes coincide at R_MAX, for every spin: a drop
+        // enters the field round, and every departure from round further in is the flow's doing.
+        for &a in &[0.0, 0.65, 0.95] {
+            let metric = KerrSchild::new(1.0, a);
+            let (dt, dphi) = drop_release_spacings(&metric);
+            let length = proper_drop_length_closed_form(&metric, R_MAX, 1.0, dt);
+            let width = proper_drop_width(&metric, R_MAX, dphi);
+            assert!(
+                (length - DROP_DIAMETER_AT_SPAWN).abs() < 1e-12,
+                "length(R_MAX) = {length} must be the spawn diameter (a={a})"
+            );
+            assert!(
+                (width - DROP_DIAMETER_AT_SPAWN).abs() < 1e-12,
+                "width(R_MAX) = {width} must be the spawn diameter (a={a})"
+            );
+        }
+    }
+
+    #[test]
+    fn test_drop_aspect_ratio_is_the_tidal_stretch() {
+        // Without spin the length goes as sqrt(R_MAX/r) and the width as r/R_MAX, so the drawn
+        // aspect ratio is exactly the (R_MAX/r)^(3/2) stretch of a radially infalling element.
+        let schwarzschild = KerrSchild::new(1.0, 0.0);
+        let (dt, dphi) = drop_release_spacings(&schwarzschild);
+        for &r in &[6.0, 3.0, 2.0, 1.0, 0.5] {
+            let ratio = proper_drop_length_closed_form(&schwarzschild, r, 1.0, dt)
+                / proper_drop_width(&schwarzschild, r, dphi);
+            let expected = (R_MAX / r).powf(1.5);
+            assert!(
+                (ratio - expected).abs() < 1e-12 * (1.0 + expected),
+                "aspect = {ratio} vs {expected} at r={r}"
+            );
+        }
+
+        // With spin g_phiphi carries a, so the ratio is no longer a pure power of r, but it still
+        // grows all the way in and the element is stretched by more than a factor of ten by the
+        // time it reaches the outer horizon.
+        let kerr = KerrSchild::new(1.0, 0.65);
+        let (dt, dphi) = drop_release_spacings(&kerr);
+        let aspect = |r: f64| {
+            proper_drop_length_closed_form(&kerr, r, 1.0, dt) / proper_drop_width(&kerr, r, dphi)
+        };
+        let rp = kerr.outer_horizon();
+        assert!(aspect(rp) > 10.0, "aspect(r+) = {} must exceed 10", aspect(rp));
+        let mut previous = aspect(R_MAX);
+        assert!((previous - 1.0).abs() < 1e-12, "aspect(R_MAX) = {previous} must be 1");
+        for &r in &[9.0, 6.0, 4.0, 3.0, 2.0, rp] {
+            let ratio = aspect(r);
+            assert!(ratio > previous, "aspect({r}) = {ratio} must exceed {previous} further out");
+            previous = ratio;
         }
     }
 
@@ -567,3 +664,4 @@ mod tests {
         }
     }
 }
+
