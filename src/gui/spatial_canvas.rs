@@ -94,6 +94,8 @@ impl SpatialCanvas {
         let r_to_px = |r: f64| -> f32 { (r as f32) * self.zoom };
         let to_screen =
             |(x, y): (f64, f64)| center + Vec2::new(x as f32 * self.zoom, -(y as f32) * self.zoom);
+        // Direction vectors (velocities, tangents) need the same y flip as positions.
+        let to_screen_dir = |(vx, vy): (f64, f64)| Vec2::new(vx as f32, -(vy as f32));
 
         // 0. Spatial Coordinate Axes (X and Y)
         let axis_stroke = Stroke::new(1.0, Color32::from_rgba_premultiplied(55, 65, 88, 120));
@@ -271,7 +273,7 @@ impl SpatialCanvas {
                     // which carries the right handedness for either sign of the spin.
                     let arrow_len = (omega.abs() * 40.0).clamp(3.0, 22.0) as f32;
                     let drag = metric.cartesian_velocity(r, phi, 0.0, omega);
-                    let tangent = Vec2::new(drag.0 as f32, drag.1 as f32).normalized() * arrow_len;
+                    let tangent = to_screen_dir(drag).normalized() * arrow_len;
                     let p_end = p_start + tangent;
 
                     let color = if r < rp {
@@ -321,7 +323,7 @@ impl SpatialCanvas {
                 // velocity, so the ingoing ray (dr/dt = -1, dphi/dt = 0) comes out as the straight
                 // line -e^{i phi} tangent to the ring, as it must in this chart.
                 let (vx, vy) = metric.cartesian_velocity(bob.r, bob.phi, dr_dt, dphi_dt);
-                let ray_vector = Vec2::new(vx as f32, vy as f32).normalized() * ray_len;
+                let ray_vector = to_screen_dir((vx, vy)).normalized() * ray_len;
                 let ray_end = bob_pos + ray_vector;
 
                 let ray_color = if dr_dt < 0.0 {

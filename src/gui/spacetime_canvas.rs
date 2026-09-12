@@ -922,10 +922,33 @@ impl SpacetimeCanvas {
                 }
             };
 
-            let label = format!("{}\n{}", name, note);
+            // Quantify the tilt so a 41.8-degree surface is not mistaken for a 45-degree one.
+            // A timelike surface is the worldsheet of observers hovering at that r; in this frame it
+            // moves at 1/|slope| (a boosted vertical line has slope 1/v). A spacelike surface is
+            // a simultaneity slice of the E = 0 observers there; the focus observer's speed relative
+            // to them is |slope|, and the surface crosses this worldline at tau = xi^0 on the axis.
+            let slope_abs = line.slope().abs();
+            let tilt_deg = if slope_abs.is_finite() { slope_abs.atan().to_degrees() } else { 90.0 };
+            let detail = match line.character(2e-3) {
+                SurfaceCharacter::Timelike => {
+                    let xi1 = if line.dir[1].abs() > 1e-12 {
+                        line.point[0] - line.dir[0] * line.point[1] / line.dir[1]
+                    } else {
+                        line.point[0]
+                    };
+                    let speed = if slope_abs.is_finite() { 1.0 / slope_abs.max(1e-9) } else { 0.0 };
+                    format!("tilt {:.1}° • moving at {:.2}c • ξ¹ ≈ {:+.2} M (1st order)", tilt_deg, speed, xi1)
+                }
+                SurfaceCharacter::Null => format!("tilt {:.1}°", tilt_deg),
+                SurfaceCharacter::Spacelike => {
+                    let xi0 = line.xi0_at_axis().unwrap_or(0.0);
+                    format!("tilt {:.1}° • closing at {:.2}c • on your worldline at τ ≈ {:+.2} M (1st order)", tilt_deg, slope_abs, xi0)
+                }
+            };
+            let label = format!("{}\n{}\n{}", name, note, detail);
             let (label_pos, align) = if line.slope().abs() >= 1.0 {
                 // Steep line: hang the label off it, stacked down the top margin.
-                let y = (rect.top() + 26.0 + 24.0 * font_scale * (idx as f32)).min(rect.bottom() - 26.0);
+                let y = (rect.top() + 26.0 + 36.0 * font_scale * (idx as f32)).min(rect.bottom() - 40.0);
                 let x = segment_x_at_y(end_a, end_b, y)
                     .clamp(rect.left() + 6.0, rect.right() - 150.0 * font_scale);
                 (Pos2::new(x + 5.0, y), egui::Align2::LEFT_TOP)
@@ -942,6 +965,15 @@ impl SpacetimeCanvas {
                 egui::FontId::proportional(10.0 * font_scale),
                 color,
             );
+        }
+
+        // Faint extensions of the observer's own null lines across the whole chart, so that the
+        // intercept of a 45-degree ray with a nearly parallel spacelike surface is visible.
+        let null_faint = Color32::from_rgba_unmultiplied(200, 220, 255, 45);
+        for d in [Vec2::new(1.0, -1.0), Vec2::new(1.0, 1.0)] {
+            if let Some((a, b)) = clip_line_to_rect(center, d, rect) {
+                painter.line_segment([a, b], Stroke::new(0.8, null_faint));
+            }
         }
 
         // 3. The focus observer's own light cone: 45 degrees through the origin, by construction.

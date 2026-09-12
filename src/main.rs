@@ -18,6 +18,33 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Relativistic Spacetime & Cauchy Horizon Visualizer",
         native_options,
-        Box::new(|_cc| Ok(Box::new(SpacetimeApp::default()))),
+        Box::new(|cc| {
+            install_fonts(&cc.egui_ctx);
+            Ok(Box::new(SpacetimeApp::default()))
+        }),
     )
+}
+
+/// egui's bundled proportional font has no subscripts, Greek or maths symbols, so r₋, τ, ν, ξ
+/// and friends rendered as boxes. Atkinson Hyperlegible (SIL OFL) is the primary text face;
+/// DejaVu Sans (Bitstream Vera licence) sits behind it as the symbol fallback for both families.
+/// Licences are in assets/fonts.
+fn install_fonts(ctx: &egui::Context) {
+    use egui::{FontData, FontDefinitions, FontFamily};
+    use std::sync::Arc;
+
+    let mut fonts = FontDefinitions::default();
+    fonts.font_data.insert(
+        "atkinson".to_owned(),
+        Arc::new(FontData::from_static(include_bytes!("../assets/fonts/AtkinsonHyperlegible-Regular.ttf"))),
+    );
+    fonts.font_data.insert(
+        "dejavu".to_owned(),
+        Arc::new(FontData::from_static(include_bytes!("../assets/fonts/DejaVuSans.ttf"))),
+    );
+    let proportional = fonts.families.entry(FontFamily::Proportional).or_default();
+    proportional.insert(0, "atkinson".to_owned());
+    proportional.insert(1, "dejavu".to_owned());
+    fonts.families.entry(FontFamily::Monospace).or_default().push("dejavu".to_owned());
+    ctx.set_fonts(fonts);
 }
