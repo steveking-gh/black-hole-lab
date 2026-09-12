@@ -1,0 +1,30 @@
+src/main.rs
+  s_5e464e0dde83ec::t_c47365e81f3da4 21-24,27-49
+  s_5e464e0dde83ec::t_05a2f9104e37d9 50
+src/gui/spacetime_canvas.rs
+  s_5e464e0dde83ec::t_0d34d63666d6a4 925-948,951,970-976
+  s_5e464e0dde83ec::t_28b001f62cad47 977-978
+src/gui/spatial_canvas.rs
+  s_5e464e0dde83ec::t_c0d2921e0e0df4 326
+  s_5e464e0dde83ec::t_5c423092975d43 97-98,276
+assets/fonts/LICENSE-DejaVu.txt
+  s_5e464e0dde83ec::t_331aaed90e6c18 1-187
+assets/fonts/OFL-AtkinsonHyperlegible.txt
+  s_5e464e0dde83ec::t_6649138ef9a215 1-92
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f96c51dd0a617a703e0aaa71a889fc7792446920",
+  "prompts": {},
+  "sessions": {
+    "s_5e464e0dde83ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc7a846d-d13c-4554-b9bf-dc2dee2f30eb",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
