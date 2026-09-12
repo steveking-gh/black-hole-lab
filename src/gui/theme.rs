@@ -103,4 +103,49 @@ impl Theme {
     pub const WARNING_RED: Color32 = Color32::from_rgb(255, 50, 80);
     pub const BLUESHIFT_BLUE: Color32 = Color32::from_rgb(60, 140, 255);
     pub const BLUESHIFT_VIOLET: Color32 = Color32::from_rgb(190, 60, 255);
+
+    // Measured frequency shift nu_obs / nu_emit, for Alice's signal rays and Bob's receptions.
+    // The ramp is keyed to log10 of the ratio, because the shift on a ray that has frozen onto r-
+    // grows exponentially in coordinate time: only the logarithm has a usable dynamic range.
+    /// log10(ratio) at or below which the colour is clamped to `SHIFT_RED_RGB`.
+    pub const SHIFT_LOG_MIN: f64 = -1.0;
+    /// log10(ratio) at which the ramp reaches `SHIFT_BLUE_RGB`.
+    pub const SHIFT_LOG_BLUE: f64 = 1.0;
+    /// log10(ratio) at or above which the colour is clamped to `SHIFT_VIOLET_RGB`.
+    pub const SHIFT_LOG_MAX: f64 = 3.0;
+    pub const SHIFT_RED_RGB: [u8; 3] = [255, 80, 50]; // deep orange-red, a tenfold redshift
+    pub const SHIFT_WHITE_RGB: [u8; 3] = [245, 245, 250]; // unshifted
+    pub const SHIFT_BLUE_RGB: [u8; 3] = [60, 140, 255]; // BLUESHIFT_BLUE, a tenfold blueshift
+    pub const SHIFT_VIOLET_RGB: [u8; 3] = [190, 60, 255]; // BLUESHIFT_VIOLET, a thousandfold
+    /// Opacity of a drawn signal ray, low enough to leave the horizons and worldlines legible.
+    pub const SHIFT_ALPHA: u8 = 170;
+
+    /// The colour of a measured frequency ratio nu_obs / nu_emit, at opacity `alpha`: orange-red
+    /// at a tenfold redshift, white when unshifted, blue at a tenfold blueshift and violet at a
+    /// thousandfold, clamped at both ends. A non-positive or non-finite ratio, which no real
+    /// measurement produces, is drawn at the red end.
+    pub fn shift_colour(ratio: f64, alpha: u8) -> Color32 {
+        let lerp = |lo: [u8; 3], hi: [u8; 3], t: f64| -> [u8; 3] {
+            let t = t.clamp(0.0, 1.0);
+            [
+                (lo[0] as f64 + t * (hi[0] as f64 - lo[0] as f64)).round() as u8,
+                (lo[1] as f64 + t * (hi[1] as f64 - lo[1] as f64)).round() as u8,
+                (lo[2] as f64 + t * (hi[2] as f64 - lo[2] as f64)).round() as u8,
+            ]
+        };
+        let log = if ratio.is_finite() && ratio > 0.0 {
+            ratio.log10().clamp(Self::SHIFT_LOG_MIN, Self::SHIFT_LOG_MAX)
+        } else {
+            Self::SHIFT_LOG_MIN
+        };
+        let rgb = if log <= 0.0 {
+            lerp(Self::SHIFT_RED_RGB, Self::SHIFT_WHITE_RGB, 1.0 - log / Self::SHIFT_LOG_MIN)
+        } else if log <= Self::SHIFT_LOG_BLUE {
+            lerp(Self::SHIFT_WHITE_RGB, Self::SHIFT_BLUE_RGB, log / Self::SHIFT_LOG_BLUE)
+        } else {
+            let span = Self::SHIFT_LOG_MAX - Self::SHIFT_LOG_BLUE;
+            lerp(Self::SHIFT_BLUE_RGB, Self::SHIFT_VIOLET_RGB, (log - Self::SHIFT_LOG_BLUE) / span)
+        };
+        Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], alpha)
+    }
 }

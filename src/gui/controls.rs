@@ -2,6 +2,7 @@ use crate::gui::theme::Theme;
 use crate::physics::geodesic::GeodesicState;
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::{Observer, ObserverMode, WorldlineParams};
+use crate::physics::wavefront::SignalField;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReferenceFrame {
@@ -37,6 +38,12 @@ pub struct AppControls {
     /// Draw the animated raindrop flow (the Painlevé-Gullstrand / Doran river) on the
     /// equatorial view.
     pub show_river: bool,
+    /// Draw Alice's outward signal pulses on the equatorial view and their principal-null tracks
+    /// in the (t, r) diagram.
+    pub show_signal: bool,
+    /// Draw the family of outgoing principal null rays trapped between r+ and r- in the (t, r)
+    /// diagram.
+    pub show_outgoing_rays: bool,
     pub show_streamlines: bool,
     pub enable_dual_infall: bool,
     pub delta_t_delay: f64,
@@ -61,6 +68,8 @@ impl Default for AppControls {
             play_speed: 1.0,
             step_distance_km: 1000.0,
             show_river: true,
+            show_signal: true,
+            show_outgoing_rays: true,
             show_streamlines: true,
             enable_dual_infall: true,
             delta_t_delay: 8.0,
@@ -87,6 +96,7 @@ impl AppControls {
         metric: &mut KerrSchild,
         bob: &mut Observer,
         alice: &mut Option<Observer>,
+        signal: &mut SignalField,
         current_time: &mut f64,
     ) {
         ui.heading(egui::RichText::new("SPACETIME LAB").strong().color(Theme::HORIZON_OUTER));
@@ -123,6 +133,7 @@ impl AppControls {
                 }
                 if ui.button("⏮ Reset").clicked() {
                     *current_time = 0.0;
+                    signal.clear();
                     let params = self.worldline_params();
                     bob.reset_with_phi(metric, 0.0, 3.8, 0.0, params);
                     if let Some(al) = alice {
@@ -143,6 +154,9 @@ impl AppControls {
                     .clicked()
                 {
                     *current_time = (*current_time - current_step).max(0.0);
+                    // A wavefront cannot be run backwards, so the field is dropped and re-emitted
+                    // as time advances again. See the same note at the app's arrow-key handler.
+                    signal.clear();
                     bob.step_back(metric, current_step);
                     if let Some(al) = alice {
                         al.step_back(metric, current_step);
@@ -158,6 +172,11 @@ impl AppControls {
                     if let Some(al) = alice {
                         al.step(metric, *current_time, current_step);
                     }
+                    signal.advance(metric, current_step);
+                    if let Some(al) = alice {
+                        signal.emit_if_due(metric, al);
+                    }
+                    signal.detect_receptions(metric, bob);
                 }
             });
 
@@ -209,6 +228,14 @@ impl AppControls {
             ui.checkbox(&mut self.show_river, "River of Space (raindrop flow)")
                 .on_hover_text(
                     "Each drop is an element of the E = 1, L = 0 raindrop flow of the Painlevé-Gullstrand / Doran river model, drawn at proper size and entering the field at r = 12M as a circle of proper diameter 0.1 M. The flow alone deforms that circle after that: length along the flow grows as √(12M/r), the ratio of Doran river speeds, and width across the flow shrinks as neighbouring flow lines converge, √g_φφ δφ. The drawn aspect ratio is therefore the tidal stretching of the fluid element, reaching about 16 at r₊ for a = 0.65. Colour is the flow speed past a local ZAMO, β = √(1 − α²), reaching c at r₊.",
+                );
+            ui.checkbox(&mut self.show_signal, "Alice's Signal (outward pulses)")
+                .on_hover_text(
+                    "Alice sends a pulse into the outward half of her own light cone every 0.1 M of her proper time, and every ray of it is an exact null geodesic of the coded metric. Colour is the frequency a local raindrop measures against Alice's emission, from a tenfold redshift through white to a thousandfold blueshift. Inside r₊ the rays that never reach r₋ are the prograde ones, dragged forward in ϕ: that is the arc of the pulse around α = 90°, so only its 45° to 90° half lies inside the emitted outward hemisphere, and the arc narrows as Alice nears r₋. Those arcs stack up against the Cauchy horizon while the rest of the pulse falls through it, and because the pulses are close enough together for consecutive arcs to overlap there, an infaller crossing r₋ where they stand cuts through several sheets in a row, each blueshifted on the scale exp(κ₋Δt).",
+                );
+            ui.checkbox(&mut self.show_outgoing_rays, "Outgoing Light Inside r₊")
+                .on_hover_text(
+                    "The faint magenta lines in the (t, r) diagram are outgoing principal null rays of the interior. Each leaves r₊, falls, and piles onto r₋ without ever crossing it. The Cauchy horizon in this chart is where the outgoing light of the whole interior accumulates, and a worldline falling through r₋ cuts the whole pile in finite proper time.",
                 );
             ui.checkbox(&mut self.show_streamlines, "Frame-Dragging Streamlines");
 
@@ -278,6 +305,7 @@ impl AppControls {
                 }
                 if preset_changed {
                     *current_time = 0.0;
+                    signal.clear();
                     let params = self.worldline_params();
                     bob.reset_with_phi(metric, 0.0, 3.8, 0.0, params);
                     if let Some(al) = alice {
@@ -410,12 +438,14 @@ impl AppControls {
                 ui.label(egui::RichText::new("Alice drops from r = 4.5M at t = 0; Bob hovers there and is released at t = Δt, so his worldline trails hers by about Δt in coordinate time the whole way in.").small().color(Theme::TEXT_MUTED));
                 if ui.button("Drop Observers").clicked() {
                     *current_time = 0.0;
+                    signal.clear();
                     let params = self.worldline_params();
                     *alice = Some(Observer::new_with_phi(metric, "Alice", 0.0, 4.5, 0.0, 0.25, params));
                     *bob = Observer::new_with_phi(metric, "Bob", 0.0, 4.5, self.delta_t_delay, 0.0, params);
                 }
             } else {
                 *alice = None;
+                signal.clear();
             }
         });
 

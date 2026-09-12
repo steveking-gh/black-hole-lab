@@ -5,6 +5,7 @@ use crate::gui::spatial_canvas::SpatialCanvas;
 use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::{Observer, WorldlineParams};
+use crate::physics::wavefront::SignalField;
 use std::time::Instant;
 
 pub struct SpacetimeApp {
@@ -13,6 +14,9 @@ pub struct SpacetimeApp {
     alice: Option<Observer>,
     spacetime_canvas: SpacetimeCanvas,
     spatial_canvas: SpatialCanvas,
+    /// Alice's outward signal pulses. It lives here rather than in a canvas because it is advanced
+    /// on the simulation clock and read by both diagrams and the HUD.
+    signal: SignalField,
     controls: AppControls,
     current_time: f64,
     last_update: Instant,
@@ -39,10 +43,27 @@ impl Default for SpacetimeApp {
             alice,
             spacetime_canvas: SpacetimeCanvas::default(),
             spatial_canvas: SpatialCanvas::default(),
+            signal: SignalField::default(),
             controls: AppControls::default(),
             current_time: 0.0,
             last_update: Instant::now(),
         }
+    }
+}
+
+impl SpacetimeApp {
+    /// Carry Alice's signal forward by dt of the simulation clock: step every live ray and every
+    /// principal-null track, let Alice emit if her own proper time says a pulse is due, then look
+    /// for a front that has just swept over Bob. The order matters. Advancing first and emitting
+    /// second keeps a fresh pulse at Alice's current event instead of one step behind it, and
+    /// detecting last means a pulse emitted this frame already has a recorded side for Bob before
+    /// the next frame can move it.
+    fn advance_signal(&mut self, dt: f64) {
+        self.signal.advance(&self.metric, dt);
+        if let Some(al) = &self.alice {
+            self.signal.emit_if_due(&self.metric, al);
+        }
+        self.signal.detect_receptions(&self.metric, &self.bob);
     }
 }
 
@@ -78,6 +99,7 @@ impl eframe::App for SpacetimeApp {
             if let Some(ref mut al) = self.alice {
                 al.step(&self.metric, self.current_time, sim_dt);
             }
+            self.advance_signal(sim_dt);
             ctx.request_repaint();
         }
 
@@ -104,6 +126,10 @@ impl eframe::App for SpacetimeApp {
             // every t and "backwards" carries no information about it; running the advection in
             // reverse would only show particles climbing outward, which no raindrop does.
             self.spatial_canvas.river.advance(&self.metric, step);
+            // The signal field is dropped rather than rewound: a wavefront is not reversible, and
+            // running the rays backwards would draw an ingoing front that no emission ever made.
+            // The pulses are re-emitted from Alice's clock as time advances again.
+            self.signal.clear();
             self.bob.step_back(&self.metric, step);
             if let Some(ref mut al) = self.alice {
                 al.step_back(&self.metric, step);
@@ -124,6 +150,7 @@ impl eframe::App for SpacetimeApp {
             if let Some(ref mut al) = self.alice {
                 al.step(&self.metric, self.current_time, step);
             }
+            self.advance_signal(step);
             ctx.request_repaint();
         }
 
@@ -204,6 +231,8 @@ impl eframe::App for SpacetimeApp {
                 &self.metric,
                 &self.bob,
                 &self.alice,
+                &self.signal,
+                self.controls.delta_t_delay,
                 self.current_time,
                 self.controls.use_km,
             );
@@ -217,6 +246,7 @@ impl eframe::App for SpacetimeApp {
                     &mut self.metric,
                     &mut self.bob,
                     &mut self.alice,
+                    &mut self.signal,
                     &mut self.current_time,
                 );
             });
@@ -258,6 +288,9 @@ impl eframe::App for SpacetimeApp {
                             self.controls.use_km,
                             self.controls.frame_of_ref,
                             self.controls.font_scale,
+                            self.controls.show_signal,
+                            &self.signal,
+                            self.controls.show_outgoing_rays,
                         );
                     },
                 );
@@ -282,6 +315,8 @@ impl eframe::App for SpacetimeApp {
                             &self.alice,
                             self.controls.show_river,
                             self.controls.show_streamlines,
+                            self.controls.show_signal,
+                            &self.signal,
                             canvas_height,
                             self.controls.use_km,
                             self.controls.frame_of_ref,
@@ -330,6 +365,12 @@ impl eframe::App for SpacetimeApp {
                         ui.heading("The river model");
                         ui.label(
                             "The pale drops on the equatorial view are the raindrop congruence, E = 1 and L = 0, dropped from rest at infinity, and that congruence is the reference frame the whole app is built on: the Manual-drag boost β is defined against it, because it is the one frame that exists at every radius, inside the horizons included. Painlevé-Gullstrand time is the raindrop's own proper time, and Doran generalises that slicing to Kerr, which is why the drops spiral: L = 0 raindrops are still frame-dragged. The river's speed relative to the local ZAMO is β = √(1 − α²), which is √(2M/r) without spin and exactly 1 at r₊; Bob's own motion through the river is a boost of at most c on top of it, so inside r₊ the inward flow always wins, whatever the thrust. One caveat: the flat-space background the river picture paints is exact only under spherical symmetry. Hamilton and Lisle (Am. J. Phys. 76, 519, 2008) extend it to Kerr with a twisting tetrad, and in that construction the Doran background speed √(2Mr)/ρ reaches c at the ergosurface rather than at r₊; quoting the ZAMO-relative speed instead, as this view does, puts the horizon statement back into an invariant. Each drop is drawn at its proper size, the length along the flow and the width across it both obtained by projecting the separation of two nearby raindrops orthogonal to the four-velocity, so the stretching along the flow and the thinning across it are the tidal deformation of a fluid element of the river, taken exactly from the congruence rather than from the tidal tensor. Every drop enters the field at 12M as a circle of proper diameter 0.1M, and from there the flow alone deforms that circle: the length grows as √(12M/r) while the width shrinks as the flow lines converge, so the drawn aspect ratio is the spaghettification factor of the fluid element, about 16 at r₊ for a = 0.65. The length reports the Doran speed √(2M/r), which reaches c at the static limit 2M, while the colour reports the ZAMO-relative speed, which reaches c at r₊, so the two river speeds and the difference between the ergosurface and the horizon are both on screen at once. Near the ring the width grows again, because g_φφ → 2Ma²/r there and the ring is a circle of infinite proper circumference."
+                        );
+                        ui.add_space(8.0);
+
+                        ui.heading("Alice's signal and the two branches of r₋");
+                        ui.label(
+                            "Alice's outward pulses are exact null geodesics. Which rays of a pulse cross r₋ and which never do is decided by the sign of E − Ω₋L, the ray's energy relative to the null generator of the inner horizon, with Ω₋ = a/(r₋² + a²). Rays with positive relative energy fall straight through; rays with negative relative energy take infinite coordinate time and accumulate on r₋, so in this chart the inner horizon is the stack of all the outgoing light of the interior. In Alice's own frame the accumulating rays are the prograde ones, the arc dragged forward in ϕ around α = 90°, of which only the 45° to 90° half lies inside the outward hemisphere she emits, and the arc narrows as she approaches r₋. Bob meets each pulse twice: first its crossing sheet sweeps over him on the way down with an ordinary shift, then he cuts through its frozen arc, standing on r₋, in the last twentieth of an M above the horizon. Alice sends a pulse every 0.1 M of her proper time, so consecutive arcs overlap and he crosses several sheets in a row, each blueshifted on the scale exp(κ₋Δt) with κ₋ = (r₊ − r₋)/(2(r₋² + a²)): about 560 for Δt = 4M and 3×10⁵ for Δt = 8M at a = 0.65. The light she sends as she crosses is shifted by exactly that factor; a pulse sent earlier by some lead time is shifted by exp(κ₋ × lead) more, having had that long to freeze as well. Each arc co-rotates at Ω₋ while it waits, so one emitter's transmission illuminates a band of r₋ rather than all of it, and how much of the stack Bob meets depends on where he crosses; the surface that covers every azimuth is built from the whole history of the interior. The ratio is finite because both observers cross the same smooth surface of exact Kerr. It diverges only as Δt → ∞, which is the Marolf and Ori (2012) statement that a hole which lives forever meets every late infaller with an outgoing null shock on this branch of r₋. The other branch, reached only as v → ∞, suffers Poisson and Israel mass inflation instead. Both make the exact continuation past r₋ physically untrustworthy, which is the content of strong cosmic censorship."
                         );
                         ui.add_space(8.0);
 
@@ -403,6 +444,78 @@ mod tests {
                     break;
                 }
             }
+        });
+    }
+
+    #[test]
+    fn test_alice_signal_is_received_through_the_app_loop() {
+        // The dual-observer layout the Drop Observers button builds: Alice released from r = 4.5M
+        // at t = 0 and Bob held at the same radius until t = Delta t, so his worldline trails hers
+        // and her outward signal climbs to him. This walks the app's own wiring rather than the
+        // physics module: the field is advanced on the simulation clock, Alice emits on her proper
+        // clock, Bob's receptions are detected, and both canvases and the HUD draw the result.
+        //
+        // A receiver *below* the emitter, which is the app's own default layout, hears nothing from
+        // this signal, and that is geometry rather than an oversight: the outward half of Alice's
+        // cone falls no faster than the raindrop congruence itself, so it never overtakes a
+        // raindrop that is already deeper and accelerating away.
+        let mut app = SpacetimeApp::default();
+        let params = WorldlineParams::default();
+        app.alice = Some(Observer::new_with_phi(&app.metric, "Alice", 0.0, 4.5, 0.0, 0.25, params));
+        app.bob = Observer::new_with_phi(&app.metric, "Bob", 0.0, 4.5, 4.0, 0.0, params);
+        app.controls.delta_t_delay = 4.0;
+        app.current_time = 0.0;
+        app.signal.clear();
+        // Test frames arrive as fast as the harness can render them, so the frame clock sits at its
+        // floor of 1/240 s; the playback rate is what buys enough simulation time to reach Bob's
+        // crossing without running thousands of frames.
+        app.controls.play_speed = 4.0;
+
+        egui::__run_test_ui(|ui| {
+            let mut frame = eframe::Frame::_new_kittest();
+            for _ in 0..800 {
+                app.ui(ui, &mut frame);
+            }
+        });
+
+        assert!(!app.signal.pulses.is_empty(), "Alice should have pulses in flight");
+        assert!(
+            app.signal.received_count() >= 4,
+            "Bob should have caught several of them by t = {}",
+            app.current_time
+        );
+        let last = app.signal.last_reception().expect("a reception was just asserted");
+        assert!(last.ratio.is_finite() && last.ratio > 0.0, "{last:?}");
+
+        // Stepping back drops the field, since a wavefront cannot be integrated in reverse.
+        app.signal.clear();
+        assert_eq!(app.signal.received_count(), 0);
+    }
+
+    #[test]
+    fn test_signal_overlays_render_without_an_inner_horizon() {
+        // A non-spinning hole has r- at the origin, so there is no Cauchy horizon for outgoing
+        // light to accumulate on and kappa_- diverges. The overlays must draw nothing rather than
+        // something misleading, and the HUD must print the divergence rather than a number, so this
+        // walks a frame at a = 0 with both overlays on and again with both off.
+        let schwarzschild = KerrSchild::with_solar_mass(1.0, 0.0, 10.0);
+        assert!(!schwarzschild.inner_surface_gravity().is_finite());
+        let mut app = SpacetimeApp::default();
+        // The presets re-drop the observers when the geometry changes, because a 4-velocity
+        // integrated in one metric is not a unit timelike vector in another; do the same here.
+        let params = WorldlineParams::default();
+        app.metric = schwarzschild;
+        app.bob.reset_with_phi(&app.metric, 0.0, 3.8, 0.0, params);
+        if let Some(al) = &mut app.alice {
+            al.reset_with_phi(&app.metric, 0.0, 4.5, 0.25, params);
+        }
+        app.signal.clear();
+        egui::__run_test_ui(|ui| {
+            let mut frame = eframe::Frame::_new_kittest();
+            app.ui(ui, &mut frame);
+            app.controls.show_signal = false;
+            app.controls.show_outgoing_rays = false;
+            app.ui(ui, &mut frame);
         });
     }
 

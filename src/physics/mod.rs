@@ -3,6 +3,7 @@ pub mod local_frame;
 pub mod tetrad;
 pub mod observer;
 pub mod geodesic;
+pub mod wavefront;
 
 #[allow(unused_imports)]
 pub use kerr_schild::KerrSchild;
@@ -12,3 +13,5 @@ pub use observer::Observer;
 pub use tetrad::Tetrad;
 #[allow(unused_imports)]
 pub use local_frame::{LocalFrame, LocalLine, SurfaceCharacter};
+#[allow(unused_imports)]
+pub use wavefront::{NullRay, Pulse, Reception, SignalField};

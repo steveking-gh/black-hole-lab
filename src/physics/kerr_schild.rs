@@ -221,6 +221,36 @@ impl KerrSchild {
         self.m - disc.sqrt()
     }
 
+    /// Surface gravity of the inner (Cauchy) horizon,
+    ///     kappa_- = (r+ - r-) / (2 (r-^2 + a^2)).
+    ///
+    /// Derivation: the horizon generators of r = r- are the null Killing direction
+    /// xi = d_t + Omega_- d_phi with Omega_- = a / (r-^2 + a^2), and for a Killing horizon of
+    /// Kerr the surface gravity is kappa = |Delta'(r_H)| / (2 (r_H^2 + a^2)). With
+    /// Delta = r^2 - 2Mr + a^2 the derivative is Delta'(r) = 2(r - M), so at r- it has modulus
+    /// 2(M - r-) = 2 sqrt(M^2 - a^2) = r+ - r-, which gives the form above. The same construction
+    /// at r+ gives the familiar kappa_+ = (r+ - r-) / (2 (r+^2 + a^2)); the two agree only in the
+    /// extremal limit, where both vanish.
+    ///
+    /// kappa_- is the exponential rate at which an outgoing principal null ray inside r+ closes on
+    /// r- in this chart: r - r- decays like exp(-kappa_- t). Two infallers released the same way
+    /// but Delta t of coordinate time apart therefore cross that stack of outgoing rays with a
+    /// relative blueshift approaching exp(kappa_- Delta t), which is what
+    /// `wavefront::limiting_blueshift` returns.
+    ///
+    /// A non-spinning hole has r- = 0 and a = 0, so the denominator vanishes and kappa_- is
+    /// infinite: there is no inner horizon to have a finite surface gravity, and the value
+    /// diverges as a -> 0 at fixed M. Infinity is returned in that degenerate case rather than a
+    /// clamped stand-in, so callers must decide what to draw.
+    pub fn inner_surface_gravity(&self) -> f64 {
+        let rm = self.inner_horizon();
+        let denom = 2.0 * (rm * rm + self.a * self.a);
+        if denom <= 0.0 {
+            return f64::INFINITY;
+        }
+        (self.outer_horizon() - rm) / denom
+    }
+
     /// Static limit / ergosphere radius on the equatorial plane (theta = pi/2): r_E = 2M.
     pub fn ergosphere_equatorial(&self) -> f64 {
         2.0 * self.m
@@ -438,21 +468,44 @@ impl KerrSchild {
         ]
     }
 
-    /// Contravariant metric g^{mu nu} in equatorial Kerr-Schild coordinates (t, r, phi).
-    /// The 3-metric is regular (det g = -r^2) everywhere off the ring singularity, so the
+    /// Contravariant metric g^{mu nu} in equatorial Kerr-Schild coordinates (t, r, phi), in closed
+    /// form. The 3-metric is regular (det g = -r^2) everywhere off the ring singularity, so the
     /// inverse exists at and inside both horizons; g^{rr} = Delta / r^2 changes sign there.
+    ///
+    /// The Kerr-Schild form is what makes the inverse elementary. Writing the metric as a flat
+    /// background plus a null rank-one piece,
+    ///
+    ///     g_{mu nu} = eta_{mu nu} + 2 H l_mu l_nu,   H = M / r,   l_mu = (1, 1, -a),
+    ///
+    /// with eta the equatorial flat metric in these coordinates,
+    ///
+    ///     eta_{mu nu} = [[-1, 0, 0], [0, 1, -a], [0, -a, r^2 + a^2]],
+    ///
+    /// reproduces `metric_components` term by term. The covector l is null for eta (and hence for
+    /// g), so raising it with eta gives l^mu = eta^{mu nu} l_nu = (-1, 1, 0) and the inverse is
+    /// exactly the same rank-one correction with the opposite sign:
+    ///
+    ///     g^{mu nu} = eta^{mu nu} - 2 H l^mu l^nu.
+    ///
+    /// The (r, phi) block of eta has determinant r^2, so eta^{tt} = -1, eta^{rr} = (r^2 + a^2)/r^2,
+    /// eta^{r phi} = a / r^2 and eta^{phi phi} = 1 / r^2, which leaves
+    ///
+    ///     g^{tt} = -(1 + 2M/r),   g^{tr} = 2M/r,        g^{t phi}   = 0,
+    ///     g^{rr} = Delta / r^2,   g^{r phi} = a / r^2,  g^{phi phi} = 1 / r^2.
+    ///
+    /// The g^{rr} entry is `g_upper_rr` and carries the causal character of the surfaces r = const;
+    /// g^{t phi} vanishing is the statement that the ingoing Kerr-Schild time function is dragged
+    /// along with l rather than twisted against d_phi.
     pub fn inverse_metric(&self, r: f64) -> [[f64; 3]; 3] {
-        let g = self.metric_components(r);
-        let m = nalgebra::Matrix3::new(
-            g[0][0], g[0][1], g[0][2],
-            g[1][0], g[1][1], g[1][2],
-            g[2][0], g[2][1], g[2][2],
-        );
-        let inv = m.try_inverse().unwrap_or_else(nalgebra::Matrix3::zeros);
+        let r = r.max(1e-6);
+        let h = self.h_scalar(r);
+        let a = self.a;
+        let inv_r2 = 1.0 / (r * r);
+
         [
-            [inv[(0, 0)], inv[(0, 1)], inv[(0, 2)]],
-            [inv[(1, 0)], inv[(1, 1)], inv[(1, 2)]],
-            [inv[(2, 0)], inv[(2, 1)], inv[(2, 2)]],
+            [-(1.0 + 2.0 * h), 2.0 * h, 0.0],
+            [2.0 * h, self.delta(r) * inv_r2, a * inv_r2],
+            [0.0, a * inv_r2, inv_r2],
         ]
     }
 
@@ -463,20 +516,32 @@ impl KerrSchild {
     /// projections of the full 4D ones for motion that stays in the plane.
     pub fn christoffel(&self, r: f64) -> [[[f64; 3]; 3]; 3] {
         let ginv = self.inverse_metric(r);
-        // dg[alpha][nu][beta] = d_alpha g_{nu beta}; only alpha = 1 (the r direction) survives.
-        let mut dg = [[[0.0f64; 3]; 3]; 3];
-        dg[1] = self.metric_derivative_r(r);
+        // d_alpha g_{nu beta} vanishes unless alpha = 1, the r direction, so the three derivative
+        // terms collapse to
+        //     2 Gamma^mu_{alpha beta} = [alpha = r] c^mu_beta + [beta = r] c^mu_alpha
+        //                               - g^{mu r} d_r g_{alpha beta},
+        // with c^mu_beta = g^{mu nu} d_r g_{nu beta} contracted once and reused. Writing it this
+        // way is the same algebra as the general formula, evaluated only where it is non-zero.
+        let dg = self.metric_derivative_r(r);
+        let mut c = [[0.0f64; 3]; 3];
+        for (mu, row) in c.iter_mut().enumerate() {
+            for (beta, entry) in row.iter_mut().enumerate() {
+                *entry = ginv[mu][0] * dg[0][beta] + ginv[mu][1] * dg[1][beta] + ginv[mu][2] * dg[2][beta];
+            }
+        }
 
         let mut gamma = [[[0.0f64; 3]; 3]; 3];
-        for mu in 0..3 {
-            for alpha in 0..3 {
-                for beta in 0..3 {
-                    let mut sum = 0.0;
-                    for nu in 0..3 {
-                        sum += ginv[mu][nu]
-                            * (dg[alpha][nu][beta] + dg[beta][nu][alpha] - dg[nu][alpha][beta]);
+        for (mu, block) in gamma.iter_mut().enumerate() {
+            for (alpha, row) in block.iter_mut().enumerate() {
+                for (beta, entry) in row.iter_mut().enumerate() {
+                    let mut sum = -ginv[mu][1] * dg[alpha][beta];
+                    if alpha == 1 {
+                        sum += c[mu][beta];
                     }
-                    gamma[mu][alpha][beta] = 0.5 * sum;
+                    if beta == 1 {
+                        sum += c[mu][alpha];
+                    }
+                    *entry = 0.5 * sum;
                 }
             }
         }
@@ -718,6 +783,34 @@ mod tests {
         // Region III (0 < r < 0.2): outgoing slope > 0 (UN-TIPPED!)
         let s_iii = ks.radial_null_slopes(0.1);
         assert!(s_iii.dr_dt_outgoing > 0.0);
+    }
+
+    #[test]
+    fn test_inner_surface_gravity_matches_the_horizon_derivative_of_delta() {
+        // kappa_- = |Delta'(r-)| / (2 (r-^2 + a^2)) is the definition; (r+ - r-) / (2 (r-^2 + a^2))
+        // is the closed form the code uses. Delta' is taken by a central difference here, so the
+        // check does not just restate the same algebra.
+        for &a in &[0.2, 0.5, 0.65, 0.9, 0.99] {
+            let ks = KerrSchild::new(1.0, a);
+            let rm = ks.inner_horizon();
+            let h = 1e-6;
+            let d_prime = (ks.delta(rm + h) - ks.delta(rm - h)) / (2.0 * h);
+            let expected = d_prime.abs() / (2.0 * (rm * rm + a * a));
+            let got = ks.inner_surface_gravity();
+            assert!(
+                (got - expected).abs() < 1e-6 * (1.0 + expected),
+                "kappa_- = {got} vs |Delta'|/(2(r-^2+a^2)) = {expected} (a={a})"
+            );
+        }
+        // The reference value quoted throughout the app.
+        let ks = KerrSchild::new(1.0, 0.65);
+        assert!(
+            (ks.inner_surface_gravity() - 1.583).abs() < 1e-3,
+            "kappa_-(a=0.65) = {}",
+            ks.inner_surface_gravity()
+        );
+        // Without spin there is no inner horizon at all, and the formula diverges.
+        assert!(!KerrSchild::new(1.0, 0.0).inner_surface_gravity().is_finite());
     }
 
     #[test]
@@ -1220,3 +1313,4 @@ mod tests {
         }
     }
 }
+

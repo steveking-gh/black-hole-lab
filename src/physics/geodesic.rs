@@ -49,7 +49,7 @@ const U_STEP_FRACTION: f64 = 0.004;
 type StateVec = [f64; 7];
 
 /// The geodesic acceleration -Gamma^mu_{alpha beta} u^alpha u^beta at radius r.
-fn geodesic_accel(metric: &KerrSchild, r: f64, u: &[f64; 3]) -> [f64; 3] {
+pub(crate) fn geodesic_accel(metric: &KerrSchild, r: f64, u: &[f64; 3]) -> [f64; 3] {
     let gamma = metric.christoffel(r);
     let mut acc = [0.0f64; 3];
     for (mu, a) in acc.iter_mut().enumerate() {

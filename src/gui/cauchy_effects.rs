@@ -1,6 +1,7 @@
 use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::Observer;
+use crate::physics::wavefront::{SignalField, limiting_blueshift};
 
 pub struct CauchyEffects;
 
@@ -14,14 +15,31 @@ fn fmt_nu(ratio: f64) -> String {
     }
 }
 
+/// Format a measured frequency ratio for the signal line: three decimals while it is a number a
+/// reader can hold in their head, scientific notation once the stack against r- takes over, and the
+/// infinity symbol for the degenerate a = 0 case, where there is no inner horizon and exp(kappa_-
+/// Delta t) has no finite value.
+fn fmt_shift(ratio: f64) -> String {
+    if !ratio.is_finite() {
+        "∞".to_string()
+    } else if ratio.abs() < 100.0 {
+        format!("{:.3}", ratio)
+    } else {
+        format!("{:.2e}", ratio)
+    }
+}
+
 impl CauchyEffects {
     /// Render the dedicated relativistic telemetry HUD panel: proper clocks, radial separation and
     /// the shift each observer measures for ingoing light.
+    #[allow(clippy::too_many_arguments)]
     pub fn render_hud(
         ui: &mut egui::Ui,
         metric: &KerrSchild,
         bob: &Observer,
         alice: &Option<Observer>,
+        signal: &SignalField,
+        delta_t: f64,
         current_time: f64,
         use_km: bool,
     ) {
@@ -103,6 +121,38 @@ impl CauchyEffects {
                         ui.label(format!("(Bob release t = {} • {})", delay_str, status));
                     }
                 });
+
+                // Alice's outward signal: how much of it Bob has caught, and the exponential scale
+                // exp(kappa_- Delta t) that the crossing of the stack on r- is measured against.
+                if alice.is_some() {
+                    ui.horizontal(|ui| {
+                        let received = signal.received_count();
+                        let scale = fmt_shift(limiting_blueshift(metric, delta_t));
+                        match (signal.last_reception(), signal.max_ratio()) {
+                            (Some(r), Some(max)) => {
+                                ui.label(format!("Alice → Bob: {} receptions, last ν_B/ν_A = ", received));
+                                ui.label(
+                                    egui::RichText::new(fmt_shift(r.ratio))
+                                        .strong()
+                                        .color(Theme::shift_colour(r.ratio, 255)),
+                                );
+                                ui.label(", max = ");
+                                ui.label(
+                                    egui::RichText::new(fmt_shift(max))
+                                        .strong()
+                                        .color(Theme::shift_colour(max, 255)),
+                                );
+                                ui.label(format!(", scale e^(κ₋Δt) = {}", scale));
+                            }
+                            _ => {
+                                ui.label(format!(
+                                    "Alice → Bob: no pulse received yet, scale e^(κ₋Δt) = {}",
+                                    scale
+                                ));
+                            }
+                        }
+                    });
+                }
             });
         });
     }

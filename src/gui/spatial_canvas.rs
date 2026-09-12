@@ -2,8 +2,10 @@ use crate::gui::controls::ReferenceFrame;
 use crate::gui::river::RiverField;
 use crate::gui::spacetime_canvas::TelemetryBoxes;
 use crate::gui::theme::Theme;
+use crate::physics::geodesic::GeodesicState;
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::Observer;
+use crate::physics::wavefront::SignalField;
 use egui::{Color32, Pos2, Stroke, Vec2};
 
 pub struct SpatialCanvas {
@@ -37,6 +39,8 @@ impl SpatialCanvas {
         alice: &Option<Observer>,
         show_river: bool,
         show_streamlines: bool,
+        show_signal: bool,
+        signal: &SignalField,
         canvas_height: f32,
         use_km: bool,
         frame_of_ref: ReferenceFrame,
@@ -311,7 +315,14 @@ impl SpatialCanvas {
             }
         }
 
-        // 5. Draw Alice's Spatial Position and Trail. Her info box is registered at the end of the
+        // 5. Alice's outward signal pulses, drawn over the flow but under the worldlines and the
+        // markers, so the fronts read as something moving through the field rather than as part of
+        // the observers' own trajectories.
+        if show_signal {
+            draw_signal_field(&painter, metric, signal, &to_screen);
+        }
+
+        // 6. Draw Alice's Spatial Position and Trail. Her info box is registered at the end of the
         // frame, after every other interaction on this canvas, so a drag on it does not pan.
         let mut alice_box: Option<Pos2> = None;
         if let Some(al) = alice {
@@ -324,7 +335,7 @@ impl SpatialCanvas {
             }
         }
 
-        // 6. Draw Bob's Spatial Position & Local Null Fan
+        // 7. Draw Bob's Spatial Position & Local Null Fan
         draw_spatial_trail(&painter, metric, bob, Theme::BOB_COLOR, 1.5, &to_screen);
         let bob_pos = to_screen(bob.cartesian_position(metric));
 
@@ -358,7 +369,7 @@ impl SpatialCanvas {
         painter.circle_filled(bob_pos, 7.0, Theme::BOB_COLOR);
         painter.circle_stroke(bob_pos, 9.0, Stroke::new(1.5, Color32::WHITE));
 
-        // 7. Title and Legend Overlay
+        // 8. Title and Legend Overlay
         // Horizon angular velocity Ω_H = a / (2 M r₊) is a rate per unit coordinate time, so in
         // geometric units it is a number per M; only dividing by t_g = GM/c³ makes it rad/s.
         let omega_h = metric.a / (2.0 * metric.m * rp);
@@ -424,7 +435,7 @@ impl SpatialCanvas {
             Theme::TEXT_BRIGHT,
         );
 
-        // 8. Draggable info boxes, registered last so they take the drag instead of the canvas.
+        // 9. Draggable info boxes, registered last so they take the drag instead of the canvas.
         if let (Some(al), Some(al_pos)) = (alice.as_ref(), alice_box) {
             self.telemetry.show(
                 ui, &painter, "spatial", rect, al_pos, "Alice", Theme::ALICE_COLOR, al, metric, use_km,
@@ -434,6 +445,52 @@ impl SpatialCanvas {
         self.telemetry.show(
             ui, &painter, "spatial", rect, bob_pos, "Bob", Theme::BOB_COLOR, bob, metric, use_km, font_scale,
         );
+    }
+}
+
+/// Draw every live wavefront of Alice's signal in the equatorial embedding.
+///
+/// Each pulse is a polyline through the Kerr-Schild positions of its surviving rays, ordered by
+/// emission angle, and each segment is coloured by the frequency a *local raindrop* would measure on
+/// it against Alice's emission. The raindrop is the reference because it is the one frame that
+/// exists at every radius, inside both horizons included, so the colour means the same thing across
+/// the whole picture: it is the shift a body falling freely from rest at infinity would see, not a
+/// shift quoted against a frame that stops existing at r+. A segment takes the mean of its two
+/// endpoints' ratios, so the ramp is continuous along the front.
+///
+/// Segments with a dead endpoint are skipped: a ray that has reached the ring is gone, and the front
+/// genuinely ends there rather than jumping across the gap.
+fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
+    painter: &egui::Painter,
+    metric: &KerrSchild,
+    signal: &SignalField,
+    to_screen: &F,
+) {
+    // `derivatives` reads only (E, L) off the state and takes the radius as an argument, so one
+    // instance of the raindrop congruence serves every ray of every pulse, as it does in the river.
+    let raindrop = GeodesicState::new_infall(metric, 0.0, 12.0, 1.0, 0.0);
+    for pulse in signal.pulses.iter() {
+        let ratios: Vec<f64> = pulse
+            .rays
+            .iter()
+            .map(|ray| {
+                if !ray.alive {
+                    return 1.0;
+                }
+                let (ut, ur, up) = raindrop.derivatives(metric, ray.r);
+                ray.frequency_ratio(metric, &[ut, ur, up])
+            })
+            .collect();
+        for i in 0..pulse.rays.len().saturating_sub(1) {
+            let (a, b) = (&pulse.rays[i], &pulse.rays[i + 1]);
+            if !a.alive || !b.alive {
+                continue;
+            }
+            let p0 = to_screen(metric.cartesian_position(a.r, a.phi));
+            let p1 = to_screen(metric.cartesian_position(b.r, b.phi));
+            let colour = Theme::shift_colour(0.5 * (ratios[i] + ratios[i + 1]), Theme::SHIFT_ALPHA);
+            painter.line_segment([p0, p1], Stroke::new(1.2, colour));
+        }
     }
 }
 
