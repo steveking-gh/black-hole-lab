@@ -1,0 +1,20 @@
+src/gui/river.rs
+  s_5e464e0dde83ec::t_b6fb3d91c03546 25-27,262-269,274,278,281,283-284,293-317,677-692
+  s_5e464e0dde83ec::t_d29511c065557c 693-694
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "de4a3a4476571d2f64977f398861d70e57b2b034",
+  "prompts": {},
+  "sessions": {
+    "s_5e464e0dde83ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc7a846d-d13c-4554-b9bf-dc2dee2f30eb",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
