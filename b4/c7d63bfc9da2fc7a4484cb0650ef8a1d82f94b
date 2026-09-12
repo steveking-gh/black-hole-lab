@@ -1,0 +1,19 @@
+src/gui/spacetime_canvas.rs
+  s_5e464e0dde83ec::t_ea4dfd510ed4e1 10-13,15,17,19,21,23,25,27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "b4c7d63bfc9da2fc7a4484cb0650ef8a1d82f94b",
+  "prompts": {},
+  "sessions": {
+    "s_5e464e0dde83ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc7a846d-d13c-4554-b9bf-dc2dee2f30eb",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
