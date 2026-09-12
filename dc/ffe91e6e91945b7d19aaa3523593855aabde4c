@@ -1,0 +1,61 @@
+src/physics/kerr_schild.rs
+  s_5e464e0dde83ec::t_9b4e1201266438 20,48-49
+src/gui/theme.rs
+  s_5e464e0dde83ec::t_d003300005fa24 5
+src/app.rs
+  s_5e464e0dde83ec::t_88d9164085cce9 440-469
+  s_5e464e0dde83ec::t_7913c0d66861b5 357
+  s_5e464e0dde83ec::t_6e1974aaebe532 477
+  s_5e464e0dde83ec::t_7b9cf54641089f 7,24-34,536,538,548
+  s_5e464e0dde83ec::t_9e2fd9223887b3 470-471
+src/physics/geodesic.rs
+  s_5e464e0dde83ec::t_609eb9a6abf543 188,230-239,241,248,275
+  s_5e464e0dde83ec::t_4cac30e0aab38b 566-569,578-585,587-588,592-594,620-721,725-781
+  s_5e464e0dde83ec::t_4b6e758b993f9d 570-577,586,589-591,595-619,722-724
+  s_5e464e0dde83ec::t_969f4cbe009381 3-10,21,23,25-31,38-42,48-90,109-111,113-122,124-133,135-178,180,185-187,189-225,227-229,240,242-247,249-274,283-308,310,316,320,328,345-347,358,361-364
+  s_5e464e0dde83ec::t_c237049991856b 98-100,106-107,335-336
+  s_5e464e0dde83ec::t_b441ed0c95c324 782
+  s_5e464e0dde83ec::t_37abbae052184c 418-486,505,521,529-532,538,547,553
+  s_5e464e0dde83ec::t_a1286822e99ebc 43-47,91-97,101-105,108,112,123,313-315,321-326,337-344
+src/gui/controls.rs
+  s_5e464e0dde83ec::t_c2e9b1cd602bac 2,4,42-47,67-69
+  s_5e464e0dde83ec::t_1e81986905d174 79-83,126-127,129,282-283,285,385-410,414-416
+src/physics/tetrad.rs
+  s_5e464e0dde83ec::t_7a1d9a22c2b923 196
+src/physics/local_frame.rs
+  s_5e464e0dde83ec::t_7a1d9a22c2b923 187
+  s_5e464e0dde83ec::t_897d3752b54a27 115
+src/gui/spacetime_canvas.rs
+  s_5e464e0dde83ec::t_ce25e7ae1187e1 54-61,94-99,104,106,144,147-155
+  s_5e464e0dde83ec::t_c6f451211b01cb 5
+src/physics/observer.rs
+  s_5e464e0dde83ec::t_3820a14ddb73b6 32-64
+  s_5e464e0dde83ec::t_eb668912da6b2b 93-103,106-116,118-125
+  s_5e464e0dde83ec::t_be91f2f500cd7e 145-153
+  s_5e464e0dde83ec::t_294dc021758237 445-450,453-454
+  s_5e464e0dde83ec::t_d217c51a7237dc 1016-1041,1043,1051-1078
+  s_5e464e0dde83ec::t_9a882c0a9c0d9b 244-249,251-255,261-264
+  s_5e464e0dde83ec::t_8093b2380a7173 161-168
+  s_5e464e0dde83ec::t_9b4e1201266438 211,574,596
+  s_5e464e0dde83ec::t_48785128d6e66c 301,320
+  s_5e464e0dde83ec::t_14fec9326a068f 619,711-712,743,769,775,788,798,800,810,827,851,868,877,885,911,923-924,955,1001,1080-1081,1091,1108,1122-1123,1149,1176,1198,1200,1205,1207,1212,1214,1222,1229,1242-1243,1246,1259,1264
+  s_5e464e0dde83ec::t_d0e149103a1c90 674
+  s_5e464e0dde83ec::t_9052deaa8bca41 1042,1044-1050
+  s_5e464e0dde83ec::t_609eb9a6abf543 1,313-316,321,395-405
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "dcffe91e6e91945b7d19aaa3523593855aabde4c",
+  "prompts": {},
+  "sessions": {
+    "s_5e464e0dde83ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc7a846d-d13c-4554-b9bf-dc2dee2f30eb",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
