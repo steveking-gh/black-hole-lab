@@ -1,0 +1,41 @@
+src/gui/spacetime_canvas.rs
+  s_5e464e0dde83ec::t_d60414bf66cd40 966-976
+  s_5e464e0dde83ec::t_296afca3b597e5 1418-1423,1427
+  s_5e464e0dde83ec::t_3655e25ad2277e 573-606,670,705,733,862-864,877-879,883,925
+  s_5e464e0dde83ec::t_6d488a35b0be04 7,9-151,153-180,186
+  s_5e464e0dde83ec::t_d8b289fe2e03ba 1425-1426
+  s_5e464e0dde83ec::t_01c1cd476659ae 1322-1340,1343-1417,1424,1428-1440
+  s_5e464e0dde83ec::t_28769c5ca579fa 1016,1123,1133,1138,1142-1145,1152,1159,1180,1211,1214,1217-1218,1241,1246-1256
+  s_5e464e0dde83ec::t_f30f9908ae17e7 1341-1342
+  s_5e464e0dde83ec::t_1dbc9c31f4d831 253-264,266,268
+  s_5e464e0dde83ec::t_5cb40255b13b3b 277-278,289,360,365,367,372,526,529,994,996-997
+  s_5e464e0dde83ec::t_f86768f5219a72 199-202,204,206
+src/app.rs
+  s_5e464e0dde83ec::t_b0a87ac44762a7 62,64,69
+  s_5e464e0dde83ec::t_ccdb8f19df9664 449-484
+src/gui/theme.rs
+  s_5e464e0dde83ec::t_6cdf1a88946e1c 35-37,39-41,46-47,49-55
+  s_5e464e0dde83ec::t_42d8f25acc5a0f 29-33,38,42-45,48,56,60-63
+  s_5e464e0dde83ec::t_5e39d86d458690 34
+src/gui/spatial_canvas.rs
+  s_5e464e0dde83ec::t_f4c70b2e184ef7 2,11-12,20,26,302-304,311,412-421
+  s_5e464e0dde83ec::t_d4a68679ea7280 422
+src/gui/controls.rs
+  s_5e464e0dde83ec::t_d5f2abf3b42a56 69
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "5cecf833a8a13d5d8b6cf35d1bddf665bac07114",
+  "prompts": {},
+  "sessions": {
+    "s_5e464e0dde83ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc7a846d-d13c-4554-b9bf-dc2dee2f30eb",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
