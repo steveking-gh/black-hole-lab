@@ -1,0 +1,495 @@
+use crate::physics::geodesic::GeodesicState;
+use crate::physics::kerr_schild::KerrSchild;
+use crate::physics::tetrad::Tetrad;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ObserverMode {
+    FreeFall,
+    ManualDrag,
+    Stationary,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct Observer {
+    pub name: String,
+    pub mode: ObserverMode,
+    /// Coordinate time t
+    pub t: f64,
+    /// Radius r
+    pub r: f64,
+    /// Azimuth phi in radians
+    pub phi: f64,
+    /// Accumulated proper time tau
+    pub tau: f64,
+    /// Local rest frame radial boost beta_r in (-0.99, 0.99)
+    pub beta_r: f64,
+    /// Local rest frame azimuthal boost beta_phi in (-0.99, 0.99)
+    pub beta_phi: f64,
+    /// Geodesic state for automated infall simulation
+    pub geodesic: Option<GeodesicState>,
+    /// History of (t, r) positions for drawing worldline trail
+    pub trail: Vec<[f64; 2]>,
+    /// Release coordinate time t_release (e.g. 0 for Alice, delta_t for Bob)
+    pub release_t: f64,
+    /// Is the observer active/released yet?
+    pub is_active: bool,
+}
+
+impl Observer {
+    pub fn new(name: &str, start_t: f64, start_r: f64, release_t: f64) -> Self {
+        Self::new_with_phi(name, start_t, start_r, release_t, 0.0)
+    }
+
+    pub fn new_with_phi(name: &str, start_t: f64, start_r: f64, release_t: f64, start_phi: f64) -> Self {
+        let mut geodesic = GeodesicState::new_infall(start_t, start_r, 1.0, 0.0);
+        geodesic.phi = start_phi;
+        let mut obs = Self {
+            name: name.to_string(),
+            mode: ObserverMode::FreeFall,
+            t: start_t,
+            r: start_r,
+            phi: start_phi,
+            tau: 0.0,
+            beta_r: 0.0,
+            beta_phi: 0.0,
+            geodesic: Some(geodesic),
+            trail: Vec::new(),
+            release_t,
+            is_active: start_t >= release_t,
+        };
+        obs.trail.push([start_t, start_r]);
+        obs
+    }
+
+    /// Reset observer back to initial conditions
+    pub fn reset(&mut self, start_t: f64, start_r: f64) {
+        self.reset_with_phi(start_t, start_r, 0.0);
+    }
+
+    /// Reset observer with initial radius, coordinate time, and azimuth phi
+    pub fn reset_with_phi(&mut self, start_t: f64, start_r: f64, start_phi: f64) {
+        self.t = start_t;
+        self.r = start_r;
+        self.phi = start_phi;
+        self.tau = 0.0;
+        self.beta_r = 0.0;
+        self.beta_phi = 0.0;
+        let mut geo = GeodesicState::new_infall(start_t, start_r, 1.0, 0.0);
+        geo.phi = start_phi;
+        self.geodesic = Some(geo);
+        self.trail.clear();
+        self.trail.push([start_t, start_r]);
+        self.is_active = self.t >= self.release_t;
+    }
+
+    /// Set position directly from user mouse dragging
+    pub fn set_drag_position(&mut self, t: f64, r: f64) {
+        self.mode = ObserverMode::ManualDrag;
+        self.t = t;
+        self.r = r.max(0.01);
+        self.is_active = true;
+        if self.trail.len() > 500 {
+            self.trail.remove(0);
+        }
+        self.trail.push([t, self.r]);
+    }
+
+    /// Advance simulation by coordinate time delta dt
+    pub fn step(&mut self, metric: &KerrSchild, current_sim_time: f64, dt: f64) {
+        if current_sim_time < self.release_t {
+            self.is_active = false;
+            return;
+        }
+        self.is_active = true;
+
+        match self.mode {
+            ObserverMode::FreeFall => {
+                if let Some(ref mut geo) = self.geodesic {
+                    if geo.r > 0.02 {
+                        geo.step_coord_time(metric, dt);
+                        self.t = geo.t;
+                        self.r = geo.r;
+                        self.phi = geo.phi;
+                        self.tau = geo.tau;
+
+                        if self.trail.len() > 800 {
+                            self.trail.remove(0);
+                        }
+                        self.trail.push([self.t, self.r]);
+                    }
+                }
+            }
+            ObserverMode::ManualDrag => {
+                // Keep manual position, just advance t slightly if playing
+                self.t += dt;
+            }
+            ObserverMode::Stationary => {
+                self.t += dt;
+                // Frame dragging affects phi even for stationary radius
+                let omega = metric.frame_dragging_omega(self.r);
+                self.phi += omega * dt;
+                let g_tt = metric.metric_components(self.r)[0][0];
+                if g_tt < 0.0 {
+                    self.tau += (-g_tt).sqrt() * dt;
+                }
+            }
+        }
+    }
+
+    /// Step observer backward in time. Pops from recorded worldline trail if available,
+    /// or integrates backward with negative step.
+    pub fn step_back(&mut self, metric: &KerrSchild, dt: f64) {
+        if self.trail.len() > 1 {
+            self.trail.pop();
+            if let Some(&[prev_t, prev_r]) = self.trail.last() {
+                self.t = prev_t;
+                self.r = prev_r;
+                if let Some(ref mut geo) = self.geodesic {
+                    geo.t = prev_t;
+                    geo.r = prev_r;
+                    geo.tau = (geo.tau - dt.abs() * 0.5).max(0.0);
+                }
+                return;
+            }
+        }
+        // Fallback backward step
+        match self.mode {
+            ObserverMode::FreeFall => {
+                if let Some(ref mut geo) = self.geodesic {
+                    let dtau = -(dt.abs() * 0.5).min(0.05);
+                    geo.step(metric, dtau);
+                    self.t = geo.t;
+                    self.r = geo.r;
+                    self.phi = geo.phi;
+                    self.tau = geo.tau;
+                }
+            }
+            ObserverMode::ManualDrag | ObserverMode::Stationary => {
+                self.t = (self.t - dt.abs()).max(0.0);
+            }
+        }
+    }
+
+    /// Advance observer using exterior coordinate time step dt_coord.
+    /// This accurately tracks observers (like Bob) whose arrival is compressed relative to an infalling observer (Alice).
+    pub fn step_exterior(&mut self, metric: &KerrSchild, current_sim_time: f64, dt_coord: f64) {
+        if current_sim_time < self.release_t {
+            self.is_active = false;
+            return;
+        }
+        self.is_active = true;
+
+        match self.mode {
+            ObserverMode::FreeFall => {
+                if let Some(ref mut geo) = self.geodesic {
+                    if geo.r > 0.02 {
+                        geo.step_coord_time(metric, dt_coord);
+                        self.t = current_sim_time;
+                        self.r = geo.r;
+                        self.phi = geo.phi;
+                        self.tau = geo.tau;
+
+                        if self.trail.len() > 800 {
+                            self.trail.remove(0);
+                        }
+                        self.trail.push([self.t, self.r]);
+                    }
+                }
+            }
+            ObserverMode::ManualDrag => {
+                self.t += dt_coord;
+            }
+            ObserverMode::Stationary => {
+                self.t += dt_coord;
+                let omega = metric.frame_dragging_omega(self.r);
+                self.phi += omega * dt_coord;
+            }
+        }
+    }
+
+    /// Generate polygon coordinates for the observer's light cone on the (t, r) diagram.
+    /// `time_height`: height in coordinate time units to extend the cone upward (future) and downward (past).
+    pub fn compute_lightcone_polygon(
+        &self,
+        metric: &KerrSchild,
+        time_height: f64,
+    ) -> LightConePolygon {
+        let r0 = self.r;
+        let t0 = self.t;
+
+        let tetrad = Tetrad::new(metric, r0);
+
+        // Compute coordinate slopes with observer's local boost applied
+        // alpha = 0 is outward radial, alpha = pi is inward radial
+        let (dr_dt_out, dphi_dt_out) = tetrad.local_to_coordinate_velocity(
+            metric,
+            r0,
+            self.beta_r,
+            self.beta_phi,
+            0.0, // outward
+        );
+
+        let (dr_dt_in, dphi_dt_in) = tetrad.local_to_coordinate_velocity(
+            metric,
+            r0,
+            self.beta_r,
+            self.beta_phi,
+            std::f64::consts::PI, // inward
+        );
+
+        // Future cone endpoints at t = t0 + time_height.
+        // If a ray reaches r = 0 before time_height, terminate the ray at the singularity
+        // preserving exact dr/dt slope rather than clamping r with fixed t.
+        let (t_fut_in, r_fut_in) = if dr_dt_in < -1e-7 && (r0 + dr_dt_in * time_height) < 0.0 {
+            let dt_sing = r0 / dr_dt_in.abs();
+            (t0 + dt_sing, 0.0)
+        } else {
+            (t0 + time_height, (r0 + dr_dt_in * time_height).max(0.0))
+        };
+
+        let (t_fut_out, r_fut_out) = if dr_dt_out < -1e-7 && (r0 + dr_dt_out * time_height) < 0.0 {
+            let dt_sing = r0 / dr_dt_out.abs();
+            (t0 + dt_sing, 0.0)
+        } else {
+            (t0 + time_height, (r0 + dr_dt_out * time_height).max(0.0))
+        };
+
+        // Past cone endpoints at t = t0 - time_height
+        let (t_pst_in, r_pst_in) = if dr_dt_in > 1e-7 && (r0 - dr_dt_in * time_height) < 0.0 {
+            let dt_sing = r0 / dr_dt_in;
+            (t0 - dt_sing, 0.0)
+        } else {
+            (t0 - time_height, (r0 - dr_dt_in * time_height).max(0.0))
+        };
+
+        let (t_pst_out, r_pst_out) = if dr_dt_out > 1e-7 && (r0 - dr_dt_out * time_height) < 0.0 {
+            let dt_sing = r0 / dr_dt_out;
+            (t0 - dt_sing, 0.0)
+        } else {
+            (t0 - time_height, (r0 - dr_dt_out * time_height).max(0.0))
+        };
+
+        LightConePolygon {
+            apex: [t0, r0],
+            future_in: [t_fut_in, r_fut_in],
+            future_out: [t_fut_out, r_fut_out],
+            past_in: [t_pst_in, r_pst_in],
+            past_out: [t_pst_out, r_pst_out],
+            dr_dt_in,
+            dr_dt_out,
+            dphi_dt_out,
+            dphi_dt_in,
+        }
+    }
+
+    /// Instantaneous radial coordinate velocity dr/dt as fraction of speed of light in Global Kerr-Schild foliation (-1.0c to 1.0c)
+    pub fn velocity_c(&self, metric: &KerrSchild) -> f64 {
+        match self.mode {
+            ObserverMode::FreeFall => {
+                if let Some(ref geo) = self.geodesic {
+                    let (dt_dtau, dr_dtau, _) = geo.derivatives(metric, self.r);
+                    (dr_dtau / dt_dtau.max(1e-5)).clamp(-1.0, 1.0)
+                } else {
+                    0.0
+                }
+            }
+            ObserverMode::ManualDrag => {
+                self.beta_r.clamp(-0.99, 0.99)
+            }
+            ObserverMode::Stationary => {
+                0.0
+            }
+        }
+    }
+
+    /// Instantaneous proper radial velocity dr/dtau (can exceed 1.0c inside horizon)
+    pub fn proper_velocity_c(&self, metric: &KerrSchild) -> f64 {
+        match self.mode {
+            ObserverMode::FreeFall => {
+                if let Some(ref geo) = self.geodesic {
+                    let (_, dr_dtau, _) = geo.derivatives(metric, self.r);
+                    dr_dtau
+                } else {
+                    0.0
+                }
+            }
+            ObserverMode::ManualDrag => {
+                self.beta_r / (1.0 - self.beta_r * self.beta_r).max(1e-4).sqrt()
+            }
+            ObserverMode::Stationary => {
+                0.0
+            }
+        }
+    }
+
+    /// Physical radial velocity in km/s
+    pub fn velocity_km_s(&self, metric: &KerrSchild) -> f64 {
+        self.velocity_c(metric) * 299792.458
+    }
+
+    /// Proper acceleration felt by the observer in Earth g's (weightlessness = 0.0)
+    pub fn proper_acceleration_g(&self, metric: &KerrSchild) -> f64 {
+        match self.mode {
+            ObserverMode::FreeFall => {
+                0.0 // True weightlessness in geodesic motion
+            }
+            ObserverMode::Stationary => {
+                let g_tt = metric.metric_components(self.r)[0][0];
+                if g_tt < 0.0 && self.r > metric.outer_horizon() {
+                    let m_geom = metric.m;
+                    let accel_geom = m_geom / (self.r * self.r * (-g_tt).sqrt().max(1e-4));
+                    let c = 299792458.0;
+                    let rg_m = metric.r_grav_km() * 1000.0;
+                    (accel_geom * c * c / rg_m) / 9.80665
+                } else {
+                    0.0
+                }
+            }
+            ObserverMode::ManualDrag => {
+                (self.beta_r.abs() * 50.0).min(500.0)
+            }
+        }
+    }
+
+    /// Radial tidal stretching force across a 2-meter body in Earth g's
+    #[allow(dead_code)]
+    pub fn tidal_force_g(&self, metric: &KerrSchild) -> f64 {
+        metric.tidal_acceleration_g(self.r, 2.0)
+    }
+
+    /// Radial tidal gradient in Earth gravities per meter (g/m)
+    pub fn tidal_gradient_g_per_m(&self, metric: &KerrSchild) -> f64 {
+        metric.tidal_gradient_g_per_m(self.r)
+    }
+
+    /// Time compression factor dt_exterior / dtau_proper relative to outside universe
+    pub fn exterior_time_compression(&self, metric: &KerrSchild) -> f64 {
+        metric.exterior_time_compression(self.r)
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+pub struct LightConePolygon {
+    pub apex: [f64; 2],
+    pub future_in: [f64; 2],
+    pub future_out: [f64; 2],
+    pub past_in: [f64; 2],
+    pub past_out: [f64; 2],
+    pub dr_dt_in: f64,
+    pub dr_dt_out: f64,
+    pub dphi_dt_out: f64,
+    pub dphi_dt_in: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_observer_manual_drag_and_cone() {
+        let metric = KerrSchild::new(1.0, 0.7);
+        let mut bob = Observer::new("Bob", 0.0, 3.0, 0.0);
+
+        // Outside horizon: outgoing slope is positive
+        let cone_out = bob.compute_lightcone_polygon(&metric, 1.0);
+        assert!(cone_out.dr_dt_out > 0.0);
+
+        // Drag Bob inside Region II (between r- = 0.286 and r+ = 1.714)
+        bob.set_drag_position(5.0, 1.0);
+        let cone_in = bob.compute_lightcone_polygon(&metric, 1.0);
+        // Trapped: outgoing slope dr/dt < 0
+        assert!(cone_in.dr_dt_out < 0.0);
+
+        // Drag Bob inside Region III (r < 0.286)
+        bob.set_drag_position(8.0, 0.15);
+        let cone_core = bob.compute_lightcone_polygon(&metric, 1.0);
+        // Un-tipped: outgoing slope dr/dt > 0
+        assert!(cone_core.dr_dt_out > 0.0);
+    }
+
+    #[test]
+    fn test_cauchy_arrival_coalescence() {
+        let metric = KerrSchild::new(1.0, 0.6);
+        let rm = metric.inner_horizon(); // 0.2
+        let rp = metric.outer_horizon(); // 1.8
+
+        let mut alice = Observer::new("Alice", 0.0, 4.0, 0.0);
+        let mut bob = Observer::new("Bob", 0.0, 4.0, 4.0); // Bob released 4s later in coordinate time
+
+        let mut sim_time = 0.0;
+        let dt = 0.03;
+
+        // Step until Alice approaches Cauchy horizon
+        for _ in 0..600 {
+            if alice.r <= rm + 0.02 {
+                break;
+            }
+            let dist_to_rm = (alice.r - rm).max(0.002);
+            let compression = if alice.r <= rp && alice.r > rm {
+                (1.0 + 0.8 * ((rp - rm) / dist_to_rm).powf(1.8)).min(150.0)
+            } else {
+                1.0
+            };
+            let dt_ext = dt * compression;
+            sim_time += dt_ext;
+
+            alice.step(&metric, sim_time, dt);
+            bob.step_exterior(&metric, sim_time, dt_ext);
+        }
+
+        println!("At Cauchy arrival: Alice r = {:.3}, Bob r = {:.3}", alice.r, bob.r);
+        assert!(alice.r <= rm + 0.08, "Alice should reach near rm");
+        assert!(bob.r <= rm + 0.45, "Bob must catch up near rm, Bob was at {}", bob.r);
+    }
+
+    #[test]
+    fn test_observer_velocity_and_acceleration_telemetry() {
+        let metric = KerrSchild::with_solar_mass(1.0, 0.7, 10.0);
+        let obs = Observer::new("Bob", 0.0, 3.0, 0.0);
+
+        let v_c = obs.velocity_c(&metric);
+        assert!(v_c.abs() < 1.0, "Velocity fraction of c magnitude must be < 1: {}", v_c);
+        assert!(v_c < 0.0, "Inward infalling observer must have negative radial velocity: {}", v_c);
+
+        let v_kms = obs.velocity_km_s(&metric);
+        assert!(v_kms.abs() <= 300_000.0, "Velocity magnitude in km/s must be <= c: {}", v_kms);
+        assert!(v_kms < 0.0, "Inward velocity in km/s must be negative: {}", v_kms);
+
+        let a_prop = obs.proper_acceleration_g(&metric);
+        assert_eq!(a_prop, 0.0, "Free-falling geodesic observer must have zero proper acceleration");
+
+        let tidal = obs.tidal_force_g(&metric);
+        assert!(tidal > 0.0, "Tidal force must be positive");
+
+        let grad = obs.tidal_gradient_g_per_m(&metric);
+        assert!(grad > 0.0, "Tidal gradient must be positive");
+        assert!((grad * 2.0 - tidal).abs() < 1e-6, "2-meter tidal force should be 2x the 1-meter gradient");
+
+        // Verify inside horizon dynamics: coordinate velocity dr/dt stays within light cone, proper velocity dr/dtau exceeds -1.0c
+        let obs_inside = Observer::new("Bob", 0.0, 1.0, 0.0);
+        let v_c_inside = obs_inside.velocity_c(&metric);
+        let u_inside = obs_inside.proper_velocity_c(&metric);
+        assert!(v_c_inside < 0.0 && v_c_inside > -1.0, "Coordinate velocity dr/dt stays causal: {}", v_c_inside);
+        assert!(u_inside < -1.0, "Proper velocity dr/dtau exceeds -1.0c inside horizon: {}", u_inside);
+    }
+
+    #[test]
+    fn test_observer_step_back() {
+        let metric = KerrSchild::new(1.0, 0.6);
+        let mut obs = Observer::new("Bob", 0.0, 4.0, 0.0);
+        let initial_r = obs.r;
+
+        // Step forward 5 times
+        for i in 1..=5 {
+            obs.step(&metric, (i as f64) * 0.1, 0.1);
+        }
+        assert!(obs.r < initial_r, "Observer should fall inward");
+        let forward_r = obs.r;
+
+        // Step back
+        obs.step_back(&metric, 0.1);
+        assert!(obs.r > forward_r, "Stepping backward must restore previous outward radius");
+    }
+}
