@@ -22,6 +22,9 @@ const MAX_DR_PER_SUBSTEP: f64 = 0.05;
 /// Hard cap on substeps per particle per call, so a very large dt cannot stall a frame.
 const MAX_SUBSTEPS: usize = 64;
 
+/// Longest advance the field accepts in one call, in M of coordinate time. See `advance`.
+const MAX_ADVANCE_T: f64 = 1.0;
+
 /// Coordinate time over which a freshly spawned drop fades up to full opacity, so respawns at
 /// `R_MAX` do not pop into view.
 const FADE_IN_T: f64 = 1.0;
@@ -256,42 +259,60 @@ impl RiverField {
     /// keeps the flow exact: the embedding x + i y = (r + i a) e^{i phi} is applied only to draw.
     ///
     /// dr/dt < 0 everywhere on this congruence, so a particle only ever moves inward; one that
-    /// reaches `R_MIN` is respawned at `R_MAX` on a fresh random azimuth with age zero.
+    /// reaches `R_MIN` is respawned at `R_MAX` on a fresh random azimuth with age zero, and then
+    /// carried a random fraction of the same step along the flow so that respawns never line up.
+    ///
+    /// The step is capped at `MAX_ADVANCE_T`. The congruence is stationary, so the field after a
+    /// long jump is statistically the same picture as after a short one, and a jump of hundreds
+    /// of M (the distance-stepping mode asks for that once Bob has stopped) would only sweep every
+    /// particle past the ring in one call and respawn all of them on the outer edge together,
+    /// which is a ring of drops that has nothing to do with the flow.
     pub fn advance(&mut self, metric: &KerrSchild, dt: f64) {
         if dt <= 0.0 {
             return;
         }
+        let dt = dt.min(MAX_ADVANCE_T);
         let raindrop = raindrop_congruence(metric);
         for i in 0..self.particles.len() {
             let mut p = self.particles[i];
-
-            // Substep count from the local radial rate, so the strong field near the ring gets
-            // the resolution and the weak field does not pay for it.
-            let (dr_dt0, _) = rates_of(&raindrop, metric, p.r);
-            let spans = ((dr_dt0.abs() * dt) / MAX_DR_PER_SUBSTEP).ceil();
-            let n = (spans.max(1.0) as usize).min(MAX_SUBSTEPS);
-            let h = dt / n as f64;
-
-            for _ in 0..n {
-                let (k1_r, k1_phi) = rates_of(&raindrop, metric, p.r);
-                let r_mid = (p.r + 0.5 * h * k1_r).max(R_MIN);
-                let (k2_r, k2_phi) = rates_of(&raindrop, metric, r_mid);
-                p.r += h * k2_r;
-                p.phi += h * 0.5 * (k1_phi + k2_phi);
-                if p.r <= R_MIN {
-                    break;
-                }
-            }
+            let reached_ring = Self::carry(&raindrop, metric, &mut p, dt);
             p.age += dt;
 
-            if p.r <= R_MIN {
+            if reached_ring {
                 p = self.spawn_at_edge();
+                let head_start = self.rng.next_f64() * dt;
+                Self::carry(&raindrop, metric, &mut p, head_start);
             } else {
                 p.r = p.r.min(R_MAX);
                 p.phi = p.phi.rem_euclid(2.0 * std::f64::consts::PI);
             }
             self.particles[i] = p;
         }
+    }
+
+    /// Carry one particle dt along the flow. Returns true if it reached `R_MIN` on the way.
+    fn carry(raindrop: &GeodesicState, metric: &KerrSchild, p: &mut RiverParticle, dt: f64) -> bool {
+        if dt <= 0.0 {
+            return false;
+        }
+        // Substep count from the local radial rate, so the strong field near the ring gets the
+        // resolution and the weak field does not pay for it.
+        let (dr_dt0, _) = rates_of(raindrop, metric, p.r);
+        let spans = ((dr_dt0.abs() * dt) / MAX_DR_PER_SUBSTEP).ceil();
+        let n = (spans.max(1.0) as usize).min(MAX_SUBSTEPS);
+        let h = dt / n as f64;
+
+        for _ in 0..n {
+            let (k1_r, k1_phi) = rates_of(raindrop, metric, p.r);
+            let r_mid = (p.r + 0.5 * h * k1_r).max(R_MIN);
+            let (k2_r, k2_phi) = rates_of(raindrop, metric, r_mid);
+            p.r += h * k2_r;
+            p.phi += h * 0.5 * (k1_phi + k2_phi);
+            if p.r <= R_MIN {
+                return true;
+            }
+        }
+        false
     }
 
     /// A replacement particle entering the field at its outer edge on a fresh azimuth.
@@ -650,6 +671,24 @@ mod tests {
             let ratio = aspect(r);
             assert!(ratio > previous, "aspect({r}) = {ratio} must exceed {previous} further out");
             previous = ratio;
+        }
+    }
+
+    #[test]
+    fn test_a_huge_step_does_not_respawn_the_field_as_a_ring() {
+        // Distance stepping can ask for hundreds of M once Bob has stopped. The field must still
+        // look like a stationary sample of the flow afterwards, not a ring of drops on the edge.
+        let metric = KerrSchild::new(1.0, 0.65);
+        let mut field = RiverField::default();
+        for _ in 0..40 {
+            field.advance(&metric, 500.0);
+            let on_the_edge = field.particles.iter().filter(|p| p.r > 0.95 * R_MAX).count();
+            let deep = field.particles.iter().filter(|p| p.r < 0.5 * R_MAX).count();
+            assert!(
+                on_the_edge < PARTICLE_COUNT / 4,
+                "{on_the_edge} of {PARTICLE_COUNT} drops piled on the outer edge"
+            );
+            assert!(deep > PARTICLE_COUNT / 10, "only {deep} drops inside half the field radius");
         }
     }
 
