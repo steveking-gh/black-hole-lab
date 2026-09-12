@@ -7,12 +7,12 @@ use egui::{Pos2, Stroke};
 /// respawned on it, so the river always has an upstream supply no matter how long it runs.
 pub const R_MAX: f64 = 12.0;
 
-/// Radius at which a streak is retired and respawned at `R_MAX`. It sits above
+/// Radius at which a drop is retired and respawned at `R_MAX`. It sits above
 /// `geodesic::R_STOP`, so a particle is never carried into the regime where the closed-form
 /// rates are being evaluated at the floor of `GeodesicState::derivatives`.
 pub const R_MIN: f64 = 0.05;
 
-/// Number of streaks in the field. The per-particle cost is a handful of closed-form evaluations,
+/// Number of drops in the field. The per-particle cost is a handful of closed-form evaluations,
 /// so this is negligible next to the rest of the frame.
 const PARTICLE_COUNT: usize = 400;
 
@@ -22,20 +22,30 @@ const MAX_DR_PER_SUBSTEP: f64 = 0.05;
 /// Hard cap on substeps per particle per call, so a very large dt cannot stall a frame.
 const MAX_SUBSTEPS: usize = 64;
 
-/// Coordinate time over which a freshly spawned streak fades up to full opacity, so respawns at
+/// Coordinate time over which a freshly spawned drop fades up to full opacity, so respawns at
 /// `R_MAX` do not pop into view.
 const FADE_IN_T: f64 = 1.0;
 
-/// Coordinate time the streak's tail is drawn back over: the tail marks where the particle was
-/// (to first order) 0.35 M of t ago, so the streak length reads as the local river speed.
-const STREAK_T: f64 = 0.35;
+/// Release spacing of a drop, in M of coordinate time t: the drop's head and its tail are two
+/// raindrops of the same congruence launched DROP_DT of t apart, so the drawn element is the
+/// piece of the river laid down over that interval.
+const DROP_DT: f64 = 0.2;
 
-/// Drawing cap on the streak length in pixels. Purely a legibility limit for deep zoom levels;
-/// it never touches the integration.
-const STREAK_MAX_PX: f32 = 24.0;
+/// Azimuthal separation, in radians, of the two flow lines whose transverse gap sets the drop's
+/// width. Chosen so that sqrt(g_phiphi(12M)) DROP_DPHI comes out near 3 px at the default 48 px/M
+/// (sqrt(g_phiphi) ~ 12 there, so 12 * 0.005 * 48 ~ 2.9): a drawing choice about how thick the
+/// far field looks, and nothing else. Every drop then reports the proper spacing of the same two
+/// flow lines, so the thinning towards the hole is the geometry, not the constant.
+const DROP_DPHI: f64 = 0.005;
 
-/// Radius of the filled dot drawn at the head of each streak, in pixels.
-const HEAD_RADIUS_PX: f32 = 1.7;
+/// Number of vertices in the polygon that stands in for each drop's ellipse.
+const DROP_VERTICES: usize = 16;
+
+/// Legibility floor and cap on the drawn semi-major axis, in pixels.
+const DROP_SEMI_MAJOR_PX: (f32, f32) = (1.0, 40.0);
+
+/// Legibility floor and cap on the drawn semi-minor axis, in pixels.
+const DROP_SEMI_MINOR_PX: (f32, f32) = (0.6, 12.0);
 
 /// Coordinate velocity (dr/dt, dphi/dt) of the river at radius r: the E = 1, L = 0 ingoing
 /// geodesic through that radius, which is the raindrop congruence the Painleve-Gullstrand and
@@ -69,6 +79,86 @@ fn rates_of(raindrop: &GeodesicState, metric: &KerrSchild, r: f64) -> (f64, f64)
     // guards against a degenerate evaluation, it never binds on the raindrop.
     let inv = 1.0 / dt_dtau.max(1e-9);
     (dr_dtau * inv, dphi_dtau * inv)
+}
+
+/// Squared proper length of a chart displacement xi at radius r, measured in the rest frame of an
+/// observer with 4-velocity u:
+///     xi_perp = xi + (u . xi) u,   ell^2 = g(xi_perp, xi_perp) = g(xi, xi) + (u . xi)^2,
+/// the cross terms collapsing because g(u, u) = -1. Only the part of xi orthogonal to u is a
+/// length for that observer; the part along u is a time offset, and subtracting it is exactly what
+/// turns a chart separation into a ruler reading.
+fn proper_length_sq(metric: &KerrSchild, r: f64, u: &[f64; 3], xi: &[f64; 3]) -> f64 {
+    let g = metric.metric_components(r);
+    let mut g_xi_xi = 0.0;
+    let mut u_dot_xi = 0.0;
+    for i in 0..3 {
+        for j in 0..3 {
+            g_xi_xi += g[i][j] * xi[i] * xi[j];
+            u_dot_xi += g[i][j] * u[i] * xi[j];
+        }
+    }
+    g_xi_xi + u_dot_xi * u_dot_xi
+}
+
+/// Proper length of a drop along the flow: the separation of two raindrops of energy `energy`
+/// released `dt` of coordinate time apart, as the drop itself measures that separation.
+///
+/// On a slice of constant t the trailing raindrop sits at
+///     xi^mu = (u^mu / u^t - delta^mu_t) dt = (0, dr/dt, dphi/dt) dt,
+/// which is not orthogonal to u, so the chart norm of xi is not a ruler reading. The projection
+/// `proper_length_sq` performs is, and evaluating it here from `metric_components` and the exact
+/// 4-velocity of `GeodesicState::derivatives` is the general answer.
+///
+/// Writing that projection out shows it collapses. With u_t = -E and g(u, u) = -1,
+///     g(xi, xi) = [ g(u,u)/(u^t)^2 - 2 u_t/u^t + g_tt ] dt^2 = [ -1/(u^t)^2 + 2E/u^t + g_tt ] dt^2,
+///     u . xi    = [ g(u,u)/u^t - u_t ] dt                    = [ -1/u^t + E ] dt,
+/// so every u^t term (and with it every g_tr and g_rphi term, which enter only through u_t and
+/// g(u, u)) cancels:
+///     ell^2 = (g_tt + E^2) dt^2 = (E^2 - 1 + 2M/r) dt^2.
+/// `proper_drop_length_closed_form` uses that result, and this projection is the independent form
+/// the tests check it against.
+#[cfg(test)]
+pub fn proper_drop_length(metric: &KerrSchild, r: f64, energy: f64, dt: f64) -> f64 {
+    let state = GeodesicState::new_infall(metric, 0.0, r, energy, 0.0);
+    let (ut, ur, uphi) = state.derivatives(metric, r);
+    let u = [ut, ur, uphi];
+    let xi = [0.0, dt * ur / ut, dt * uphi / ut];
+    proper_length_sq(metric, r, &u, &xi).max(0.0).sqrt()
+}
+
+/// The closed form of `proper_drop_length`:
+///     ell = sqrt(E^2 - 1 + 2M/r) dt,
+/// which at E = 1 is `KerrSchild::doran_river_speed` times dt, i.e. sqrt(2M/r) dt. This is the
+/// cheap form the drawing uses: no 4-velocity, no metric inverse, one square root per drop.
+///
+/// The radicand is negative only inside the turning point of a bound raindrop (E < 1 and
+/// r < 2M/(1 - E^2)), where no geodesic with that energy reaches, so the floor never binds on a
+/// congruence that exists; at the turning point itself ell = 0, as it must be, because the two
+/// release events then sit at the same radius.
+pub fn proper_drop_length_closed_form(metric: &KerrSchild, r: f64, energy: f64, dt: f64) -> f64 {
+    let doran = metric.doran_river_speed(r);
+    (energy * energy - 1.0 + doran * doran).max(0.0).sqrt() * dt
+}
+
+/// Proper width of a drop across the flow: the transverse gap between two raindrops of the E = 1,
+/// L = 0 congruence at the same (t, r) whose azimuths differ by `dphi`, as the drop measures it.
+///
+/// The separation is xi^mu = (0, 0, dphi), so `proper_length_sq` gives
+///     w^2 = g_phiphi dphi^2 + (u . xi)^2 = g_phiphi dphi^2 + (u_phi dphi)^2,
+/// and the raindrop carries u_phi = L = 0, so the cross term vanishes identically and
+/// w = sqrt(g_phiphi) dphi exactly. The projection is evaluated anyway, so the coded metric alone
+/// decides the answer.
+///
+/// On the equator g_phiphi = r^2 + a^2 + 2 M a^2 / r. For a = 0 the width falls monotonically to
+/// zero at the singularity. For a != 0 it turns around at r = (M a^2)^(1/3), which lies between
+/// r- and r+, and then grows without bound as r -> 0: the ring singularity is a circle of infinite
+/// proper circumference, so the flow lines fan apart again on the way in.
+pub fn proper_drop_width(metric: &KerrSchild, r: f64, dphi: f64) -> f64 {
+    let raindrop = raindrop_congruence(metric);
+    let (ut, ur, uphi) = raindrop.derivatives(metric, r);
+    let u = [ut, ur, uphi];
+    let xi = [0.0, 0.0, dphi];
+    proper_length_sq(metric, r, &u, &xi).max(0.0).sqrt()
 }
 
 /// One tracer of the river, carried in chart coordinates so that the advection is exact and the
@@ -190,31 +280,29 @@ impl RiverField {
         }
     }
 
-    /// Draw the field: one streak per particle, running from where it was STREAK_T of coordinate
-    /// time ago to where it is now, with a dot at the head. The colour is keyed to the invariant
-    /// river speed `KerrSchild::river_speed`, so it reports the flow's speed against the local
-    /// ZAMO rather than any coordinate rate.
+    /// Draw the field: one fluid element of the river per particle, an ellipse carrying the
+    /// element's own proper dimensions.
+    ///
+    /// The long axis is `proper_drop_length_closed_form`, the separation of two raindrops released
+    /// DROP_DT of coordinate time apart as those raindrops measure it, which at E = 1 is the Doran
+    /// river speed sqrt(2M/r) times DROP_DT and so reaches DROP_DT itself at the static limit
+    /// r = 2M. The short axis is `proper_drop_width`, the proper gap between two flow lines
+    /// DROP_DPHI apart in azimuth. Both are ruler readings in the drop's rest frame, taken from
+    /// the coded metric, so the stretching along the flow and the thinning across it are the
+    /// tidal deformation of the element itself.
+    ///
+    /// The colour stays keyed to `KerrSchild::river_speed`, the flow's speed against the local
+    /// ZAMO, which reaches c at r+ rather than at 2M: the two river speeds are therefore both on
+    /// screen, one as shape and one as hue.
     pub fn draw<F: Fn((f64, f64)) -> Pos2>(
         &self,
         painter: &egui::Painter,
         metric: &KerrSchild,
         to_screen: &F,
+        px_per_m: f32,
     ) {
         let raindrop = raindrop_congruence(metric);
         for p in &self.particles {
-            let (dr_dt, dphi_dt) = rates_of(&raindrop, metric, p.r);
-            let head = metric.cartesian_position(p.r, p.phi);
-            let (vx, vy) = metric.cartesian_velocity(p.r, p.phi, dr_dt, dphi_dt);
-            // First-order tail: the Cartesian point the particle came from STREAK_T ago.
-            let tail = (head.0 - vx * STREAK_T, head.1 - vy * STREAK_T);
-
-            let head_px = to_screen(head);
-            let mut tail_px = to_screen(tail);
-            let span = tail_px - head_px;
-            if span.length() > STREAK_MAX_PX {
-                tail_px = head_px + span.normalized() * STREAK_MAX_PX;
-            }
-
             let fade = (p.age / FADE_IN_T).clamp(0.0, 1.0);
             let alpha = (Theme::RIVER_ALPHA as f64 * fade).round() as u8;
             if alpha == 0 {
@@ -222,8 +310,37 @@ impl RiverField {
             }
             let colour = Theme::river_colour(metric.river_speed(p.r), alpha);
 
-            painter.line_segment([tail_px, head_px], Stroke::new(1.2, colour));
-            painter.circle_filled(head_px, HEAD_RADIUS_PX, colour);
+            let (dr_dt, dphi_dt) = rates_of(&raindrop, metric, p.r);
+            let head = metric.cartesian_position(p.r, p.phi);
+            let (vx, vy) = metric.cartesian_velocity(p.r, p.phi, dr_dt, dphi_dt);
+
+            // `to_screen` is affine, so mapping the head and the head displaced by the Cartesian
+            // velocity and differencing gives the drawn direction of the flow, y flip included.
+            let centre = to_screen(head);
+            let along = to_screen((head.0 + vx, head.1 + vy)) - centre;
+            let along = if along.length() > 1e-9 {
+                along.normalized()
+            } else {
+                egui::vec2(1.0, 0.0)
+            };
+            let across = egui::vec2(-along.y, along.x);
+
+            // Proper sizes first, pixels second. The clamps are legibility floors and caps on the
+            // drawing alone: no integration, rate or invariant anywhere else sees them.
+            let length = proper_drop_length_closed_form(metric, p.r, raindrop.energy, DROP_DT);
+            let width = proper_drop_width(metric, p.r, DROP_DPHI);
+            let semi_major = ((0.5 * length) as f32 * px_per_m)
+                .clamp(DROP_SEMI_MAJOR_PX.0, DROP_SEMI_MAJOR_PX.1);
+            let semi_minor = ((0.5 * width) as f32 * px_per_m)
+                .clamp(DROP_SEMI_MINOR_PX.0, DROP_SEMI_MINOR_PX.1);
+
+            let points: Vec<Pos2> = (0..DROP_VERTICES)
+                .map(|k| {
+                    let theta = k as f32 * std::f32::consts::TAU / DROP_VERTICES as f32;
+                    centre + along * (semi_major * theta.cos()) + across * (semi_minor * theta.sin())
+                })
+                .collect();
+            painter.add(egui::Shape::convex_polygon(points, colour, Stroke::NONE));
         }
     }
 }
@@ -331,6 +448,112 @@ mod tests {
             }
         }
         assert!(moved > 1000, "the test must actually have advanced particles, got {moved}");
+    }
+
+    #[test]
+    fn test_proper_drop_length_projection_matches_the_closed_form() {
+        // The projection carries u^t, g_tr and g_rphi explicitly; the closed form carries none of
+        // them. Agreement to 1e-10 across every region is the statement that they all cancel.
+        let mut worst = 0.0f64;
+        for &a in &[0.0, 0.65, 0.95] {
+            let metric = KerrSchild::new(1.0, a);
+            let rp = metric.outer_horizon();
+            for &energy in &[1.0, 1.3] {
+                for &r in &[12.0, 6.0, 3.0, 2.0, rp, 1.0, 0.5, 0.2] {
+                    let projected = proper_drop_length(&metric, r, energy, DROP_DT);
+                    let closed = proper_drop_length_closed_form(&metric, r, energy, DROP_DT);
+                    let d = (projected - closed).abs();
+                    worst = worst.max(d);
+                    assert!(
+                        d < 1e-10,
+                        "ell = {projected} vs {closed} at r={r} (a={a}, E={energy})"
+                    );
+                    assert!(projected > 0.0, "ell must be positive at r={r} (a={a}, E={energy})");
+                }
+            }
+        }
+        assert!(worst < 1e-10, "worst deviation {worst}");
+    }
+
+    #[test]
+    fn test_proper_drop_length_is_the_doran_river_speed_at_unit_energy() {
+        // E = 1 reduces ell to sqrt(2M/r) dt, so the drawn length reads off the Doran river speed
+        // directly and hits exactly dt at the static limit r = 2M, for every spin.
+        for &a in &[0.0, 0.65, 0.95] {
+            let metric = KerrSchild::new(1.0, a);
+            for &r in &[12.0, 6.0, 3.0, 2.0, 1.0, 0.2] {
+                let expected = (2.0_f64 / r).sqrt() * DROP_DT;
+                let got = proper_drop_length_closed_form(&metric, r, 1.0, DROP_DT);
+                assert!((got - expected).abs() < 1e-12, "ell = {got} vs {expected} at r={r} (a={a})");
+                assert!(
+                    (got - metric.doran_river_speed(r) * DROP_DT).abs() < 1e-12,
+                    "ell must be doran_river_speed * dt at r={r} (a={a})"
+                );
+            }
+            let at_static_limit = proper_drop_length_closed_form(&metric, 2.0, 1.0, DROP_DT);
+            assert!(
+                (at_static_limit - DROP_DT).abs() < 1e-12,
+                "ell(2M) = {at_static_limit} must be dt = {DROP_DT} (a={a})"
+            );
+        }
+    }
+
+    #[test]
+    fn test_proper_drop_width_is_the_root_of_g_phiphi() {
+        // u_phi = L = 0 on the raindrop, so the projection has no cross term and the width is
+        // sqrt(g_phiphi) dphi exactly, read straight off the coded metric component.
+        for &a in &[0.0, 0.65, 0.95] {
+            let metric = KerrSchild::new(1.0, a);
+            let rp = metric.outer_horizon();
+            for &r in &[12.0, 6.0, 3.0, 2.0, rp, 1.0, 0.5, 0.2] {
+                let g_phiphi = metric.metric_components(r)[2][2];
+                let expected = g_phiphi.sqrt() * DROP_DPHI;
+                let got = proper_drop_width(&metric, r, DROP_DPHI);
+                assert!(
+                    (got - expected).abs() < 1e-12 * (1.0 + expected),
+                    "w = {got} vs {expected} at r={r} (a={a})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_proper_drop_width_turns_around_between_the_horizons_and_diverges_at_the_ring() {
+        // g_phiphi = r^2 + a^2 + 2 M a^2 / r has d/dr = 2r - 2 M a^2 / r^2, so with spin the width
+        // is least at r = (M a^2)^(1/3), which lies inside r+ and outside r-, and grows again as
+        // r -> 0 because g_phiphi ~ 2 M a^2 / r there: the ring has infinite proper circumference.
+        for &a in &[0.65, 0.95] {
+            let metric = KerrSchild::new(1.0, a);
+            let r_min_width = (metric.m * a * a).cbrt();
+            assert!(
+                r_min_width > metric.inner_horizon() && r_min_width < metric.outer_horizon(),
+                "the width minimum at r={r_min_width} must sit between the horizons (a={a})"
+            );
+            let w_min = proper_drop_width(&metric, r_min_width, DROP_DPHI);
+            for &r in &[12.0, 3.0, 2.0, 1.5 * r_min_width, 0.5 * r_min_width, 0.05, 0.01] {
+                assert!(
+                    proper_drop_width(&metric, r, DROP_DPHI) > w_min,
+                    "w({r}) = {} must exceed the minimum {w_min} (a={a})",
+                    proper_drop_width(&metric, r, DROP_DPHI)
+                );
+            }
+            // Monotone growth on the way in from the turning point to the ring.
+            let mut previous = w_min;
+            for &r in &[0.5 * r_min_width, 0.1 * r_min_width, 0.01 * r_min_width] {
+                let w = proper_drop_width(&metric, r, DROP_DPHI);
+                assert!(w > previous, "w({r}) = {w} must exceed w at the larger radius {previous}");
+                previous = w;
+            }
+        }
+
+        // Without spin g_phiphi = r^2, so the width falls monotonically to zero instead.
+        let schwarzschild = KerrSchild::new(1.0, 0.0);
+        let mut previous = f64::INFINITY;
+        for &r in &[12.0, 6.0, 2.0, 0.5, 0.05] {
+            let w = proper_drop_width(&schwarzschild, r, DROP_DPHI);
+            assert!(w < previous, "w({r}) = {w} must fall without spin");
+            previous = w;
+        }
     }
 
     #[test]

@@ -208,7 +208,7 @@ impl AppControls {
             }
             ui.checkbox(&mut self.show_river, "River of Space (raindrop flow)")
                 .on_hover_text(
-                    "The streaks are the E = 1, L = 0 raindrop congruence of the Painlevé-Gullstrand / Doran river model: space itself flowing inward. The flow runs at β = √(1 − α²) relative to the local ZAMO, reaching c at r₊ and exceeding it inside, so nothing inside can move outward. The spiral is frame dragging.",
+                    "Each drop is an element of the E = 1, L = 0 raindrop flow of the Painlevé-Gullstrand / Doran river model, drawn at proper size. Length is the separation of consecutive raindrops as those raindrops measure the gap, √(2M/r) per unit release interval: the Doran river speed, reaching c at the static limit r = 2M. Width is the proper spacing of neighbouring flow lines, √g_φφ δφ, thinning towards the hole. Colour is the flow speed past a local ZAMO, β = √(1 − α²), reaching c at r₊.",
                 );
             ui.checkbox(&mut self.show_streamlines, "Frame-Dragging Streamlines");
 

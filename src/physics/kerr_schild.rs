@@ -316,6 +316,25 @@ impl KerrSchild {
         (1.0 - alpha_sq).max(0.0).sqrt()
     }
 
+    /// Speed of the Doran river background at radius r: sqrt(2M/r) on the equatorial plane.
+    ///
+    /// This is the rate at which two consecutive raindrops of the E = 1, L = 0 congruence draw
+    /// apart, per unit of the coordinate time that separates their release, as the raindrops
+    /// themselves measure the gap. Releasing at t and at t + dt puts the pair at chart separation
+    /// xi^mu = (0, dr/dt, dphi/dt) dt on a slice of constant t; projecting xi orthogonal to the
+    /// 4-velocity (see `gui::river::proper_drop_length`) makes every u^t and g_tr term cancel and
+    /// leaves ell^2 = (g_tt + E^2) dt^2 = (E^2 - 1 + 2M/r) dt^2, so ell = sqrt(2M/r) dt at E = 1.
+    /// The equatorial rho is r, so this is the Hamilton-Lisle Doran river speed sqrt(2Mr)/rho.
+    ///
+    /// It reaches 1 at the static limit r = 2M for every spin, not at r+: the Doran background is
+    /// already flowing at c where no static observer can survive, and it exceeds c inside 2M.
+    /// `river_speed` measures the same congruence against the local ZAMO instead, and reaches 1 at
+    /// r+, where no stationary observer survives. Both are exact statements about the same flow;
+    /// they are quoted against different frames.
+    pub fn doran_river_speed(&self, r: f64) -> f64 {
+        (2.0 * self.m / r.max(1e-6)).sqrt()
+    }
+
     /// Cartesian radius rho of the chart radius r in the equatorial plane.
     ///
     /// The equatorial plane is embedded in Kerr-Schild Cartesian coordinates as
@@ -1096,6 +1115,40 @@ mod tests {
                     "beta(r-) = {} (a={a})",
                     ks.river_speed(rm)
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn test_doran_river_speed_reaches_one_at_the_static_limit_not_at_the_horizon() {
+        // sqrt(2M/r) = 1 at r = 2M for every spin, which is the equatorial static limit. The
+        // ZAMO-relative speed reaches 1 at r+ instead, so the two coincide only for a = 0.
+        for &a in &[0.0, 0.65, 0.95] {
+            let ks = KerrSchild::new(1.0, a);
+            assert!(
+                (ks.doran_river_speed(2.0) - 1.0).abs() < 1e-12,
+                "doran(2M) = {} (a={a})",
+                ks.doran_river_speed(2.0)
+            );
+            let rp = ks.outer_horizon();
+            if a.abs() < 1e-12 {
+                assert!((ks.doran_river_speed(rp) - ks.river_speed(rp)).abs() < 1e-9);
+            } else {
+                // r+ < 2M whenever the hole spins, so the Doran speed has already passed c
+                // there, at exactly the radius where the ZAMO-relative speed reaches it.
+                assert!(rp < 2.0, "r+ = {rp} must sit inside the static limit (a={a})");
+                assert!(
+                    ks.doran_river_speed(rp) > 1.0,
+                    "doran(r+) = {} (a={a})",
+                    ks.doran_river_speed(rp)
+                );
+                assert!((ks.river_speed(rp) - 1.0).abs() < 1e-9);
+            }
+            // Without spin the two agree at every radius: alpha^2 = 1 - 2M/r exactly.
+            if a.abs() < 1e-12 {
+                for &r in &[20.0, 8.0, 4.0, 2.0] {
+                    assert!((ks.doran_river_speed(r) - ks.river_speed(r)).abs() < 1e-12);
+                }
             }
         }
     }

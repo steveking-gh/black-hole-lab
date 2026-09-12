@@ -266,7 +266,7 @@ impl SpatialCanvas {
         // 3. River of Space: the E = 1, L = 0 raindrop congruence, drawn under the arrows, the
         // trails and the observer markers so it never competes with them for legibility.
         if show_river {
-            self.river.draw(&painter, metric, &to_screen);
+            self.river.draw(&painter, metric, &to_screen, self.zoom);
         }
 
         // 4. Frame Dragging Swirl Vector Field
@@ -373,7 +373,7 @@ impl SpatialCanvas {
                  Cauchy Horizon r₋: {} ({:.2}M, ρ = {:.2}M)\n\
                  Spin a/M: {:.3}\n\
                  Drag: Ω_H = {:.3}/M = {:.3e} rad/s\n\
-                 River: β = √(1−α²) vs ZAMO; = 1 at r₊\n\
+                 River: colour √(1−α²) vs ZAMO (1 at r₊); length √(2M/r) (1 at 2M)\n\
                  🔍 Zoom: {:.0} px/M (Scroll to zoom, drag to pan)",
                 metric.format_physical_distance(1.0),
                 metric.m_solar,
@@ -399,7 +399,7 @@ impl SpatialCanvas {
                  Cauchy Horizon r₋: {:.2}M ({}), ρ = {:.2}M\n\
                  Spin a/M: {:.3}\n\
                  Drag: Ω_H = {:.3}/M\n\
-                 River: β = √(1−α²) vs ZAMO; = 1 at r₊\n\
+                 River: colour √(1−α²) vs ZAMO (1 at r₊); length √(2M/r) (1 at 2M)\n\
                  🔍 Zoom: {:.0} px/M (Scroll to zoom, drag to pan)",
                 metric.format_physical_distance(1.0),
                 metric.format_physical_time(1.0),
