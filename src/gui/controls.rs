@@ -335,14 +335,24 @@ impl AppControls {
                 } else {
                     ui.add(egui::Slider::new(&mut bob.r, 0.05..=5.5).text("Radial Position r (M)"));
                 }
-            }
 
-            ui.add(egui::Slider::new(&mut bob.beta_r, -0.95..=0.95).text("Radial Boost β_r"));
-            ui.add(egui::Slider::new(&mut bob.beta_phi, -0.95..=0.95).text("Azimuthal Boost β_ϕ"));
+                // The boost only defines a worldline in ManualDrag mode: free fall, static and
+                // ZAMO observers each pin down their own 4-velocity, so a beta there would be
+                // ignored. Hide the sliders rather than show dead controls.
+                ui.add(egui::Slider::new(&mut bob.beta_r, -0.95..=0.95).text("Radial Boost β_r"));
+                ui.add(egui::Slider::new(&mut bob.beta_phi, -0.95..=0.95).text("Azimuthal Boost β_ϕ"));
+                ui.label(
+                    egui::RichText::new(
+                        "Velocity relative to a raindrop observer (dropped from rest at infinity) at Bob's r",
+                    )
+                    .small()
+                    .color(Theme::TEXT_MUTED),
+                );
 
-            if ui.button("Reset Bob's Thrusters").clicked() {
-                bob.beta_r = 0.0;
-                bob.beta_phi = 0.0;
+                if ui.button("Reset Bob's Thrusters").clicked() {
+                    bob.beta_r = 0.0;
+                    bob.beta_phi = 0.0;
+                }
             }
         });
 

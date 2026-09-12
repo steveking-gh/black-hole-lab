@@ -13,14 +13,36 @@ pub struct KerrSchild {
     pub a: f64,
 }
 
+/// Coordinate slopes of the two *principal null directions* (PNDs) of the Kerr geometry at a
+/// radius r on the equatorial plane. These are the repeated null eigendirections of the Weyl
+/// tensor (the algebraically special rays that make Kerr type D), not the extreme rays of the
+/// light cone: see `NullWedge` for the latter.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct NullSlopes {
-    /// Coordinate velocity dr/dt of the ingoing null ray.
+    /// dr/dt of the ingoing PND: exactly -1 in ingoing Kerr-Schild coordinates, at every r.
     pub dr_dt_ingoing: f64,
-    /// Coordinate velocity dr/dt of the outgoing null ray.
+    /// dr/dt of the outgoing PND: Delta / (r^2 + a^2 + 2Mr).
     pub dr_dt_outgoing: f64,
-    /// Frame-dragging angular coordinate velocity dphi/dt.
-    pub dphi_dt_drag: f64,
+    /// dphi/dt of the ingoing PND: exactly 0 (the ingoing PND is the generator of the chart).
+    pub dphi_dt_ingoing: f64,
+    /// dphi/dt of the outgoing PND: 2a / (r^2 + a^2 + 2Mr).
+    pub dphi_dt_outgoing: f64,
+}
+
+/// The projection of the full null cone at radius r onto the (t, r) plane of the spacetime
+/// diagram: the open interval of radial coordinate velocities dr/dt that a light ray can have.
+/// It is a property of the event alone, independent of which observer draws it.
+#[derive(Debug, Clone, Copy)]
+pub struct NullWedge {
+    /// Most negative dr/dt attainable by a null ray (the inner edge of the wedge).
+    pub dr_dt_in: f64,
+    /// Most positive dr/dt attainable by a null ray (the outer edge of the wedge).
+    pub dr_dt_out: f64,
+    /// dphi/dt carried by the ray that realises `dr_dt_in`.
+    pub dphi_dt_in: f64,
+    /// dphi/dt carried by the ray that realises `dr_dt_out`.
+    pub dphi_dt_out: f64,
 }
 
 #[allow(dead_code)]
@@ -397,60 +419,83 @@ impl KerrSchild {
         sum
     }
 
-    /// Compute exact coordinate slopes dr/dt for ingoing and outgoing null geodesics
-    /// with zero angular momentum (or along the principal null directions).
+    /// The two *principal null directions* of the equatorial Kerr geometry at radius r, as
+    /// coordinate slopes in ingoing Kerr-Schild coordinates. As tangent vectors (dt, dr, dphi):
+    ///
+    ///     ingoing   ~ (1, -1, 0)
+    ///     outgoing  ~ (r^2 + a^2 + 2Mr, Delta, 2a)
+    ///
+    /// The ingoing PND is the generator of the ingoing Kerr-Schild congruence, which is why the
+    /// chart is regular across both horizons and why ingoing light always moves at dr/dt = -1.
+    /// The outgoing PND has dr/dt = Delta / (r^2 + a^2 + 2Mr), so it changes sign exactly at r+
+    /// and again at r-: outgoing light is dragged inward throughout Region II and turns around
+    /// again inside the Cauchy horizon.
+    ///
+    /// These are *not* the edges of the light cone as seen in the (t, r) diagram; the extreme
+    /// radial slopes are carried by the zero-angular-momentum rays of `null_wedge`.
     pub fn radial_null_slopes(&self, r: f64) -> NullSlopes {
         let r = r.max(1e-5);
         let a2 = self.a * self.a;
         let delta = self.delta(r);
 
-        // In ingoing Kerr-Schild coordinates, ingoing null rays propagate at dr/dt = -1 everywhere.
-        let dr_dt_ingoing = -1.0;
-
-        // Outgoing null ray slope dr/dt:
-        // Derived from g_{mu nu} v^mu v^nu = 0 with dphi/dt matching the frame-dragging stream.
-        // For Kerr-Schild, outgoing coordinate velocity is:
-        // dr/dt = Delta / (r^2 + a^2 + 2 * M * r)
-        let denominator = r * r + a2 + 2.0 * self.m * r;
-        let dr_dt_outgoing = delta / denominator.max(1e-9);
-
-        let dphi_dt_drag = self.frame_dragging_omega(r);
+        // Common denominator k^t of the outgoing PND, strictly positive for r > 0.
+        let kt_out = (r * r + a2 + 2.0 * self.m * r).max(1e-9);
 
         NullSlopes {
-            dr_dt_ingoing,
-            dr_dt_outgoing,
-            dphi_dt_drag,
+            dr_dt_ingoing: -1.0,
+            dr_dt_outgoing: delta / kt_out,
+            dphi_dt_ingoing: 0.0,
+            dphi_dt_outgoing: 2.0 * self.a / kt_out,
         }
     }
 
-    /// Compute an angular fan of null vectors around Bob at radius r in his local frame,
-    /// mapped to coordinate velocities (dr/dt, dphi/dt).
-    /// `angles`: array of emission angles alpha in [0, 2*pi] in the local rest frame.
-    /// Returns vector of (dr/dt, dphi/dt).
-    pub fn null_cone_fan(&self, r: f64, num_rays: usize) -> Vec<(f64, f64)> {
-        let mut fan = Vec::with_capacity(num_rays);
-        let slopes = self.radial_null_slopes(r);
-        let omega = slopes.dphi_dt_drag;
+    /// Extreme radial coordinate velocities dr/dt of light at radius r: the shadow the null cone
+    /// casts on the (t, r) plane of the spacetime diagram.
+    ///
+    /// Writing a null tangent as (1, v, w) with v = dr/dt and w = dphi/dt, the null condition is
+    ///     g_tt + 2 g_tr v + g_rr v^2 + 2 (g_tphi + g_rphi v) w + g_phiphi w^2 = 0.
+    /// A real w exists for a given v exactly when the discriminant of that quadratic in w is
+    /// non-negative:
+    ///     D(v) = (g_tphi + g_rphi v)^2 - g_phiphi (g_tt + 2 g_tr v + g_rr v^2) = A v^2 + B v + C
+    /// with
+    ///     A = g_rphi^2 - g_phiphi g_rr = -(1 + 2M/r) r^2   < 0
+    ///     B = 2 g_tphi g_rphi - 2 g_phiphi g_tr = -4 M r
+    ///     C = g_tphi^2 - g_phiphi g_tt = Delta             (exactly)
+    /// so D is a downward parabola and the admissible v form the closed interval between its two
+    /// roots. Extremising v over the cone by Lagrange multipliers puts the boundary rays at
+    /// D(v) = 0, where the double root in w is w = -(g_tphi + g_rphi v) / g_phiphi, i.e. exactly
+    /// k_phi = 0: the wedge edges are the *zero-angular-momentum* rays, not the PNDs.
+    ///
+    /// Consequences encoded in the tests: D(-1) = a^2 >= 0, so dr_dt_in <= -1 always (with
+    /// equality iff a = 0); D(0) = Delta, so dr_dt_out = 0 exactly on either horizon, is negative
+    /// throughout Region II (nothing can even hold station) and positive outside it. For a = 0 the
+    /// roots are -1 and (r - 2M) / (r + 2M).
+    pub fn null_wedge(&self, r: f64) -> NullWedge {
+        let r = r.max(1e-5);
+        let g = self.metric_components(r);
+        let (g_tt, g_tr, g_tphi) = (g[0][0], g[0][1], g[0][2]);
+        let (g_rr, g_rphi, g_phiphi) = (g[1][1], g[1][2], g[2][2]);
 
-        for i in 0..num_rays {
-            let alpha = 2.0 * std::f64::consts::PI * (i as f64) / (num_rays as f64);
-            // Local direction vector (cos(alpha), sin(alpha))
-            // cos(alpha) = +1 corresponds to local outgoing radial direction
-            // cos(alpha) = -1 corresponds to local ingoing radial direction
-            let cos_a = alpha.cos();
-            let sin_a = alpha.sin();
+        let quad_a = g_rphi * g_rphi - g_phiphi * g_rr;
+        let quad_b = 2.0 * g_tphi * g_rphi - 2.0 * g_phiphi * g_tr;
+        let quad_c = g_tphi * g_tphi - g_phiphi * g_tt;
 
-            // Interpolate radial coordinate velocity between ingoing (-1) and outgoing (slopes.dr_dt_outgoing)
-            // Weight: 0 for ingoing, 1 for outgoing
-            let radial_weight = 0.5 * (1.0 + cos_a);
-            let dr_dt = (1.0 - radial_weight) * slopes.dr_dt_ingoing + radial_weight * slopes.dr_dt_outgoing;
+        // quad_a = -(1 + 2M/r) r^2 is strictly negative, so the parabola always opens downward and
+        // the discriminant is non-negative (D(-1) = a^2 >= 0 puts a real point above the axis).
+        let root = (quad_b * quad_b - 4.0 * quad_a * quad_c).max(0.0).sqrt();
+        let v_a = (-quad_b + root) / (2.0 * quad_a);
+        let v_b = (-quad_b - root) / (2.0 * quad_a);
+        let (dr_dt_in, dr_dt_out) = if v_a <= v_b { (v_a, v_b) } else { (v_b, v_a) };
 
-            // Azimuthal component includes frame-dragging omega plus local transverse velocity
-            let dphi_dt = omega + (sin_a / r.max(1e-3)) * 0.5;
+        // Along an edge the w-quadratic has a double root: w = -(g_tphi + g_rphi v) / g_phiphi.
+        let w_of = |v: f64| -(g_tphi + g_rphi * v) / g_phiphi;
 
-            fan.push((dr_dt, dphi_dt));
+        NullWedge {
+            dr_dt_in,
+            dr_dt_out,
+            dphi_dt_in: w_of(dr_dt_in),
+            dphi_dt_out: w_of(dr_dt_out),
         }
-        fan
     }
 
     /// Kretschmann curvature scalar K = R_{abcd} R^{abcd} on the equatorial plane.
@@ -716,6 +761,156 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_principal_null_directions_are_null() {
+        // Both PNDs must satisfy g(k, k) = 0 against the coded metric, at every radius.
+        for &a in &[0.0, 0.65, 0.95] {
+            let ks = KerrSchild::new(1.0, a);
+            for &r in probe_radii(&ks).iter() {
+                let s = ks.radial_null_slopes(r);
+                for k in [
+                    [1.0, s.dr_dt_ingoing, s.dphi_dt_ingoing],
+                    [1.0, s.dr_dt_outgoing, s.dphi_dt_outgoing],
+                ] {
+                    let n = ks.norm(r, &k);
+                    assert!(n.abs() < 1e-10, "PND norm = {n} for {k:?} at r={r} (a={a})");
+                }
+                assert_eq!(s.dr_dt_ingoing, -1.0);
+                assert_eq!(s.dphi_dt_ingoing, 0.0);
+                // The outgoing PND is dragged in the direction of the spin.
+                assert!(s.dphi_dt_outgoing * a >= 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn test_null_wedge_discriminant_constant_is_delta() {
+        // C = g_tphi^2 - g_phiphi g_tt = Delta exactly, which is why the outer edge of the wedge
+        // vanishes precisely on the horizons.
+        for &a in &[0.0, 0.3, 0.65, 0.95] {
+            let ks = KerrSchild::new(1.0, a);
+            for &r in probe_radii(&ks).iter() {
+                let g = ks.metric_components(r);
+                let c = g[0][2] * g[0][2] - g[2][2] * g[0][0];
+                assert!(
+                    (c - ks.delta(r)).abs() < 1e-10 * (1.0 + ks.delta(r).abs()),
+                    "C = {c} vs Delta = {} at r={r} (a={a})",
+                    ks.delta(r)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_null_wedge_schwarzschild_closed_form() {
+        // With a = 0 the roots of D are exactly -1 and (r - 2M) / (r + 2M).
+        let ks = KerrSchild::new(1.0, 0.0);
+        for &r in &[12.0, 6.0, 2.0, 1.0, 0.3, 0.05] {
+            let w = ks.null_wedge(r);
+            assert!((w.dr_dt_in + 1.0).abs() < 1e-12, "in = {} at r={r}", w.dr_dt_in);
+            let expected = (r - 2.0) / (r + 2.0);
+            assert!(
+                (w.dr_dt_out - expected).abs() < 1e-12,
+                "out = {} vs {expected} at r={r}",
+                w.dr_dt_out
+            );
+            // Without spin there is no frame dragging, so both edges are purely radial.
+            assert!(w.dphi_dt_in.abs() < 1e-15 && w.dphi_dt_out.abs() < 1e-15);
+        }
+    }
+
+    #[test]
+    fn test_null_wedge_edges_are_null_and_carry_zero_angular_momentum() {
+        for &a in &[0.0, 0.65, 0.95] {
+            let ks = KerrSchild::new(1.0, a);
+            let g_of = |r: f64| ks.metric_components(r);
+            for &r in probe_radii(&ks).iter() {
+                let w = ks.null_wedge(r);
+                let g = g_of(r);
+                for k in [
+                    [1.0, w.dr_dt_in, w.dphi_dt_in],
+                    [1.0, w.dr_dt_out, w.dphi_dt_out],
+                ] {
+                    let scale = 1.0 + g[2][2].abs() * (1.0 + k[2] * k[2]);
+                    let n = ks.norm(r, &k);
+                    assert!(
+                        n.abs() < 1e-9 * scale,
+                        "edge norm = {n} for {k:?} at r={r} (a={a})"
+                    );
+                    // k_phi = g_{phi mu} k^mu = 0 is what makes these the extremal rays.
+                    let k_phi = g[2][0] * k[0] + g[2][1] * k[1] + g[2][2] * k[2];
+                    assert!(
+                        k_phi.abs() < 1e-9 * scale,
+                        "k_phi = {k_phi} for {k:?} at r={r} (a={a})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_null_wedge_sign_structure_by_region() {
+        for &a in &[0.0, 0.3, 0.65, 0.95] {
+            let ks = KerrSchild::new(1.0, a);
+            let rp = ks.outer_horizon();
+            let rm = ks.inner_horizon().max(1e-4);
+
+            // v_min <= -1 everywhere, because D(-1) = a^2 >= 0.
+            for &r in probe_radii(&ks).iter() {
+                let w = ks.null_wedge(r);
+                assert!(w.dr_dt_in <= -1.0 + 1e-12, "in = {} at r={r} (a={a})", w.dr_dt_in);
+                assert!(w.dr_dt_in < w.dr_dt_out, "wedge must be non-degenerate at r={r}");
+            }
+
+            // v_max = 0 exactly on the horizons (Delta = 0)...
+            let horizons: Vec<f64> = if ks.inner_horizon() > 1e-3 { vec![rp, rm] } else { vec![rp] };
+            for &r in horizons.iter() {
+                let w = ks.null_wedge(r);
+                assert!(w.dr_dt_out.abs() < 1e-9, "out = {} at horizon r={r} (a={a})", w.dr_dt_out);
+            }
+            // ...negative strictly inside the trapped band...
+            if rp - rm > 1e-3 {
+                for f in [0.25, 0.5, 0.75] {
+                    let r = rm + f * (rp - rm);
+                    assert!(
+                        ks.null_wedge(r).dr_dt_out < 0.0,
+                        "Region II must be trapped at r={r} (a={a})"
+                    );
+                }
+            }
+            // ...and positive outside it, in both Region I and Region III.
+            for &r in &[rp + 0.5, rp + 4.0, 12.0] {
+                assert!(ks.null_wedge(r).dr_dt_out > 0.0, "Region I at r={r} (a={a})");
+            }
+            if rm > 0.02 {
+                for &r in &[0.25 * rm, 0.75 * rm] {
+                    assert!(ks.null_wedge(r).dr_dt_out > 0.0, "Region III at r={r} (a={a})");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_null_wedge_matches_principal_null_directions_without_spin() {
+        // With a = 0 the geometry is spherically symmetric: the radial PNDs carry no angular
+        // momentum, so they *are* the edges of the wedge. With spin they part company.
+        let ks0 = KerrSchild::new(1.0, 0.0);
+        for &r in &[10.0, 4.0, 2.0, 0.8, 0.1] {
+            let s = ks0.radial_null_slopes(r);
+            let w = ks0.null_wedge(r);
+            assert!((s.dr_dt_ingoing - w.dr_dt_in).abs() < 1e-12);
+            assert!((s.dr_dt_outgoing - w.dr_dt_out).abs() < 1e-12);
+        }
+        let ks = KerrSchild::new(1.0, 0.9);
+        let s = ks.radial_null_slopes(4.0);
+        let w = ks.null_wedge(4.0);
+        assert!(
+            (s.dr_dt_ingoing - w.dr_dt_in).abs() > 1e-4,
+            "with spin the ingoing PND is strictly inside the wedge"
+        );
+        assert!(s.dr_dt_outgoing < w.dr_dt_out, "the wedge must bound the outgoing PND");
     }
 
     #[test]

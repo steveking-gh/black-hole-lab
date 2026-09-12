@@ -1,121 +1,251 @@
 use crate::physics::kerr_schild::KerrSchild;
 
-/// Local orthonormal tetrad frame e_{(a)}^mu at radius r on the equatorial plane.
-/// This connects the observer's local Minkowski frame (where light travels isotropically at c=1)
-/// to the global Kerr-Schild coordinate frame.
+/// Bilinear form g_{mu nu} a^mu b^nu at radius r, for two contravariant vectors written in the
+/// equatorial Kerr-Schild chart (t, r, phi). `KerrSchild::norm` is the diagonal case a = b.
+pub fn inner(metric: &KerrSchild, r: f64, a: &[f64; 3], b: &[f64; 3]) -> f64 {
+    let g = metric.metric_components(r);
+    let mut sum = 0.0;
+    for i in 0..3 {
+        for j in 0..3 {
+            sum += g[i][j] * a[i] * b[j];
+        }
+    }
+    sum
+}
+
+/// Local orthonormal tetrad e_{(a)}^mu carried by an observer with 4-velocity u at radius r on the
+/// equatorial plane: the frame in which that observer is at rest and light moves isotropically at
+/// c = 1. The three legs satisfy g(e_a, e_b) = diag(-1, +1, +1) exactly, so the cross terms
+/// g_tr, g_tphi and g_rphi of the ingoing Kerr-Schild chart are fully accounted for.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct Tetrad {
-    /// Zero-Angular-Momentum / coordinate frame tetrad vectors [e_{(0)}, e_{(1)}, e_{(2)}]
-    /// Each is a 3-vector [v^t, v^r, v^phi]
-    pub e0: [f64; 3], // Timelike basis vector (future-directed)
-    pub e1: [f64; 3], // Radial spacelike basis vector
-    pub e2: [f64; 3], // Azimuthal spacelike basis vector
+    /// Timelike leg, equal to the observer's 4-velocity u^mu (future-directed, g(e0, e0) = -1).
+    pub e0: [f64; 3],
+    /// Spacelike radial leg: the observer's local outward direction, g(e1, d_r) > 0.
+    pub e1: [f64; 3],
+    /// Spacelike azimuthal leg: the observer's local +phi direction.
+    pub e2: [f64; 3],
 }
 
 impl Tetrad {
-    /// Construct the local orthonormal tetrad for an observer at radius r in Kerr-Schild coordinates.
-    pub fn new(metric: &KerrSchild, r: f64) -> Self {
+    /// Gram-Schmidt orthonormalisation of the coordinate frame against a timelike 4-velocity u:
+    ///
+    ///     e0 = u                                              (normalised, g(u, u) = -1)
+    ///     v1 = d_r   + g(d_r, e0) e0,                     e1 = v1 / sqrt(g(v1, v1))
+    ///     v2 = d_phi + g(d_phi, e0) e0 - g(d_phi, e1) e1, e2 = v2 / sqrt(g(v2, v2))
+    ///
+    /// The plus sign in front of g(x, e0) e0 is the Lorentzian projector: the subtracted piece is
+    /// g(x, e0) / g(e0, e0) times e0, and g(e0, e0) = -1 flips the sign. The orthogonal complement
+    /// of a timelike vector is a positive-definite subspace, so g(v1, v1) > 0 and g(v2, v2) > 0 at
+    /// *every* radius r > 0, including at and inside both horizons, where the coordinate direction
+    /// d_r itself becomes timelike. No horizon-dependent special case is needed.
+    pub fn from_four_velocity(metric: &KerrSchild, r: f64, u: &[f64; 3]) -> Self {
         let r = r.max(1e-4);
-        let slopes = metric.radial_null_slopes(r);
-        let omega = slopes.dphi_dt_drag;
+        debug_assert!(
+            (inner(metric, r, u, u) + 1.0).abs() < 1e-6,
+            "tetrad needs a unit timelike 4-velocity; got u.u = {} at r = {r}",
+            inner(metric, r, u, u)
+        );
 
-        // In Kerr-Schild, the stationary / dragging observer has 4-velocity:
-        // u^mu ~ (1, 0, omega)
-        // Normalization: g_{mu nu} u^mu u^nu = g_{tt} + 2 omega g_{t phi} + omega^2 g_{phi phi}
-        let g = metric.metric_components(r);
-        let norm_sq = -(g[0][0] + 2.0 * omega * g[0][2] + omega * omega * g[2][2]);
-        let gamma_stat = if norm_sq > 1e-7 {
-            1.0 / norm_sq.sqrt()
-        } else {
-            // Inside ergosphere/horizon where static observer cannot exist, use infalling baseline
-            1.0
-        };
+        let e0 = *u;
+        let d_r = [0.0, 1.0, 0.0];
+        let d_phi = [0.0, 0.0, 1.0];
 
-        let e0 = [gamma_stat, 0.0, gamma_stat * omega];
+        let u_r = inner(metric, r, &d_r, &e0);
+        let mut v1 = [0.0f64; 3];
+        for mu in 0..3 {
+            v1[mu] = d_r[mu] + u_r * e0[mu];
+        }
+        let n1 = inner(metric, r, &v1, &v1).max(1e-300).sqrt();
+        let e1 = [v1[0] / n1, v1[1] / n1, v1[2] / n1];
 
-        // Radial spacelike basis vector:
-        // Orthogonal to e0, pointing along +r
-        let g_rr = g[1][1].max(1.0);
-        let e1_scale = 1.0 / g_rr.sqrt();
-        let e1 = [0.0, e1_scale, 0.0];
-
-        // Azimuthal spacelike basis vector:
-        let g_pp = g[2][2].max(1e-4);
-        let e2_scale = 1.0 / g_pp.sqrt();
-        let e2 = [0.0, 0.0, e2_scale];
+        let u_phi = inner(metric, r, &d_phi, &e0);
+        let p_phi = inner(metric, r, &d_phi, &e1);
+        let mut v2 = [0.0f64; 3];
+        for mu in 0..3 {
+            v2[mu] = d_phi[mu] + u_phi * e0[mu] - p_phi * e1[mu];
+        }
+        let n2 = inner(metric, r, &v2, &v2).max(1e-300).sqrt();
+        let e2 = [v2[0] / n2, v2[1] / n2, v2[2] / n2];
 
         Self { e0, e1, e2 }
     }
 
-    /// Boost a local null direction vector (1, cos_alpha, sin_alpha) by observer local velocity
-    /// beta = (beta_r, beta_phi) where |beta| < 1, and return the coordinate velocities (dr/dt, dphi/dt).
-    pub fn local_to_coordinate_velocity(
-        &self,
-        metric: &KerrSchild,
-        r: f64,
-        beta_r: f64,
-        beta_phi: f64,
-        alpha: f64,
-    ) -> (f64, f64) {
-        // Clamp beta to physical subluminal speeds |beta| < 0.99
-        let beta_sq = (beta_r * beta_r + beta_phi * beta_phi).min(0.98);
-        let gamma = 1.0 / (1.0 - beta_sq).sqrt();
+    /// Future-directed null vector k^mu = e0 + cos(alpha) e1 + sin(alpha) e2 emitted by this
+    /// observer at local angle alpha: alpha = 0 is the local outward radial direction, alpha = pi
+    /// the local inward one, alpha = pi/2 the local +phi direction. It is null by construction,
+    /// because the frame is orthonormal: g(k, k) = -1 + cos^2 + sin^2 = 0.
+    pub fn null_direction(&self, alpha: f64) -> [f64; 3] {
+        let (s, c) = alpha.sin_cos();
+        [
+            self.e0[0] + c * self.e1[0] + s * self.e2[0],
+            self.e0[1] + c * self.e1[1] + s * self.e2[1],
+            self.e0[2] + c * self.e1[2] + s * self.e2[2],
+        ]
+    }
 
-        // Local photon 3-velocity in observer's rest frame: direction alpha
-        let n_r = alpha.cos();
-        let n_phi = alpha.sin();
+    /// Coordinate slopes (dr/dt, dphi/dt) = (k^r / k^t, k^phi / k^t) of a vector in this frame.
+    /// For every `null_direction` and every r > 0 the component k^t is positive: the ingoing
+    /// Kerr-Schild time function increases along all future-directed null rays.
+    pub fn coordinate_velocity(&self, k: &[f64; 3]) -> (f64, f64) {
+        (k[1] / k[0], k[2] / k[0])
+    }
 
-        // Standard Lorentz aberration / boost:
-        // v'_local = [ (n + beta*(gamma/(gamma+1)*(n.beta) + 1)) ] / [ gamma * (1 + beta.n) ]
-        let n_dot_beta = n_r * beta_r + n_phi * beta_phi;
-        let denom = 1.0 + n_dot_beta;
-        let boost_factor = if beta_sq > 1e-9 {
-            (gamma - 1.0) / beta_sq
+    /// 4-velocity of an observer moving with local velocity beta = (beta_r, beta_phi) relative to
+    /// this frame: u' = gamma (e0 + beta_r e1 + beta_phi e2), gamma = 1 / sqrt(1 - |beta|^2).
+    /// The speed |beta| is clamped to 0.99 so the result stays timelike and finite.
+    pub fn boost(&self, beta_r: f64, beta_phi: f64) -> [f64; 3] {
+        let speed = (beta_r * beta_r + beta_phi * beta_phi).sqrt();
+        let (b_r, b_phi) = if speed > 0.99 {
+            (beta_r * 0.99 / speed, beta_phi * 0.99 / speed)
         } else {
-            0.5
+            (beta_r, beta_phi)
         };
-
-        let v_loc_r = (n_r + gamma * beta_r + boost_factor * n_dot_beta * beta_r) / (gamma * denom.max(1e-6));
-        let v_loc_phi = (n_phi + gamma * beta_phi + boost_factor * n_dot_beta * beta_phi) / (gamma * denom.max(1e-6));
-
-        // Now map from local tetrad frame to coordinate velocities
-        // dr/dt and dphi/dt are bounded by the metric's null cone
-        let slopes = metric.radial_null_slopes(r);
-        let v_ingoing = slopes.dr_dt_ingoing;
-        let v_outgoing = slopes.dr_dt_outgoing;
-
-        // Interpolate dr/dt based on local boosted radial direction
-        let w = 0.5 * (1.0 + v_loc_r.clamp(-1.0, 1.0));
-        let dr_dt = (1.0 - w) * v_ingoing + w * v_outgoing;
-
-        // Azimuthal coordinate velocity incorporates frame dragging + local boosted transverse speed
-        let omega = slopes.dphi_dt_drag;
-        let dphi_dt = omega + (v_loc_phi / r.max(1e-3)) * 0.7;
-
-        (dr_dt, dphi_dt)
+        let gamma = 1.0 / (1.0 - b_r * b_r - b_phi * b_phi).max(1e-12).sqrt();
+        [
+            gamma * (self.e0[0] + b_r * self.e1[0] + b_phi * self.e2[0]),
+            gamma * (self.e0[1] + b_r * self.e1[1] + b_phi * self.e2[1]),
+            gamma * (self.e0[2] + b_r * self.e1[2] + b_phi * self.e2[2]),
+        ]
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::physics::geodesic::GeodesicState;
+
+    /// Raindrop (E = 1, L = 0) 4-velocity. It exists at every r > 0, so it is the one reference
+    /// frame available in all three regions.
+    fn raindrop(metric: &KerrSchild, r: f64) -> [f64; 3] {
+        let (ut, ur, up) = GeodesicState::new_infall(0.0, r, 1.0, 0.0).derivatives(metric, r);
+        [ut, ur, up]
+    }
+
+    /// ZAMO 4-velocity; timelike only outside the outer horizon.
+    fn zamo(metric: &KerrSchild, r: f64) -> [f64; 3] {
+        let g = metric.metric_components(r);
+        let omega = metric.frame_dragging_omega(r);
+        let n = -(g[0][0] + 2.0 * omega * g[0][2] + omega * omega * g[2][2]);
+        let gamma = 1.0 / n.sqrt();
+        [gamma, 0.0, gamma * omega]
+    }
+
+    /// Radii spanning every region: exterior, r+, between the horizons, r-, inside r-.
+    fn probe_radii(metric: &KerrSchild) -> Vec<f64> {
+        let rp = metric.outer_horizon();
+        let rm = metric.inner_horizon().max(0.05);
+        vec![8.0, 3.0, rp, 0.5 * (rp + rm), rm, (0.5 * rm).max(0.05)]
+    }
 
     #[test]
-    fn test_tetrad_radial_boost() {
-        let metric = KerrSchild::new(1.0, 0.5);
-        let r = 3.0;
-        let tetrad = Tetrad::new(&metric, r);
+    fn test_tetrad_is_orthonormal_in_every_region() {
+        for &a in &[0.0, 0.65, 0.95] {
+            let metric = KerrSchild::new(1.0, a);
+            for &r in probe_radii(&metric).iter() {
+                let t = Tetrad::from_four_velocity(&metric, r, &raindrop(&metric, r));
+                let legs = [t.e0, t.e1, t.e2];
+                for i in 0..3 {
+                    for j in 0..3 {
+                        let expected = match (i == j, i) {
+                            (true, 0) => -1.0,
+                            (true, _) => 1.0,
+                            (false, _) => 0.0,
+                        };
+                        let got = inner(&metric, r, &legs[i], &legs[j]);
+                        assert!(
+                            (got - expected).abs() < 1e-9,
+                            "g(e{i}, e{j}) = {got} (want {expected}) at r={r} (a={a})"
+                        );
+                    }
+                }
+                // e1 really points outward: g(e1, d_r) > 0.
+                assert!(inner(&metric, r, &t.e1, &[0.0, 1.0, 0.0]) > 0.0);
+            }
+        }
+    }
 
-        // At rest
-        let (dr_rest_out, _) = tetrad.local_to_coordinate_velocity(&metric, r, 0.0, 0.0, 0.0);
-        let (dr_rest_in, _) = tetrad.local_to_coordinate_velocity(&metric, r, 0.0, 0.0, std::f64::consts::PI);
+    #[test]
+    fn test_null_directions_are_null_and_future_directed() {
+        for &a in &[0.0, 0.65, 0.95] {
+            let metric = KerrSchild::new(1.0, a);
+            for &r in probe_radii(&metric).iter() {
+                let t = Tetrad::from_four_velocity(&metric, r, &raindrop(&metric, r));
+                for i in 0..32 {
+                    let alpha = 2.0 * std::f64::consts::PI * (i as f64) / 32.0;
+                    let k = t.null_direction(alpha);
+                    let n = metric.norm(r, &k);
+                    let scale = 1.0 + k.iter().fold(0.0f64, |m, v| m.max(v.abs())).powi(2);
+                    assert!(
+                        n.abs() < 1e-9 * scale,
+                        "g(k, k) = {n} at alpha={alpha}, r={r} (a={a})"
+                    );
+                    assert!(
+                        k[0] > 0.0,
+                        "k^t = {} must be positive at alpha={alpha}, r={r} (a={a})",
+                        k[0]
+                    );
+                }
+            }
+        }
+    }
 
-        // Inward boost beta_r < 0 should shift light cone inward
-        let (dr_boost_out, _) = tetrad.local_to_coordinate_velocity(&metric, r, -0.8, 0.0, 0.0);
-        assert!(dr_boost_out < dr_rest_out);
+    #[test]
+    fn test_wedge_is_the_frame_independent_extreme_of_dr_dt() {
+        // The projection of the null cone onto the (t, r) plane is a property of the event, not of
+        // the observer: sweeping alpha in a free-fall frame and in a ZAMO frame at the same r must
+        // give the same extreme coordinate slopes, and those are `KerrSchild::null_wedge`.
+        let samples = 20_000;
+        for &a in &[0.0, 0.65, 0.95] {
+            let metric = KerrSchild::new(1.0, a);
+            let rp = metric.outer_horizon();
+            for &r in probe_radii(&metric).iter() {
+                let mut frames = vec![Tetrad::from_four_velocity(&metric, r, &raindrop(&metric, r))];
+                if r > rp {
+                    frames.push(Tetrad::from_four_velocity(&metric, r, &zamo(&metric, r)));
+                }
+                let wedge = metric.null_wedge(r);
+                for t in frames {
+                    let mut lo = f64::INFINITY;
+                    let mut hi = f64::NEG_INFINITY;
+                    for i in 0..samples {
+                        let alpha = 2.0 * std::f64::consts::PI * (i as f64) / (samples as f64);
+                        let (dr_dt, _) = t.coordinate_velocity(&t.null_direction(alpha));
+                        lo = lo.min(dr_dt);
+                        hi = hi.max(dr_dt);
+                    }
+                    assert!(
+                        (lo - wedge.dr_dt_in).abs() < 1e-6,
+                        "min dr/dt = {lo} vs wedge {} at r={r} (a={a})",
+                        wedge.dr_dt_in
+                    );
+                    assert!(
+                        (hi - wedge.dr_dt_out).abs() < 1e-6,
+                        "max dr/dt = {hi} vs wedge {} at r={r} (a={a})",
+                        wedge.dr_dt_out
+                    );
+                }
+            }
+        }
+    }
 
-        // Ingoing ray remains inward
-        assert!(dr_rest_in < 0.0);
+    #[test]
+    fn test_boost_is_a_unit_timelike_vector() {
+        let metric = KerrSchild::new(1.0, 0.65);
+        for &r in probe_radii(&metric).iter() {
+            let t = Tetrad::from_four_velocity(&metric, r, &raindrop(&metric, r));
+            for &(b_r, b_phi) in &[(0.0, 0.0), (0.5, -0.3), (-0.7, 0.2), (0.9, 0.9)] {
+                let u = t.boost(b_r, b_phi);
+                let n = metric.norm(r, &u);
+                assert!((n + 1.0).abs() < 1e-9, "u.u = {n} for beta=({b_r},{b_phi}) at r={r}");
+                assert!(u[0] > 0.0, "a boosted observer must still move forward in t: {u:?}");
+            }
+            // Zero boost is the identity.
+            let u0 = t.boost(0.0, 0.0);
+            for mu in 0..3 {
+                assert!((u0[mu] - t.e0[mu]).abs() < 1e-12);
+            }
+        }
     }
 }

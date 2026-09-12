@@ -812,7 +812,7 @@ impl SpacetimeCanvas {
         let slope_msg = if bob.r > 0.02 {
             let cone = bob.compute_lightcone_polygon(metric, 1.8);
             format!(
-                "Null Slopes at Bob:\nOutgoing dr/dt = {:+.3}\nIngoing dr/dt = {:+.3}\nDrag dϕ/dt = {:+.3}",
+                "Null Wedge at Bob (ZAMO rays):\nOutgoing dr/dt (L=0 ray) = {:+.3}\nIngoing dr/dt (L=0 ray) = {:+.3}\nOutgoing dϕ/dt (L=0 ray) = {:+.3}",
                 cone.dr_dt_out, cone.dr_dt_in, cone.dphi_dt_out
             )
         } else {

@@ -11,8 +11,10 @@ pub enum ObserverMode {
     /// Exists everywhere in the equatorial plane, including at and inside both horizons, and has
     /// identically zero proper acceleration (that is what "geodesic" means).
     FreeFall,
-    /// Worldline positioned by the user's mouse. For this step its telemetry uses the free-fall
-    /// 4-velocity; a later step defines it as a boost of the free-fall tetrad by (beta_r, beta_phi).
+    /// Worldline positioned by the user's mouse. Its 4-velocity is the boost of the local
+    /// *raindrop* frame (the E = 1, L = 0 ingoing geodesic, which exists at every r > 0) by the
+    /// local velocity (beta_r, beta_phi). beta = 0 reproduces free fall exactly; any other beta is
+    /// a rocket, and carries the proper acceleration that keeping it up requires.
     ManualDrag,
     /// Static observer: fixed r *and* fixed phi, u^mu = (1, 0, 0) / sqrt(-g_tt).
     /// The Killing vector d/dt is timelike only outside the equatorial static limit, so this
@@ -185,11 +187,35 @@ impl Observer {
                 let gamma = 1.0 / norm_sq.max(1e-14).sqrt();
                 [gamma, 0.0, gamma * omega]
             }
-            // TODO(step 2): ManualDrag should be a boost of the free-fall tetrad by
-            // (beta_r, beta_phi); until then it rides the free-fall 4-velocity.
-            // An inadmissible Static / Zamo selection also lands here.
+            ObserverMode::ManualDrag => {
+                // The dragged observer is defined as a *boost of the local raindrop frame*:
+                // u = gamma (e0 + beta_r e1 + beta_phi e2) built on the orthonormal tetrad of the
+                // E = 1, L = 0 ingoing geodesic at this radius. (beta_r, beta_phi) is therefore
+                // the observer's velocity, as a fraction of c, relative to an observer dropped
+                // from rest at infinity and passing through the same event.
+                //
+                // The raindrop frame is the reference because it exists at every r > 0, including
+                // between the horizons where no static or ZAMO frame exists; beta = 0 reproduces
+                // free fall exactly, and any beta != 0 is a rocket with real proper acceleration.
+                Self::raindrop_tetrad(metric, r).boost(self.beta_r, self.beta_phi)
+            }
+            // An inadmissible Static / Zamo selection lands here and rides free fall instead.
             _ => self.free_fall_four_velocity(metric, r),
         }
+    }
+
+    /// Orthonormal tetrad of the raindrop (E = 1, L = 0 ingoing geodesic) observer at radius r.
+    fn raindrop_tetrad(metric: &KerrSchild, r: f64) -> Tetrad {
+        let raindrop = GeodesicState::new_infall(0.0, r, 1.0, 0.0);
+        let (dt_dtau, dr_dtau, dphi_dtau) = raindrop.derivatives(metric, r);
+        Tetrad::from_four_velocity(metric, r, &[dt_dtau, dr_dtau, dphi_dtau])
+    }
+
+    /// The observer's own orthonormal frame: the Gram-Schmidt tetrad built on this observer's
+    /// 4-velocity. Light leaves the observer isotropically in this frame, so
+    /// `tetrad.null_direction(alpha)` sweeps the local null cone as alpha runs over [0, 2 pi).
+    pub fn tetrad(&self, metric: &KerrSchild) -> Tetrad {
+        Tetrad::from_four_velocity(metric, self.r, &self.four_velocity(metric))
     }
 
     /// Exact ingoing-geodesic 4-velocity at radius r for this observer's conserved (E, L).
@@ -378,8 +404,15 @@ impl Observer {
         }
     }
 
-    /// Generate polygon coordinates for the observer's light cone on the (t, r) diagram.
-    /// `time_height`: height in coordinate time units to extend the cone upward (future) and downward (past).
+    /// Generate polygon coordinates for the light cone at the observer's event on the (t, r)
+    /// diagram. `time_height`: height in coordinate time units to extend the cone upward (future)
+    /// and downward (past).
+    ///
+    /// The wedge drawn here is `KerrSchild::null_wedge`, the projection of the full null cone onto
+    /// the (t, r) plane. That projection belongs to the *event*, not to the observer: boosting the
+    /// observer re-labels which local angle alpha emits the extreme ray, but the extreme values of
+    /// dr/dt are unchanged. So the cone drawn in the diagram deliberately does not depend on the
+    /// observer's mode or on (beta_r, beta_phi).
     pub fn compute_lightcone_polygon(
         &self,
         metric: &KerrSchild,
@@ -388,25 +421,9 @@ impl Observer {
         let r0 = self.r;
         let t0 = self.t;
 
-        let tetrad = Tetrad::new(metric, r0);
-
-        // Compute coordinate slopes with observer's local boost applied
-        // alpha = 0 is outward radial, alpha = pi is inward radial
-        let (dr_dt_out, dphi_dt_out) = tetrad.local_to_coordinate_velocity(
-            metric,
-            r0,
-            self.beta_r,
-            self.beta_phi,
-            0.0, // outward
-        );
-
-        let (dr_dt_in, dphi_dt_in) = tetrad.local_to_coordinate_velocity(
-            metric,
-            r0,
-            self.beta_r,
-            self.beta_phi,
-            std::f64::consts::PI, // inward
-        );
+        let wedge = metric.null_wedge(r0);
+        let (dr_dt_in, dphi_dt_in) = (wedge.dr_dt_in, wedge.dphi_dt_in);
+        let (dr_dt_out, dphi_dt_out) = (wedge.dr_dt_out, wedge.dphi_dt_out);
 
         // Future cone endpoints at t = t0 + time_height.
         // If a ray reaches r = 0 before time_height, terminate the ray at the singularity
@@ -519,24 +536,169 @@ mod tests {
 
     #[test]
     fn test_observer_manual_drag_and_cone() {
+        // The drawn cone is the zero-angular-momentum wedge of the event, so it must reproduce
+        // `null_wedge` exactly and tip according to the sign of Delta, in every region.
         let metric = KerrSchild::new(1.0, 0.7);
         let mut bob = Observer::new("Bob", 0.0, 3.0, 0.0);
 
-        // Outside horizon: outgoing slope is positive
+        let check = |cone: &LightConePolygon, r: f64| {
+            let w = metric.null_wedge(r);
+            assert!((cone.dr_dt_in - w.dr_dt_in).abs() < 1e-12);
+            assert!((cone.dr_dt_out - w.dr_dt_out).abs() < 1e-12);
+            assert!((cone.dphi_dt_in - w.dphi_dt_in).abs() < 1e-12);
+            assert!((cone.dphi_dt_out - w.dphi_dt_out).abs() < 1e-12);
+            assert!(cone.dr_dt_in <= -1.0 + 1e-12, "inner edge = {}", cone.dr_dt_in);
+        };
+
+        // Region I: outgoing edge is positive.
         let cone_out = bob.compute_lightcone_polygon(&metric, 1.0);
+        check(&cone_out, 3.0);
         assert!(cone_out.dr_dt_out > 0.0);
 
-        // Drag Bob inside Region II (between r- = 0.286 and r+ = 1.714)
+        // Region II (between r- = 0.286 and r+ = 1.714): trapped, outgoing edge dr/dt < 0.
         bob.set_drag_position(5.0, 1.0);
         let cone_in = bob.compute_lightcone_polygon(&metric, 1.0);
-        // Trapped: outgoing slope dr/dt < 0
+        check(&cone_in, 1.0);
         assert!(cone_in.dr_dt_out < 0.0);
 
-        // Drag Bob inside Region III (r < 0.286)
+        // Region III (r < 0.286): un-tipped again, outgoing edge dr/dt > 0.
         bob.set_drag_position(8.0, 0.15);
         let cone_core = bob.compute_lightcone_polygon(&metric, 1.0);
-        // Un-tipped: outgoing slope dr/dt > 0
+        check(&cone_core, 0.15);
         assert!(cone_core.dr_dt_out > 0.0);
+
+        // The wedge belongs to the event: thrusting must not change it.
+        bob.set_drag_position(8.0, 3.0);
+        let rest = bob.compute_lightcone_polygon(&metric, 1.0);
+        bob.beta_r = 0.8;
+        bob.beta_phi = -0.4;
+        let boosted = bob.compute_lightcone_polygon(&metric, 1.0);
+        assert_eq!(rest.dr_dt_in, boosted.dr_dt_in);
+        assert_eq!(rest.dr_dt_out, boosted.dr_dt_out);
+    }
+
+    #[test]
+    fn test_observer_tetrads_are_orthonormal_everywhere() {
+        // Every mode the UI can select must hand `Tetrad::from_four_velocity` a unit timelike
+        // vector, and the resulting frame must be exactly orthonormal in all three regions.
+        use crate::physics::tetrad::inner;
+        for &a in &[0.0, 0.65, 0.95] {
+            let metric = KerrSchild::new(1.0, a);
+            let rp = metric.outer_horizon();
+            let rm = metric.inner_horizon().max(0.05);
+            let radii = [8.0, 3.0, rp, 0.5 * (rp + rm), rm, (0.5 * rm).max(0.05)];
+            for &r in radii.iter() {
+                for &mode in &[
+                    ObserverMode::FreeFall,
+                    ObserverMode::ManualDrag,
+                    ObserverMode::Static,
+                    ObserverMode::Zamo,
+                ] {
+                    let mut obs = observer_at(mode, r);
+                    if mode == ObserverMode::ManualDrag {
+                        obs.beta_r = 0.5;
+                        obs.beta_phi = -0.3;
+                    }
+                    let u = obs.four_velocity(&metric);
+                    let uu = metric.norm(r, &u);
+                    assert!((uu + 1.0).abs() < 1e-9, "u.u = {uu} for {mode:?} at r={r} (a={a})");
+
+                    let t = obs.tetrad(&metric);
+                    let legs = [t.e0, t.e1, t.e2];
+                    for i in 0..3 {
+                        for j in 0..3 {
+                            let expected = match (i == j, i) {
+                                (true, 0) => -1.0,
+                                (true, _) => 1.0,
+                                (false, _) => 0.0,
+                            };
+                            let got = inner(&metric, r, &legs[i], &legs[j]);
+                            assert!(
+                                (got - expected).abs() < 1e-9,
+                                "g(e{i}, e{j}) = {got} (want {expected}) for {mode:?} at r={r} (a={a})"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_manual_drag_zero_boost_is_free_fall() {
+        for &a in &[0.0, 0.65, 0.95] {
+            let metric = KerrSchild::new(1.0, a);
+            let rp = metric.outer_horizon();
+            let rm = metric.inner_horizon().max(0.05);
+            for &r in &[9.0, 3.0, rp, 0.5 * (rp + rm), (0.5 * rm).max(0.05)] {
+                let drag = observer_at(ObserverMode::ManualDrag, r);
+                let free = observer_at(ObserverMode::FreeFall, r);
+                let ud = drag.four_velocity(&metric);
+                let uf = free.four_velocity(&metric);
+                for mu in 0..3 {
+                    assert!(
+                        (ud[mu] - uf[mu]).abs() < 1e-10 * (1.0 + uf[mu].abs()),
+                        "beta = 0 must reproduce free fall: u^{mu} {ud:?} vs {uf:?} at r={r} (a={a})"
+                    );
+                }
+                // ...and a weightless one at that.
+                assert!(drag.is_free_falling(&metric), "unboosted drag at r={r} (a={a})");
+            }
+        }
+    }
+
+    #[test]
+    fn test_manual_drag_boost_stays_inside_the_null_wedge() {
+        let metric = KerrSchild::new(1.0, 0.65);
+        let rp = metric.outer_horizon();
+        let rm = metric.inner_horizon();
+        for &r in &[8.0, 3.0, rp, 0.5 * (rp + rm), 0.5 * rm] {
+            let wedge = metric.null_wedge(r);
+            for &(b_r, b_phi) in &[
+                (0.0, 0.0),
+                (0.5, 0.0),
+                (-0.5, 0.0),
+                (0.9, 0.0),
+                (-0.9, 0.0),
+                (0.5, -0.3),
+                (-0.4, 0.7),
+            ] {
+                let mut obs = observer_at(ObserverMode::ManualDrag, r);
+                obs.beta_r = b_r;
+                obs.beta_phi = b_phi;
+                let u = obs.four_velocity(&metric);
+                let n = metric.norm(r, &u);
+                assert!((n + 1.0).abs() < 1e-9, "u.u = {n} for beta=({b_r},{b_phi}) at r={r}");
+                assert!(u[0] > 0.0, "must move forward in t: {u:?}");
+
+                let v = obs.velocity_c(&metric);
+                assert!(
+                    v > wedge.dr_dt_in && v < wedge.dr_dt_out,
+                    "dr/dt = {v} escapes the wedge ({}, {}) for beta=({b_r},{b_phi}) at r={r}",
+                    wedge.dr_dt_in,
+                    wedge.dr_dt_out
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_manual_drag_boost_costs_proper_acceleration() {
+        // Because `four_acceleration` differentiates `four_velocity_at` in r, a boosted drag
+        // observer automatically picks up the thrust its worldline family requires.
+        let metric = KerrSchild::with_solar_mass(1.0, 0.65, 10.0);
+        let r = 3.0;
+
+        let mut boosted = observer_at(ObserverMode::ManualDrag, r);
+        boosted.beta_r = 0.5;
+        let a_boost = boosted.proper_acceleration_geom(&metric);
+        assert!(a_boost.is_finite() && a_boost > 0.0, "|a| = {a_boost} for beta_r = 0.5");
+        assert!(!boosted.is_free_falling(&metric));
+
+        let rest = observer_at(ObserverMode::ManualDrag, r);
+        let a_rest = rest.proper_acceleration_geom(&metric);
+        assert!(a_rest < 1e-6, "|a| = {a_rest} for beta = 0 must vanish");
+        assert!(rest.is_free_falling(&metric));
     }
 
     #[test]

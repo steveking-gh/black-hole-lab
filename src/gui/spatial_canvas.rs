@@ -296,9 +296,13 @@ impl SpatialCanvas {
 
         // Project Bob's null emission fan (only while outside singularity)
         if bob.r > 0.02 && bob.is_active {
-            let fan = metric.null_cone_fan(bob.r, 24);
+            // Bob's local null cone: 24 rays emitted isotropically in his own orthonormal frame
+            // (alpha = 0 outward, alpha = pi/2 along +phi), mapped to coordinate slopes.
+            let tetrad = bob.tetrad(metric);
             let ray_len = 28.0;
-            for (dr_dt, dphi_dt) in fan {
+            for i in 0..24 {
+                let alpha = 2.0 * std::f64::consts::PI * (i as f64) / 24.0;
+                let (dr_dt, dphi_dt) = tetrad.coordinate_velocity(&tetrad.null_direction(alpha));
                 let radial_dir = Vec2::new(bob_psi.cos() as f32, bob_psi.sin() as f32);
                 let azim_dir = Vec2::new(-bob_psi.sin() as f32, bob_psi.cos() as f32);
 
