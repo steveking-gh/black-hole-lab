@@ -7,30 +7,24 @@ use egui::{epaint::PathShape, Color32, Pos2, Rect, Stroke, Vec2};
 use std::collections::HashMap;
 
 /// Plain-language gloss on every number in a telemetry box, shown on hover.
-pub const TELEMETRY_HOVER_TIP: &str = "\
-Drag this box anywhere on the canvas; double-click it to snap it back to the observer. \
-Each canvas remembers where you put each observer's box.
+/// Hover tip for the observer info boxes. Written as a plain multi-line literal (lines start at
+/// column 0 so no indentation leaks into the text).
+pub const TELEMETRY_HOVER_TIP: &str =
+"Drag: move the box anywhere on the canvas. Double-click: snap the box back to the observer. Each canvas remembers box positions per observer.
 
-dr/dt — coordinate radial velocity in the global ingoing Kerr-Schild time slicing, as a fraction \
-of c. It always lies inside the local light cone; inside the horizon it is negative for everything.
+dr/dt — coordinate radial velocity in the global ingoing Kerr-Schild time slicing, as a fraction of c. Always lies inside the local light cone; negative for everything inside the horizon.
 
-dr/dτ — radial velocity per unit of the observer's own proper time (u^r). It is not bounded by c \
-and exceeds it inside the horizon, where r is a time coordinate.
+dr/dτ — radial velocity per unit of the observer's proper time (u^r). Not bounded by c; exceeds c inside the horizon, where r acts as a time coordinate.
 
-a_prop — proper acceleration felt by the observer, what an accelerometer reads, in Earth g. Zero \
-means free fall.
+a_prop — proper acceleration in Earth g, the accelerometer reading. Zero means free fall.
 
-Tidal — difference in gravitational acceleration across one metre of the body, in g per metre. \
-Set by curvature, 48M²/r⁶ on the equator; it is what actually stretches you.
+Tidal — gravitational acceleration difference across one metre, in g per metre. Curvature sets the value (48M²/r⁶ on the equator); tidal stretch, not infall speed, tears a body apart.
 
-ν_in/ν_∞ — frequency of ingoing light as measured by this observer divided by its frequency at \
-infinity. Below 1 is a redshift; a raindrop sees 1/2 at the Schwarzschild horizon.
+ν_in/ν_∞ — frequency of ingoing light measured by the observer, divided by the frequency at infinity. Below 1 means redshift; a raindrop measures 1/2 at the Schwarzschild horizon.
 
-E and L — conserved energy and angular momentum per unit mass of the geodesic. E = 1, L = 0 is a \
-drop from rest at infinity.
+E, L — conserved energy and angular momentum per unit mass along the geodesic. E = 1, L = 0 means a drop from rest at infinity.
 
-Region tag — which of the three regions (outside r₊, between r₊ and r₋, inside r₋) the observer \
-is in, plus the ergosphere.";
+Region tag — location relative to the horizons: outside r₊, between r₊ and r₋, or inside r₋, plus the ergosphere.";
 
 /// The drag offsets of the hovering telemetry boxes on one canvas, keyed by canvas tag and
 /// observer name so that the same observer can have a different box position in each diagram.
