@@ -469,4 +469,43 @@ mod tests {
             app.ui(ui, &mut frame);
         });
     }
+
+    #[test]
+    fn test_observer_rest_frame_renders_in_every_region() {
+        // One frame in each reference frame with the observers parked in Region I, exactly on r+,
+        // in Region II and in Region III. The rest-frame view places every surface with the dual
+        // tetrad, so this walks the timelike / null / spacelike branches of that code, and the
+        // Alice-less pass checks the fallback to Bob.
+        let mut app = SpacetimeApp::default();
+        app.controls.is_playing = false;
+        let rp = app.metric.outer_horizon();
+        let rm = app.metric.inner_horizon();
+        let radii = [4.5, rp, 0.5 * (rp + rm), 0.5 * rm];
+
+        egui::__run_test_ui(|ui| {
+            let mut frame = eframe::Frame::_new_kittest();
+            for &frame_of_ref in &[
+                ReferenceFrame::DistantObserver,
+                ReferenceFrame::Bob,
+                ReferenceFrame::Alice,
+            ] {
+                app.controls.frame_of_ref = frame_of_ref;
+                for &r in radii.iter() {
+                    app.bob.reset_with_phi(0.0, r, 0.0);
+                    if let Some(ref mut al) = app.alice {
+                        al.reset_with_phi(0.0, r * 1.08, 0.35);
+                    }
+                    app.ui(ui, &mut frame);
+                    assert!(app.bob.r > 0.0);
+                }
+            }
+
+            app.controls.frame_of_ref = ReferenceFrame::Alice;
+            app.alice = None;
+            for &r in radii.iter() {
+                app.bob.reset_with_phi(0.0, r, 0.0);
+                app.ui(ui, &mut frame);
+            }
+        });
+    }
 }

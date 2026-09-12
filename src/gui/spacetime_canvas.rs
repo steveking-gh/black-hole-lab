@@ -1,6 +1,7 @@
 use crate::gui::controls::ReferenceFrame;
 use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
+use crate::physics::local_frame::{LocalFrame, SurfaceCharacter};
 use crate::physics::observer::Observer;
 use egui::{epaint::PathShape, Color32, Pos2, Rect, Stroke, Vec2};
 
@@ -813,6 +814,21 @@ impl SpacetimeCanvas {
         );
     }
 
+    /// Render the focus observer's rest frame: the *first-order local inertial chart* defined by
+    /// their orthonormal tetrad.
+    ///
+    /// Everything in the picture is placed by one linear map, the dual tetrad
+    /// xi^a = e^a_mu Delta x^mu (see `LocalFrame`): the surfaces r = const (the ring singularity,
+    /// both horizons and the static limit), the other observer's event, and the direction of their
+    /// worldline. Because the map is linear and the frame is orthonormal, light cones are at
+    /// exactly 45 degrees everywhere in the picture - the focus observer's and the other
+    /// observer's alike - and the tilt of every surface comes out of the geometry rather than out
+    /// of a drawing rule: a surface r = const is steeper than 45 degrees where g^rr > 0, at 45
+    /// degrees on a horizon, and flatter than 45 degrees between them.
+    ///
+    /// The chart is exact at the focus observer's own event, where all of those orientations live,
+    /// and linearised for finite offsets (how far away a horizon is drawn, where the other
+    /// observer sits). The banner says so.
     fn render_observer_frame(
         &self,
         painter: &egui::Painter,
@@ -825,174 +841,93 @@ impl SpacetimeCanvas {
     ) {
         let center = rect.center();
         let scale = (rect.width() / (self.max_r as f32).max(1e-5)) * 0.45;
+        let to_screen = |xi1: f64, xi0: f64| -> Pos2 {
+            Pos2::new(
+                center.x + (xi1 as f32) * scale,
+                center.y - (xi0 as f32) * scale,
+            )
+        };
 
-        // 1. Grid lines in observer rest frame (xi, tau)
+        // 1. The chart's own axes: the observer's worldline xi^1 = 0 and their local space xi^0 = 0.
         let grid_stroke = Stroke::new(0.8, Color32::from_rgba_premultiplied(45, 52, 72, 90));
-        painter.line_segment([Pos2::new(rect.left(), center.y), Pos2::new(rect.right(), center.y)], grid_stroke);
-        painter.line_segment([Pos2::new(center.x, rect.top()), Pos2::new(center.x, rect.bottom())], grid_stroke);
-
-        let rp = metric.outer_horizon();
-        let rm = metric.inner_horizon();
-        let r_obs = focus_obs.r;
-
-        // 2. Horizon & Singularity Tilting Dynamics in Observer's Co-moving Frame
-        // -------------------------------------------------------------------------
-        // In general relativity:
-        // - Region I (r > r₊): g^rr > 0 (spacelike). All surfaces of constant r (r₊, r₋, r=0) are TIMELIKE -> strictly VERTICAL.
-        // - Crossing r₊: g^rr -> 0. r flips to timelike. Horizons tilt into horizontal boundaries!
-        // - Region II (r₋ < r < r₊): g^rr < 0 (timelike). r₊ is a past boundary (horizontal below); r₋ is a future boundary (horizontal above).
-        // - Crossing r₋: g^rr -> 0. r flips back to spacelike! r₋ un-tilts back to VERTICAL.
-        // - Region III (r < r₋): g^rr > 0 (spacelike). r₋ is vertical behind; Ring Singularity r=0 is vertical ahead (timelike singularity of Kerr metric).
-
-        // --- OUTER EVENT HORIZON r₊ ---
-        let (theta_p, p_anchor_rp, rp_line1, rp_line2) = if r_obs > rp + 0.15 {
-            // Region I: strictly vertical line ahead in space
-            let delta_rp = (rp - r_obs) as f32;
-            let anchor = Pos2::new(center.x + delta_rp * scale, center.y);
-            (0.0_f32, anchor, "Event Horizon r₊", "[r₊ Spacelike Ahead]")
-        } else if r_obs < rp - 0.15 {
-            // Region II / III: horizontal boundary in the past (below center)
-            let tau_past = (rp - r_obs).abs() as f32;
-            let anchor = Pos2::new(center.x, center.y + tau_past * scale);
-            (std::f32::consts::FRAC_PI_2, anchor, "Event Horizon r₊", "[Timelike in PAST]")
-        } else {
-            // Crossing r₊: tilts smoothly from 0 to pi/2
-            let frac = ((rp + 0.15 - r_obs) / 0.30) as f32;
-            let theta = frac * std::f32::consts::FRAC_PI_2;
-            let delta_rp = (rp - r_obs) as f32;
-            let tau_past = (rp - r_obs).abs() as f32;
-            let anchor = Pos2::new(
-                center.x + delta_rp * scale * theta.cos(),
-                center.y + tau_past * scale * theta.sin(),
-            );
-            (theta, anchor, "Event Horizon r₊", "[Tilting across r₊]")
-        };
-
-        // Draw r₊ horizon line
-        let dir_rp = Vec2::new(theta_p.sin(), -theta_p.cos());
         painter.line_segment(
-            [p_anchor_rp - dir_rp * 1200.0, p_anchor_rp + dir_rp * 1200.0],
-            Stroke::new(2.5, Theme::HORIZON_OUTER),
+            [Pos2::new(rect.left(), center.y), Pos2::new(rect.right(), center.y)],
+            grid_stroke,
+        );
+        painter.line_segment(
+            [Pos2::new(center.x, rect.top()), Pos2::new(center.x, rect.bottom())],
+            grid_stroke,
         );
 
-        // Place r₊ note at display edges in 2 compact lines (no overlap with central cone)
-        if theta_p > std::f32::consts::FRAC_PI_4 {
-            // Horizontal line across display: place note at right margin
-            let y_clamped = p_anchor_rp.y.clamp(rect.top() + 20.0, rect.bottom() - 24.0);
-            painter.text(
-                Pos2::new(rect.right() - 8.0, y_clamped - 2.0),
-                egui::Align2::RIGHT_BOTTOM,
-                format!("{}\n{}", rp_line1, rp_line2),
-                egui::FontId::proportional(10.0 * font_scale),
-                Theme::HORIZON_OUTER,
-            );
-        } else {
-            // Vertical line down display: place note at top margin
-            let x_clamped = p_anchor_rp.x.clamp(rect.left() + 8.0, rect.right() - 85.0);
-            painter.text(
-                Pos2::new(x_clamped + 4.0, rect.top() + 26.0),
-                egui::Align2::LEFT_TOP,
-                format!("{}\n{}", rp_line1, rp_line2),
-                egui::FontId::proportional(10.0 * font_scale),
-                Theme::HORIZON_OUTER,
-            );
-        }
+        let frame = LocalFrame::for_observer(metric, focus_obs.r, &focus_obs.four_velocity(metric));
 
-        // --- INNER CAUCHY HORIZON r₋ ---
-        let (theta_m, p_anchor_rm, rm_line1, rm_line2) = if r_obs > rp + 0.15 {
-            // Region I: strictly vertical line ahead in space (NOT horizontal!)
-            let delta_rm = (rm - r_obs) as f32;
-            let anchor = Pos2::new(center.x + delta_rm * scale, center.y);
-            (0.0_f32, anchor, "Cauchy Horizon r₋", "[r₋ Spacelike Ahead]")
-        } else if r_obs >= rp - 0.15 {
-            // Crossing r₊ into Region II: rotates from vertical (0) to horizontal (pi/2 in future)
-            let frac = ((rp + 0.15 - r_obs) / 0.30) as f32;
-            let theta = frac * std::f32::consts::FRAC_PI_2;
-            let delta_rm = (rm - r_obs) as f32;
-            let tau_fut = (r_obs - rm).max(0.0) as f32;
-            let anchor = Pos2::new(
-                center.x + delta_rm * scale * theta.cos(),
-                center.y - tau_fut * scale * theta.sin(),
-            );
-            (theta, anchor, "Cauchy Horizon r₋", "[Tilting to Future]")
-        } else if r_obs > rm + 0.15 {
-            // Region II: strictly horizontal inescapable future boundary (above center)
-            let tau_fut = (r_obs - rm) as f32;
-            let anchor = Pos2::new(center.x, center.y - tau_fut * scale);
-            (std::f32::consts::FRAC_PI_2, anchor, "Cauchy Horizon r₋", "[Inescapable FUTURE]")
-        } else if r_obs >= rm - 0.15 {
-            // Crossing r₋ into Region III: un-tilts from horizontal (pi/2) back to vertical (0)
-            let frac = ((r_obs - (rm - 0.15)) / 0.30) as f32;
-            let theta = frac * std::f32::consts::FRAC_PI_2;
-            let delta_rm = (rm - r_obs) as f32;
-            let tau_fut = (r_obs - rm).max(0.0) as f32;
-            let anchor = Pos2::new(
-                center.x + delta_rm * scale * theta.cos(),
-                center.y - tau_fut * scale * theta.sin(),
-            );
-            (theta, anchor, "Cauchy Horizon r₋", "[Un-tilting across r₋]")
-        } else {
-            // Region III: vertical line behind in space
-            let delta_rm = (rm - r_obs) as f32;
-            let anchor = Pos2::new(center.x + delta_rm * scale, center.y);
-            (0.0_f32, anchor, "Cauchy Horizon r₋", "[r₋ Spacelike Behind]")
-        };
-
-        // Draw r₋ horizon line
-        let dir_rm = Vec2::new(theta_m.sin(), -theta_m.cos());
-        painter.line_segment(
-            [p_anchor_rm - dir_rm * 1200.0, p_anchor_rm + dir_rm * 1200.0],
-            Stroke::new(2.5, Theme::HORIZON_CAUCHY),
+        // 2. Surfaces r = const, every one of them placed by the dual tetrad.
+        let ergo_faint = Color32::from_rgba_unmultiplied(
+            Theme::ERGOSPHERE_LINE.r(),
+            Theme::ERGOSPHERE_LINE.g(),
+            Theme::ERGOSPHERE_LINE.b(),
+            80,
         );
+        let surfaces: [(f64, &str, Color32, f32); 4] = [
+            (metric.ergosphere_equatorial(), "Static limit 2M", ergo_faint, 1.4),
+            (metric.outer_horizon(), "Event Horizon r₊", Theme::HORIZON_OUTER, 2.5),
+            (metric.inner_horizon(), "Cauchy Horizon r₋", Theme::HORIZON_CAUCHY, 2.5),
+            (0.0, "Ring Singularity r = 0", Theme::SINGULARITY_LINE, 3.0),
+        ];
 
-        // Place r₋ note at display edges in 2 compact lines
-        if theta_m > std::f32::consts::FRAC_PI_4 {
-            let y_clamped = p_anchor_rm.y.clamp(rect.top() + 20.0, rect.bottom() - 24.0);
+        for (idx, &(r_h, name, color, width)) in surfaces.iter().enumerate() {
+            let line = frame.surface_r_const(r_h);
+            let anchor = to_screen(line.point[0], line.point[1]);
+            let dir = Vec2::new(line.dir[0] as f32, -(line.dir[1] as f32));
+            let Some((end_a, end_b)) = clip_line_to_rect(anchor, dir, rect) else {
+                continue;
+            };
+            painter.line_segment([end_a, end_b], Stroke::new(width, color));
+
+            // The causal character is read straight off the drawn slope: |d xi^0 / d xi^1| > 1 is
+            // a timelike surface, = 1 a null one, < 1 a spacelike one. The 2e-3 tolerance is a
+            // display band on that comparison, not a physical fudge.
+            let note = match line.character(2e-3) {
+                SurfaceCharacter::Null => "null surface (crossing now)",
+                SurfaceCharacter::Timelike => "timelike surface (can be avoided)",
+                SurfaceCharacter::Spacelike => {
+                    if line.xi0_at_axis().unwrap_or(0.0) >= 0.0 {
+                        "spacelike surface (in your future)"
+                    } else {
+                        "spacelike surface (in your past)"
+                    }
+                }
+            };
+
+            let label = format!("{}\n{}", name, note);
+            let (label_pos, align) = if line.slope().abs() >= 1.0 {
+                // Steep line: hang the label off it, stacked down the top margin.
+                let y = (rect.top() + 26.0 + 24.0 * font_scale * (idx as f32)).min(rect.bottom() - 26.0);
+                let x = segment_x_at_y(end_a, end_b, y)
+                    .clamp(rect.left() + 6.0, rect.right() - 150.0 * font_scale);
+                (Pos2::new(x + 5.0, y), egui::Align2::LEFT_TOP)
+            } else {
+                // Flat line: park the label on it at the right margin.
+                let y = segment_y_at_x(end_a, end_b, rect.right() - 10.0)
+                    .clamp(rect.top() + 24.0, rect.bottom() - 6.0);
+                (Pos2::new(rect.right() - 8.0, y - 3.0), egui::Align2::RIGHT_BOTTOM)
+            };
             painter.text(
-                Pos2::new(rect.right() - 8.0, y_clamped - 2.0),
-                egui::Align2::RIGHT_BOTTOM,
-                format!("{}\n{}", rm_line1, rm_line2),
+                label_pos,
+                align,
+                label,
                 egui::FontId::proportional(10.0 * font_scale),
-                Theme::HORIZON_CAUCHY,
-            );
-        } else {
-            let x_clamped = p_anchor_rm.x.clamp(rect.left() + 8.0, rect.right() - 85.0);
-            painter.text(
-                Pos2::new(x_clamped + 4.0, rect.top() + 48.0),
-                egui::Align2::LEFT_TOP,
-                format!("{}\n{}", rm_line1, rm_line2),
-                egui::FontId::proportional(10.0 * font_scale),
-                Theme::HORIZON_CAUCHY,
+                color,
             );
         }
 
-        // --- RING SINGULARITY r = 0 ---
-        // In Region I (r > rp) and Region III (r < rm), r=0 is ahead in space as a vertical line.
-        if r_obs < rm || r_obs > rp {
-            let x_sing = center.x - (r_obs as f32) * scale;
-            if x_sing >= rect.left() - 50.0 && x_sing <= rect.right() + 50.0 {
-                painter.line_segment(
-                    [Pos2::new(x_sing, rect.top()), Pos2::new(x_sing, rect.bottom())],
-                    Stroke::new(3.0, Theme::SINGULARITY_LINE),
-                );
-                let x_clamped = x_sing.clamp(rect.left() + 8.0, rect.right() - 110.0);
-                painter.text(
-                    Pos2::new(x_clamped + 4.0, rect.top() + 70.0),
-                    egui::Align2::LEFT_TOP,
-                    "Ring Singularity r = 0\n[Timelike Core Boundary]",
-                    egui::FontId::proportional(10.0 * font_scale),
-                    Theme::SINGULARITY_LINE,
-                );
-            }
-        }
-
-        // 3. Primary Observer's 45-Degree Minkowski Light Cone (Permanently locked at 45°)
+        // 3. The focus observer's own light cone: 45 degrees through the origin, by construction.
         let cone_len = (rect.height() * 0.35).min(rect.width() * 0.35);
         let apex = center;
 
         if focus_obs.r > 0.02 && focus_obs.is_active {
-            let p_fut_out = apex + Vec2::new(cone_len, -cone_len); // +45 deg (future outgoing)
-            let p_fut_in = apex + Vec2::new(-cone_len, -cone_len); // -45 deg (future ingoing)
+            let p_fut_out = apex + Vec2::new(cone_len, -cone_len);
+            let p_fut_in = apex + Vec2::new(-cone_len, -cone_len);
             let p_past_out = apex + Vec2::new(cone_len, cone_len);
             let p_past_in = apex + Vec2::new(-cone_len, cone_len);
 
@@ -1007,13 +942,11 @@ impl SpacetimeCanvas {
                 egui::epaint::PathStroke::NONE,
             ));
 
-            // 45° boundary lines
             painter.line_segment([apex, p_fut_in], Stroke::new(2.2, Theme::LIGHTCONE_BORDER_INGOING));
             painter.line_segment([p_past_out, apex], Stroke::new(1.2, Theme::LIGHTCONE_BORDER_INGOING));
             painter.line_segment([apex, p_fut_out], Stroke::new(2.2, Theme::LIGHTCONE_BORDER_OUTGOING));
             painter.line_segment([p_past_in, apex], Stroke::new(1.2, Theme::LIGHTCONE_BORDER_OUTGOING));
 
-            // 45 degree angle indicators
             painter.text(
                 p_fut_out + Vec2::new(4.0, -2.0),
                 egui::Align2::LEFT_BOTTOM,
@@ -1029,7 +962,6 @@ impl SpacetimeCanvas {
                 Theme::LIGHTCONE_BORDER_INGOING,
             );
         } else if focus_obs.is_active {
-            // Singularity collision: light cone terminates
             painter.circle_filled(center, 12.0, Theme::SINGULARITY_FILL);
             painter.circle_stroke(center, 15.0, Stroke::new(2.0, Theme::SINGULARITY_LINE));
             painter.text(
@@ -1041,54 +973,42 @@ impl SpacetimeCanvas {
             );
         }
 
-        // Primary Observer Avatar
         let obs_color = if focus_obs.name == "Alice" { Theme::ALICE_COLOR } else { Theme::BOB_COLOR };
         painter.circle_filled(apex, 7.5, obs_color);
         painter.circle_stroke(apex, 9.5, Stroke::new(1.5, Color32::WHITE));
 
-        // 4. Secondary Observer (Relative position, convergence & boosted light cone)
+        // 4. The other observer: their event, their worldline direction and their light cone, all
+        // from the same linear map. The azimuthal component xi^2 is dropped from the picture and
+        // printed instead, so the projection is on the record.
         if let Some(other) = other_obs {
             if other.is_active {
-                // Coordinate transformation into focus observer's local rest frame:
-                // Radial difference between observers
-                let dr = (other.r - focus_obs.r) as f32;
-
-                // In the observer's local rest frame, simultaneity is defined along their local spacelike tetrad.
-                // In Region II (r- < r < r+), lines of constant r are spacelike (horizontal at distance tau_fut = r_obs - r-).
-                // Alice's position along the horizon normal is (other.r - r-) vs Bob's (focus_obs.r - r-).
-                let other_pos = if r_obs > rp + 0.15 {
-                    // Region I: vertical coordinate r is spacelike horizontal, t is timelike vertical.
-                    // Scale dt by local time dilation so Alice doesn't jump off screen.
-                    let dt = ((other.t - focus_obs.t).clamp(-3.0, 3.0)) as f32;
-                    center + Vec2::new(dr * scale, -dt * scale)
-                } else if r_obs >= rm {
-                    // Region II / Horizon Crossing:
-                    // Radial coordinate r is timelike (points toward Cauchy horizon).
-                    // As both observers approach r-, dr = other.r - focus_obs.r -> 0!
-                    // On Bob's rest-frame display, the Cauchy horizon is at distance (r_obs - rm) in the future (above Bob).
-                    // Alice's position relative to Bob along the approach to r- is given by her radial offset:
-                    let dy_radial = ((focus_obs.r - other.r) as f32) * scale;
-                    // Lateral drift from azimuthal/time separation:
-                    let dx_lateral = (dr * 0.5) * scale;
-                    center + Vec2::new(dx_lateral, -dy_radial)
-                } else {
-                    // Region III: inside Cauchy core, r is spacelike again
-                    center + Vec2::new(dr * scale, 0.0)
-                };
+                let two_pi = std::f64::consts::TAU;
+                let mut d_phi = (other.phi - focus_obs.phi).rem_euclid(two_pi);
+                if d_phi > std::f64::consts::PI {
+                    d_phi -= two_pi;
+                }
+                let xi = frame.to_local(&[other.t - focus_obs.t, other.r - focus_obs.r, d_phi]);
+                let other_pos = to_screen(xi[1], xi[0]);
 
                 if rect.contains(other_pos) {
                     let other_color = if other.name == "Alice" { Theme::ALICE_COLOR } else { Theme::BOB_COLOR };
-
-                    // Boosted light cone for secondary observer
-                    let v_rel = ((other.velocity_c(metric) - focus_obs.velocity_c(metric))
-                        / (1.0 - other.velocity_c(metric) * focus_obs.velocity_c(metric))).clamp(-0.95, 0.95);
-                    let slope_in = ((-1.0 - v_rel) / (1.0 + v_rel)) as f32;
+                    // v^a = e^a_mu u_other^mu is their 4-velocity in this frame: the drawn tangent
+                    // is (v^1, v^0) normalised, and |v^1 / v^0| is their radial speed relative to
+                    // the focus observer.
+                    let v = frame.vector_to_local(&other.four_velocity(metric));
+                    let len = ((v[0] * v[0] + v[1] * v[1]) as f32).sqrt().max(1e-9);
+                    let tangent = Vec2::new((v[1] as f32) / len, -(v[0] as f32) / len);
+                    let wl_len = (cone_len * 0.5).max(16.0);
+                    painter.line_segment(
+                        [other_pos - tangent * wl_len * 0.4, other_pos + tangent * wl_len],
+                        Stroke::new(1.6, other_color),
+                    );
 
                     if other.r > 0.02 {
+                        // Light cones are frame-invariant: theirs is at 45 degrees too.
                         let other_cone_len = (cone_len * 0.45).max(18.0);
-
                         let o_fut_out = other_pos + Vec2::new(other_cone_len, -other_cone_len);
-                        let o_fut_in = other_pos + Vec2::new(slope_in * other_cone_len, -other_cone_len);
+                        let o_fut_in = other_pos + Vec2::new(-other_cone_len, -other_cone_len);
 
                         painter.add(PathShape::convex_polygon(
                             vec![other_pos, o_fut_in, o_fut_out],
@@ -1098,38 +1018,95 @@ impl SpacetimeCanvas {
                         painter.line_segment([other_pos, o_fut_in], Stroke::new(1.2, other_color));
                         painter.line_segment([other_pos, o_fut_out], Stroke::new(1.2, other_color));
                     } else {
-                        // Secondary observer singularity impact
                         painter.circle_filled(other_pos, 8.0, Theme::SINGULARITY_FILL);
                         painter.circle_stroke(other_pos, 10.0, Stroke::new(1.5, Theme::SINGULARITY_LINE));
                     }
 
-                    // Other avatar
                     painter.circle_filled(other_pos, 6.0, other_color);
                     painter.circle_stroke(other_pos, 7.5, Stroke::new(1.0, Color32::WHITE));
-
-                    // Relative separation bracket
                     painter.line_segment([center, other_pos], Stroke::new(1.2, Color32::from_white_alpha(120)));
 
-                    // Telemetry card for secondary observer
+                    let v_rel = (v[1] / v[0].abs().max(1e-12)).abs();
+                    painter.text(
+                        other_pos + Vec2::new(9.0, 9.0),
+                        egui::Align2::LEFT_TOP,
+                        format!(
+                            "azimuthal offset ξ² = {}\nradial speed in this frame = {:.3}c",
+                            metric.format_r(xi[2], use_km),
+                            v_rel.min(9.999)
+                        ),
+                        egui::FontId::monospace(9.0 * font_scale),
+                        Theme::TEXT_MUTED,
+                    );
+
                     draw_hovering_telemetry(painter, rect, other_pos, &other.name, other_color, other, metric, use_km, font_scale);
                 }
             }
         }
 
-        // Telemetry card for primary observer
         draw_hovering_telemetry(painter, rect, apex, &focus_obs.name, obs_color, focus_obs, metric, use_km, font_scale);
 
-        // Header Title Banner
         painter.text(
             Pos2::new(rect.left() + 8.0, rect.top() + 8.0),
             egui::Align2::LEFT_TOP,
             format!(
-                "🔭 {}'S REST FRAME  |  Local Minkowski Space (c ≡ 1, 45° Light Cones)\n\
-                 Horizons Tilt Dynamically: Vertical in Spacelike Regions (I & III) ↔ Horizontal in Timelike Region (II)",
+                "🔭 {}'S REST FRAME  |  first-order local inertial frame (c ≡ 1, 45° light cones); \
+                 surfaces r = const placed by the dual tetrad",
                 focus_obs.name.to_uppercase()
             ),
             egui::FontId::proportional(11.0 * font_scale),
             Color32::from_rgb(150, 220, 255),
         );
     }
+}
+
+/// Clip the infinite line p + t d to `rect` (Liang-Barsky), returning its visible segment.
+fn clip_line_to_rect(p: Pos2, d: Vec2, rect: Rect) -> Option<(Pos2, Pos2)> {
+    if d.x.abs() < 1e-12 && d.y.abs() < 1e-12 {
+        return None;
+    }
+    let mut t_min = f32::NEG_INFINITY;
+    let mut t_max = f32::INFINITY;
+    // Each edge contributes one constraint num * t <= den.
+    for &(num, den) in &[
+        (-d.x, p.x - rect.left()),
+        (d.x, rect.right() - p.x),
+        (-d.y, p.y - rect.top()),
+        (d.y, rect.bottom() - p.y),
+    ] {
+        if num.abs() < 1e-12 {
+            if den < 0.0 {
+                return None;
+            }
+        } else {
+            let t = den / num;
+            if num < 0.0 {
+                t_min = t_min.max(t);
+            } else {
+                t_max = t_max.min(t);
+            }
+        }
+    }
+    if !(t_min <= t_max) || !t_min.is_finite() || !t_max.is_finite() {
+        return None;
+    }
+    Some((p + d * t_min, p + d * t_max))
+}
+
+/// x on the segment a-b at screen height y, clamped to the segment.
+fn segment_x_at_y(a: Pos2, b: Pos2, y: f32) -> f32 {
+    if (b.y - a.y).abs() < 1e-3 {
+        return 0.5 * (a.x + b.x);
+    }
+    let t = ((y - a.y) / (b.y - a.y)).clamp(0.0, 1.0);
+    a.x + t * (b.x - a.x)
+}
+
+/// y on the segment a-b at screen abscissa x, clamped to the segment.
+fn segment_y_at_x(a: Pos2, b: Pos2, x: f32) -> f32 {
+    if (b.x - a.x).abs() < 1e-3 {
+        return 0.5 * (a.y + b.y);
+    }
+    let t = ((x - a.x) / (b.x - a.x)).clamp(0.0, 1.0);
+    a.y + t * (b.y - a.y)
 }

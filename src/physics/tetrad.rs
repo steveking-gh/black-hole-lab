@@ -72,6 +72,81 @@ impl Tetrad {
         Self { e0, e1, e2 }
     }
 
+    /// Orthonormal tetrad adapted to a (time, radius) diagram: the same observer, but with the
+    /// azimuthal leg chosen *tangent to the surfaces r = const*, i.e. e2^r = 0.
+    ///
+    /// The surfaces r = const are spanned by d_t and d_phi, so the vectors tangent to them with
+    /// zero radial component form the 2-plane span(d_t, d_phi). Requiring in addition
+    /// orthogonality to u picks the single direction
+    ///
+    ///     w^mu = (u_phi, 0, -u_t),      g(w, u) = u_phi u_t - u_t u_phi = 0,
+    ///
+    /// which is spacelike because it lies in the (positive-definite) rest space of u. Then
+    /// e2 = w / sqrt(g(w, w)) and e1 is what is left over: the rest-space projection of d_r
+    /// orthogonalised against e2, which is automatically outward-pointing.
+    ///
+    /// Why this gauge: the drawn plane of the diagram is span(e0, e1), the slice xi^2 = 0. The
+    /// covector dr has local components n_a = e_a^r, and this gauge makes n_2 = 0, so
+    ///
+    ///     -n_0^2 + n_1^2 = eta^{ab} n_a n_b = g^{rr} = Delta / r^2
+    ///
+    /// exactly. The trace of a surface r = const in the drawn plane therefore carries the exact
+    /// causal character of the surface itself: steeper than 45 degrees where g^rr > 0, at 45
+    /// degrees on either horizon, flatter where g^rr < 0. With the `from_four_velocity` gauge the
+    /// leftover n_2 = e2^r (which equals a / r for a raindrop) would tilt the drawn line away from
+    /// 45 degrees at the horizons, because there the null generator of the surface leaves the
+    /// slice.
+    ///
+    /// The degenerate case u_t = u_phi = 0 (possible only between the horizons, where d_r is
+    /// timelike) makes w vanish; the construction then falls back to the rest-space projection of
+    /// d_phi, which is the continuous limit, since u_phi -> 0 there.
+    pub fn from_four_velocity_axial(metric: &KerrSchild, r: f64, u: &[f64; 3]) -> Self {
+        let r = r.max(1e-4);
+        debug_assert!(
+            (inner(metric, r, u, u) + 1.0).abs() < 1e-6,
+            "tetrad needs a unit timelike 4-velocity; got u.u = {} at r = {r}",
+            inner(metric, r, u, u)
+        );
+
+        let e0 = *u;
+        let g = metric.metric_components(r);
+        // u_mu = g_{mu nu} u^nu.
+        let mut u_low = [0.0f64; 3];
+        for mu in 0..3 {
+            for nu in 0..3 {
+                u_low[mu] += g[mu][nu] * u[nu];
+            }
+        }
+
+        let mut w = [u_low[2], 0.0, -u_low[0]];
+        let mut w2 = inner(metric, r, &w, &w);
+        let scale = 1.0 + u_low[0] * u_low[0] + u_low[2] * u_low[2];
+        if !(w2 > 1e-12 * scale) {
+            // u_t and u_phi both vanish: any direction in span(d_t, d_phi) is orthogonal to u, and
+            // the rest-space projection of d_phi is the one that matches the limit.
+            let d_phi = [0.0, 0.0, 1.0];
+            let u_phi = inner(metric, r, &d_phi, &e0);
+            w = [u_phi * e0[0], u_phi * e0[1], 1.0 + u_phi * e0[2]];
+            w2 = inner(metric, r, &w, &w);
+        }
+        let n2 = w2.max(1e-300).sqrt();
+        let e2 = [w[0] / n2, w[1] / n2, w[2] / n2];
+
+        // e1: the part of d_r orthogonal to both e0 (Lorentzian projector, hence the plus sign)
+        // and e2. g(v1, d_r) = g(v1, v1) > 0, so e1 points outward without any sign fix-up.
+        let d_r = [0.0, 1.0, 0.0];
+        let p0 = inner(metric, r, &d_r, &e0);
+        let p2 = inner(metric, r, &d_r, &e2);
+        let mut v1 = [0.0f64; 3];
+        for mu in 0..3 {
+            v1[mu] = d_r[mu] + p0 * e0[mu] - p2 * e2[mu];
+        }
+        let n1 = inner(metric, r, &v1, &v1).max(1e-300).sqrt();
+        let e1 = [v1[0] / n1, v1[1] / n1, v1[2] / n1];
+
+        Self { e0, e1, e2 }
+    }
+
     /// Future-directed null vector k^mu = e0 + cos(alpha) e1 + sin(alpha) e2 emitted by this
     /// observer at local angle alpha: alpha = 0 is the local outward radial direction, alpha = pi
     /// the local inward one, alpha = pi/2 the local +phi direction. It is null by construction,
@@ -245,6 +320,48 @@ mod tests {
             let u0 = t.boost(0.0, 0.0);
             for mu in 0..3 {
                 assert!((u0[mu] - t.e0[mu]).abs() < 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn test_axial_tetrad_is_orthonormal_and_tangent_to_constant_r() {
+        // The diagram gauge must still be an exact orthonormal frame with e0 = u, and its
+        // azimuthal leg must have no radial component, so that -n_0^2 + n_1^2 = g^rr exactly.
+        for &a in &[0.0, 0.65, 0.95] {
+            let metric = KerrSchild::new(1.0, a);
+            for &r in probe_radii(&metric).iter() {
+                let mut frames = vec![Tetrad::from_four_velocity_axial(&metric, r, &raindrop(&metric, r))];
+                if r > metric.outer_horizon() {
+                    frames.push(Tetrad::from_four_velocity_axial(&metric, r, &zamo(&metric, r)));
+                }
+                for t in frames {
+                    let legs = [t.e0, t.e1, t.e2];
+                    for i in 0..3 {
+                        for j in 0..3 {
+                            let expected = match (i == j, i) {
+                                (true, 0) => -1.0,
+                                (true, _) => 1.0,
+                                (false, _) => 0.0,
+                            };
+                            let got = inner(&metric, r, &legs[i], &legs[j]);
+                            assert!(
+                                (got - expected).abs() < 1e-9,
+                                "g(e{i}, e{j}) = {got} (want {expected}) at r={r} (a={a})"
+                            );
+                        }
+                    }
+                    assert!(t.e2[1].abs() < 1e-12, "e2^r = {} must vanish at r={r} (a={a})", t.e2[1]);
+                    assert!(inner(&metric, r, &t.e1, &[0.0, 1.0, 0.0]) > 0.0, "e1 must point outward");
+                    // n_a = e_a^r is the covector dr in this frame; its Minkowski norm is g^rr.
+                    let n = [t.e0[1], t.e1[1], t.e2[1]];
+                    let norm = -n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
+                    let grr = metric.g_upper_rr(r);
+                    assert!(
+                        (norm - grr).abs() < 1e-8 * (1.0 + grr.abs()),
+                        "|dr|^2 = {norm} vs g^rr = {grr} at r={r} (a={a})"
+                    );
+                }
             }
         }
     }
