@@ -1,5 +1,5 @@
 use crate::gui::controls::ReferenceFrame;
-use crate::gui::spacetime_canvas::draw_hovering_telemetry;
+use crate::gui::spacetime_canvas::TelemetryBoxes;
 use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::Observer;
@@ -8,6 +8,8 @@ use egui::{Color32, Pos2, Stroke, Vec2};
 pub struct SpatialCanvas {
     pub zoom: f32,
     pub pan_offset: Vec2,
+    /// Where the user has dragged each info box on this canvas, per observer.
+    pub telemetry: TelemetryBoxes,
 }
 
 impl Default for SpatialCanvas {
@@ -15,11 +17,13 @@ impl Default for SpatialCanvas {
         Self {
             zoom: 48.0, // pixels per M
             pan_offset: Vec2::ZERO,
+            telemetry: TelemetryBoxes::default(),
         }
     }
 }
 
 impl SpatialCanvas {
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         ui: &mut egui::Ui,
@@ -295,14 +299,16 @@ impl SpatialCanvas {
             }
         }
 
-        // 4. Draw Alice's Spatial Position and Trail
+        // 4. Draw Alice's Spatial Position and Trail. Her info box is registered at the end of the
+        // frame, after every other interaction on this canvas, so a drag on it does not pan.
+        let mut alice_box: Option<Pos2> = None;
         if let Some(al) = alice {
             draw_spatial_trail(&painter, metric, al, Theme::ALICE_COLOR, 1.2, &to_screen);
             if al.is_active {
                 let al_pos = to_screen(al.cartesian_position(metric));
 
                 painter.circle_filled(al_pos, 5.0, Theme::ALICE_COLOR);
-                draw_hovering_telemetry(&painter, rect, al_pos, "Alice", Theme::ALICE_COLOR, al, metric, use_km, font_scale);
+                alice_box = Some(al_pos);
             }
         }
 
@@ -339,7 +345,6 @@ impl SpatialCanvas {
         // Bob circle marker
         painter.circle_filled(bob_pos, 7.0, Theme::BOB_COLOR);
         painter.circle_stroke(bob_pos, 9.0, Stroke::new(1.5, Color32::WHITE));
-        draw_hovering_telemetry(&painter, rect, bob_pos, "Bob", Theme::BOB_COLOR, bob, metric, use_km, font_scale);
 
         // 6. Title and Legend Overlay
         // Horizon angular velocity Ω_H = a / (2 M r₊) is a rate per unit coordinate time, so in
@@ -403,6 +408,17 @@ impl SpatialCanvas {
             legend_text,
             egui::FontId::monospace(11.0 * font_scale),
             Theme::TEXT_BRIGHT,
+        );
+
+        // 7. Draggable info boxes, registered last so they take the drag instead of the canvas.
+        if let (Some(al), Some(al_pos)) = (alice.as_ref(), alice_box) {
+            self.telemetry.show(
+                ui, &painter, "spatial", rect, al_pos, "Alice", Theme::ALICE_COLOR, al, metric, use_km,
+                font_scale,
+            );
+        }
+        self.telemetry.show(
+            ui, &painter, "spatial", rect, bob_pos, "Bob", Theme::BOB_COLOR, bob, metric, use_km, font_scale,
         );
     }
 }

@@ -57,39 +57,16 @@ impl eframe::App for SpacetimeApp {
 
         // Advance simulation if playing
         if self.controls.is_playing {
-            // Adaptive step sizing: smoothly throttle step size when approaching the Cauchy horizon
-            let adaptive_factor = if self.controls.auto_slow_cauchy {
-                let rm = self.metric.inner_horizon();
-                let rp = self.metric.outer_horizon();
-                let delta_horizons = (rp - rm).max(0.1);
-
-                // Check distance of active observers to Cauchy horizon
-                let mut min_proximity: f64 = 1.0;
-                if self.bob.is_active && self.bob.r > rm && self.bob.r < rp {
-                    let d = (self.bob.r - rm) / (0.35 * delta_horizons);
-                    min_proximity = min_proximity.min(d);
-                }
-                if let Some(ref al) = self.alice {
-                    if al.is_active && al.r > rm && al.r < rp {
-                        let d = (al.r - rm) / (0.35 * delta_horizons);
-                        min_proximity = min_proximity.min(d);
-                    }
-                }
-                // Damping factor between 0.08 (12x slow-down at r-) and 1.0 (normal)
-                min_proximity.clamp(0.08, 1.0)
-            } else {
-                1.0
-            };
-
             // Time mode: frame-rate independent playback at `play_speed` units of M per real second.
             // Distance mode: per-frame step chosen so Bob moves a fixed Δr (normalised to 60 fps).
+            // Nothing throttles the step near r₋: to study the crossing, pause and step by hand.
             let sim_dt = match self.controls.step_mode {
-                StepMode::Time => dt * self.controls.play_speed * adaptive_factor,
+                StepMode::Time => dt * self.controls.play_speed,
                 StepMode::Distance => {
                     let delta_r_m = self.metric.km_to_r(self.controls.step_distance_km);
                     let v_coord = self.bob.velocity_c(&self.metric).abs().max(0.01);
                     let base_step = (delta_r_m / v_coord).clamp(1e-8, 500.0);
-                    (dt / 0.01667).clamp(0.2, 3.0) * base_step * adaptive_factor
+                    (dt / 0.01667).clamp(0.2, 3.0) * base_step
                 }
             };
 
@@ -467,6 +444,42 @@ mod tests {
         // Defaults stay the raindrop.
         let d = AppControls::default();
         assert_eq!((d.energy, d.l_ang, d.outgoing_start), (1.0, 0.0, false));
+    }
+
+    #[test]
+    fn test_control_defaults() {
+        let d = AppControls::default();
+        // Kilometres are the default unit, and nothing throttles the step near r₋ any more:
+        // the play speed and the step size are the only things that set sim_dt.
+        assert!(d.use_km, "distances are shown in km out of the box");
+        assert!(d.is_playing);
+        assert_eq!(d.play_speed, 1.0);
+        assert_eq!(d.step_size, 0.1);
+    }
+
+    #[test]
+    fn test_km_telemetry_layout_renders_in_both_views() {
+        // Both observers present, in kilometres, with the new one-metric-per-line info boxes and
+        // Alice's light cone in the (t, r) diagram: the boxes register widgets on the canvas, so
+        // this walks the interaction path as well as the paint path.
+        let mut app = SpacetimeApp::default();
+        app.controls.is_playing = false;
+        app.controls.use_km = true;
+        app.controls.frame_of_ref = ReferenceFrame::DistantObserver;
+        assert!(app.alice.is_some(), "the dual-observer default gives us Alice");
+
+        egui::__run_test_ui(|ui| {
+            let mut frame = eframe::Frame::_new_kittest();
+            // Two passes: the second one reads back the widgets the first one registered.
+            for _ in 0..2 {
+                app.ui(ui, &mut frame);
+            }
+            // A ManualDrag observer is the non-geodesic case, which prints a_thrust and no E / L.
+            app.bob.mode = crate::physics::observer::ObserverMode::ManualDrag;
+            app.ui(ui, &mut frame);
+        });
+
+        assert!(app.controls.use_km);
     }
 
     #[test]

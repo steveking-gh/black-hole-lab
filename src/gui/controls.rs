@@ -34,7 +34,6 @@ pub struct AppControls {
     /// Playback rate while playing: coordinate time (units of M) per wall-clock second.
     pub play_speed: f64,
     pub step_distance_km: f64,
-    pub auto_slow_cauchy: bool,
     pub show_wavefronts: bool,
     pub show_streamlines: bool,
     pub enable_dual_infall: bool,
@@ -59,7 +58,6 @@ impl Default for AppControls {
             step_size: 0.1,
             play_speed: 1.0,
             step_distance_km: 1000.0,
-            auto_slow_cauchy: true,
             show_wavefronts: true,
             show_streamlines: true,
             enable_dual_infall: true,
@@ -68,7 +66,7 @@ impl Default for AppControls {
             l_ang: 0.0,
             outgoing_start: false,
             show_theory_modal: false,
-            use_km: false,
+            use_km: true,
             frame_of_ref: ReferenceFrame::DistantObserver,
             font_scale: 1.0,
         }
@@ -206,10 +204,6 @@ impl AppControls {
                     });
                 }
             }
-            ui.checkbox(
-                &mut self.auto_slow_cauchy,
-                "⚡ Auto-slow near Cauchy Horizon (preserve detail)",
-            );
             ui.checkbox(&mut self.show_wavefronts, "Incoming Wavefront Pulses");
             ui.checkbox(&mut self.show_streamlines, "Frame-Dragging Streamlines");
 

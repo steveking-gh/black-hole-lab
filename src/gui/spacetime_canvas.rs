@@ -4,19 +4,186 @@ use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::local_frame::{LocalFrame, SurfaceCharacter};
 use crate::physics::observer::{Observer, ObserverMode};
 use egui::{epaint::PathShape, Color32, Pos2, Rect, Stroke, Vec2};
+use std::collections::HashMap;
 
-pub fn draw_hovering_telemetry(
+/// Plain-language gloss on every number in a telemetry box, shown on hover.
+pub const TELEMETRY_HOVER_TIP: &str = "\
+Drag this box anywhere on the canvas; double-click it to snap it back to the observer. \
+Each canvas remembers where you put each observer's box.
+
+dr/dt — coordinate radial velocity in the global ingoing Kerr-Schild time slicing, as a fraction \
+of c. It always lies inside the local light cone; inside the horizon it is negative for everything.
+
+dr/dτ — radial velocity per unit of the observer's own proper time (u^r). It is not bounded by c \
+and exceeds it inside the horizon, where r is a time coordinate.
+
+a_prop — proper acceleration felt by the observer, what an accelerometer reads, in Earth g. Zero \
+means free fall.
+
+Tidal — difference in gravitational acceleration across one metre of the body, in g per metre. \
+Set by curvature, 48M²/r⁶ on the equator; it is what actually stretches you.
+
+ν_in/ν_∞ — frequency of ingoing light as measured by this observer divided by its frequency at \
+infinity. Below 1 is a redshift; a raindrop sees 1/2 at the Schwarzschild horizon.
+
+E and L — conserved energy and angular momentum per unit mass of the geodesic. E = 1, L = 0 is a \
+drop from rest at infinity.
+
+Region tag — which of the three regions (outside r₊, between r₊ and r₋, inside r₋) the observer \
+is in, plus the ergosphere.";
+
+/// The drag offsets of the hovering telemetry boxes on one canvas, keyed by canvas tag and
+/// observer name so that the same observer can have a different box position in each diagram.
+#[derive(Default)]
+pub struct TelemetryBoxes {
+    offsets: HashMap<String, Vec2>,
+}
+
+impl TelemetryBoxes {
+    /// Lay out, register, drag and paint one observer's info box.
+    ///
+    /// The box is anchored next to `pos` exactly as before, then displaced by the offset the user
+    /// has dragged it to and clamped back inside `canvas_rect`. The `ui.interact` must be called
+    /// after the canvas has allocated its own painter response: within a layer egui hands an
+    /// overlapping drag to the widget registered last, so registering here is what stops a drag on
+    /// the box from panning the background or grabbing Bob's marker.
+    #[allow(clippy::too_many_arguments)]
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        painter: &egui::Painter,
+        canvas_tag: &str,
+        canvas_rect: Rect,
+        pos: Pos2,
+        name: &str,
+        color: Color32,
+        obs: &Observer,
+        metric: &KerrSchild,
+        use_km: bool,
+        font_scale: f32,
+    ) -> egui::Response {
+        let key = format!("{canvas_tag}:{name}");
+        let offset = self.offsets.get(&key).copied().unwrap_or(Vec2::ZERO);
+        let lines = telemetry_lines(name, color, obs, metric, use_km);
+        let size = telemetry_box_size(painter, &lines, font_scale);
+
+        let anchored = default_badge_pos(canvas_rect, pos, size);
+        let badge_rect = clamp_into(Rect::from_min_size(anchored + offset, size), canvas_rect);
+
+        let id = ui.id().with(("telemetry", canvas_tag, name));
+        // click_and_drag rather than drag alone: egui only reports a double-click on a widget that
+        // senses clicks, and the double-click is what resets the offset.
+        let response = ui.interact(badge_rect, id, egui::Sense::click_and_drag());
+
+        let badge_rect = if response.double_clicked() {
+            self.offsets.remove(&key);
+            clamp_into(Rect::from_min_size(anchored, size), canvas_rect)
+        } else {
+            let moved = clamp_into(badge_rect.translate(response.drag_delta()), canvas_rect);
+            // Store where the box actually ended up, so a drag against the canvas edge does not
+            // build up an offset that snaps back later.
+            self.offsets.insert(key, moved.min - anchored);
+            moved
+        };
+
+        paint_telemetry_box(painter, badge_rect, color, &lines, font_scale);
+        response.on_hover_text(TELEMETRY_HOVER_TIP)
+    }
+}
+
+/// One printed line of a telemetry box: the text, its colour and whether it is the title.
+struct TelemetryLine {
+    text: String,
+    color: Color32,
+    is_title: bool,
+}
+
+/// The box position the anchor asks for, before the user's drag offset is added.
+fn default_badge_pos(canvas_rect: Rect, pos: Pos2, size: Vec2) -> Pos2 {
+    let bx = (pos.x + 12.0).min(canvas_rect.right() - size.x - 6.0).max(canvas_rect.left() + 6.0);
+    let by = (pos.y - size.y - 6.0)
+        .max(canvas_rect.top() + 6.0)
+        .min(canvas_rect.bottom() - size.y - 6.0);
+    Pos2::new(bx, by)
+}
+
+/// Keep `rect` inside `bounds` with a 6 px margin, sliding rather than shrinking it.
+fn clamp_into(rect: Rect, bounds: Rect) -> Rect {
+    let max_x = (bounds.right() - rect.width() - 6.0).max(bounds.left() + 6.0);
+    let max_y = (bounds.bottom() - rect.height() - 6.0).max(bounds.top() + 6.0);
+    Rect::from_min_size(
+        Pos2::new(
+            rect.left().clamp(bounds.left() + 6.0, max_x),
+            rect.top().clamp(bounds.top() + 6.0, max_y),
+        ),
+        rect.size(),
+    )
+}
+
+fn telemetry_fonts(font_scale: f32) -> (egui::FontId, egui::FontId) {
+    (
+        egui::FontId::monospace(10.0 * font_scale),
+        egui::FontId::monospace(9.0 * font_scale),
+    )
+}
+
+/// Width fitted to the longest line, height to the actual number of lines.
+fn telemetry_box_size(painter: &egui::Painter, lines: &[TelemetryLine], font_scale: f32) -> Vec2 {
+    let font_scale = font_scale.clamp(0.7, 2.0);
+    let (font_title, font_body) = telemetry_fonts(font_scale);
+    let max_text_w = lines
+        .iter()
+        .map(|line| {
+            let font = if line.is_title { font_title.clone() } else { font_body.clone() };
+            painter.layout_no_wrap(line.text.clone(), font, line.color).size().x
+        })
+        .fold(0.0_f32, f32::max);
+
+    let pad_x = 10.0 * font_scale;
+    let pad_y = 6.0 * font_scale;
+    let line_spacing = 13.0 * font_scale;
+    Vec2::new(
+        (max_text_w + pad_x * 2.0).max(180.0 * font_scale),
+        (pad_y * 2.0 + line_spacing * (lines.len() as f32 - 0.2)).max(56.0 * font_scale),
+    )
+}
+
+fn paint_telemetry_box(
     painter: &egui::Painter,
-    canvas_rect: Rect,
-    pos: Pos2,
+    badge_rect: Rect,
+    color: Color32,
+    lines: &[TelemetryLine],
+    font_scale: f32,
+) {
+    let font_scale = font_scale.clamp(0.7, 2.0);
+    let (font_title, font_body) = telemetry_fonts(font_scale);
+    let pad_x = 10.0 * font_scale;
+    let pad_y = 6.0 * font_scale;
+    let line_spacing = 13.0 * font_scale;
+
+    painter.rect_filled(badge_rect, 4.0 * font_scale, Color32::from_black_alpha(230));
+    painter.rect_stroke(badge_rect, 4.0 * font_scale, Stroke::new(1.2, color), egui::StrokeKind::Inside);
+
+    for (i, line) in lines.iter().enumerate() {
+        let font = if line.is_title { font_title.clone() } else { font_body.clone() };
+        painter.text(
+            Pos2::new(badge_rect.left() + pad_x, badge_rect.top() + pad_y + line_spacing * i as f32),
+            egui::Align2::LEFT_TOP,
+            line.text.clone(),
+            font,
+            line.color,
+        );
+    }
+}
+
+/// The box's contents, one metric per line.
+fn telemetry_lines(
     name: &str,
     color: Color32,
     obs: &Observer,
     metric: &KerrSchild,
     use_km: bool,
-    font_scale: f32,
-) {
-    let font_scale = font_scale.clamp(0.7, 2.0);
+) -> Vec<TelemetryLine> {
     let v_c = obs.velocity_c(metric);
     let v_kms = obs.velocity_km_s(metric);
     let u_prop = obs.proper_velocity_c(metric);
@@ -29,11 +196,14 @@ pub fn draw_hovering_telemetry(
     // Exact shift of ingoing principal null light: nu_obs/nu_inf = -k.u = u^t + u^r - a u^phi.
     let nu_ratio = obs.ingoing_frequency_ratio(metric);
 
-    let v_str = if use_km {
-        format!("dr/dt = {:+.0} km/s ({:+.2}c) | dr/dτ = {:+.2}c", v_kms, v_c, u_prop)
+    // One metric per line: the coordinate velocity and the proper velocity are different
+    // statements about the infall and no longer share a row.
+    let v_coord_str = if use_km {
+        format!("dr/dt   = {:+.0} km/s ({:+.2}c)", v_kms, v_c)
     } else {
-        format!("dr/dt = {:+.2}c | dr/dτ = {:+.2}c", v_c, u_prop)
+        format!("dr/dt   = {:+.2}c", v_c)
     };
+    let v_proper_str = format!("dr/dτ   = {:+.2}c", u_prop);
 
     let a_str = if is_geodesic || a_prop < 0.05 {
         "a_prop = 0.00g (Free Fall)".to_string()
@@ -80,79 +250,22 @@ pub fn draw_hovering_telemetry(
         "Reg III (Core)"
     };
 
-    let title_line = format!("{} [{}] • {}", name, region_tag, v_str);
-
-    let font_title = egui::FontId::monospace(10.0 * font_scale);
-    let font_body = egui::FontId::monospace(9.0 * font_scale);
-
-    // Measure actual rendered text widths so box dynamically encloses all text
-    let w_title = painter.layout_no_wrap(title_line.clone(), font_title.clone(), color).size().x;
-    let w_a = painter.layout_no_wrap(a_str.clone(), font_body.clone(), color).size().x;
-    let w_tidal = painter.layout_no_wrap(tidal_str.clone(), font_body.clone(), color).size().x;
-    let w_nu = painter.layout_no_wrap(nu_str.clone(), font_body.clone(), color).size().x;
-
-    let w_constants = constants_str
-        .as_ref()
-        .map(|s| painter.layout_no_wrap(s.clone(), font_body.clone(), color).size().x)
-        .unwrap_or(0.0);
-
-    let max_text_w = w_title.max(w_a).max(w_tidal).max(w_nu).max(w_constants);
-    let pad_x = 10.0 * font_scale;
-    let pad_y = 6.0 * font_scale;
-    let line_spacing = 13.0 * font_scale;
-
-    let body_lines = if constants_str.is_some() { 4.0 } else { 3.0 };
-    let badge_w = (max_text_w + pad_x * 2.0).max(180.0 * font_scale);
-    let badge_h = (pad_y * 2.0 + line_spacing * (body_lines + 0.8)).max(56.0 * font_scale);
-
-    let bx = (pos.x + 12.0).min(canvas_rect.right() - badge_w - 6.0).max(canvas_rect.left() + 6.0);
-    let by = (pos.y - badge_h - 6.0).max(canvas_rect.top() + 6.0).min(canvas_rect.bottom() - badge_h - 6.0);
-
-    let badge_rect = Rect::from_min_size(
-        Pos2::new(bx, by),
-        egui::Vec2::new(badge_w, badge_h),
-    );
-
-    painter.rect_filled(badge_rect, 4.0 * font_scale, Color32::from_black_alpha(230));
-    painter.rect_stroke(badge_rect, 4.0 * font_scale, Stroke::new(1.2, color), egui::StrokeKind::Inside);
-
-    painter.text(
-        Pos2::new(badge_rect.left() + pad_x, badge_rect.top() + pad_y),
-        egui::Align2::LEFT_TOP,
-        title_line,
-        font_title,
-        color,
-    );
-    painter.text(
-        Pos2::new(badge_rect.left() + pad_x, badge_rect.top() + pad_y + line_spacing),
-        egui::Align2::LEFT_TOP,
-        a_str,
-        font_body.clone(),
-        Color32::from_rgb(180, 240, 180),
-    );
-    painter.text(
-        Pos2::new(badge_rect.left() + pad_x, badge_rect.top() + pad_y + line_spacing * 2.0),
-        egui::Align2::LEFT_TOP,
-        tidal_str,
-        font_body.clone(),
-        Color32::from_rgb(255, 200, 100),
-    );
-    painter.text(
-        Pos2::new(badge_rect.left() + pad_x, badge_rect.top() + pad_y + line_spacing * 3.0),
-        egui::Align2::LEFT_TOP,
-        nu_str,
-        font_body.clone(),
-        if nu_ratio > 1.0 { Theme::BLUESHIFT_BLUE } else { Theme::TEXT_MUTED },
-    );
+    let mut lines = vec![
+        TelemetryLine { text: format!("{} [{}]", name, region_tag), color, is_title: true },
+        TelemetryLine { text: v_coord_str, color: Theme::TEXT_BRIGHT, is_title: false },
+        TelemetryLine { text: v_proper_str, color: Theme::TEXT_BRIGHT, is_title: false },
+        TelemetryLine { text: a_str, color: Color32::from_rgb(180, 240, 180), is_title: false },
+        TelemetryLine { text: tidal_str, color: Color32::from_rgb(255, 200, 100), is_title: false },
+        TelemetryLine {
+            text: nu_str,
+            color: if nu_ratio > 1.0 { Theme::BLUESHIFT_BLUE } else { Theme::TEXT_MUTED },
+            is_title: false,
+        },
+    ];
     if let Some(constants_str) = constants_str {
-        painter.text(
-            Pos2::new(badge_rect.left() + pad_x, badge_rect.top() + pad_y + line_spacing * 4.0),
-            egui::Align2::LEFT_TOP,
-            constants_str,
-            font_body,
-            Theme::TEXT_MUTED,
-        );
+        lines.push(TelemetryLine { text: constants_str, color: Theme::TEXT_MUTED, is_title: false });
     }
+    lines
 }
 
 pub struct SpacetimeCanvas {
@@ -161,6 +274,8 @@ pub struct SpacetimeCanvas {
     pub time_window: f64,
     pub time_offset: f64,
     pub is_dragging_bob: bool,
+    /// Where the user has dragged each info box on this canvas, per diagram and per observer.
+    pub telemetry: TelemetryBoxes,
 }
 
 impl Default for SpacetimeCanvas {
@@ -171,6 +286,7 @@ impl Default for SpacetimeCanvas {
             time_window: 14.0,
             time_offset: 0.0,
             is_dragging_bob: false,
+            telemetry: TelemetryBoxes::default(),
         }
     }
 }
@@ -241,18 +357,19 @@ impl SpacetimeCanvas {
         match frame_of_ref {
             ReferenceFrame::Bob => {
                 painter.rect_filled(rect, 4.0, Theme::CANVAS_BG);
-                self.render_observer_frame(&painter, rect, metric, bob, alice.as_ref(), use_km, font_scale);
+                self.render_observer_frame(ui, &painter, rect, metric, bob, alice.as_ref(), use_km, font_scale);
             }
             ReferenceFrame::Alice => {
                 painter.rect_filled(rect, 4.0, Theme::CANVAS_BG);
                 if let Some(al) = alice {
-                    self.render_observer_frame(&painter, rect, metric, al, Some(bob), use_km, font_scale);
+                    self.render_observer_frame(ui, &painter, rect, metric, al, Some(bob), use_km, font_scale);
                 } else {
-                    self.render_observer_frame(&painter, rect, metric, bob, None, use_km, font_scale);
+                    self.render_observer_frame(ui, &painter, rect, metric, bob, None, use_km, font_scale);
                 }
             }
             ReferenceFrame::DistantObserver => {
                 self.render_distant_observer(
+                    ui,
                     &painter,
                     &response,
                     rect,
@@ -406,8 +523,10 @@ impl SpacetimeCanvas {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_distant_observer(
         &mut self,
+        ui: &mut egui::Ui,
         painter: &egui::Painter,
         response: &egui::Response,
         rect: Rect,
@@ -449,6 +568,40 @@ impl SpacetimeCanvas {
         let to_coord_t = |screen_y: f32| -> f64 {
             let frac = ((rect.bottom() - screen_y) / rect.height()) as f64;
             t_min + frac * (t_max - t_min)
+        };
+
+        // Both observers' cones span the same slice of the zoom window.
+        let cone_span = (self.time_window * 0.12).min(self.max_r * 1.5).clamp(1e-4, 1.8);
+
+        // One exact light cone in the (t, r) chart, drawn in the colours that belong to `obs`
+        // rather than to the diagram, so a cone is identifiable in any frame.
+        let draw_cone = |obs: &Observer| {
+            let (future_fill, past_fill, edge) = Theme::cone_colours(&obs.name);
+            let cone = obs.compute_lightcone_polygon(metric, cone_span);
+            let cone_apex = Pos2::new(to_screen_x(cone.apex[1]), to_screen_y(cone.apex[0]));
+            let p_fut_in = Pos2::new(to_screen_x(cone.future_in[1]), to_screen_y(cone.future_in[0]));
+            let p_fut_out = Pos2::new(to_screen_x(cone.future_out[1]), to_screen_y(cone.future_out[0]));
+            let p_past_in = Pos2::new(to_screen_x(cone.past_in[1]), to_screen_y(cone.past_in[0]));
+            let p_past_out = Pos2::new(to_screen_x(cone.past_out[1]), to_screen_y(cone.past_out[0]));
+
+            painter.add(PathShape::convex_polygon(
+                vec![cone_apex, p_fut_in, p_fut_out],
+                future_fill,
+                egui::epaint::PathStroke::NONE,
+            ));
+            painter.add(PathShape::convex_polygon(
+                vec![cone_apex, p_past_in, p_past_out],
+                past_fill,
+                egui::epaint::PathStroke::NONE,
+            ));
+
+            // Collinear rays:
+            // Ingoing ray: p_past_in (past-right) -> apex -> p_fut_in (future-left), slope dr/dt = -1
+            painter.line_segment([cone_apex, p_fut_in], Stroke::new(1.8, edge));
+            painter.line_segment([p_past_in, cone_apex], Stroke::new(1.2, edge));
+            // Outgoing ray: p_past_out -> apex -> p_fut_out
+            painter.line_segment([cone_apex, p_fut_out], Stroke::new(2.2, edge));
+            painter.line_segment([p_past_out, cone_apex], Stroke::new(1.2, edge));
         };
 
         // Paint background
@@ -514,7 +667,7 @@ impl SpacetimeCanvas {
             if y >= rect.top() && y <= rect.bottom() {
                 painter.line_segment(
                     [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
-                    Stroke::new(0.8, Color32::from_rgba_premultiplied(45, 52, 72, 90)),
+                    Stroke::new(Theme::GRID_LINE_WIDTH, Theme::GRID_LINE),
                 );
                 // Time tick label on the left margin
                 let t_label = if use_km {
@@ -549,7 +702,7 @@ impl SpacetimeCanvas {
                     if x >= rect.left() && x <= rect.right() {
                         painter.line_segment(
                             [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
-                            Stroke::new(1.0, Theme::GRID_LINE),
+                            Stroke::new(Theme::GRID_LINE_WIDTH, Theme::GRID_LINE),
                         );
                         painter.text(
                             Pos2::new(x + 3.0, rect.bottom() - 18.0),
@@ -577,7 +730,7 @@ impl SpacetimeCanvas {
                     if x >= rect.left() && x <= rect.right() {
                         painter.line_segment(
                             [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
-                            Stroke::new(1.0, Theme::GRID_LINE),
+                            Stroke::new(Theme::GRID_LINE_WIDTH, Theme::GRID_LINE),
                         );
                         let label = metric.format_grid_m(r_val, r_step);
                         painter.text(
@@ -706,7 +859,9 @@ impl SpacetimeCanvas {
             }
         }
 
-        // Alice Worldline & Marker
+        // Alice Worldline & Marker. The info boxes are registered last, below, so that a drag on
+        // a box beats the canvas's own pan/drag response instead of panning time or moving Bob.
+        let mut alice_box: Option<Pos2> = None;
         if let Some(al) = alice {
             if al.trail.len() >= 2 {
                 let points: Vec<Pos2> = al
@@ -719,10 +874,13 @@ impl SpacetimeCanvas {
 
             if al.is_active {
                 let alice_pos = Pos2::new(to_screen_x(al.r), to_screen_y(al.t));
+                if al.r > 0.02 {
+                    draw_cone(al);
+                }
                 if rect.contains(alice_pos) {
                     painter.circle_filled(alice_pos, 5.5, Theme::ALICE_COLOR);
                     painter.circle_stroke(alice_pos, 7.5, Stroke::new(1.0, Color32::WHITE));
-                    draw_hovering_telemetry(painter, rect, alice_pos, "Alice", Theme::ALICE_COLOR, al, metric, use_km, font_scale);
+                    alice_box = Some(alice_pos);
                 }
             }
         }
@@ -764,36 +922,7 @@ impl SpacetimeCanvas {
         let apex = Pos2::new(to_screen_x(bob.r), to_screen_y(bob.t));
 
         if bob.r > 0.02 && bob.is_active {
-            // Bob's Exact Light Cone: span scales proportionally with zoom window
-            let time_cone_span = (self.time_window * 0.12).min(self.max_r * 1.5).clamp(1e-4, 1.8);
-            let cone = bob.compute_lightcone_polygon(metric, time_cone_span);
-
-            let cone_apex = Pos2::new(to_screen_x(cone.apex[1]), to_screen_y(cone.apex[0]));
-            let p_fut_in = Pos2::new(to_screen_x(cone.future_in[1]), to_screen_y(cone.future_in[0]));
-            let p_fut_out = Pos2::new(to_screen_x(cone.future_out[1]), to_screen_y(cone.future_out[0]));
-            let p_past_in = Pos2::new(to_screen_x(cone.past_in[1]), to_screen_y(cone.past_in[0]));
-            let p_past_out = Pos2::new(to_screen_x(cone.past_out[1]), to_screen_y(cone.past_out[0]));
-
-            // Future cone fill & borders
-            painter.add(PathShape::convex_polygon(
-                vec![cone_apex, p_fut_in, p_fut_out],
-                Theme::LIGHTCONE_FUTURE_FILL,
-                egui::epaint::PathStroke::NONE,
-            ));
-            // Past cone fill & borders
-            painter.add(PathShape::convex_polygon(
-                vec![cone_apex, p_past_in, p_past_out],
-                Theme::LIGHTCONE_PAST_FILL,
-                egui::epaint::PathStroke::NONE,
-            ));
-
-            // Collinear rays:
-            // Ingoing ray: p_past_in (past-right) -> apex -> p_fut_in (future-left) with slope dr/dt = -1
-            painter.line_segment([cone_apex, p_fut_in], Stroke::new(1.8, Theme::LIGHTCONE_BORDER_INGOING));
-            painter.line_segment([p_past_in, cone_apex], Stroke::new(1.2, Theme::LIGHTCONE_BORDER_INGOING));
-            // Outgoing ray: p_past_out -> apex -> p_fut_out
-            painter.line_segment([cone_apex, p_fut_out], Stroke::new(2.2, Theme::LIGHTCONE_BORDER_OUTGOING));
-            painter.line_segment([p_past_out, cone_apex], Stroke::new(1.2, Theme::LIGHTCONE_BORDER_OUTGOING));
+            draw_cone(bob);
         } else if bob.is_active {
             // Singularity collision marker
             painter.circle_filled(apex, 10.0, Theme::SINGULARITY_FILL);
@@ -807,7 +936,6 @@ impl SpacetimeCanvas {
             if self.is_dragging_bob { Color32::WHITE } else { Theme::BOB_COLOR },
         );
         painter.circle_stroke(apex, bob_radius + 2.0, Stroke::new(1.5, Color32::WHITE));
-        draw_hovering_telemetry(painter, rect, apex, "Bob", Theme::BOB_COLOR, bob, metric, use_km, font_scale);
 
         // Zoom hint overlay in top-left
         painter.text(
@@ -835,6 +963,17 @@ impl SpacetimeCanvas {
             egui::FontId::monospace(11.0 * font_scale),
             Theme::TEXT_BRIGHT,
         );
+
+        // Draggable info boxes, registered after every other interaction on this canvas.
+        if let (Some(al), Some(alice_pos)) = (alice.as_ref(), alice_box) {
+            self.telemetry.show(
+                ui, painter, "spacetime", rect, alice_pos, "Alice", Theme::ALICE_COLOR, al, metric, use_km,
+                font_scale,
+            );
+        }
+        self.telemetry.show(
+            ui, painter, "spacetime", rect, apex, "Bob", Theme::BOB_COLOR, bob, metric, use_km, font_scale,
+        );
     }
 
     /// Render the focus observer's rest frame: the *first-order local inertial chart* defined by
@@ -852,8 +991,10 @@ impl SpacetimeCanvas {
     /// The chart is exact at the focus observer's own event, where all of those orientations live,
     /// and linearised for finite offsets (how far away a horizon is drawn, where the other
     /// observer sits). The banner says so.
+    #[allow(clippy::too_many_arguments)]
     fn render_observer_frame(
-        &self,
+        &mut self,
+        ui: &mut egui::Ui,
         painter: &egui::Painter,
         rect: Rect,
         metric: &KerrSchild,
@@ -872,7 +1013,7 @@ impl SpacetimeCanvas {
         };
 
         // 1. The chart's own axes: the observer's worldline xi^1 = 0 and their local space xi^0 = 0.
-        let grid_stroke = Stroke::new(0.8, Color32::from_rgba_premultiplied(45, 52, 72, 90));
+        let grid_stroke = Stroke::new(Theme::GRID_LINE_WIDTH, Theme::GRID_LINE);
         painter.line_segment(
             [Pos2::new(rect.left(), center.y), Pos2::new(rect.right(), center.y)],
             grid_stroke,
@@ -979,6 +1120,7 @@ impl SpacetimeCanvas {
         // 3. The focus observer's own light cone: 45 degrees through the origin, by construction.
         let cone_len = (rect.height() * 0.35).min(rect.width() * 0.35);
         let apex = center;
+        let (focus_future_fill, focus_past_fill, focus_edge) = Theme::cone_colours(&focus_obs.name);
 
         if focus_obs.r > 0.02 && focus_obs.is_active {
             let p_fut_out = apex + Vec2::new(cone_len, -cone_len);
@@ -988,33 +1130,33 @@ impl SpacetimeCanvas {
 
             painter.add(PathShape::convex_polygon(
                 vec![apex, p_fut_in, p_fut_out],
-                Theme::LIGHTCONE_FUTURE_FILL,
+                focus_future_fill,
                 egui::epaint::PathStroke::NONE,
             ));
             painter.add(PathShape::convex_polygon(
                 vec![apex, p_past_out, p_past_in],
-                Theme::LIGHTCONE_PAST_FILL,
+                focus_past_fill,
                 egui::epaint::PathStroke::NONE,
             ));
 
-            painter.line_segment([apex, p_fut_in], Stroke::new(2.2, Theme::LIGHTCONE_BORDER_INGOING));
-            painter.line_segment([p_past_out, apex], Stroke::new(1.2, Theme::LIGHTCONE_BORDER_INGOING));
-            painter.line_segment([apex, p_fut_out], Stroke::new(2.2, Theme::LIGHTCONE_BORDER_OUTGOING));
-            painter.line_segment([p_past_in, apex], Stroke::new(1.2, Theme::LIGHTCONE_BORDER_OUTGOING));
+            painter.line_segment([apex, p_fut_in], Stroke::new(2.2, focus_edge));
+            painter.line_segment([p_past_out, apex], Stroke::new(1.2, focus_edge));
+            painter.line_segment([apex, p_fut_out], Stroke::new(2.2, focus_edge));
+            painter.line_segment([p_past_in, apex], Stroke::new(1.2, focus_edge));
 
             painter.text(
                 p_fut_out + Vec2::new(4.0, -2.0),
                 egui::Align2::LEFT_BOTTOM,
                 "+45° Outgoing",
                 egui::FontId::monospace(9.0 * font_scale),
-                Theme::LIGHTCONE_BORDER_OUTGOING,
+                focus_edge,
             );
             painter.text(
                 p_fut_in + Vec2::new(-4.0, -2.0),
                 egui::Align2::RIGHT_BOTTOM,
                 "-45° Ingoing",
                 egui::FontId::monospace(9.0 * font_scale),
-                Theme::LIGHTCONE_BORDER_INGOING,
+                focus_edge,
             );
         } else if focus_obs.is_active {
             painter.circle_filled(center, 12.0, Theme::SINGULARITY_FILL);
@@ -1035,6 +1177,7 @@ impl SpacetimeCanvas {
         // 4. The other observer: their event, their worldline direction and their light cone, all
         // from the same linear map. The azimuthal component xi^2 is dropped from the picture and
         // printed instead, so the projection is on the record.
+        let mut other_box: Option<(&Observer, Pos2, Color32)> = None;
         if let Some(other) = other_obs {
             if other.is_active {
                 let two_pi = std::f64::consts::TAU;
@@ -1065,13 +1208,14 @@ impl SpacetimeCanvas {
                         let o_fut_out = other_pos + Vec2::new(other_cone_len, -other_cone_len);
                         let o_fut_in = other_pos + Vec2::new(-other_cone_len, -other_cone_len);
 
+                        let (other_future_fill, _, other_edge) = Theme::cone_colours(&other.name);
                         painter.add(PathShape::convex_polygon(
                             vec![other_pos, o_fut_in, o_fut_out],
-                            Color32::from_rgba_premultiplied(other_color.r(), other_color.g(), other_color.b(), 1),
+                            other_future_fill,
                             egui::epaint::PathStroke::NONE,
                         ));
-                        painter.line_segment([other_pos, o_fut_in], Stroke::new(1.2, other_color));
-                        painter.line_segment([other_pos, o_fut_out], Stroke::new(1.2, other_color));
+                        painter.line_segment([other_pos, o_fut_in], Stroke::new(1.2, other_edge));
+                        painter.line_segment([other_pos, o_fut_out], Stroke::new(1.2, other_edge));
                     } else {
                         painter.circle_filled(other_pos, 8.0, Theme::SINGULARITY_FILL);
                         painter.circle_stroke(other_pos, 10.0, Stroke::new(1.5, Theme::SINGULARITY_LINE));
@@ -1094,12 +1238,22 @@ impl SpacetimeCanvas {
                         Theme::TEXT_MUTED,
                     );
 
-                    draw_hovering_telemetry(painter, rect, other_pos, &other.name, other_color, other, metric, use_km, font_scale);
+                    other_box = Some((other, other_pos, other_color));
                 }
             }
         }
 
-        draw_hovering_telemetry(painter, rect, apex, &focus_obs.name, obs_color, focus_obs, metric, use_km, font_scale);
+        // The info boxes go last so that dragging one wins over the canvas's own drag response.
+        if let Some((other, other_pos, other_color)) = other_box {
+            self.telemetry.show(
+                ui, painter, "restframe", rect, other_pos, &other.name, other_color, other, metric, use_km,
+                font_scale,
+            );
+        }
+        self.telemetry.show(
+            ui, painter, "restframe", rect, apex, &focus_obs.name, obs_color, focus_obs, metric, use_km,
+            font_scale,
+        );
 
         painter.text(
             Pos2::new(rect.left() + 8.0, rect.top() + 8.0),
@@ -1164,4 +1318,123 @@ fn segment_y_at_x(a: Pos2, b: Pos2, x: f32) -> f32 {
     }
     let t = ((x - a.x) / (b.x - a.x)).clamp(0.0, 1.0);
     a.y + t * (b.y - a.y)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One egui pass over a canvas-sized drag surface with a telemetry-sized box registered on
+    /// top of it, in the same order the canvases use. Returns (canvas dragged, box dragged).
+    fn drag_precedence_pass(
+        ctx: &egui::Context,
+        screen: Rect,
+        box_rect: &mut Option<Rect>,
+        events: Vec<egui::Event>,
+    ) -> (bool, bool) {
+        let mut dragged = (false, false);
+        let input = egui::RawInput {
+            screen_rect: Some(screen),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                // The canvas allocates its own drag response first, exactly as `render` does.
+                let (canvas, _painter) =
+                    ui.allocate_painter(Vec2::new(360.0, 260.0), egui::Sense::drag());
+                let rect = *box_rect.get_or_insert_with(|| {
+                    Rect::from_min_size(canvas.rect.min + Vec2::new(40.0, 40.0), Vec2::new(120.0, 60.0))
+                });
+                // ... and the info box is registered afterwards, so it is on top.
+                let badge = ui.interact(rect, ui.id().with("telemetry"), egui::Sense::click_and_drag());
+                dragged = (canvas.dragged(), badge.dragged());
+            });
+        });
+        dragged
+    }
+
+    fn press(pos: Pos2) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::default(),
+        }
+    }
+
+    /// A drag that starts on an info box must go to the box, and a drag that starts on the bare
+    /// canvas must still go to the canvas (which is what pans time and moves Bob). egui resolves
+    /// the overlap by registration order within the layer, last one wins.
+    #[test]
+    fn info_box_takes_the_drag_and_the_background_keeps_it() {
+        let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0));
+
+        for on_the_box in [true, false] {
+            let ctx = egui::Context::default();
+            let mut box_rect = None;
+            // First pass only registers the widgets, which is what the hit test reads.
+            drag_precedence_pass(&ctx, screen, &mut box_rect, vec![]);
+            let rect = box_rect.expect("the box is laid out on the first pass");
+            let start = if on_the_box {
+                rect.center()
+            } else {
+                Pos2::new(rect.right() + 60.0, rect.bottom() + 60.0)
+            };
+
+            drag_precedence_pass(&ctx, screen, &mut box_rect, vec![egui::Event::PointerMoved(start)]);
+            drag_precedence_pass(&ctx, screen, &mut box_rect, vec![press(start)]);
+            let (canvas_dragged, box_dragged) = drag_precedence_pass(
+                &ctx,
+                screen,
+                &mut box_rect,
+                vec![egui::Event::PointerMoved(start + Vec2::new(45.0, 35.0))],
+            );
+
+            assert_eq!(
+                (canvas_dragged, box_dragged),
+                (!on_the_box, on_the_box),
+                "drag started {} the box",
+                if on_the_box { "on" } else { "off" }
+            );
+        }
+    }
+
+    /// The box grows a line at a time and stays wide enough for its longest line.
+    #[test]
+    fn telemetry_box_is_sized_from_the_line_count() {
+        let line = |text: &str| TelemetryLine {
+            text: text.to_string(),
+            color: Color32::WHITE,
+            is_title: false,
+        };
+
+        let six = vec![line("a"), line("b"), line("c"), line("d"), line("e"), line("f")];
+        let seven = {
+            let mut v = six.iter().map(|l| line(&l.text)).collect::<Vec<_>>();
+            v.push(line("E = 1.000  L = 0.000 M"));
+            v
+        };
+        // Fonts only exist inside a running context, so measure inside one.
+        egui::__run_test_ui(|ui| {
+            let painter = ui.painter();
+            let h6 = telemetry_box_size(painter, &six, 1.0).y;
+            let h7 = telemetry_box_size(painter, &seven, 1.0).y;
+            assert!((h7 - h6 - 13.0).abs() < 1e-3, "one extra line is one extra line height");
+
+            // The width never drops below the minimum badge width, whatever the line count.
+            assert!(telemetry_box_size(painter, &six, 1.0).x >= 180.0);
+        });
+    }
+
+    /// A box dragged past the edge is slid back inside the canvas rather than clipped.
+    #[test]
+    fn dragged_box_is_clamped_into_the_canvas() {
+        let bounds = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::new(400.0, 300.0));
+        let size = Vec2::new(180.0, 90.0);
+        let far_out = Rect::from_min_size(Pos2::new(9000.0, -9000.0), size);
+        let clamped = clamp_into(far_out, bounds);
+        assert_eq!(clamped.size(), size);
+        assert!(bounds.contains_rect(clamped), "{clamped:?} outside {bounds:?}");
+    }
 }
