@@ -185,6 +185,23 @@ impl Observer {
         self.trail.push([t, self.r, self.phi]);
     }
 
+    /// Let go of a dragged observer: resume the worldline from the new event. The geodesic is
+    /// re-seeded at (t, r, phi) with the same conserved (E, L) on the ingoing root (the energy
+    /// floor clamps E if the new radius is forbidden for that L), proper time continues from its
+    /// current value, and the observer returns to `mode`. Free fall then resumes from wherever
+    /// the user dropped the marker, instead of the marker hovering at the dragged position.
+    pub fn release_from_drag(&mut self, metric: &KerrSchild, mode: ObserverMode) {
+        if let Some(old) = self.geodesic {
+            let mut geo = GeodesicState::new_infall(metric, self.t, self.r, old.energy, old.l_ang);
+            geo.phi = self.phi;
+            geo.tau = self.tau;
+            self.geodesic = Some(geo);
+        }
+        self.mode = mode;
+        self.release_t = self.release_t.min(self.t);
+        self.is_active = true;
+    }
+
     /// While waiting for release the observer hovers at fixed (r, phi): coordinate time follows the
     /// simulation clock and proper time ticks at the static-observer rate sqrt(-g_tt) dt.
     /// The worldline is therefore a vertical segment that turns into the infall curve at t = release_t.
@@ -993,6 +1010,31 @@ mod tests {
             "the trail must terminate on the ring rho = a = {}, got {rho_end}",
             metric.a.abs()
         );
+    }
+
+    #[test]
+    fn test_released_drag_resumes_free_fall_from_the_new_event() {
+        let metric = KerrSchild::new(1.0, 0.65);
+        let mut bob = Observer::new(&metric, "Bob", 0.0, 3.8, 0.0);
+        bob.step(&metric, 0.5, 0.5);
+        let r_before_drag = bob.r;
+
+        bob.set_drag_position(2.0, 4.6);
+        assert_eq!(bob.mode, ObserverMode::ManualDrag);
+        bob.step(&metric, 2.5, 0.5);
+        assert!((bob.r - 4.6).abs() < 1e-12, "manual drag holds r while dragging");
+
+        bob.release_from_drag(&metric, ObserverMode::FreeFall);
+        assert_eq!(bob.mode, ObserverMode::FreeFall);
+        assert!(bob.is_active);
+        let u = bob.four_velocity(&metric);
+        assert!((metric.norm(bob.r, &u) + 1.0).abs() < 1e-9, "re-seeded u must be unit timelike");
+        assert!(u[1] < 0.0, "resumes on the ingoing root");
+
+        bob.step(&metric, 3.0, 0.5);
+        assert!(bob.r < 4.6, "free fall resumes from the dropped radius: r = {}", bob.r);
+        assert!(bob.r > r_before_drag, "and from the new event, not the pre-drag one");
+        assert!((bob.t - 3.0).abs() < 1e-9);
     }
 
     #[test]

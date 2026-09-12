@@ -268,6 +268,9 @@ pub struct SpacetimeCanvas {
     pub time_window: f64,
     pub time_offset: f64,
     pub is_dragging_bob: bool,
+    /// Bob's mode when a marker drag began, restored when the drag ends so that a free-falling
+    /// Bob resumes free fall from the dropped event rather than staying in manual mode.
+    bob_mode_before_drag: Option<ObserverMode>,
     /// Where the user has dragged each info box on this canvas, per diagram and per observer.
     pub telemetry: TelemetryBoxes,
 }
@@ -280,6 +283,7 @@ impl Default for SpacetimeCanvas {
             time_window: 14.0,
             time_offset: 0.0,
             is_dragging_bob: false,
+            bob_mode_before_drag: None,
             telemetry: TelemetryBoxes::default(),
         }
     }
@@ -896,6 +900,7 @@ impl SpacetimeCanvas {
             if let Some(mouse_pos) = response.interact_pointer_pos() {
                 if mouse_pos.distance(bob_pos) < bob_radius * 3.0 {
                     self.is_dragging_bob = true;
+                    self.bob_mode_before_drag = Some(bob.mode);
                 }
             }
         }
@@ -909,6 +914,12 @@ impl SpacetimeCanvas {
         }
 
         if response.drag_stopped() {
+            if self.is_dragging_bob {
+                // Resume the worldline from the dropped event in whatever mode Bob had before the
+                // drag; an explicit Manual selection stays manual.
+                let mode = self.bob_mode_before_drag.take().unwrap_or(ObserverMode::FreeFall);
+                bob.release_from_drag(metric, mode);
+            }
             self.is_dragging_bob = false;
         }
 
