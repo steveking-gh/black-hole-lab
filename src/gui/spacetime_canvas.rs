@@ -12,9 +12,9 @@ use std::collections::HashMap;
 pub const TELEMETRY_HOVER_TIP: &str =
 "Drag: move the box anywhere on the canvas. Double-click: snap the box back to the observer. Each canvas remembers box positions per observer.
 
-dr/dt — coordinate radial velocity in the global ingoing Kerr-Schild time slicing, as a fraction of c. Always lies inside the local light cone; negative for everything inside the horizon.
+dr/dt — map speed: rate at which the dot crosses the (t, r) chart per tick of the chart's shared clock. Matches a distant observer's measurement far from the hole. Near the hole the chart clock keeps infall and light moving at the horizon instead of freezing; read the value against the light wedge, not as a measured speed.
 
-dr/dτ — radial velocity per unit of the observer's proper time (u^r). Not bounded by c; exceeds c inside the horizon, where r acts as a time coordinate.
+dr/dτ — wristwatch speed: kilometres of radius per second on the observer's own watch. Exceeds c without breaking relativity: the watch runs slow relative to outside clocks, and the radial coordinate undercounts stretched space near the hole. Inside the horizon, radius becomes a countdown and dr/dτ gives the countdown rate.
 
 a_prop — proper acceleration in Earth g, the accelerometer reading. Zero means free fall.
 
