@@ -23,7 +23,6 @@ pub enum SurfaceCharacter {
     Spacelike,
 }
 
-#[allow(dead_code)]
 impl LocalLine {
     /// Diagram slope d xi^0 / d xi^1, infinite for a line of constant xi^1.
     pub fn slope(&self) -> f64 {
@@ -83,7 +82,6 @@ pub struct LocalFrame {
     r: f64,
 }
 
-#[allow(dead_code)]
 impl LocalFrame {
     /// Build the chart of an arbitrary orthonormal tetrad carried at radius r.
     pub fn new(metric: &KerrSchild, r: f64, tetrad: Tetrad) -> Self {
@@ -114,17 +112,9 @@ impl LocalFrame {
         Self::new(metric, r, tetrad)
     }
 
+    #[allow(dead_code)] // the tests build null directions from the frame's own tetrad
     pub fn tetrad(&self) -> &Tetrad {
         &self.tetrad
-    }
-
-    /// e^a_mu, the covariant legs of the tetrad.
-    pub fn dual(&self) -> &[[f64; 3]; 3] {
-        &self.dual
-    }
-
-    pub fn r(&self) -> f64 {
-        self.r
     }
 
     /// Local coordinates xi^a = e^a_mu Delta x^mu of a coordinate displacement (dt, dr, dphi).
@@ -194,7 +184,7 @@ mod tests {
     use std::f64::consts::PI;
 
     fn raindrop(metric: &KerrSchild, r: f64) -> [f64; 3] {
-        let (ut, ur, up) = GeodesicState::new_infall(0.0, r, 1.0, 0.0).derivatives(metric, r);
+        let (ut, ur, up) = GeodesicState::new_infall(metric, 0.0, r, 1.0, 0.0).derivatives(metric, r);
         [ut, ur, up]
     }
 

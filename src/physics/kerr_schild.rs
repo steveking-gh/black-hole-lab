@@ -17,7 +17,7 @@ pub struct KerrSchild {
 /// radius r on the equatorial plane. These are the repeated null eigendirections of the Weyl
 /// tensor (the algebraically special rays that make Kerr type D), not the extreme rays of the
 /// light cone: see `NullWedge` for the latter.
-#[allow(dead_code)]
+#[allow(dead_code)] // constructed by `radial_null_slopes`, which the tests exercise
 #[derive(Debug, Clone, Copy)]
 pub struct NullSlopes {
     /// dr/dt of the ingoing PND: exactly -1 in ingoing Kerr-Schild coordinates, at every r.
@@ -45,6 +45,8 @@ pub struct NullWedge {
     pub dphi_dt_out: f64,
 }
 
+// Several members below are exercised only by the test suite (the unit conversions, the
+// closed forms the GUI cross-checks against); they are part of the geometry's public surface.
 #[allow(dead_code)]
 impl KerrSchild {
     pub fn new(m: f64, a: f64) -> Self {
@@ -126,16 +128,6 @@ impl KerrSchild {
     /// Convert kilometers to coordinate radius r (in units of M).
     pub fn km_to_r(&self, km: f64) -> f64 {
         (km / self.r_grav_km()) * self.m
-    }
-
-    /// Convert coordinate time t (in units of M/c) to seconds.
-    pub fn t_to_seconds(&self, t: f64) -> f64 {
-        (t / self.m) * self.t_grav_seconds()
-    }
-
-    /// Convert seconds to coordinate time t (in units of M/c).
-    pub fn seconds_to_t(&self, secs: f64) -> f64 {
-        (secs / self.t_grav_seconds()) * self.m
     }
 
     /// Format a distance value in kilometers nicely.
@@ -237,29 +229,6 @@ impl KerrSchild {
     /// Delta(r) = r^2 - 2Mr + a^2 = (r - r+)(r - r-)
     pub fn delta(&self, r: f64) -> f64 {
         r * r - 2.0 * self.m * r + self.a * self.a
-    }
-
-    /// Surface gravity of the outer event horizon: kappa+ = sqrt(M^2 - a^2) / (2 M r+) > 0.
-    /// It is the temperature scale of the horizon (T_H = kappa+ / 2 pi) and the rate at which
-    /// outgoing null generators diverge there. It is reported as the geometric quantity it is and
-    /// is deliberately *not* used to manufacture any observer-facing shift factor.
-    pub fn surface_gravity_outer(&self) -> f64 {
-        let rp = self.outer_horizon();
-        let disc = (self.m * self.m - self.a * self.a).max(0.0);
-        disc.sqrt() / (2.0 * self.m * rp)
-    }
-
-    /// Surface gravity of the inner Cauchy horizon: kappa- = -sqrt(M^2 - a^2) / (2 M r-) < 0.
-    /// The sign is the standard convention for the inner horizon's null generators (they converge
-    /// rather than diverge); |kappa-| sets the e-folding rate of the perturbation growth behind the
-    /// *other* branch of r-, at advanced time v -> infinity. That branch is not covered by this
-    /// ingoing chart, so kappa- is likewise reported as a bare geometric quantity and is not used
-    /// to synthesise any observer-facing shift factor: see `ingoing_frequency_ratio` for the exact
-    /// shift an observer in this chart actually measures.
-    pub fn surface_gravity_inner(&self) -> f64 {
-        let rm = self.inner_horizon();
-        let disc = (self.m * self.m - self.a * self.a).max(0.0);
-        -disc.sqrt() / (2.0 * self.m * rm.max(1e-6))
     }
 
     /// Covariant components k_mu of the ingoing principal null ray, normalised to unit conserved

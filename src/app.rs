@@ -4,7 +4,7 @@ use crate::gui::spacetime_canvas::SpacetimeCanvas;
 use crate::gui::spatial_canvas::SpatialCanvas;
 use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
-use crate::physics::observer::Observer;
+use crate::physics::observer::{Observer, WorldlineParams};
 use std::time::Instant;
 
 pub struct SpacetimeApp {
@@ -21,8 +21,17 @@ pub struct SpacetimeApp {
 impl Default for SpacetimeApp {
     fn default() -> Self {
         let metric = KerrSchild::with_solar_mass(1.0, 0.65, 10.0);
-        let bob = Observer::new("Bob", 0.0, 3.8, 0.0);
-        let alice = Some(Observer::new_with_phi("Alice", 0.0, 4.5, 0.0, 0.25));
+        // Both start as raindrops: E = 1, L = 0, ingoing.
+        let bob = Observer::new(&metric, "Bob", 0.0, 3.8, 0.0);
+        let alice = Some(Observer::new_with_phi(
+            &metric,
+            "Alice",
+            0.0,
+            4.5,
+            0.0,
+            0.25,
+            WorldlineParams::default(),
+        ));
 
         Self {
             metric,
@@ -345,6 +354,7 @@ impl eframe::App for SpacetimeApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::physics::geodesic::GeodesicState;
     use eframe::App;
 
     #[test]
@@ -428,11 +438,43 @@ mod tests {
     }
 
     #[test]
+    fn test_dual_observer_energy_and_angular_momentum_controls() {
+        // The E / L sliders drive the dropped worldlines, and the panel renders both muted
+        // hints: the energy-floor clamp and the outgoing-start caveat.
+        let mut app = SpacetimeApp::default();
+        app.controls.is_playing = false;
+        app.controls.energy = 0.92;
+        app.controls.l_ang = 3.5;
+        app.controls.outgoing_start = true;
+
+        let floor = GeodesicState::energy_floor(&app.metric, 4.5, app.controls.l_ang);
+        assert!(floor > app.controls.energy, "the test needs a clamped case: floor = {floor}");
+
+        egui::__run_test_ui(|ui| {
+            let mut frame = eframe::Frame::_new_kittest();
+            app.ui(ui, &mut frame);
+        });
+
+        // Building an observer from those settings clamps E up to the floor and leaves the
+        // observer on a legal (turning-point) worldline.
+        let params = WorldlineParams::new(app.controls.energy, app.controls.l_ang, app.controls.outgoing_start);
+        app.bob.reset_with_phi(&app.metric, 0.0, 4.5, 0.0, params);
+        let geo = app.bob.geodesic.expect("free-fall observers carry a geodesic state");
+        assert!((geo.energy - floor).abs() < 1e-12, "E = {} vs floor {floor}", geo.energy);
+        assert!((geo.l_ang - 3.5).abs() < 1e-12);
+        assert!((app.metric.norm(4.5, &app.bob.four_velocity(&app.metric)) + 1.0).abs() < 1e-9);
+
+        // Defaults stay the raindrop.
+        let d = AppControls::default();
+        assert_eq!((d.energy, d.l_ang, d.outgoing_start), (1.0, 0.0, false));
+    }
+
+    #[test]
     fn test_fixed_distance_stepping() {
         let mut app = SpacetimeApp::default();
         // Use Sagittarius A* (4.15e6 M_solar) where 1000 km is a fine step (~0.000163 M)
         app.metric = KerrSchild::with_solar_mass(1.0, 0.9, 4.15e6);
-        app.bob.reset(0.0, 3.8);
+        app.bob.reset_with_phi(&app.metric, 0.0, 3.8, 0.0, WorldlineParams::default());
         app.controls.is_playing = false;
         app.controls.step_mode = StepMode::Distance;
         app.controls.step_distance_km = 1000.0;
@@ -491,9 +533,9 @@ mod tests {
             ] {
                 app.controls.frame_of_ref = frame_of_ref;
                 for &r in radii.iter() {
-                    app.bob.reset_with_phi(0.0, r, 0.0);
+                    app.bob.reset_with_phi(&app.metric, 0.0, r, 0.0, WorldlineParams::default());
                     if let Some(ref mut al) = app.alice {
-                        al.reset_with_phi(0.0, r * 1.08, 0.35);
+                        al.reset_with_phi(&app.metric, 0.0, r * 1.08, 0.35, WorldlineParams::default());
                     }
                     app.ui(ui, &mut frame);
                     assert!(app.bob.r > 0.0);
@@ -503,7 +545,7 @@ mod tests {
             app.controls.frame_of_ref = ReferenceFrame::Alice;
             app.alice = None;
             for &r in radii.iter() {
-                app.bob.reset_with_phi(0.0, r, 0.0);
+                app.bob.reset_with_phi(&app.metric, 0.0, r, 0.0, WorldlineParams::default());
                 app.ui(ui, &mut frame);
             }
         });

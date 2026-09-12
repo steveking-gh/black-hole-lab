@@ -1,6 +1,7 @@
 use crate::gui::theme::Theme;
+use crate::physics::geodesic::GeodesicState;
 use crate::physics::kerr_schild::KerrSchild;
-use crate::physics::observer::{Observer, ObserverMode};
+use crate::physics::observer::{Observer, ObserverMode, WorldlineParams};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReferenceFrame {
@@ -38,6 +39,12 @@ pub struct AppControls {
     pub show_streamlines: bool,
     pub enable_dual_infall: bool,
     pub delta_t_delay: f64,
+    /// Conserved energy per unit mass E = -u_t of the dropped observers.
+    pub energy: f64,
+    /// Conserved axial angular momentum per unit mass L = u_phi, in units of M.
+    pub l_ang: f64,
+    /// Start the dropped observers on the outgoing root of r^4 (dr/dtau)^2 = R(r).
+    pub outgoing_start: bool,
     pub show_theory_modal: bool,
     pub use_km: bool,
     pub frame_of_ref: ReferenceFrame,
@@ -57,6 +64,9 @@ impl Default for AppControls {
             show_streamlines: true,
             enable_dual_infall: true,
             delta_t_delay: 8.0,
+            energy: 1.0,
+            l_ang: 0.0,
+            outgoing_start: false,
             show_theory_modal: false,
             use_km: false,
             frame_of_ref: ReferenceFrame::DistantObserver,
@@ -66,6 +76,11 @@ impl Default for AppControls {
 }
 
 impl AppControls {
+    /// The constants of motion the dual-observer group is currently asking for.
+    fn worldline_params(&self) -> WorldlineParams {
+        WorldlineParams::new(self.energy, self.l_ang, self.outgoing_start)
+    }
+
     pub fn render_panel(
         &mut self,
         ui: &mut egui::Ui,
@@ -108,9 +123,10 @@ impl AppControls {
                 }
                 if ui.button("⏮ Reset").clicked() {
                     *current_time = 0.0;
-                    bob.reset(0.0, 3.8);
+                    let params = self.worldline_params();
+                    bob.reset_with_phi(metric, 0.0, 3.8, 0.0, params);
                     if let Some(al) = alice {
-                        al.reset_with_phi(0.0, 4.5, 0.25);
+                        al.reset_with_phi(metric, 0.0, 4.5, 0.25, params);
                     }
                 }
                 let current_step = match self.step_mode {
@@ -263,9 +279,10 @@ impl AppControls {
                 }
                 if preset_changed {
                     *current_time = 0.0;
-                    bob.reset(0.0, 3.8);
+                    let params = self.worldline_params();
+                    bob.reset_with_phi(metric, 0.0, 3.8, 0.0, params);
                     if let Some(al) = alice {
-                        al.reset_with_phi(0.0, 4.5, 0.25);
+                        al.reset_with_phi(metric, 0.0, 4.5, 0.25, params);
                     }
                 }
             });
@@ -365,11 +382,38 @@ impl AppControls {
 
             if self.enable_dual_infall {
                 ui.add(egui::Slider::new(&mut self.delta_t_delay, 2.0..=30.0).text("Release Delay Δt"));
+                ui.add(egui::Slider::new(&mut self.energy, 0.90..=1.60).text("Energy E (per unit mass)"));
+                ui.add(egui::Slider::new(&mut self.l_ang, -4.0..=4.0).text("Angular momentum L (per unit mass, M)"));
+                ui.checkbox(&mut self.outgoing_start, "Start on the outgoing root (dr/dτ > 0)");
+
+                // Below the effective potential V(r, L) there is no timelike geodesic through
+                // r = 4.5M at all, so the drop raises E to the floor instead of refusing.
+                let floor = GeodesicState::energy_floor(metric, 4.5, self.l_ang);
+                if self.energy < floor {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "E raised to {:.3}: below that, r = 4.5M is forbidden for this L",
+                            floor
+                        ))
+                        .small()
+                        .color(Theme::TEXT_MUTED),
+                    );
+                }
+                if self.outgoing_start {
+                    ui.label(
+                        egui::RichText::new(
+                            "Outgoing start: the ingoing chart cannot follow an outward crossing of r₋",
+                        )
+                        .small()
+                        .color(Theme::TEXT_MUTED),
+                    );
+                }
                 ui.label(egui::RichText::new("Alice drops from r = 4.5M at t = 0; Bob hovers there and is released at t = Δt, so his worldline trails hers by about Δt in coordinate time the whole way in.").small().color(Theme::TEXT_MUTED));
                 if ui.button("Drop Observers").clicked() {
                     *current_time = 0.0;
-                    *alice = Some(Observer::new_with_phi("Alice", 0.0, 4.5, 0.0, 0.25));
-                    *bob = Observer::new("Bob", 0.0, 4.5, self.delta_t_delay);
+                    let params = self.worldline_params();
+                    *alice = Some(Observer::new_with_phi(metric, "Alice", 0.0, 4.5, 0.0, 0.25, params));
+                    *bob = Observer::new_with_phi(metric, "Bob", 0.0, 4.5, self.delta_t_delay, 0.0, params);
                 }
             } else {
                 *alice = None;

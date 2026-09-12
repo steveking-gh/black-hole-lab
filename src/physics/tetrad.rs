@@ -17,7 +17,6 @@ pub fn inner(metric: &KerrSchild, r: f64, a: &[f64; 3], b: &[f64; 3]) -> f64 {
 /// equatorial plane: the frame in which that observer is at rest and light moves isotropically at
 /// c = 1. The three legs satisfy g(e_a, e_b) = diag(-1, +1, +1) exactly, so the cross terms
 /// g_tr, g_tphi and g_rphi of the ingoing Kerr-Schild chart are fully accounted for.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct Tetrad {
     /// Timelike leg, equal to the observer's 4-velocity u^mu (future-directed, g(e0, e0) = -1).
@@ -194,7 +193,7 @@ mod tests {
     /// Raindrop (E = 1, L = 0) 4-velocity. It exists at every r > 0, so it is the one reference
     /// frame available in all three regions.
     fn raindrop(metric: &KerrSchild, r: f64) -> [f64; 3] {
-        let (ut, ur, up) = GeodesicState::new_infall(0.0, r, 1.0, 0.0).derivatives(metric, r);
+        let (ut, ur, up) = GeodesicState::new_infall(metric, 0.0, r, 1.0, 0.0).derivatives(metric, r);
         [ut, ur, up]
     }
 

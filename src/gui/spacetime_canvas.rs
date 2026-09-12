@@ -2,7 +2,7 @@ use crate::gui::controls::ReferenceFrame;
 use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::local_frame::{LocalFrame, SurfaceCharacter};
-use crate::physics::observer::Observer;
+use crate::physics::observer::{Observer, ObserverMode};
 use egui::{epaint::PathShape, Color32, Pos2, Rect, Stroke, Vec2};
 
 pub fn draw_hovering_telemetry(
@@ -51,6 +51,14 @@ pub fn draw_hovering_telemetry(
         format!("Tidal = {:.2e} g/m", a_tidal_grad)
     };
 
+    // The conserved constants of the worldline actually being integrated, for free-fallers.
+    let constants_str = match obs.geodesic {
+        Some(geo) if obs.mode == ObserverMode::FreeFall => {
+            Some(format!("E = {:.3}  L = {:.3} M", geo.energy, geo.l_ang))
+        }
+        _ => None,
+    };
+
     let shift_tag = if nu_ratio > 1.0 { "blueshift" } else { "redshift" };
     let nu_str = if nu_ratio < 0.01 {
         format!("ν_in/ν_∞ = {:.2e} ({})", nu_ratio, shift_tag)
@@ -83,13 +91,19 @@ pub fn draw_hovering_telemetry(
     let w_tidal = painter.layout_no_wrap(tidal_str.clone(), font_body.clone(), color).size().x;
     let w_nu = painter.layout_no_wrap(nu_str.clone(), font_body.clone(), color).size().x;
 
-    let max_text_w = w_title.max(w_a).max(w_tidal).max(w_nu);
+    let w_constants = constants_str
+        .as_ref()
+        .map(|s| painter.layout_no_wrap(s.clone(), font_body.clone(), color).size().x)
+        .unwrap_or(0.0);
+
+    let max_text_w = w_title.max(w_a).max(w_tidal).max(w_nu).max(w_constants);
     let pad_x = 10.0 * font_scale;
     let pad_y = 6.0 * font_scale;
     let line_spacing = 13.0 * font_scale;
 
+    let body_lines = if constants_str.is_some() { 4.0 } else { 3.0 };
     let badge_w = (max_text_w + pad_x * 2.0).max(180.0 * font_scale);
-    let badge_h = (pad_y * 2.0 + line_spacing * 3.8).max(56.0 * font_scale);
+    let badge_h = (pad_y * 2.0 + line_spacing * (body_lines + 0.8)).max(56.0 * font_scale);
 
     let bx = (pos.x + 12.0).min(canvas_rect.right() - badge_w - 6.0).max(canvas_rect.left() + 6.0);
     let by = (pos.y - badge_h - 6.0).max(canvas_rect.top() + 6.0).min(canvas_rect.bottom() - badge_h - 6.0);
@@ -127,9 +141,18 @@ pub fn draw_hovering_telemetry(
         Pos2::new(badge_rect.left() + pad_x, badge_rect.top() + pad_y + line_spacing * 3.0),
         egui::Align2::LEFT_TOP,
         nu_str,
-        font_body,
+        font_body.clone(),
         if nu_ratio > 1.0 { Theme::BLUESHIFT_BLUE } else { Theme::TEXT_MUTED },
     );
+    if let Some(constants_str) = constants_str {
+        painter.text(
+            Pos2::new(badge_rect.left() + pad_x, badge_rect.top() + pad_y + line_spacing * 4.0),
+            egui::Align2::LEFT_TOP,
+            constants_str,
+            font_body,
+            Theme::TEXT_MUTED,
+        );
+    }
 }
 
 pub struct SpacetimeCanvas {

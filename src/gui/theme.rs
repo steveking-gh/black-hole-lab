@@ -2,7 +2,7 @@ use egui::Color32;
 
 pub struct Theme;
 
-#[allow(dead_code)]
+#[allow(dead_code)] // the palette is declared in full; not every colour is on screen yet
 impl Theme {
     // Backgrounds
     pub const BG_VOID: Color32 = Color32::from_rgb(10, 12, 18);
