@@ -34,6 +34,9 @@ pub struct AppControls {
     /// Playback rate while playing: coordinate time (units of M) per wall-clock second.
     pub play_speed: f64,
     pub step_distance_km: f64,
+    /// Draw the animated raindrop flow (the Painlevé-Gullstrand / Doran river) on the
+    /// equatorial view.
+    pub show_river: bool,
     pub show_streamlines: bool,
     pub enable_dual_infall: bool,
     pub delta_t_delay: f64,
@@ -57,6 +60,7 @@ impl Default for AppControls {
             step_size: 0.1,
             play_speed: 1.0,
             step_distance_km: 1000.0,
+            show_river: true,
             show_streamlines: true,
             enable_dual_infall: true,
             delta_t_delay: 8.0,
@@ -202,6 +206,10 @@ impl AppControls {
                     });
                 }
             }
+            ui.checkbox(&mut self.show_river, "River of Space (raindrop flow)")
+                .on_hover_text(
+                    "The streaks are the E = 1, L = 0 raindrop congruence of the Painlevé-Gullstrand / Doran river model: space itself flowing inward. The flow runs at β = √(1 − α²) relative to the local ZAMO, reaching c at r₊ and exceeding it inside, so nothing inside can move outward. The spiral is frame dragging.",
+                );
             ui.checkbox(&mut self.show_streamlines, "Frame-Dragging Streamlines");
 
             ui.add_space(2.0);

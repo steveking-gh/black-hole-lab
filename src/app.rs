@@ -71,6 +71,9 @@ impl eframe::App for SpacetimeApp {
             };
 
             self.current_time += sim_dt;
+            // The river runs on the simulation clock, not the frame clock, so it freezes when
+            // paused and speeds up with the playback rate.
+            self.spatial_canvas.river.advance(&self.metric, sim_dt);
             self.bob.step(&self.metric, self.current_time, sim_dt);
             if let Some(ref mut al) = self.alice {
                 al.step(&self.metric, self.current_time, sim_dt);
@@ -96,6 +99,11 @@ impl eframe::App for SpacetimeApp {
                 }
             };
             self.current_time = (self.current_time - step).max(0.0);
+            // Stepping back advances the river forward by the same amount rather than
+            // integrating backwards. The congruence is stationary, so its picture is the same at
+            // every t and "backwards" carries no information about it; running the advection in
+            // reverse would only show particles climbing outward, which no raindrop does.
+            self.spatial_canvas.river.advance(&self.metric, step);
             self.bob.step_back(&self.metric, step);
             if let Some(ref mut al) = self.alice {
                 al.step_back(&self.metric, step);
@@ -111,6 +119,7 @@ impl eframe::App for SpacetimeApp {
                 }
             };
             self.current_time += step;
+            self.spatial_canvas.river.advance(&self.metric, step);
             self.bob.step(&self.metric, self.current_time, step);
             if let Some(ref mut al) = self.alice {
                 al.step(&self.metric, self.current_time, step);
@@ -271,6 +280,7 @@ impl eframe::App for SpacetimeApp {
                             &self.metric,
                             &self.bob,
                             &self.alice,
+                            self.controls.show_river,
                             self.controls.show_streamlines,
                             canvas_height,
                             self.controls.use_km,
@@ -315,6 +325,12 @@ impl eframe::App for SpacetimeApp {
 
                         ui.label(egui::RichText::new("5. Region III (0 < r < r₋): Inner Maneuverable Core").strong().color(Theme::BOB_COLOR));
                         ui.label("The radial coordinate r reverts to being spacelike again (g^rr > 0). Bob's light cone un-tips, allowing dr/dt ≥ 0, so in classical Kerr geometry thrusters can stop his descent. The ring singularity at r = 0 is timelike rather than spacelike, so it can be steered around; but the equatorial L = 0 infall drawn here is aimed straight at it, and this worldline still ends on it.");
+                        ui.add_space(8.0);
+
+                        ui.heading("The river model");
+                        ui.label(
+                            "The pale streaks on the equatorial view are the raindrop congruence, E = 1 and L = 0, dropped from rest at infinity, and that congruence is the reference frame the whole app is built on: the Manual-drag boost β is defined against it, because it is the one frame that exists at every radius, inside the horizons included. Painlevé-Gullstrand time is the raindrop's own proper time, and Doran generalises that slicing to Kerr, which is why the streaks spiral: L = 0 raindrops are still frame-dragged. The river's speed relative to the local ZAMO is β = √(1 − α²), which is √(2M/r) without spin and exactly 1 at r₊; Bob's own motion through the river is a boost of at most c on top of it, so inside r₊ the inward flow always wins, whatever the thrust. One caveat: the flat-space background the river picture paints is exact only under spherical symmetry. Hamilton and Lisle (Am. J. Phys. 76, 519, 2008) extend it to Kerr with a twisting tetrad, and in that construction the Doran background speed √(2Mr)/ρ reaches c at the ergosurface rather than at r₊; quoting the ZAMO-relative speed instead, as this view does, puts the horizon statement back into an invariant."
+                        );
                         ui.add_space(8.0);
 
                         ui.heading("What an infaller sees near the Cauchy horizon");

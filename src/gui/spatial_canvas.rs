@@ -1,4 +1,5 @@
 use crate::gui::controls::ReferenceFrame;
+use crate::gui::river::RiverField;
 use crate::gui::spacetime_canvas::TelemetryBoxes;
 use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
@@ -10,6 +11,9 @@ pub struct SpatialCanvas {
     pub pan_offset: Vec2,
     /// Where the user has dragged each info box on this canvas, per observer.
     pub telemetry: TelemetryBoxes,
+    /// The animated raindrop flow. It is advanced from the app's own simulation clock, not from
+    /// the frame rate, so it freezes when paused and steps with the arrow keys.
+    pub river: RiverField,
 }
 
 impl Default for SpatialCanvas {
@@ -18,6 +22,7 @@ impl Default for SpatialCanvas {
             zoom: 48.0, // pixels per M
             pan_offset: Vec2::ZERO,
             telemetry: TelemetryBoxes::default(),
+            river: RiverField::default(),
         }
     }
 }
@@ -30,6 +35,7 @@ impl SpatialCanvas {
         metric: &KerrSchild,
         bob: &Observer,
         alice: &Option<Observer>,
+        show_river: bool,
         show_streamlines: bool,
         canvas_height: f32,
         use_km: bool,
@@ -257,7 +263,13 @@ impl SpatialCanvas {
             );
         }
 
-        // 3. Frame Dragging Swirl Vector Field
+        // 3. River of Space: the E = 1, L = 0 raindrop congruence, drawn under the arrows, the
+        // trails and the observer markers so it never competes with them for legibility.
+        if show_river {
+            self.river.draw(&painter, metric, &to_screen);
+        }
+
+        // 4. Frame Dragging Swirl Vector Field
         if show_streamlines && metric.a.abs() > 0.01 {
             let radii = [0.4 * rm, rm, 0.5 * (rm + rp), rp, 0.5 * (rp + re), re, 3.0 * metric.m, 4.5 * metric.m];
             for &r in &radii {
@@ -299,7 +311,7 @@ impl SpatialCanvas {
             }
         }
 
-        // 4. Draw Alice's Spatial Position and Trail. Her info box is registered at the end of the
+        // 5. Draw Alice's Spatial Position and Trail. Her info box is registered at the end of the
         // frame, after every other interaction on this canvas, so a drag on it does not pan.
         let mut alice_box: Option<Pos2> = None;
         if let Some(al) = alice {
@@ -312,7 +324,7 @@ impl SpatialCanvas {
             }
         }
 
-        // 5. Draw Bob's Spatial Position & Local Null Fan
+        // 6. Draw Bob's Spatial Position & Local Null Fan
         draw_spatial_trail(&painter, metric, bob, Theme::BOB_COLOR, 1.5, &to_screen);
         let bob_pos = to_screen(bob.cartesian_position(metric));
 
@@ -346,7 +358,7 @@ impl SpatialCanvas {
         painter.circle_filled(bob_pos, 7.0, Theme::BOB_COLOR);
         painter.circle_stroke(bob_pos, 9.0, Stroke::new(1.5, Color32::WHITE));
 
-        // 6. Title and Legend Overlay
+        // 7. Title and Legend Overlay
         // Horizon angular velocity Ω_H = a / (2 M r₊) is a rate per unit coordinate time, so in
         // geometric units it is a number per M; only dividing by t_g = GM/c³ makes it rad/s.
         let omega_h = metric.a / (2.0 * metric.m * rp);
@@ -361,6 +373,7 @@ impl SpatialCanvas {
                  Cauchy Horizon r₋: {} ({:.2}M, ρ = {:.2}M)\n\
                  Spin a/M: {:.3}\n\
                  Drag: Ω_H = {:.3}/M = {:.3e} rad/s\n\
+                 River: β = √(1−α²) vs ZAMO; = 1 at r₊\n\
                  🔍 Zoom: {:.0} px/M (Scroll to zoom, drag to pan)",
                 metric.format_physical_distance(1.0),
                 metric.m_solar,
@@ -386,6 +399,7 @@ impl SpatialCanvas {
                  Cauchy Horizon r₋: {:.2}M ({}), ρ = {:.2}M\n\
                  Spin a/M: {:.3}\n\
                  Drag: Ω_H = {:.3}/M\n\
+                 River: β = √(1−α²) vs ZAMO; = 1 at r₊\n\
                  🔍 Zoom: {:.0} px/M (Scroll to zoom, drag to pan)",
                 metric.format_physical_distance(1.0),
                 metric.format_physical_time(1.0),
@@ -410,7 +424,7 @@ impl SpatialCanvas {
             Theme::TEXT_BRIGHT,
         );
 
-        // 7. Draggable info boxes, registered last so they take the drag instead of the canvas.
+        // 8. Draggable info boxes, registered last so they take the drag instead of the canvas.
         if let (Some(al), Some(al_pos)) = (alice.as_ref(), alice_box) {
             self.telemetry.show(
                 ui, &painter, "spatial", rect, al_pos, "Alice", Theme::ALICE_COLOR, al, metric, use_km,

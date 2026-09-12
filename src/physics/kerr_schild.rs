@@ -285,6 +285,37 @@ impl KerrSchild {
         (2.0 * self.m * self.a * r) / sigma.max(1e-9)
     }
 
+    /// Speed of the Painleve-Gullstrand / Doran "river of space" at radius r: the speed of the
+    /// E = 1, L = 0 raindrop (dropped from rest at infinity) relative to the local zero-angular-
+    /// momentum observer, as a fraction of c.
+    ///
+    /// The raindrop's Lorentz factor against the ZAMO is
+    ///     gamma = -u_rain . u_ZAMO = (E - omega L) / alpha = 1 / alpha   for E = 1, L = 0,
+    /// because the ZAMO 4-velocity is u_ZAMO^mu = (1/alpha) (1, 0, omega) with omega the
+    /// frame-dragging rate, so -u_rain . u_ZAMO = -(1/alpha)(u_t + omega u_phi) = (E - omega L)/alpha.
+    /// The relative speed then follows from gamma = 1/sqrt(1 - beta^2):
+    ///     beta_river = sqrt(1 - 1/gamma^2) = sqrt(1 - alpha^2).
+    ///
+    /// The equatorial lapse is alpha^2 = Delta r^2 / A with A = (r^2 + a^2)^2 - a^2 Delta, which is
+    /// also g_phiphi = A / r^2 in this chart. Consequences:
+    ///   * a = 0 gives alpha^2 = 1 - 2M/r, so beta_river = sqrt(2M/r), the Newtonian escape speed
+    ///     that the Painleve-Gullstrand form makes exact;
+    ///   * Delta = 0 on either horizon, so beta_river = 1 exactly at r+ and again at r-;
+    ///   * Delta < 0 between the horizons makes 1 - alpha^2 > 1, so beta_river > 1 there. That is
+    ///     not a particle outrunning light: it is the statement that no ZAMO (indeed no
+    ///     stationary observer at all) exists inside r+, so the frame the speed is quoted against
+    ///     has gone spacelike.
+    pub fn river_speed(&self, r: f64) -> f64 {
+        let r = r.max(1e-6);
+        let r2 = r * r;
+        let a2 = self.a * self.a;
+        let delta = self.delta(r);
+        // A = (r^2 + a^2)^2 - a^2 Delta = r^4 + a^2 r^2 + 2 M a^2 r > 0 for every r > 0.
+        let big_a = (r2 + a2) * (r2 + a2) - a2 * delta;
+        let alpha_sq = delta * r2 / big_a;
+        (1.0 - alpha_sq).max(0.0).sqrt()
+    }
+
     /// Cartesian radius rho of the chart radius r in the equatorial plane.
     ///
     /// The equatorial plane is embedded in Kerr-Schild Cartesian coordinates as
@@ -1032,6 +1063,95 @@ mod tests {
                 // -k_mu k^mu must vanish: the ray is null, so its "frequency" for itself is zero.
                 assert!(ks.ingoing_frequency_ratio(r, &k_up).abs() < 1e-10);
             }
+        }
+    }
+
+    #[test]
+    fn test_river_speed_schwarzschild_closed_form() {
+        // With a = 0 the lapse is alpha^2 = 1 - 2M/r, so the river runs at the Newtonian escape
+        // speed sqrt(2M/r): that is the Painleve-Gullstrand statement, exact in full GR.
+        let ks = KerrSchild::new(1.0, 0.0);
+        for &r in &[100.0, 20.0, 8.0, 4.0, 2.5, 2.0] {
+            let expected = (2.0_f64 / r).sqrt();
+            let got = ks.river_speed(r);
+            assert!((got - expected).abs() < 1e-12, "beta({r}) = {got} vs {expected}");
+        }
+    }
+
+    #[test]
+    fn test_river_speed_is_exactly_one_on_the_horizons() {
+        // Delta = 0 on r+ and r-, so alpha = 0 and beta_river = 1 there, for every spin.
+        for &a in &[0.0, 0.65, 0.95] {
+            let ks = KerrSchild::new(1.0, a);
+            let rp = ks.outer_horizon();
+            assert!(
+                (ks.river_speed(rp) - 1.0).abs() < 1e-9,
+                "beta(r+) = {} (a={a})",
+                ks.river_speed(rp)
+            );
+            let rm = ks.inner_horizon();
+            if rm > 1e-6 {
+                assert!(
+                    (ks.river_speed(rm) - 1.0).abs() < 1e-9,
+                    "beta(r-) = {} (a={a})",
+                    ks.river_speed(rm)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_river_speed_exceeds_one_between_the_horizons() {
+        // Delta < 0 in Region II, so 1 - alpha^2 > 1: no ZAMO exists there to be outrun.
+        let ks = KerrSchild::new(1.0, 0.65);
+        let rp = ks.outer_horizon();
+        let rm = ks.inner_horizon();
+        for f in [0.15, 0.35, 0.5, 0.7, 0.9] {
+            let r = rm + f * (rp - rm);
+            let beta = ks.river_speed(r);
+            assert!(beta > 1.0, "beta({r}) = {beta} must exceed 1 inside r+ = {rp}");
+        }
+        // Strictly outside r+ and strictly inside r- the ZAMO frame exists again, so beta < 1.
+        for &r in &[rp + 0.05, rp + 2.0, 12.0, 0.9 * rm, 0.4 * rm] {
+            assert!(ks.river_speed(r) < 1.0, "beta({r}) = {} must be below 1", ks.river_speed(r));
+        }
+    }
+
+    #[test]
+    fn test_river_speed_matches_the_contracted_raindrop_and_zamo_four_velocities() {
+        // Independent cross-check of beta_river = sqrt(1 - alpha^2): form gamma = -u_rain . u_ZAMO
+        // by contracting the two 4-velocities with the coded metric, and invert gamma directly.
+        // The ZAMO is built exactly as `Observer::four_velocity` builds it: u^mu = gamma_z (1, 0, omega)
+        // with omega = -g_tphi/g_phiphi, which is the only stationary observer with u_phi = 0.
+        use crate::physics::geodesic::GeodesicState;
+        let ks = KerrSchild::new(1.0, 0.65);
+        for &r in &[40.0, 12.0, 6.0, 3.0, 2.2, ks.outer_horizon() + 0.05] {
+            let g = ks.metric_components(r);
+            let omega = ks.frame_dragging_omega(r);
+            let norm_sq = -(g[0][0] + 2.0 * omega * g[0][2] + omega * omega * g[2][2]);
+            let gamma_z = 1.0 / norm_sq.sqrt();
+            let u_zamo = [gamma_z, 0.0, gamma_z * omega];
+            assert!((ks.norm(r, &u_zamo) + 1.0).abs() < 1e-10, "the ZAMO must be unit timelike");
+
+            let raindrop = GeodesicState::new_infall(&ks, 0.0, r, 1.0, 0.0);
+            let (ut, ur, up) = raindrop.derivatives(&ks, r);
+            let u_rain = [ut, ur, up];
+            assert!((ks.norm(r, &u_rain) + 1.0).abs() < 1e-9, "the raindrop must be unit timelike");
+
+            let mut gamma = 0.0;
+            for mu in 0..3 {
+                for nu in 0..3 {
+                    gamma -= g[mu][nu] * u_rain[mu] * u_zamo[nu];
+                }
+            }
+            // gamma = 1 / alpha, so the ZAMO's own gamma factor must come out the same way.
+            assert!((gamma - gamma_z).abs() < 1e-9, "gamma = {gamma} vs 1/alpha = {gamma_z} at r={r}");
+            let beta = (1.0 - 1.0 / (gamma * gamma)).sqrt();
+            assert!(
+                (beta - ks.river_speed(r)).abs() < 1e-9,
+                "beta = {beta} vs river_speed = {} at r={r}",
+                ks.river_speed(r)
+            );
         }
     }
 
