@@ -1,0 +1,43 @@
+src/gui/spacetime_canvas.rs
+  s_5e464e0dde83ec::t_d7c750ca795627 37-44,47-49,900-906,927
+src/physics/wavefront.rs
+  s_5e464e0dde83ec::t_5f0707486b6de8 1200-1204,1234-1235
+  s_5e464e0dde83ec::t_1b0c5404313c55 1-2
+  s_5e464e0dde83ec::t_86a512ced2f170 1005-1010,1029-1032
+  s_5e464e0dde83ec::t_b084df8f2d0e25 78,1158-1166
+  s_5e464e0dde83ec::t_86590972309c7d 79-81
+  s_5e464e0dde83ec::t_7a4d607122ca15 61-64,449-452,502-512,542-545,547-549,552,564,572,575,657,660-662,1213,1216
+src/app.rs
+  s_5e464e0dde83ec::t_3cb0ade91674cf 373
+  s_5e464e0dde83ec::t_3648ee959bf4ec 454-455,459-462
+  s_5e464e0dde83ec::t_1b0c5404313c55 17,458
+src/gui/controls.rs
+  s_5e464e0dde83ec::t_d7c750ca795627 87-104,256,300-307
+  s_5e464e0dde83ec::t_1b0c5404313c55 41,250,252
+src/gui/theme.rs
+  s_5e464e0dde83ec::t_751b9a2af9628f 25-26
+  s_5e464e0dde83ec::t_d7c750ca795627 27
+src/gui/cauchy_effects.rs
+  s_5e464e0dde83ec::t_1b0c5404313c55 125
+src/gui/spatial_canvas.rs
+  s_5e464e0dde83ec::t_d9d5c56f8fe543 458-459
+  s_5e464e0dde83ec::t_1b0c5404313c55 318
+  s_5e464e0dde83ec::t_c37138bec9bea4 453-455,485-492,498
+  s_5e464e0dde83ec::t_5f34678786d9a5 456-457
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "5db1e16c1e181086ae0a13e9fb2dce213bf4ef25",
+  "prompts": {},
+  "sessions": {
+    "s_5e464e0dde83ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc7a846d-d13c-4554-b9bf-dc2dee2f30eb",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
