@@ -12,9 +12,9 @@ use std::collections::HashMap;
 pub const TELEMETRY_HOVER_TIP: &str =
 "Drag: move the box anywhere on the canvas. Double-click: snap the box back to the observer. Each canvas remembers box positions per observer.
 
-dr/dt — map speed: rate at which the dot crosses the (t, r) chart per tick of the chart's shared clock. Matches a distant observer's measurement far from the hole. Near the hole the chart clock keeps infall and light moving at the horizon instead of freezing; read the value against the light wedge, not as a measured speed.
+dr/dt — map speed: how fast the dot crosses the (t, r) chart per tick of the chart's shared clock. Far from the hole, this equals what a distant observer would measure. Near the hole, the chart uses a clock that lets infall and light cross the horizon without freezing, so the number only means something relative to the light wedge.
 
-dr/dτ — wristwatch speed: kilometres of radius per second on the observer's own watch. Exceeds c without breaking relativity: the watch runs slow relative to outside clocks, and the radial coordinate undercounts stretched space near the hole. Inside the horizon, radius becomes a countdown and dr/dτ gives the countdown rate.
+dr/dτ — wristwatch speed: kilometres of radius per second on the observer's own watch. Can exceed c without breaking relativity, because the watch runs slow and the radius undercounts stretched space near the hole. Inside the horizon, radius becomes a countdown, and dr/dτ is how fast it runs.
 
 a_prop — proper acceleration in Earth g, the accelerometer reading. Zero means free fall.
 
