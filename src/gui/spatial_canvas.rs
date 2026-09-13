@@ -625,32 +625,20 @@ fn segment_arc<F: Fn((f64, f64)) -> Pos2>(
         .collect()
 }
 
-/// What one segment of a front is drawn as, under the user's choice of `draw_arcs`: either the
-/// curve of `segment_arc`, or the straight chord between the two rays' own screen positions.
+/// The radius, times the field's stroke scale, of the dot each calculated point of a front is
+/// drawn as: every live ray when the arcs are switched off, and the frozen family's beads always.
 ///
-/// The choice is a drawing choice and only a drawing choice. `Pulse::scan` interpolates linearly in
-/// (r, phi) between the same two rays either way, so which of these two polylines is on screen
-/// changes nothing about where a reception happens or what shift it is measured at; what it changes
-/// is whether the drawn front is the same curve the reception test is testing. With arcs on it is,
-/// and that is the default. With them off the drawing is faster and the front reads as the raw
-/// polygon on its rays, which is worth being able to see - but in the deep interior it is wrong in
-/// a way worth naming: inside r- neighbouring rays wind at wildly different rates and end up most
-/// of a radian apart, and the chord between two such rays cuts straight across the annulus and
-/// through the disk inside the ring, drawing spikes into the singularity that no ray ever took.
-fn segment_polyline<F: Fn((f64, f64)) -> Pos2>(
-    metric: &KerrSchild,
-    from: (f64, f64),
-    to: (f64, f64),
-    ends: (Pos2, Pos2),
-    draw_arcs: bool,
-    to_screen: &F,
-) -> Vec<Pos2> {
-    if draw_arcs {
-        segment_arc(metric, from, to, to_screen)
-    } else {
-        vec![ends.0, ends.1]
-    }
-}
+/// The Arcs between wavefront points checkbox is a drawing choice and only a drawing choice. On,
+/// each segment of a front between two neighbouring rays is drawn as the curve of `segment_arc`,
+/// the same interpolation in (r, phi) that `Pulse::scan` uses to test the front against a
+/// receiver, so the drawn front is the curve the detector is testing. Off, nothing is drawn between
+/// the rays at all: the front is shown as the calculated points themselves, one dot per live ray,
+/// which is the raw output of the integrator with no interpolation of any kind laid over it. That
+/// is worth being able to see, because everything an arc adds is inference - a segment between two
+/// rays most of a radian apart in the deep interior is drawn along a curve no ray was integrated
+/// on - and the dots are the part that is not. Nothing about a reception moves when the box is
+/// unticked; `Pulse::scan` interpolates along the same segments either way.
+const FRONT_POINT_RADIUS: f32 = 1.6;
 
 fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
     painter: &egui::Painter,
@@ -709,7 +697,7 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
         let frozen: Vec<bool> =
             pulse.rays.iter().map(|ray| ray.alive() && ray.frozen(metric)).collect();
         // The ray positions themselves, which the frozen dots sit on; the segments between them
-        // are drawn as arcs in (r, phi) rather than as chords between these points.
+        // are drawn as arcs in (r, phi) between them, or not at all when the arcs are off.
         let points: Vec<Pos2> = pulse
             .rays
             .iter()
@@ -717,17 +705,16 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
             .collect();
 
         // n segments rather than n - 1: the closing one runs from the last ray back to the first.
-        for i in 0..n {
+        // With the arcs off there are no segments at all, only the points below.
+        for i in (0..n).filter(|_| draw_front_arcs) {
             let j = (i + 1) % n;
             if !pulse.rays[i].alive() || !pulse.rays[j].alive() {
                 continue;
             }
-            let arc = segment_polyline(
+            let arc = segment_arc(
                 metric,
                 (pulse.rays[i].r, pulse.rays[i].phi),
                 (pulse.rays[j].r, pulse.rays[j].phi),
-                (points[i], points[j]),
-                draw_front_arcs,
                 to_screen,
             );
             let gain = 0.5 * (gains[i] + gains[j]);
@@ -741,9 +728,20 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
             ));
         }
         for (i, point) in points.iter().enumerate() {
+            if !pulse.rays[i].alive() {
+                continue;
+            }
             if frozen[i] {
                 frozen_dots
                     .push((*point, Theme::front_colour(gains[i], Theme::FRONT_FROZEN_ALPHA)));
+            } else if !draw_front_arcs {
+                // The calculated point itself: with the arcs on it is implied by the two segments
+                // meeting there, with them off it is all there is of this ray.
+                painter.circle_filled(
+                    *point,
+                    FRONT_POINT_RADIUS * width_scale,
+                    Theme::front_colour(gains[i], Theme::SHIFT_ALPHA),
+                );
             }
         }
         // The anchor: where on Alice's trail this loop was let go of.
@@ -755,7 +753,7 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
         painter.add(egui::Shape::line(segment, Stroke::new(2.0 * width_scale, colour)));
     }
     for (point, colour) in frozen_dots {
-        painter.circle_filled(point, 1.6 * width_scale, colour);
+        painter.circle_filled(point, FRONT_POINT_RADIUS * width_scale, colour);
     }
 }
 
@@ -905,47 +903,83 @@ mod tests {
         );
     }
 
+    /// Count what `draw_signal_field` puts into a painter for one field: the polylines (segments
+    /// of front) and the filled circles (calculated points, frozen beads and emission dots).
+    fn count_front_shapes(metric: &KerrSchild, field: &SignalField, draw_arcs: bool) -> (usize, usize) {
+        fn tally(shape: &egui::Shape, lines: &mut usize, circles: &mut usize) {
+            match shape {
+                egui::Shape::Path(_) | egui::Shape::LineSegment { .. } => *lines += 1,
+                egui::Shape::Circle(_) => *circles += 1,
+                egui::Shape::Vec(inner) => {
+                    for shape in inner {
+                        tally(shape, lines, circles);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let output = ctx.run_ui(Default::default(), |ui| {
+            let (_, painter) =
+                ui.allocate_painter(egui::Vec2::new(400.0, 400.0), egui::Sense::hover());
+            let to_screen =
+                |(x, y): (f64, f64)| Pos2::new(200.0 + 60.0 * x as f32, 200.0 - 60.0 * y as f32);
+            draw_signal_field(&painter, metric, field, Theme::ALICE_COLOR, 1.0, draw_arcs, &to_screen);
+        });
+        let (mut lines, mut circles) = (0, 0);
+        for clipped in output.shapes.iter() {
+            tally(&clipped.shape, &mut lines, &mut circles);
+        }
+        output.drop_without_applying_deltas();
+        (lines, circles)
+    }
+
     #[test]
-    fn test_with_the_arcs_turned_off_a_segment_is_the_chord_between_its_two_rays() {
-        // The checkbox, at the one place it acts. With the arcs on, a segment between two rays a
-        // radian apart on r- is the curve linear in (r, phi) between them, which is dozens of
-        // points lying on the r- circle. With them off it is the two ray positions and nothing in
-        // between - the straight chord, which for this pair dips well inside r-. Both are drawings
-        // of the same segment of the same front; `Pulse::scan` interpolates in (r, phi) either
-        // way, so nothing about a reception moves when the box is unticked.
+    fn test_with_the_arcs_turned_off_a_front_is_its_calculated_points_and_nothing_between_them() {
+        // The checkbox, at the one place it acts: `draw_signal_field` adds either one polyline per
+        // live segment (arcs on) or one filled circle per live ray (arcs off), and never both. A
+        // real transmission is drawn both ways into an egui painter and the shapes counted, so what
+        // is measured is the drawing the user sees rather than a helper's return value. With the
+        // arcs off nothing at all is drawn between neighbouring rays, however far apart they have
+        // wound: that is the point of the setting, the raw integrated points with no interpolation
+        // laid over them. The emission dot, one per pulse, is there either way.
+        use crate::physics::observer::{Observer, WorldlineParams};
+        use crate::physics::wavefront::SignalField;
         let metric = KerrSchild::new(1.0, 0.90);
-        let rm = metric.inner_horizon();
-        let to_screen = |(x, y): (f64, f64)| Pos2::new(x as f32, y as f32);
-        let (from, to) = ((rm, 0.3), (rm, 1.5));
-        let ends = (
-            to_screen(metric.cartesian_position(from.0, from.1)),
-            to_screen(metric.cartesian_position(to.0, to.1)),
-        );
+        // An emitter let go inside r+ (1.436 at this spin), so the fronts it sends carry a frozen
+        // family too and the beads are part of what is counted.
+        let mut alice =
+            Observer::new_with_phi(&metric, "Alice", 0.0, 1.2, 0.0, 0.0, WorldlineParams::default());
+        let mut field = SignalField::default();
+        let mut t = 0.0;
+        for _ in 0..40 {
+            field.emit_if_due(&metric, &alice);
+            alice.step(&metric, t, 0.02);
+            field.advance(&metric, 0.02);
+            t += 0.02;
+        }
+        let live_pulses: Vec<_> =
+            field.pulses.iter().filter(|p| p.rays.iter().any(|r| r.alive())).collect();
+        let live: usize =
+            live_pulses.iter().map(|p| p.rays.iter().filter(|r| r.alive()).count()).sum();
+        assert!(live > 100, "the field has a front to draw: {live} live rays");
 
-        let chord = segment_polyline(&metric, from, to, ends, false, &to_screen);
-        assert_eq!(chord, vec![ends.0, ends.1], "with the arcs off a segment is its two ends");
-
-        let arc = segment_polyline(&metric, from, to, ends, true, &to_screen);
-        assert_eq!(
-            arc,
-            segment_arc(&metric, from, to, &to_screen),
-            "with the arcs on a segment is exactly what `segment_arc` draws"
-        );
-        assert!(arc.len() > 20, "and that is the subdivided curve: {} points", arc.len());
-        // The two agree at the ends and nowhere else: same front, two drawings of it.
-        assert_eq!((arc[0], arc[arc.len() - 1]), (chord[0], chord[1]));
-        let circle = (rm * rm + metric.a * metric.a).sqrt();
-        let chord_mid = Pos2::new(
-            0.5 * (chord[0].x + chord[1].x),
-            0.5 * (chord[0].y + chord[1].y),
-        );
+        let (lines_on, circles_on) = count_front_shapes(&metric, &field, true);
+        let (lines_off, circles_off) = count_front_shapes(&metric, &field, false);
         println!(
-            "over 1.2 rad of r- the arc is {} points on the rho = {circle:.4} circle; the chord is \
-             2 points whose midpoint sits at rho = {:.4}, inside it",
-            arc.len(),
-            embedded_radius(chord_mid)
+            "arcs on: {lines_on} polylines and {circles_on} circles; arcs off: {lines_off} \
+             polylines and {circles_off} circles, over {live} live rays in {} pulses",
+            live_pulses.len()
         );
-        assert!(embedded_radius(chord_mid) < circle - 0.15);
+        assert!(lines_on > 0, "with the arcs on the front is drawn as polylines");
+        assert_eq!(lines_off, 0, "with the arcs off nothing is drawn between the rays");
+        assert_eq!(
+            circles_off,
+            live + live_pulses.len(),
+            "with the arcs off every live ray is one dot, plus one emission dot per pulse"
+        );
+        assert!(circles_off > circles_on, "and that is more dots than the frozen beads alone");
     }
 
     #[test]
