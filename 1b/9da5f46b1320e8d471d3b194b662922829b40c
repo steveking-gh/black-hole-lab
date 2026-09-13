@@ -1,0 +1,29 @@
+src/app.rs
+  s_5e464e0dde83ec::t_e6a09f18e3b0cb 408
+src/gui/spatial_canvas.rs
+  s_5e464e0dde83ec::t_e6a09f18e3b0cb 47,330-339,419-423,451-455,502,507-528,540,543-554,628-654,661,676-679,690-696,704,725,729-730,733,735,738-741,745-746,754-755,757-758,818-949
+  s_5e464e0dde83ec::t_bb72d080172a94 950
+src/gui/controls.rs
+  s_5e464e0dde83ec::t_e6a09f18e3b0cb 130-136,174,238-240,246,250,759-760
+src/gui/theme.rs
+  s_5e464e0dde83ec::t_e6a09f18e3b0cb 136-140,184-273
+  s_5e464e0dde83ec::t_d5fe7d1d3c990d 274-275
+src/physics/wavefront.rs
+  s_5e464e0dde83ec::t_e6a09f18e3b0cb 38-41,263-276,347,385-421,2249,5037,5452-5605
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "1b9da5f46b1320e8d471d3b194b662922829b40c",
+  "prompts": {},
+  "sessions": {
+    "s_5e464e0dde83ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc7a846d-d13c-4554-b9bf-dc2dee2f30eb",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
