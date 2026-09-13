@@ -171,10 +171,14 @@ impl AppControls {
                     .on_hover_text("Step back by Step Size / Distance (Left Arrow key)")
                     .clicked()
                 {
-                    *current_time = (*current_time - current_step).max(0.0);
-                    // A wavefront cannot be run backwards, so the field is dropped and re-emitted
-                    // as time advances again. See the same note at the app's arrow-key handler.
-                    signal.clear();
+                    // The clock stops at t = 0, so everything that is stepped back with it is
+                    // stepped back by however much of the step is left above zero.
+                    let back = current_step.min(*current_time);
+                    *current_time -= back;
+                    // The field is rewound, not dropped: `SignalField::step_back` integrates every
+                    // ray back along the null geodesic it came in on, revives the ones that died
+                    // inside the interval, and un-sends the pulses emitted inside it.
+                    signal.step_back(metric, back);
                     bob.step_back(metric, current_step);
                     if let Some(al) = alice {
                         al.step_back(metric, current_step);
@@ -249,7 +253,7 @@ impl AppControls {
                 );
             ui.checkbox(&mut self.show_signal, "Alice's Signal (pulses)")
                 .on_hover_text(
-                    "Alice broadcasts a pulse into the whole of her own light cone every 0.1 M of her proper time, and every ray of it is an exact null geodesic of the coded metric. Colour is the frequency a local raindrop measures against Alice's emission, from a tenfold redshift through white to a thousandfold blueshift. Inside r₊ the rays that never reach r₋ are the prograde ones, dragged forward in ϕ: that is the arc of the pulse around α = 90°, running from about 45° to 135° well inside r₊, wider than that just below r₊ and narrowing as Alice nears r₋, its edges lying exactly where E − Ω₋L changes sign. Those arcs stack up against the Cauchy horizon while the rest of the pulse falls through it, and because the pulses are close enough together for consecutive arcs to overlap there, an infaller crossing r₋ where they stand cuts through several sheets in a row, each blueshifted on the scale exp(κ₋Δt).",
+                    "Alice broadcasts a pulse into the whole of her own light cone every 0.1 M of her proper time, and every ray of it is an exact null geodesic of the coded metric. Colour is the frequency a local raindrop measures against Alice's emission, from a tenfold redshift through white to a thousandfold blueshift. Inside r₊ the rays that never reach r₋ are the prograde ones, dragged forward in ϕ: that is the arc of the pulse around α = 90°, running from about 45° to 135° well inside r₊, wider than that just below r₊ and narrowing as Alice nears r₋, its edges lying exactly where E − Ω₋L changes sign. Those arcs stack up against the Cauchy horizon while the rest of the pulse falls through it, and because the pulses are close enough together for consecutive arcs to overlap there, an infaller crossing r₋ where they stand cuts through several sheets in a row, each blueshifted on the scale exp(κ₋Δt). Each loop is one pulse and encloses Alice, since light is isotropic in Alice's own frame, and the dot on the loop marks the emission event on Alice's trail. Inside r₊ the flow carries the whole loop inward, so the loop's outer edge never gets further from the hole than that dot: the river model, drawn with light.",
                 );
             ui.checkbox(&mut self.show_outgoing_rays, "Outgoing Light Inside r₊")
                 .on_hover_text(

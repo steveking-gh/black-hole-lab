@@ -65,6 +65,54 @@ impl SpacetimeApp {
         }
         self.signal.detect_receptions(&self.metric, &self.bob);
     }
+
+    /// What one press of an arrow key is worth in coordinate time: the Δt slider in Time mode, and
+    /// in Distance mode the time Bob needs to cover the requested Δr at his current coordinate
+    /// speed.
+    fn arrow_step(&self) -> f64 {
+        match self.controls.step_mode {
+            StepMode::Time => self.controls.step_size,
+            StepMode::Distance => {
+                let delta_r_m = self.metric.km_to_r(self.controls.step_distance_km);
+                let v_coord = self.bob.velocity_c(&self.metric).abs().max(0.01);
+                (delta_r_m / v_coord).clamp(1e-8, 500.0)
+            }
+        }
+    }
+
+    /// One step forward by hand, in the same order as a played frame.
+    fn step_forward(&mut self, step: f64) {
+        self.current_time += step;
+        self.spatial_canvas.river.advance(&self.metric, step);
+        self.bob.step(&self.metric, self.current_time, step);
+        if let Some(ref mut al) = self.alice {
+            al.step(&self.metric, self.current_time, step);
+        }
+        self.advance_signal(step);
+    }
+
+    /// One step back by hand, undoing a step forward rather than approximating one.
+    ///
+    /// The observers and Alice's signal are both integrated backwards: `SignalField::step_back`
+    /// runs every ray back along the null geodesic it came in on, revives the ones that reached the
+    /// ring inside the interval, and un-sends the pulses emitted inside it.
+    ///
+    /// The river is the exception, and deliberately. Stepping back advances the congruence forward
+    /// by the same amount instead of reversing it. The flow is stationary, so its picture is the
+    /// same at every t and "backwards" carries no information about it; running the advection in
+    /// reverse would only show particles climbing outward, which no raindrop does.
+    fn step_backward(&mut self, step: f64) {
+        // The clock stops at t = 0, so whatever is wound back is wound back by however much of the
+        // step is left above zero, and the field's clock stays equal to the simulation clock.
+        let back = step.min(self.current_time);
+        self.current_time -= back;
+        self.spatial_canvas.river.advance(&self.metric, step);
+        self.signal.step_back(&self.metric, back);
+        self.bob.step_back(&self.metric, step);
+        if let Some(ref mut al) = self.alice {
+            al.step_back(&self.metric, step);
+        }
+    }
 }
 
 impl eframe::App for SpacetimeApp {
@@ -112,45 +160,10 @@ impl eframe::App for SpacetimeApp {
             self.controls.is_playing = !self.controls.is_playing;
             ctx.request_repaint();
         } else if step_back_pressed {
-            let step = match self.controls.step_mode {
-                StepMode::Time => self.controls.step_size,
-                StepMode::Distance => {
-                    let delta_r_m = self.metric.km_to_r(self.controls.step_distance_km);
-                    let v_coord = self.bob.velocity_c(&self.metric).abs().max(0.01);
-                    (delta_r_m / v_coord).clamp(1e-8, 500.0)
-                }
-            };
-            self.current_time = (self.current_time - step).max(0.0);
-            // Stepping back advances the river forward by the same amount rather than
-            // integrating backwards. The congruence is stationary, so its picture is the same at
-            // every t and "backwards" carries no information about it; running the advection in
-            // reverse would only show particles climbing outward, which no raindrop does.
-            self.spatial_canvas.river.advance(&self.metric, step);
-            // The signal field is dropped rather than rewound: a wavefront is not reversible, and
-            // running the rays backwards would draw an ingoing front that no emission ever made.
-            // The pulses are re-emitted from Alice's clock as time advances again.
-            self.signal.clear();
-            self.bob.step_back(&self.metric, step);
-            if let Some(ref mut al) = self.alice {
-                al.step_back(&self.metric, step);
-            }
+            self.step_backward(self.arrow_step());
             ctx.request_repaint();
         } else if step_fwd_pressed {
-            let step = match self.controls.step_mode {
-                StepMode::Time => self.controls.step_size,
-                StepMode::Distance => {
-                    let delta_r_m = self.metric.km_to_r(self.controls.step_distance_km);
-                    let v_coord = self.bob.velocity_c(&self.metric).abs().max(0.01);
-                    (delta_r_m / v_coord).clamp(1e-8, 500.0)
-                }
-            };
-            self.current_time += step;
-            self.spatial_canvas.river.advance(&self.metric, step);
-            self.bob.step(&self.metric, self.current_time, step);
-            if let Some(ref mut al) = self.alice {
-                al.step(&self.metric, self.current_time, step);
-            }
-            self.advance_signal(step);
+            self.step_forward(self.arrow_step());
             ctx.request_repaint();
         }
 
@@ -488,9 +501,64 @@ mod tests {
         let last = app.signal.last_reception().expect("a reception was just asserted");
         assert!(last.ratio.is_finite() && last.ratio > 0.0, "{last:?}");
 
-        // Stepping back drops the field, since a wavefront cannot be integrated in reverse.
+        // `clear` is the reset, not the rewind: it drops the field outright, which is what
+        // re-dropping the observers or changing the geometry needs. The rewind is
+        // `test_stepping_back_through_the_app_keeps_the_signal`.
         app.signal.clear();
         assert_eq!(app.signal.received_count(), 0);
+        assert_eq!(app.signal.t, 0.0);
+    }
+
+    #[test]
+    fn test_stepping_back_through_the_app_keeps_the_signal() {
+        // The step-back path used to call `SignalField::clear`, so every front on screen vanished
+        // the moment the left arrow was pressed. It now runs the field backwards along the same
+        // null geodesics it came in on, so the transmission survives the rewind and the field's own
+        // clock stays locked to the simulation clock, which is what makes stepping back and forward
+        // over the same interval land on the same picture.
+        let mut app = SpacetimeApp::default();
+        app.controls.play_speed = 4.0;
+        app.controls.step_size = 0.01;
+
+        egui::__run_test_ui(|ui| {
+            let mut frame = eframe::Frame::_new_kittest();
+            for _ in 0..200 {
+                app.ui(ui, &mut frame);
+            }
+        });
+        let forward_pulses = app.signal.pulses.len();
+        assert!(forward_pulses > 0, "Alice should be transmitting by t = {}", app.current_time);
+        assert!(
+            (app.signal.t - app.current_time).abs() < 1e-9,
+            "the field rides the simulation clock: {} vs {}",
+            app.signal.t,
+            app.current_time
+        );
+
+        let step = app.arrow_step();
+        for _ in 0..50 {
+            app.step_backward(step);
+        }
+
+        assert!(
+            !app.signal.pulses.is_empty(),
+            "stepping back must rewind the signal, not delete it"
+        );
+        assert!(
+            (app.signal.t - app.current_time).abs() < 1e-9,
+            "and must keep the field's clock on the simulation clock: {} vs {}",
+            app.signal.t,
+            app.current_time
+        );
+        // Nothing survives that had not been emitted by the time stepped back to.
+        for pulse in app.signal.pulses.iter() {
+            assert!(
+                pulse.emitted_t <= app.current_time + 1e-9,
+                "a pulse emitted at t = {} is still in a field wound back to t = {}",
+                pulse.emitted_t,
+                app.current_time
+            );
+        }
     }
 
     #[test]

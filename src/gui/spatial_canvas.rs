@@ -461,6 +461,13 @@ impl SpatialCanvas {
 ///
 /// Segments with a dead endpoint are skipped: a ray that has reached the ring is gone, and the front
 /// genuinely ends there rather than jumping across the gap.
+///
+/// Every pulse also gets a dot at its own emission event. Without it the nested loops inside r+ read
+/// as circles drawn around the hole, which is the wrong picture: each loop is one pulse and encloses
+/// Alice, because light is isotropic in Alice's own frame, and the flow then carries the whole loop
+/// inward. The dot sits on Alice's trail at the radius the pulse left her at, and the loop's outer
+/// edge never gets further from the hole than that dot, which is the statement the drawing exists to
+/// make.
 fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
     painter: &egui::Painter,
     metric: &KerrSchild,
@@ -470,12 +477,21 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
     // `derivatives` reads only (E, L) off the state and takes the radius as an argument, so one
     // instance of the raindrop congruence serves every ray of every pulse, as it does in the river.
     let raindrop = GeodesicState::new_infall(metric, 0.0, 12.0, 1.0, 0.0);
+    // Alice's colour, faint: present enough to read as a mark on her trail, quiet enough not to
+    // compete with the wavefront it anchors.
+    let alice = Theme::ALICE_COLOR;
+    let dot = Color32::from_rgba_unmultiplied(alice.r(), alice.g(), alice.b(), 150);
     for pulse in signal.pulses.iter() {
+        // A spent pulse is kept in the field so that stepping backwards can bring it back, but it
+        // has no front left to draw and no dot to anchor.
+        if !pulse.rays.iter().any(|ray| ray.alive()) {
+            continue;
+        }
         let ratios: Vec<f64> = pulse
             .rays
             .iter()
             .map(|ray| {
-                if !ray.alive {
+                if !ray.alive() {
                     return 1.0;
                 }
                 let (ut, ur, up) = raindrop.derivatives(metric, ray.r);
@@ -490,7 +506,7 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
         for i in 0..n {
             let j = (i + 1) % n;
             let (a, b) = (&pulse.rays[i], &pulse.rays[j]);
-            if !a.alive || !b.alive {
+            if !a.alive() || !b.alive() {
                 continue;
             }
             let p0 = to_screen(metric.cartesian_position(a.r, a.phi));
@@ -498,6 +514,9 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
             let colour = Theme::shift_colour(0.5 * (ratios[i] + ratios[j]), Theme::SHIFT_ALPHA);
             painter.line_segment([p0, p1], Stroke::new(1.2, colour));
         }
+        // The anchor: where on Alice's trail this loop was let go of.
+        let emitted = to_screen(metric.cartesian_position(pulse.emitted_r, pulse.emitted_phi));
+        painter.circle_filled(emitted, 2.0, dot);
     }
 }
 

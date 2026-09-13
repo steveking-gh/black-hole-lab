@@ -63,9 +63,14 @@ use crate::physics::tetrad::Tetrad;
 /// between two.
 pub const RAYS_PER_PULSE: usize = 72;
 
-/// Pulses kept alive at once. The oldest is dropped past this, which bounds both the drawing and
-/// the integration cost of a long run. A pulse whose every ray has died is dropped as soon as that
-/// happens, so this cap is only reached while the transmission is genuinely still in flight.
+/// Pulses kept at once. The oldest is dropped past this, which bounds both the drawing and the
+/// integration cost of a long run.
+///
+/// A pulse whose every ray has died is not retired early. A dead ray keeps its state at the death
+/// event and can be revived by `SignalField::step_back`, so dropping a spent pulse would put a hole
+/// in the field that stepping backwards could never fill. Dead rays cost nothing to integrate and
+/// nothing to draw, and this cap bounds the pile either way; a whole infall is some forty pulses,
+/// well under it.
 pub const MAX_PULSES: usize = 64;
 
 /// Alice's proper-time interval between pulses, in units of M. Her whole infall from r = 4.5M is
@@ -144,7 +149,9 @@ pub(crate) fn f_factor(metric: &KerrSchild, r: f64, v: &[f64; 3], u: &[f64; 3]) 
 /// tangent, plus the emission-frequency factor that turns it into a measurable shift.
 #[derive(Debug, Clone, Copy)]
 pub struct NullRay {
-    /// Coordinate time of the ray's current event.
+    /// The field clock this ray is carried on. For a live ray it is the coordinate time of the
+    /// ray's current event; a dead ray goes on being carried on it without moving, so that
+    /// `step_back` can ask each ray whether it was still alive at the time being stepped back to.
     pub t: f64,
     /// Radius of the ray's current event.
     pub r: f64,
@@ -158,8 +165,13 @@ pub struct NullRay {
     /// `f_factor` evaluated at the emission event against the emitter's 4-velocity. The frequency
     /// ratio anywhere later on the ray is the current factor divided by this one.
     pub f_emit: f64,
-    /// Cleared when the ray has left the field (r > `R_ESCAPE`) or reached the ring (r < R_STOP).
-    pub alive: bool,
+    /// Coordinate time at which the ray left the field (r > `R_ESCAPE`) or reached the ring
+    /// (r < R_STOP), or None while it is still running.
+    ///
+    /// The rest of the state is left standing at that death event rather than discarded, which is
+    /// what makes the death reversible: a `step_back` over an interval reaching past `death_t`
+    /// clears this field and integrates the stored state backwards out of the boundary again.
+    pub death_t: Option<f64>,
 }
 
 impl NullRay {
@@ -187,8 +199,14 @@ impl NullRay {
             dr_dt,
             dphi_dt,
             f_emit: f_factor(metric, r, &v, u_emitter),
-            alive: true,
+            death_t: None,
         }
+    }
+
+    /// Whether the ray is still running. A dead ray keeps its state at the death event, so this is
+    /// a question about the ray's clock rather than about whether its state means anything.
+    pub fn alive(&self) -> bool {
+        self.death_t.is_none()
     }
 
     /// The ray's direction v^mu = (1, dr/dt, dphi/dt).
@@ -253,14 +271,74 @@ impl NullRay {
     /// An outgoing ray closing on r- from above simply freezes, its dr/dt decaying to zero like
     /// exp(-kappa_- t). That is the correct behaviour and not a stall: the ray genuinely never
     /// crosses this branch of the Cauchy horizon at finite t.
+    ///
+    /// A dead ray is carried on the clock without moving. Its state stays at the death event and
+    /// `death_t` goes on naming that event, so the interval between them is exactly the time a
+    /// step backwards has to skip before it starts integrating.
     pub fn step(&mut self, metric: &KerrSchild, dt: f64) {
-        if !self.alive || dt <= 0.0 {
+        if dt <= 0.0 {
             return;
         }
+        let end_t = self.t + dt;
+        if self.alive() {
+            self.integrate(metric, dt);
+        }
+        // The clock runs on even if the ray died part way through the step: `death_t` records the
+        // event it died at, `t` records what time it is.
+        self.t = end_t;
+    }
 
+    /// Carry the ray back by dt of coordinate time, dt > 0 meaning "go back by dt".
+    ///
+    /// `ray_rhs` is a first-order system in (r, phi, v^r, v^phi) with no explicit dependence on t,
+    /// so it is time symmetric: the same substepped RK4 run with a negative step integrates the
+    /// same geodesic in the other direction rather than solving a different problem, and retraces
+    /// the forward path to the accuracy of the scheme. The retrace is not bit-exact, because the
+    /// substep count is read off the state a step starts from and that is the far end of the
+    /// interval on the way back; the tests measure what is left over.
+    ///
+    /// A death is reversible too. A ray that reached the ring or left the field inside the interval
+    /// being undone is put back on its feet at the death event, where its full state was kept, and
+    /// integrated backwards from there to the target time; the remainder of the interval is time it
+    /// spent already dead, over which it covered no distance. A ray that died before the target
+    /// time stays dead, with its clock wound back like everything else.
+    pub fn step_back(&mut self, metric: &KerrSchild, dt: f64) {
+        if dt <= 0.0 {
+            return;
+        }
+        let target_t = self.t - dt;
+        match self.death_t {
+            None => {
+                self.integrate(metric, -dt);
+                if self.alive() {
+                    self.t = target_t;
+                }
+            }
+            Some(death_t) if death_t > target_t => {
+                self.death_t = None;
+                self.t = death_t;
+                self.integrate(metric, target_t - death_t);
+                if self.alive() {
+                    self.t = target_t;
+                }
+            }
+            Some(_) => self.t = target_t,
+        }
+    }
+
+    /// The one integrator behind `step` and `step_back`: substepped RK4 of `ray_rhs` over a signed
+    /// interval, leaving (r, phi, v^r, v^phi, t) at the event that interval ends on.
+    ///
+    /// The substep caps are read off |dt|, so a backward step is subdivided exactly as finely as a
+    /// forward step of the same length. Only a forward step retires a ray at R_STOP or `R_ESCAPE`;
+    /// a ray running backwards is retracing ground it has already covered inside the field, and
+    /// applying the test there would only re-kill a ray at the boundary it is climbing away from.
+    fn integrate(&mut self, metric: &KerrSchild, dt: f64) {
+        let forward = dt > 0.0;
+        let t0 = self.t;
         let mut y: RayState = [self.r, self.phi, self.dr_dt, self.dphi_dt];
         let k1 = ray_rhs(metric, &y);
-        let n = substep_count(&y, &k1, dt);
+        let n = substep_count(&y, &k1, dt.abs());
         let h = dt / n as f64;
 
         let mut k = k1;
@@ -268,24 +346,31 @@ impl NullRay {
             if i > 0 {
                 k = ray_rhs(metric, &y);
             }
-            y = ray_rk4(metric, &y, &k, h);
-            if !y.iter().all(|c| c.is_finite()) {
-                self.alive = false;
+            let next = ray_rk4(metric, &y, &k, h);
+            let leaves = forward && (next[0] < R_STOP || next[0] > R_ESCAPE);
+            if leaves || !next.iter().all(|c| c.is_finite()) {
+                // The ray is left standing at the last event *inside* the field rather than at the
+                // first one outside it. That is what makes the death reversible: `ray_rhs` clamps
+                // r to R_STOP, so its value below the ring is not the equation the ray came in on,
+                // and a state kept out there could not be integrated back through. Kept one
+                // substep short, the state is one the forward pass actually visited, and the
+                // backward RK4 retraces from it with nothing but the scheme's own error.
+                self.commit(&y, t0 + (i as f64) * h);
+                self.death_t = Some(self.t);
                 return;
             }
-            if y[0] < R_STOP || y[0] > R_ESCAPE {
-                break;
-            }
+            y = next;
         }
+        self.commit(&y, t0 + dt);
+    }
 
-        self.t += dt;
+    /// Move the ray onto an integrated state at a given coordinate time.
+    fn commit(&mut self, y: &RayState, t: f64) {
+        self.t = t;
         self.r = y[0];
         self.phi = y[1];
         self.dr_dt = y[2];
         self.dphi_dt = y[3];
-        if self.r < R_STOP || self.r > R_ESCAPE {
-            self.alive = false;
-        }
     }
 }
 
@@ -546,7 +631,7 @@ impl Pulse {
         let mut sheets = Vec::new();
         for i in 0..n {
             let j = (i + 1) % n;
-            if !self.rays[i].alive || !self.rays[j].alive {
+            if !self.rays[i].alive() || !self.rays[j].alive() {
                 continue;
             }
             let (a, b) = (rel[i], if i + 1 < n { rel[i + 1] } else { closing });
@@ -614,6 +699,10 @@ fn measuring_four_velocity(metric: &KerrSchild, observer: &Observer) -> [f64; 3]
 pub struct SignalField {
     /// Live pulses, oldest first.
     pub pulses: Vec<Pulse>,
+    /// The field's own coordinate clock, advanced by `advance` and wound back by `step_back`. It
+    /// carries the time of the field as a whole, so that a step backwards does not have to
+    /// interrogate every pulse for it, and it is what an empty field falls back on.
+    pub t: f64,
     /// Serial number the next pulse will carry.
     next_index: usize,
     /// Alice's proper time at the last emission, or None before she has sent anything.
@@ -626,6 +715,7 @@ impl Default for SignalField {
     fn default() -> Self {
         Self {
             pulses: Vec::new(),
+            t: 0.0,
             next_index: 0,
             last_emit_tau: None,
             interval_tau: EMISSION_INTERVAL_TAU,
@@ -685,21 +775,74 @@ impl SignalField {
     }
 
     /// Advance every live ray and every principal-null track by dt of coordinate time.
+    ///
+    /// `NullRay::step` carries a dead ray forward on the clock without moving it, so every ray of
+    /// the field reads the same t as the field itself and `step_back` can ask each of them the one
+    /// question that matters: was this ray still alive dt ago?
     pub fn advance(&mut self, metric: &KerrSchild, dt: f64) {
         if dt <= 0.0 {
             return;
         }
+        self.t += dt;
         for pulse in self.pulses.iter_mut() {
             for ray in pulse.rays.iter_mut() {
-                if ray.alive {
-                    ray.step(metric, dt);
-                }
+                ray.step(metric, dt);
             }
             pulse.extend_track(metric, dt);
         }
-        // A pulse whose every ray has reached the ring or left the field has nothing left to draw
-        // or to sweep over anyone, so it goes rather than being carried to the cap.
-        self.pulses.retain(|p| p.rays.iter().any(|ray| ray.alive));
+    }
+
+    /// Carry the whole field back by dt of coordinate time, the way `Observer::step_back` carries a
+    /// worldline back, so that stepping the simulation backwards undoes the transmission instead of
+    /// deleting it.
+    ///
+    /// The target time is dt before the latest event in the field, and everything else follows from
+    /// it. A pulse emitted after the target was never sent and goes. Every ray of a pulse that
+    /// survives is integrated back to the target, reviving if it died inside the interval. A
+    /// principal-null track is truncated to the points it had reached by then, never below its own
+    /// emission point. A reception recorded after the target is unrecorded.
+    ///
+    /// The per-sheet bookkeeping of `Pulse::detect` is dropped rather than rewound, so the next
+    /// forward pass re-establishes which side of each sheet Bob stands on before it can call
+    /// anything a crossing. Rewinding a side is meaningless, and keeping the stale one would invent
+    /// a sign change out of the rewind itself.
+    ///
+    /// `last_emit_tau` falls back to the newest surviving pulse, so Alice resumes on the same
+    /// cadence as time runs forward again, and `next_index` is left alone: serial numbers are not
+    /// reused, and a re-emitted pulse is a new pulse even where it lands on an old emission event.
+    ///
+    /// One thing does not come back. A pulse already evicted by the `MAX_PULSES` cap is gone from
+    /// the field, and no amount of stepping backwards restores it; the reversible window is the
+    /// window the cap keeps.
+    pub fn step_back(&mut self, metric: &KerrSchild, dt: f64) {
+        if dt <= 0.0 {
+            return;
+        }
+        let latest = self
+            .pulses
+            .iter()
+            .flat_map(|p| p.rays.iter())
+            .map(|ray| ray.t)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let target_t = if latest.is_finite() { latest } else { self.t } - dt;
+
+        self.pulses.retain(|p| p.emitted_t <= target_t + 1e-12);
+        for pulse in self.pulses.iter_mut() {
+            for ray in pulse.rays.iter_mut() {
+                ray.step_back(metric, dt);
+            }
+            let keep = pulse
+                .pnd_track
+                .iter()
+                .take_while(|(t, _)| *t <= target_t + 1e-9)
+                .count()
+                .max(1);
+            pulse.pnd_track.truncate(keep);
+            pulse.receptions.retain(|rec| rec.t <= target_t);
+            pulse.sheets.clear();
+        }
+        self.last_emit_tau = self.pulses.iter().map(|p| p.emitted_tau).reduce(f64::max);
+        self.t = target_t;
     }
 
     /// Record every crossing of Bob's worldline by every live wavefront on this pass.
@@ -738,10 +881,13 @@ impl SignalField {
         self.pulses.iter().map(|p| p.receptions.len()).sum()
     }
 
-    /// Drop every pulse. A wavefront cannot be run backwards, so stepping the simulation back
-    /// clears the field and lets it be re-emitted as time advances again.
+    /// Drop every pulse and put the clock back to zero. This is the reset, not the rewind: it is
+    /// for re-dropping the observers and for changing the geometry under them, where the standing
+    /// wavefronts are null geodesics of a metric that no longer applies. Stepping the simulation
+    /// backwards uses `step_back` instead, which keeps the transmission.
     pub fn clear(&mut self) {
         self.pulses.clear();
+        self.t = 0.0;
         self.last_emit_tau = None;
     }
 }
@@ -769,7 +915,7 @@ mod tests {
             dr_dt,
             dphi_dt,
             f_emit: f_factor(metric, r, &v, &u),
-            alive: true,
+            death_t: None,
         }
     }
 
@@ -787,10 +933,10 @@ mod tests {
             let mut ray = NullRay::from_local_direction(&metric, 0.0, r0, 0.0, &tetrad, alpha, &u);
             let l_over_e0 = ray.l_over_e(&metric);
             let mut steps = 0;
-            while ray.alive && steps < 4000 {
+            while ray.alive() && steps < 4000 {
                 ray.step(&metric, 0.01);
                 steps += 1;
-                if !ray.alive {
+                if !ray.alive() {
                     break;
                 }
                 let n = metric.norm(ray.r, &ray.direction());
@@ -909,7 +1055,7 @@ mod tests {
                         crossed = true;
                         break;
                     }
-                    if !ray.alive {
+                    if !ray.alive() {
                         break;
                     }
                 }
@@ -1226,7 +1372,7 @@ mod tests {
         let mut profile: Vec<(f64, f64)> = rays
             .iter()
             .filter(|ray| {
-                ray.alive && ray.inner_horizon_energy(&metric) < 0.0 && ray.r < rm + 0.05
+                ray.alive() && ray.inner_horizon_energy(&metric) < 0.0 && ray.r < rm + 0.05
             })
             .map(|ray| (ray.r, ray.frequency_ratio(&metric, &raindrop(&metric, ray.r))))
             .collect();
@@ -1246,6 +1392,240 @@ mod tests {
         assert!(
             profile.last().unwrap().1 > 100.0 * profile[0].1,
             "and the profile must span orders of magnitude: {profile:?}"
+        );
+    }
+
+    /// The largest component-wise gap between two ray states, in the four numbers the integration
+    /// actually carries.
+    fn state_gap(a: &NullRay, b: &NullRay) -> f64 {
+        [
+            (a.r - b.r).abs(),
+            (a.phi - b.phi).abs(),
+            (a.dr_dt - b.dr_dt).abs(),
+            (a.dphi_dt - b.dphi_dt).abs(),
+        ]
+        .into_iter()
+        .fold(0.0f64, f64::max)
+    }
+
+    #[test]
+    fn test_ray_step_back_retraces_the_forward_path() {
+        // `ray_rhs` is a first-order autonomous system and it is time symmetric, so RK4 with a
+        // negative step integrates the same null geodesic in the other direction rather than some
+        // other curve. What is left over is the scheme's own asymmetry: the substep count is read
+        // off the state a step begins at, and on the way back that is the far end of the interval,
+        // so the two directions do not subdivide identically.
+        //
+        // Measured over a whole light cone at r = 3 and again in Region II at r = 1, the eight
+        // directions split into two groups. The ones that stay out in the open come back to
+        // between 5e-16 and 2e-9 of where they started, which is round-off. The ones that run into
+        // the stiff last decade of radius above the ring, some of them reaching it and being
+        // revived on the way out, come back to between 7e-8 and 8.4e-6: a substep of a given size
+        // is simply not the same instrument in both directions where the connection is that steep.
+        // 1e-5 is the tolerance that covers the worst of those and 1e-6 is not, the worst measured
+        // being 8.4e-6 at alpha = 270 degrees from r = 3.
+        let metric = KerrSchild::new(1.0, 0.65);
+        let two_pi = 2.0 * std::f64::consts::PI;
+        for &(r0, span) in &[(3.0f64, 4.0f64), (1.0, 1.5)] {
+            let u = raindrop(&metric, r0);
+            let tetrad = Tetrad::from_four_velocity(&metric, r0, &u);
+            let mut worst = 0.0f64;
+            for i in 0..8 {
+                let alpha = two_pi * (i as f64) / 8.0;
+                let start = NullRay::from_local_direction(&metric, 0.0, r0, 0.0, &tetrad, alpha, &u);
+                let mut ray = start;
+                let n = (span / 0.02).round() as usize;
+                for _ in 0..n {
+                    ray.step(&metric, 0.02);
+                }
+                for _ in 0..n {
+                    ray.step_back(&metric, 0.02);
+                }
+                assert!(ray.alive(), "the retrace must bring the ray back to life: {ray:?}");
+                assert!(
+                    (ray.t - start.t).abs() < 1e-12,
+                    "and back to the time it started at: t = {}",
+                    ray.t
+                );
+                let err = state_gap(&ray, &start);
+                worst = worst.max(err);
+                println!("r0={r0} alpha={alpha}: retrace error {err:e}");
+                assert!(
+                    err < 1e-5,
+                    "r0={r0} alpha={alpha}: retrace error {err}, {ray:?} vs {start:?}"
+                );
+            }
+            println!("r0 = {r0}, span = {span} M: worst retrace error {worst:e}");
+        }
+    }
+
+    #[test]
+    fn test_dead_rays_revive_on_step_back() {
+        // Death is a state, not a deletion. A ray aimed straight at the ring from r = 0.5 reaches
+        // R_STOP well inside 1 M and stops there with its full state kept; two M later it is still
+        // exactly where it stopped, and stepping the two M back walks it away from the boundary and
+        // all the way home along the geodesic it came in on. Measured error on the round trip:
+        // 3.3e-7 in the worst of the four carried numbers.
+        let metric = KerrSchild::new(1.0, 0.65);
+        let r0 = 0.5;
+        let u = raindrop(&metric, r0);
+        let tetrad = Tetrad::from_four_velocity(&metric, r0, &u);
+        let start =
+            NullRay::from_local_direction(&metric, 0.0, r0, 0.0, &tetrad, std::f64::consts::PI, &u);
+
+        let mut ray = start;
+        for _ in 0..100 {
+            ray.step(&metric, 0.02);
+        }
+        let death_t = ray.death_t.expect("the inward ray must reach the ring");
+        assert!(death_t < 1.0, "and reach it inside 1 M: death_t = {death_t}");
+        // The state kept is the last event inside the field, one substep short of the boundary,
+        // which is why the ray is left just outside R_STOP rather than just inside it.
+        assert!(
+            (R_STOP..R_STOP + MAX_DR_PER_SUBSTEP).contains(&ray.r),
+            "with its state kept at the ring: r = {}",
+            ray.r
+        );
+        assert!(
+            (ray.t - 2.0).abs() < 1e-12,
+            "while its clock runs on with the field: t = {}",
+            ray.t
+        );
+
+        for _ in 0..100 {
+            ray.step_back(&metric, 0.02);
+        }
+        assert!(ray.alive(), "stepping back past the death event must revive the ray");
+        let err = state_gap(&ray, &start);
+        println!("revived ray: worst component error {err:e}");
+        assert!(err < 1e-5, "revival error {err}: {ray:?} vs {start:?}");
+    }
+
+    /// The transmission of `run_transmission` on a plain fixed step, run to a given coordinate
+    /// time. A fixed step is what makes two runs of different length share one history exactly, so
+    /// a field run to 12 and wound back to 9 can be compared with a field run to 9.
+    fn run_field_to(metric: &KerrSchild, until: f64, dt: f64) -> SignalField {
+        let params = WorldlineParams::default();
+        let mut alice = Observer::new_with_phi(metric, "Alice", 0.0, 4.5, 0.0, 0.25, params);
+        let mut bob = Observer::new_with_phi(metric, "Bob", 0.0, 4.5, 8.0, 0.0, params);
+        let mut field = SignalField::default();
+        let steps = (until / dt).round() as usize;
+        for i in 0..steps {
+            let t = ((i + 1) as f64) * dt;
+            alice.step(metric, t, dt);
+            bob.step(metric, t, dt);
+            field.advance(metric, dt);
+            field.emit_if_due(metric, &alice);
+            field.detect_receptions(metric, &bob);
+        }
+        field
+    }
+
+    #[test]
+    fn test_field_step_back_removes_later_pulses_and_receptions() {
+        // The whole field is reversible, not just one ray. A transmission run to t = 12 and then
+        // wound back 3 M has to become the transmission run to t = 9: the pulses Alice sent in
+        // those three M were never sent, the crossings Bob recorded in them never happened, and
+        // every ray of every surviving pulse is back where it stood at t = 9.
+        let metric = KerrSchild::new(1.0, 0.65);
+        let dt = 0.01;
+        let mut wound = run_field_to(&metric, 12.0, dt);
+        let pulses_at_12 = wound.pulses.len();
+        let receptions_at_12 = wound.received_count();
+        assert!(pulses_at_12 > 10, "the run should have a transmission in flight: {pulses_at_12}");
+        assert!(receptions_at_12 > 0, "and Bob should have heard some of it");
+
+        for _ in 0..300 {
+            wound.step_back(&metric, dt);
+        }
+        assert!(
+            (wound.t - 9.0).abs() < 1e-9,
+            "the field's clock lands on the target: t = {}",
+            wound.t
+        );
+        println!(
+            "pulses {} -> {}, receptions {} -> {}",
+            pulses_at_12,
+            wound.pulses.len(),
+            receptions_at_12,
+            wound.received_count()
+        );
+        assert!(
+            wound.received_count() < receptions_at_12,
+            "the crossings Bob made in those three M must be unrecorded: {} of {receptions_at_12}",
+            wound.received_count()
+        );
+        for pulse in wound.pulses.iter() {
+            assert!(
+                pulse.emitted_t <= 9.0 + 1e-9,
+                "a pulse emitted at t = {} survived a rewind to t = 9",
+                pulse.emitted_t
+            );
+            for reception in pulse.receptions.iter() {
+                assert!(
+                    reception.t <= 9.0 + 1e-9,
+                    "a crossing recorded at t = {} survived a rewind to t = 9",
+                    reception.t
+                );
+            }
+        }
+        assert_eq!(
+            wound.last_emit_tau,
+            wound.pulses.iter().map(|p| p.emitted_tau).reduce(f64::max),
+            "Alice resumes from the newest pulse she has left"
+        );
+
+        // The exact statement: what the rewind leaves is what running forward to t = 9 builds.
+        let fresh = run_field_to(&metric, 9.0, dt);
+        let mut compared = 0;
+        let mut worst = 0.0f64;
+        for pulse in wound.pulses.iter().filter(|p| p.emitted_t < 9.0 - 1e-9) {
+            let Some(same) = fresh.pulses.iter().find(|q| q.index == pulse.index) else {
+                panic!("pulse {} is missing from the forward run", pulse.index);
+            };
+            assert_eq!(pulse.rays.len(), same.rays.len());
+            for (a, b) in pulse.rays.iter().zip(same.rays.iter()) {
+                assert_eq!(
+                    a.alive(),
+                    b.alive(),
+                    "pulse {}: a rewound ray and a freshly run one disagree about being alive",
+                    pulse.index
+                );
+                if a.alive() {
+                    let err = state_gap(a, b);
+                    worst = worst.max(err);
+                    assert!(err < 1e-4, "pulse {}: ray state gap {err}", pulse.index);
+                }
+                compared += 1;
+            }
+        }
+        assert!(compared > 100, "the comparison should cover most of the field: {compared} rays");
+        println!("rewound vs forward: {compared} rays, worst state gap {worst:e}");
+
+        // Alice has reached the ring and stopped broadcasting well before t = 9, so the window
+        // above un-sends no pulse; a window inside her broadcast does. Wound from t = 4 back to
+        // t = 1, the field keeps exactly the pulses she had sent by then and drops the rest.
+        let mut early = run_field_to(&metric, 4.0, dt);
+        let sent_by_4 = early.pulses.len();
+        for _ in 0..300 {
+            early.step_back(&metric, dt);
+        }
+        assert!(
+            early.pulses.len() < sent_by_4,
+            "three M of emissions must be un-sent: {} of {sent_by_4} left",
+            early.pulses.len()
+        );
+        assert!(!early.pulses.is_empty(), "and everything sent before t = 1 must stay");
+        for pulse in early.pulses.iter() {
+            assert!(
+                pulse.emitted_t <= 1.0 + 1e-9,
+                "a pulse emitted at t = {} survived a rewind to t = 1",
+                pulse.emitted_t
+            );
+        }
+        assert_eq!(
+            early.last_emit_tau,
+            early.pulses.iter().map(|p| p.emitted_tau).reduce(f64::max)
         );
     }
 
