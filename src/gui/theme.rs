@@ -35,6 +35,13 @@ impl Theme {
     pub const BOB_COLOR: Color32 = Color32::from_rgb(0, 255, 200); // Bright Mint / Cyan
     pub const ALICE_COLOR: Color32 = Color32::from_rgb(255, 160, 40); // Amber Orange
 
+    /// Stroke-width scale for the *second* transmission drawn on a canvas, Bob's, against the
+    /// first, Alice's. Both fields are coloured by the shift their rays carry, which is the physics
+    /// and is not available as an identifying mark, so what separates them is weight: Bob's fronts
+    /// are drawn at half the stroke width of Alice's, and his emission dots in `BOB_COLOR` where
+    /// hers are in `ALICE_COLOR`.
+    pub const SECONDARY_FRONT_WIDTH: f32 = 0.5;
+
     // Light Cones, keyed to the observer rather than to the diagram, so a cone keeps its
     // identity in every reference frame. Fills sit at roughly 90% transparency; the edges use
     // the same hue at an alpha that still reads over the region shading.

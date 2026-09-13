@@ -1,11 +1,11 @@
 use crate::gui::cauchy_effects::CauchyEffects;
-use crate::gui::controls::{AppControls, ReferenceFrame, StepMode};
+use crate::gui::controls::{AppControls, ReferenceFrame, SignalViews, StepMode};
 use crate::gui::spacetime_canvas::SpacetimeCanvas;
 use crate::gui::spatial_canvas::SpatialCanvas;
 use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::{Observer, WorldlineParams};
-use crate::physics::wavefront::SignalField;
+use crate::physics::wavefront::{SignalField, SignalPair};
 use std::time::Instant;
 
 pub struct SpacetimeApp {
@@ -14,9 +14,12 @@ pub struct SpacetimeApp {
     alice: Option<Observer>,
     spacetime_canvas: SpacetimeCanvas,
     spatial_canvas: SpatialCanvas,
-    /// Alice's signal pulses. They live here rather than in a canvas because they are advanced
-    /// on the simulation clock and read by both diagrams and the HUD.
+    /// Alice's signal pulses, which Bob receives. They live here rather than in a canvas because
+    /// they are advanced on the simulation clock and read by both diagrams and the HUD.
     signal: SignalField,
+    /// Bob's own transmission, which Alice receives. It is the same object driven the other way
+    /// round, and the two are advanced, rewound and cleared together through `SignalPair`.
+    bob_signal: SignalField,
     controls: AppControls,
     current_time: f64,
     last_update: Instant,
@@ -44,6 +47,7 @@ impl Default for SpacetimeApp {
             spacetime_canvas: SpacetimeCanvas::default(),
             spatial_canvas: SpatialCanvas::default(),
             signal: SignalField::default(),
+            bob_signal: SignalField::default(),
             controls: AppControls::default(),
             current_time: 0.0,
             last_update: Instant::now(),
@@ -52,18 +56,15 @@ impl Default for SpacetimeApp {
 }
 
 impl SpacetimeApp {
-    /// Carry Alice's signal forward by dt of the simulation clock: step every live ray and every
-    /// principal-null track, let Alice emit if her own proper time says a pulse is due, then look
-    /// for a front that has just swept over Bob. The order matters. Advancing first and emitting
-    /// second keeps a fresh pulse at Alice's current event instead of one step behind it, and
-    /// detecting last means a pulse emitted this frame already has a recorded side for Bob before
-    /// the next frame can move it.
+    /// Carry both transmissions forward by dt of the simulation clock. `SignalPair::advance` owns
+    /// the order - carry the light, then emit, then listen - and the panel's Step Fwd button goes
+    /// through the same call, so the two paths cannot drift apart.
     fn advance_signal(&mut self, dt: f64) {
-        self.signal.advance(&self.metric, dt);
-        if let Some(al) = &self.alice {
-            self.signal.emit_if_due(&self.metric, al);
+        SignalPair {
+            alice: &mut self.signal,
+            bob: &mut self.bob_signal,
         }
-        self.signal.detect_receptions(&self.metric, &self.bob);
+        .advance(&self.metric, dt, self.alice.as_ref(), &self.bob);
     }
 
     /// What one press of an arrow key is worth in coordinate time: the Δt slider in Time mode, and
@@ -93,7 +94,7 @@ impl SpacetimeApp {
 
     /// One step back by hand, undoing a step forward rather than approximating one.
     ///
-    /// The observers and Alice's signal are both integrated backwards: `SignalField::step_back`
+    /// The observers and both transmissions are integrated backwards: `SignalField::step_back`
     /// runs every ray back along the null geodesic it came in on, revives the ones that reached the
     /// ring inside the interval, and un-sends the pulses emitted inside it.
     ///
@@ -107,7 +108,11 @@ impl SpacetimeApp {
         let back = step.min(self.current_time);
         self.current_time -= back;
         self.spatial_canvas.river.advance(&self.metric, step);
-        self.signal.step_back(&self.metric, back);
+        SignalPair {
+            alice: &mut self.signal,
+            bob: &mut self.bob_signal,
+        }
+        .step_back(&self.metric, back);
         self.bob.step_back(&self.metric, step);
         if let Some(ref mut al) = self.alice {
             al.step_back(&self.metric, step);
@@ -245,6 +250,7 @@ impl eframe::App for SpacetimeApp {
                 &self.bob,
                 &self.alice,
                 &self.signal,
+                &self.bob_signal,
                 self.controls.delta_t_delay,
                 self.current_time,
                 self.controls.use_km,
@@ -259,7 +265,10 @@ impl eframe::App for SpacetimeApp {
                     &mut self.metric,
                     &mut self.bob,
                     &mut self.alice,
-                    &mut self.signal,
+                    SignalPair {
+                        alice: &mut self.signal,
+                        bob: &mut self.bob_signal,
+                    },
                     &mut self.current_time,
                 );
             });
@@ -301,8 +310,12 @@ impl eframe::App for SpacetimeApp {
                             self.controls.use_km,
                             self.controls.frame_of_ref,
                             self.controls.font_scale,
-                            self.controls.show_signal,
-                            &self.signal,
+                            SignalViews {
+                                alice: &self.signal,
+                                show_alice: self.controls.show_signal,
+                                bob: &self.bob_signal,
+                                show_bob: self.controls.show_bob_signal,
+                            },
                             self.controls.show_outgoing_rays,
                         );
                     },
@@ -318,7 +331,7 @@ impl eframe::App for SpacetimeApp {
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("EQUATORIAL PLANE (x, y)").strong().color(Theme::HORIZON_CAUCHY));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(egui::RichText::new("Top-Down View & Null Fan").small().color(Theme::TEXT_MUTED));
+                                ui.label(egui::RichText::new("Top-Down View").small().color(Theme::TEXT_MUTED));
                             });
                         });
                         self.spatial_canvas.render(
@@ -328,8 +341,12 @@ impl eframe::App for SpacetimeApp {
                             &self.alice,
                             self.controls.show_river,
                             self.controls.show_streamlines,
-                            self.controls.show_signal,
-                            &self.signal,
+                            SignalViews {
+                                alice: &self.signal,
+                                show_alice: self.controls.show_signal,
+                                bob: &self.bob_signal,
+                                show_bob: self.controls.show_bob_signal,
+                            },
                             canvas_height,
                             self.controls.use_km,
                             self.controls.frame_of_ref,
@@ -480,6 +497,7 @@ mod tests {
         app.controls.delta_t_delay = 4.0;
         app.current_time = 0.0;
         app.signal.clear();
+        app.bob_signal.clear();
         // Test frames arrive as fast as the harness can render them, so the frame clock sits at its
         // floor of 1/240 s; the playback rate is what buys enough simulation time to reach Bob's
         // crossing without running thousands of frames.
@@ -579,10 +597,12 @@ mod tests {
             al.reset_with_phi(&app.metric, 0.0, 4.5, 0.25, params);
         }
         app.signal.clear();
+        app.bob_signal.clear();
         egui::__run_test_ui(|ui| {
             let mut frame = eframe::Frame::_new_kittest();
             app.ui(ui, &mut frame);
             app.controls.show_signal = false;
+            app.controls.show_bob_signal = false;
             app.controls.show_outgoing_rays = false;
             app.ui(ui, &mut frame);
         });
@@ -759,5 +779,212 @@ mod tests {
                 app.ui(ui, &mut frame);
             }
         });
+    }
+
+    #[test]
+    fn test_bobs_signal_reaches_alice_and_rewinds_through_the_app_loop() {
+        // Bob's transmission through the app's own wiring, in the layout Drop Observers builds and
+        // at the default delay: Alice released from r = 4.5M at t = 0, Bob hovering at the same
+        // radius until t = 8. He transmits throughout the wait - a static observer with a clock and
+        // a frame - and this walks the whole loop over the hover: `SignalPair` advances his field
+        // on the simulation clock, his proper time paces the emissions at sqrt(-g_tt) = 0.745 of
+        // coordinate time, and Alice's worldline collects the arrivals.
+        //
+        // The clock is driven by `step_forward`, the app's own hand-stepping path and the one the
+        // arrow keys use, rather than by played frames: a played frame's step is the wall-clock
+        // frame time, which in a test harness is whatever the machine happens to give and is far
+        // too coarse and too irregular to resolve a front sweeping over a worldline. One rendered
+        // frame at the end walks both canvases and the HUD over the state that produced.
+        //
+        // Then the rewind, which for a hovering emitter has one more thing to undo than for a
+        // falling one: his proper time. `Observer::step_back` unwinds a hover analytically, so the
+        // cadence comes back exactly where it was and running forward again re-sends the same
+        // pulses at the same events - which is the last thing this test measures.
+        let mut app = SpacetimeApp::default();
+        app.controls.is_playing = false;
+        app.controls.step_size = 0.02;
+        app.controls.delta_t_delay = 8.0;
+        let params = WorldlineParams::default();
+        app.alice = Some(Observer::new_with_phi(&app.metric, "Alice", 0.0, 4.5, 0.0, 0.25, params));
+        app.bob = Observer::new_with_phi(&app.metric, "Bob", 0.0, 4.5, 8.0, 0.0, params);
+        app.current_time = 0.0;
+        app.signal.clear();
+        app.bob_signal.clear();
+
+        let step = 0.02;
+        for _ in 0..150 {
+            app.step_forward(step);
+        }
+        egui::__run_test_ui(|ui| {
+            let mut frame = eframe::Frame::_new_kittest();
+            app.ui(ui, &mut frame);
+        });
+
+        assert!(!app.bob.is_active, "Bob is still hovering at t = {}", app.current_time);
+        assert!((app.bob.r - 4.5).abs() < 1e-12, "and has not moved: r = {}", app.bob.r);
+        let heard = app.bob_signal.received_count();
+        let emitted: Vec<(usize, f64, f64)> = app
+            .bob_signal
+            .pulses
+            .iter()
+            .map(|p| (p.index, p.emitted_t, p.emitted_tau))
+            .collect();
+        println!(
+            "app loop to t = {:.2}: the hovering Bob has sent {} pulses, Alice has heard {heard}",
+            app.current_time,
+            emitted.len()
+        );
+        assert!(heard >= 3, "Alice should have caught several of his hover pulses: {heard}");
+        assert!(emitted.len() >= 10, "and he should be transmitting steadily: {}", emitted.len());
+        assert!(
+            emitted.iter().all(|&(_, t, _)| t <= app.current_time + 1e-9),
+            "no pulse can be dated after the clock: {emitted:?}"
+        );
+        assert!(
+            (app.bob_signal.t - app.current_time).abs() < 1e-9,
+            "Bob's field rides the simulation clock: {} vs {}",
+            app.bob_signal.t,
+            app.current_time
+        );
+        let last_arrival = app.bob_signal.last_reception().expect("just asserted").t;
+        let forward_time = app.current_time;
+
+        // A full M of coordinate time back, one arrow press at a time: past the last arrival, and
+        // past several of his emissions.
+        let back_steps = 50;
+        for _ in 0..back_steps {
+            app.step_backward(step);
+        }
+        assert!(
+            app.current_time < last_arrival,
+            "the rewind must go back past the arrival at t = {last_arrival}: now t = {}",
+            app.current_time
+        );
+        assert!(!app.bob.is_active && (app.bob.r - 4.5).abs() < 1e-12, "he is still hovering");
+        assert!(
+            (app.bob.t - app.current_time).abs() < 1e-9,
+            "and his own clock came back with the simulation's: {} vs {}",
+            app.bob.t,
+            app.current_time
+        );
+
+        assert!(
+            !app.bob_signal.pulses.is_empty(),
+            "stepping back must rewind Bob's signal, not delete it"
+        );
+        assert!(
+            (app.bob_signal.t - app.current_time).abs() < 1e-9,
+            "and must keep its clock on the simulation clock: {} vs {}",
+            app.bob_signal.t,
+            app.current_time
+        );
+        assert!(
+            app.bob_signal.received_count() < heard,
+            "the arrivals inside the rewound interval must be unrecorded: {} of {heard}",
+            app.bob_signal.received_count()
+        );
+        assert!(
+            app.bob_signal.pulses.len() + 5 <= emitted.len(),
+            "and the pulses emitted inside it un-sent: {} of {}",
+            app.bob_signal.pulses.len(),
+            emitted.len()
+        );
+        for pulse in app.bob_signal.pulses.iter() {
+            assert!(
+                pulse.emitted_t <= app.current_time + 1e-9,
+                "a pulse emitted at t = {} is still in a field wound back to t = {}",
+                pulse.emitted_t,
+                app.current_time
+            );
+            for reception in pulse.receptions.iter() {
+                assert!(
+                    reception.t <= app.current_time + 1e-9,
+                    "an arrival recorded at t = {} survived a rewind to t = {}",
+                    reception.t,
+                    app.current_time
+                );
+            }
+        }
+        for reception in app.bob_signal.receptions() {
+            assert!(
+                reception.t <= app.current_time + 1e-9,
+                "the field's own record of an arrival at t = {} survived the rewind",
+                reception.t
+            );
+        }
+
+        // Forward again over the same interval: the same pulses, at the same events. This is what
+        // the analytic hover rewind buys - a hovering emitter's proper time is put back exactly, so
+        // the cadence does not slip and the transmission is not re-cut at different events.
+        for _ in 0..back_steps {
+            app.step_forward(step);
+        }
+        assert!(
+            (app.current_time - forward_time).abs() < 1e-9,
+            "back to the same clock: {} vs {forward_time}",
+            app.current_time
+        );
+        let again: Vec<(usize, f64, f64)> = app
+            .bob_signal
+            .pulses
+            .iter()
+            .map(|p| (p.index, p.emitted_t, p.emitted_tau))
+            .collect();
+        assert_eq!(
+            again.len(),
+            emitted.len(),
+            "the second pass must re-send the same number of pulses: {again:?} vs {emitted:?}"
+        );
+        for (second, first) in again.iter().zip(emitted.iter()) {
+            assert!(
+                (second.1 - first.1).abs() < 1e-9 && (second.2 - first.2).abs() < 1e-9,
+                "re-emitted at a different event: {second:?} vs {first:?}"
+            );
+        }
+        println!(
+            "round trip over {back_steps} steps: {} pulses re-sent at the same events",
+            again.len()
+        );
+    }
+
+    #[test]
+    fn test_bobs_transmission_ends_when_alices_worldline_does() {
+        // The feature's own statement, through the app loop: once Alice has reached the ring there
+        // is a last pulse of Bob's that reached her, and everything he sends after it is sent to
+        // nobody. The HUD and both canvases read exactly these two calls, and the frame drawn at
+        // the end is the state that puts the ring on his worldline.
+        let mut app = SpacetimeApp::default();
+        app.controls.is_playing = false;
+        let mut ended_at = None;
+        for _ in 0..400 {
+            app.step_forward(0.02);
+            if ended_at.is_none() && app.alice.as_ref().is_some_and(|al| al.has_ended()) {
+                ended_at = Some(app.current_time);
+            }
+        }
+        egui::__run_test_ui(|ui| {
+            let mut frame = eframe::Frame::_new_kittest();
+            app.ui(ui, &mut frame);
+        });
+
+        let alice = app.alice.as_ref().expect("the dual-observer default gives us Alice");
+        assert!(alice.has_ended(), "the run must reach the end of Alice's worldline: r = {}", alice.r);
+        let last = app
+            .bob_signal
+            .last_delivered_pulse()
+            .expect("Bob starts below her and his light climbs to her from t = 0");
+        let never = app.bob_signal.pulses_after(last.pulse_index);
+        println!(
+            "app loop: Alice ends at t = {:?}; last delivered #{} at t = {:.3}, r = {:.4},              Bob's tau = {:.3}; {never} later pulses never arrive",
+            ended_at, last.pulse_index, last.emitted_t, last.emitted_r, last.emitted_tau
+        );
+        assert!(never >= 1, "Bob goes on transmitting after the last delivery: {never}");
+        assert!(
+            last.emitted_t < app.current_time,
+            "the boundary event is in the past of the current frame"
+        );
+        for pulse in app.bob_signal.pulses.iter().filter(|p| p.index > last.pulse_index) {
+            assert!(pulse.receptions.is_empty(), "pulse {} cannot have arrived", pulse.index);
+        }
     }
 }

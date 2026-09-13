@@ -39,6 +39,7 @@ impl CauchyEffects {
         bob: &Observer,
         alice: &Option<Observer>,
         signal: &SignalField,
+        bob_signal: &SignalField,
         delta_t: f64,
         current_time: f64,
         use_km: bool,
@@ -149,6 +150,75 @@ impl CauchyEffects {
                                     "Alice → Bob: no pulse received yet, scale e^(κ₋Δt) = {}",
                                     scale
                                 ));
+                            }
+                        }
+                    });
+
+                    // The return path, and it is not the mirror image. Bob transmits from t = 0,
+                    // first as the static observer he is while he hovers - his proper time runs
+                    // there at sqrt(-g_tt) dt, which is a perfectly good clock to pace a
+                    // transmission by - and then in free fall once he is released. Where he trails
+                    // her, which is the layout Drop Observers builds, his pulses have to chase her
+                    // inward and
+                    // the only rays that catch her are the ingoing ones, whose shift is finite on
+                    // the branch of r₋ she crosses; the rays of his that pile onto r₋ settle there
+                    // behind her, after she has already crossed, so she never meets a stack and
+                    // there is no e^(κ₋Δt) scale to quote on this line. Where he is the deeper of the
+                    // two, which is how the app starts, his light climbs to her instead and the
+                    // shift starts as a small blueshift and turns over into a redshift as he falls
+                    // away below her. Either way the transmission has an end: once her worldline
+                    // has finished - on the ring, or frozen on r₋ - the last pulse of his that
+                    // arrived marks the event on *his* worldline past which nothing he sends can
+                    // ever reach her.
+                    ui.horizontal(|ui| {
+                        let received = bob_signal.received_count();
+                        match bob_signal.last_reception() {
+                            Some(r) => {
+                                ui.label(format!(
+                                    "Bob → Alice: {} receptions, last ν_A/ν_B = ",
+                                    received
+                                ));
+                                ui.label(
+                                    egui::RichText::new(fmt_shift(r.ratio))
+                                        .strong()
+                                        .color(Theme::shift_colour(r.ratio, 255)),
+                                );
+                            }
+                            None => {
+                                ui.label("Bob → Alice: no pulse received yet".to_string());
+                            }
+                        }
+                        // Before her worldline ends nothing is said about reachability: a pulse
+                        // still in flight may yet arrive, and the simulation is the only criterion.
+                        if alice.as_ref().is_some_and(|al| al.has_ended()) {
+                            match bob_signal.last_delivered_pulse() {
+                                Some(pulse) => {
+                                    let never = bob_signal.pulses_after(pulse.pulse_index);
+                                    let r_str = if use_km {
+                                        metric.format_km(metric.r_to_km(pulse.emitted_r))
+                                    } else {
+                                        format!("{:.3}M", pulse.emitted_r)
+                                    };
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "· last pulse to reach her: #{} sent at t = {:.2}M, r = {} (Bob's τ = {:.2}M); {} later pulses never arrive",
+                                            pulse.pulse_index,
+                                            pulse.emitted_t,
+                                            r_str,
+                                            pulse.emitted_tau,
+                                            never
+                                        ))
+                                        .color(Theme::BOB_COLOR),
+                                    );
+                                }
+                                None => {
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "· her worldline has ended and nothing of his ever reached her",
+                                        )
+                                        .color(Theme::BOB_COLOR),
+                                    );
+                                }
                             }
                         }
                     });

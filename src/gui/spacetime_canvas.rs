@@ -1,4 +1,4 @@
-use crate::gui::controls::ReferenceFrame;
+use crate::gui::controls::{ReferenceFrame, SignalViews};
 use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::local_frame::{LocalFrame, SurfaceCharacter};
@@ -362,8 +362,7 @@ impl SpacetimeCanvas {
         use_km: bool,
         frame_of_ref: ReferenceFrame,
         font_scale: f32,
-        show_signal: bool,
-        signal: &SignalField,
+        signals: SignalViews<'_>,
         show_outgoing_rays: bool,
     ) {
         let total_size = egui::Vec2::new(ui.available_width(), canvas_height);
@@ -422,8 +421,7 @@ impl SpacetimeCanvas {
                     current_time,
                     use_km,
                     font_scale,
-                    show_signal,
-                    signal,
+                    signals,
                     show_outgoing_rays,
                 );
             }
@@ -581,8 +579,7 @@ impl SpacetimeCanvas {
         current_time: f64,
         use_km: bool,
         font_scale: f32,
-        show_signal: bool,
-        signal: &SignalField,
+        signals: SignalViews<'_>,
         show_outgoing_rays: bool,
     ) {
         // Done before the screen-mapping closures below take their borrow of self.
@@ -929,13 +926,14 @@ impl SpacetimeCanvas {
             }
         }
 
-        // Alice's signal pulses. A wavefront is a fan of azimuths, which a (t, r) diagram cannot
+        // The two transmissions. A wavefront is a fan of azimuths, which a (t, r) diagram cannot
         // show, so each pulse is drawn as its outgoing principal null ray from the emission event:
         // the exact null geodesic that represents where the front's leading edge stands in radius.
-        if show_signal {
-            let a = Theme::ALICE_COLOR;
-            let faint = Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), 110);
-            for pulse in signal.pulses.iter() {
+        // Each field is drawn in its own emitter's colour, faint, so the tracks read as light in
+        // flight rather than as worldlines.
+        let draw_tracks = |field: &SignalField, colour: Color32| {
+            let faint = Color32::from_rgba_unmultiplied(colour.r(), colour.g(), colour.b(), 110);
+            for pulse in field.pulses.iter() {
                 let points: Vec<Pos2> = pulse
                     .pnd_track
                     .iter()
@@ -946,6 +944,12 @@ impl SpacetimeCanvas {
                     painter.add(PathShape::line(points, Stroke::new(1.0, faint)));
                 }
             }
+        };
+        if signals.show_bob {
+            draw_tracks(signals.bob, Theme::BOB_COLOR);
+        }
+        if signals.show_alice {
+            draw_tracks(signals.alice, Theme::ALICE_COLOR);
         }
 
         // Alice Worldline & Marker. The info boxes are registered last, below, so that a drag on
@@ -984,19 +988,42 @@ impl SpacetimeCanvas {
             painter.add(PathShape::line(points, Stroke::new(2.5, Theme::BOB_COLOR)));
         }
 
-        // Every arrival Bob has recorded, marked on his worldline at the event of reception and
-        // coloured by the shift he measured: red where Alice's signal arrives redshifted, violet
-        // where crossing the stack on r- has multiplied its frequency a thousandfold. A pulse
-        // appears more than once here, since its crossing sheet sweeps past Bob well above r- and
-        // its frozen sheet waits on r- for him to fall through it.
-        if show_signal {
-            for reception in signal.receptions() {
+        // Every arrival either observer has recorded, marked on the receiver's worldline at the
+        // event of reception and coloured by the shift they measured: red where the signal arrives
+        // redshifted, violet where crossing the stack on r- has multiplied its frequency a
+        // thousandfold. One of Alice's pulses appears more than once on Bob's worldline, since its
+        // crossing sheet sweeps past him well above r- and its frozen sheet waits on r- for him to
+        // fall through it. Bob's pulses reach Alice once each and then stop reaching her at all.
+        let draw_receptions = |field: &SignalField| {
+            for reception in field.receptions() {
                 if reception.t < t_min || reception.t > t_max {
                     continue;
                 }
                 let at = Pos2::new(to_screen_x(reception.r), to_screen_y(reception.t));
                 if rect.contains(at) {
                     painter.circle_filled(at, 3.0, Theme::shift_colour(reception.ratio, 255));
+                }
+            }
+        };
+        if signals.show_alice {
+            draw_receptions(signals.alice);
+        }
+        if signals.show_bob {
+            draw_receptions(signals.bob);
+            // The emission event of the last pulse of Bob's that ever reached Alice, ringed on his
+            // worldline once hers has ended. Beyond that event his light cone no longer contains
+            // any of her worldline, so nothing he sends arrives; the simulation is what decides
+            // that, and the ring appears only once it has. He transmits through his wait as well as
+            // through his fall, so the ring can land on the vertical hover segment of his
+            // worldline, and at the app's default delay it does: everything below the ring on that
+            // segment reached her, everything above it, release and infall included, did not.
+            if alice.as_ref().is_some_and(|al| al.has_ended())
+                && let Some(pulse) = signals.bob.last_delivered_pulse()
+            {
+                let at = Pos2::new(to_screen_x(pulse.emitted_r), to_screen_y(pulse.emitted_t));
+                if rect.contains(at) {
+                    painter.circle_stroke(at, 5.0, Stroke::new(2.0, Theme::BOB_COLOR));
+                    painter.circle_stroke(at, 7.0, Stroke::new(1.0, Color32::WHITE));
                 }
             }
         }

@@ -1,4 +1,4 @@
-use crate::gui::controls::ReferenceFrame;
+use crate::gui::controls::{ReferenceFrame, SignalViews};
 use crate::gui::river::RiverField;
 use crate::gui::spacetime_canvas::TelemetryBoxes;
 use crate::gui::theme::Theme;
@@ -39,8 +39,7 @@ impl SpatialCanvas {
         alice: &Option<Observer>,
         show_river: bool,
         show_streamlines: bool,
-        show_signal: bool,
-        signal: &SignalField,
+        signals: SignalViews<'_>,
         canvas_height: f32,
         use_km: bool,
         frame_of_ref: ReferenceFrame,
@@ -315,11 +314,22 @@ impl SpatialCanvas {
             }
         }
 
-        // 5. Alice's signal pulses, drawn over the flow but under the worldlines and the
-        // markers, so the fronts read as something moving through the field rather than as part of
-        // the observers' own trajectories.
-        if show_signal {
-            draw_signal_field(&painter, metric, signal, &to_screen);
+        // 5. The two transmissions, drawn over the flow but under the worldlines and the markers,
+        // so the fronts read as something moving through the field rather than as part of the
+        // observers' own trajectories. Bob's goes down first and Alice's over it, so where the two
+        // overlap it is the heavier, primary field that stays legible.
+        if signals.show_bob {
+            draw_signal_field(
+                &painter,
+                metric,
+                signals.bob,
+                Theme::BOB_COLOR,
+                Theme::SECONDARY_FRONT_WIDTH,
+                &to_screen,
+            );
+        }
+        if signals.show_alice {
+            draw_signal_field(&painter, metric, signals.alice, Theme::ALICE_COLOR, 1.0, &to_screen);
         }
 
         // 6. Draw Alice's Spatial Position and Trail. Her info box is registered at the end of the
@@ -335,34 +345,30 @@ impl SpatialCanvas {
             }
         }
 
-        // 7. Draw Bob's Spatial Position & Local Null Fan
+        // 7. Draw Bob's Spatial Position. His local null cone is not drawn as a fan of stubs any
+        // more: he broadcasts the same pulses Alice does, and a whole light cone integrated as
+        // exact null geodesics says everything the twenty-four stubs said and keeps saying it as
+        // the light travels.
         draw_spatial_trail(&painter, metric, bob, Theme::BOB_COLOR, 1.5, &to_screen);
         let bob_pos = to_screen(bob.cartesian_position(metric));
 
-        // Project Bob's null emission fan (only while outside singularity)
-        if bob.r > 0.02 && bob.is_active {
-            // Bob's local null cone: 24 rays emitted isotropically in his own orthonormal frame
-            // (alpha = 0 outward, alpha = pi/2 along +phi), mapped to coordinate slopes.
-            let tetrad = bob.tetrad(metric);
-            let ray_len = 28.0;
-            for i in 0..24 {
-                let alpha = 2.0 * std::f64::consts::PI * (i as f64) / 24.0;
-                let (dr_dt, dphi_dt) = tetrad.coordinate_velocity(&tetrad.null_direction(alpha));
-                // The screen direction is the Jacobian of the embedding applied to the coordinate
-                // velocity, so the ingoing ray (dr/dt = -1, dphi/dt = 0) comes out as the straight
-                // line -e^{i phi} tangent to the ring, as it must in this chart.
-                let (vx, vy) = metric.cartesian_velocity(bob.r, bob.phi, dr_dt, dphi_dt);
-                let ray_vector = to_screen_dir((vx, vy)).normalized() * ray_len;
-                let ray_end = bob_pos + ray_vector;
-
-                let ray_color = if dr_dt < 0.0 {
-                    Color32::from_rgba_premultiplied(255, 80, 100, 140) // Trapped inward ray
-                } else {
-                    Color32::from_rgba_premultiplied(100, 240, 255, 160) // Outward ray
-                };
-
-                painter.line_segment([bob_pos, ray_end], Stroke::new(1.0, ray_color));
-            }
+        // The last pulse of Bob's that ever reached Alice, marked at the event on his worldline
+        // where he sent it. It is drawn only once her worldline has ended, because until then the
+        // question has no answer: the simulation is the criterion, and a pulse still in flight may
+        // yet arrive. After it, the ring is the boundary of the causal past of the end of Alice's
+        // worldline, seen on Bob's: everything he sends beyond it is sent to nobody.
+        //
+        // He transmits while he hovers as well as while he falls, so the event can perfectly well
+        // be one he sent standing still: at the app's default delay it is, and the ring then sits
+        // on his hover radius, which in this projection is a point on the circle he waits on rather
+        // than anywhere along the spiral of his infall.
+        if signals.show_bob
+            && alice.as_ref().is_some_and(|al| al.has_ended())
+            && let Some(pulse) = signals.bob.last_delivered_pulse()
+        {
+            let at = to_screen(metric.cartesian_position(pulse.emitted_r, pulse.emitted_phi));
+            painter.circle_stroke(at, 5.0, Stroke::new(2.0, Theme::BOB_COLOR));
+            painter.circle_stroke(at, 7.0, Stroke::new(1.0, Color32::WHITE));
         }
 
         // Bob circle marker
@@ -386,6 +392,7 @@ impl SpatialCanvas {
                  Drag: Ω_H = {:.3}/M = {:.3e} rad/s\n\
                  River: colour √(1−α²) vs ZAMO (1 at r₊); length √(2M/r) (1 at 2M)\n\
                  Signal: salmon = frozen family (E − Ω₋L < 0, ends on the other branch of r₋)\n\
+                 Bob's fronts: same shift colours at half stroke, mint emission dots; mint ring = his last pulse to reach Alice\n\
                  🔍 Zoom: {:.0} px/M (Scroll to zoom, drag to pan)",
                 metric.format_physical_distance(1.0),
                 metric.m_solar,
@@ -413,6 +420,7 @@ impl SpatialCanvas {
                  Drag: Ω_H = {:.3}/M\n\
                  River: colour √(1−α²) vs ZAMO (1 at r₊); length √(2M/r) (1 at 2M)\n\
                  Signal: salmon = frozen family (E − Ω₋L < 0, ends on the other branch of r₋)\n\
+                 Bob's fronts: same shift colours at half stroke, mint emission dots; mint ring = his last pulse to reach Alice\n\
                  🔍 Zoom: {:.0} px/M (Scroll to zoom, drag to pan)",
                 metric.format_physical_distance(1.0),
                 metric.format_physical_time(1.0),
@@ -450,12 +458,18 @@ impl SpatialCanvas {
     }
 }
 
-/// Draw every live wavefront of Alice's signal in the equatorial embedding.
+/// Draw every live wavefront of one transmission in the equatorial embedding.
 ///
-/// Alice broadcasts into her whole light cone, so each pulse is a *closed* polyline through the
-/// Kerr-Schild positions of its surviving rays, ordered by emission angle and with the last ray
+/// The same code draws Alice's field and Bob's, because it is the same physics either way. What
+/// tells them apart on screen is `emission_colour`, the colour of the dot marking each emission
+/// event on its emitter's trail, and `width_scale`, which thins the secondary field's strokes (see
+/// `Theme::SECONDARY_FRONT_WIDTH`). The shift colouring of the fronts themselves is not available
+/// as an identifying mark: it is a measurement, and it has to mean the same thing in both fields.
+///
+/// The emitter broadcasts into their whole light cone, so each pulse is a *closed* polyline through
+/// the Kerr-Schild positions of its surviving rays, ordered by emission angle and with the last ray
 /// joined back to the first. Each segment is coloured by the frequency a *local raindrop* would
-/// measure on it against Alice's emission. The raindrop is the reference because it is the one
+/// measure on it against the emission. The raindrop is the reference because it is the one
 /// frame that exists at every radius, inside both horizons included, so the colour means the same
 /// thing across the whole picture: it is the shift a body falling freely from rest at infinity
 /// would see, not a shift quoted against a frame that stops existing at r+. A segment takes the mean of its two
@@ -464,12 +478,12 @@ impl SpatialCanvas {
 /// Segments with a dead endpoint are skipped: a ray that has reached the ring is gone, and the front
 /// genuinely ends there rather than jumping across the gap.
 ///
-/// Every pulse also gets a dot at its own emission event. Without it the nested loops inside r+ read
-/// as circles drawn around the hole, which is the wrong picture: each loop is one pulse and encloses
-/// Alice, because light is isotropic in Alice's own frame, and the flow then carries the whole loop
-/// inward. The dot sits on Alice's trail at the radius the pulse left her at, and the loop's outer
-/// edge never gets further from the hole than that dot, which is the statement the drawing exists to
-/// make.
+/// Every pulse also gets a dot at its own emission event, in the emitter's own colour. Without it
+/// the nested loops inside r+ read as circles drawn around the hole, which is the wrong picture:
+/// each loop is one pulse and encloses its emitter, because light is isotropic in the emitter's own
+/// frame, and the flow then carries the whole loop inward. The dot sits on the emitter's trail at
+/// the radius the pulse left them at, and the loop's outer edge never gets further from the hole
+/// than that dot, which is the statement the drawing exists to make.
 ///
 /// The frozen family is drawn twice over, in salmon, because otherwise it cannot be seen at all.
 /// Every ray whose `NullRay::inner_horizon_energy` is negative approaches r- as r - r- ~
@@ -486,15 +500,21 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
     painter: &egui::Painter,
     metric: &KerrSchild,
     signal: &SignalField,
+    emission_colour: Color32,
+    width_scale: f32,
     to_screen: &F,
 ) {
     // `derivatives` reads only (E, L) off the state and takes the radius as an argument, so one
     // instance of the raindrop congruence serves every ray of every pulse, as it does in the river.
     let raindrop = GeodesicState::new_infall(metric, 0.0, 12.0, 1.0, 0.0);
-    // Alice's colour, faint: present enough to read as a mark on her trail, quiet enough not to
-    // compete with the wavefront it anchors.
-    let alice = Theme::ALICE_COLOR;
-    let dot = Color32::from_rgba_unmultiplied(alice.r(), alice.g(), alice.b(), 150);
+    // The emitter's colour, faint: present enough to read as a mark on their trail, quiet enough
+    // not to compete with the wavefront it anchors.
+    let dot = Color32::from_rgba_unmultiplied(
+        emission_colour.r(),
+        emission_colour.g(),
+        emission_colour.b(),
+        150,
+    );
     // The frozen family of every pulse, held back and drawn last so that it lies on top of both the
     // r- circle and the ordinary fronts it is buried in.
     let mut frozen_segments: Vec<[Pos2; 2]> = Vec::new();
@@ -541,7 +561,7 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
                 continue;
             }
             let colour = Theme::shift_colour(0.5 * (ratios[i] + ratios[j]), Theme::SHIFT_ALPHA);
-            painter.line_segment([points[i], points[j]], Stroke::new(1.2, colour));
+            painter.line_segment([points[i], points[j]], Stroke::new(1.2 * width_scale, colour));
         }
         for (i, point) in points.iter().enumerate() {
             if frozen[i] {
@@ -554,10 +574,10 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
     }
 
     for segment in frozen_segments {
-        painter.line_segment(segment, Stroke::new(2.0, Theme::FROZEN_FRONT));
+        painter.line_segment(segment, Stroke::new(2.0 * width_scale, Theme::FROZEN_FRONT));
     }
     for point in frozen_dots {
-        painter.circle_filled(point, 1.6, Theme::FROZEN_FRONT);
+        painter.circle_filled(point, 1.6 * width_scale, Theme::FROZEN_FRONT);
     }
 }
 

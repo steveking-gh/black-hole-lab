@@ -221,6 +221,23 @@ impl Observer {
         self.trail.push([self.t, self.r, self.phi]);
     }
 
+    /// Has this worldline ended, as far as the simulation is concerned?
+    ///
+    /// Two ways out, and both are the end of the observer's future in this chart. Either the
+    /// worldline has reached the ring, r <= `R_STOP`, where `GeodesicState` stops integrating
+    /// because the equatorial L = 0 infall runs into the curvature singularity; or its geodesic has
+    /// stalled, which is the E - Omega_- L < 0 case of freezing onto r-, where the worldline
+    /// asymptotes to a surface of constant r and its proper time to a finite limit while only the
+    /// coordinate clock runs on.
+    ///
+    /// It is a statement about the drawn worldline, not a prediction. Once it is true, no signal
+    /// emitted anywhere later can be received by this observer, because there is no more of their
+    /// worldline left for a ray to cross: the last signal that did arrive marks, on the emitter's
+    /// worldline, the boundary of the causal past of the end of this one.
+    pub fn has_ended(&self) -> bool {
+        self.r <= R_STOP || self.geodesic.map(|geo| geo.stalled).unwrap_or(false)
+    }
+
     /// Kerr-Schild Cartesian azimuth psi of the observer, x + i y = (r + i a) e^{i phi}, i.e. the
     /// polar angle of `cartesian_position`. It is a correct quantity, but it is *not* enough to
     /// plot with: the matching radius is sqrt(r^2 + a^2), never r, so drawing at (r, psi) is what
@@ -260,10 +277,20 @@ impl Observer {
     /// free-fall 4-velocity is returned instead, so the display never shows a spacelike "observer".
     ///
     /// A released free-faller reports the *integrated* 4-velocity carried by its geodesic state,
-    /// so every derived quantity (`velocity_c`, `proper_velocity_c`, the null fan, the rest-frame
-    /// view) follows the worldline actually being drawn, outgoing phases and turning points
-    /// included. Before release the worldline has not started, so the closed-form value at the
+    /// so every derived quantity (`velocity_c`, `proper_velocity_c`, the signal pulses, the
+    /// rest-frame view) follows the worldline actually being drawn, outgoing phases and turning
+    /// points included. Before release the worldline has not started, so the closed-form value at the
     /// hover radius is used instead.
+    ///
+    /// That last case is a known inconsistency, left standing here on purpose. An observer waiting
+    /// for release is not falling: `step` holds them at fixed (r, phi) and ticks their clock at the
+    /// static rate sqrt(-g_tt), so the worldline they are on is the static one and the free-fall
+    /// value returned here is not its 4-velocity. Everything that reads this function - the
+    /// telemetry, the drawn cones, the Distance-mode step estimate - has always read it that way.
+    /// The signal code cannot afford to: a pulse has to be emitted isotropically in the frame of
+    /// the worldline the emitter is actually on, and an arrival has to be measured in it. So
+    /// `wavefront::signalling_four_velocity` corrects for it locally, returning the normalised
+    /// time-translation Killing vector for a hovering observer where one exists.
     pub fn four_velocity(&self, metric: &KerrSchild) -> [f64; 3] {
         if self.mode == ObserverMode::FreeFall && self.is_active {
             if let Some(geo) = self.geodesic {
@@ -318,13 +345,6 @@ impl Observer {
         let raindrop = GeodesicState::new_infall(metric, 0.0, r, 1.0, 0.0);
         let (dt_dtau, dr_dtau, dphi_dtau) = raindrop.derivatives(metric, r);
         Tetrad::from_four_velocity(metric, r, &[dt_dtau, dr_dtau, dphi_dtau])
-    }
-
-    /// The observer's own orthonormal frame: the Gram-Schmidt tetrad built on this observer's
-    /// 4-velocity. Light leaves the observer isotropically in this frame, so
-    /// `tetrad.null_direction(alpha)` sweeps the local null cone as alpha runs over [0, 2 pi).
-    pub fn tetrad(&self, metric: &KerrSchild) -> Tetrad {
-        Tetrad::from_four_velocity(metric, self.r, &self.four_velocity(metric))
     }
 
     /// The closed-form geodesic congruence with this observer's conserved (E, L), evaluated at
@@ -451,7 +471,31 @@ impl Observer {
 
     /// Step observer backward in time. Pops from recorded worldline trail if available,
     /// or integrates backward with negative step.
+    ///
+    /// An observer still waiting for release is wound back analytically instead, because their
+    /// worldline is not in the trail: `hover` keeps only [start event, current event] there, so
+    /// popping it would throw the observer back to the start of the run rather than back by dt.
+    /// They hover at fixed (r, phi), so the only two clocks running are t and the static observer's
+    /// proper time, and undoing `hover` is subtracting exactly what it added: dt of coordinate time
+    /// and sqrt(-g_tt) dt of proper time, with g_tt evaluated at the radius neither of them moves
+    /// from. That exactness is what lets a rewind of the simulation put a transmitting hoverer's
+    /// emission cadence back where it was, so that running forward again re-emits the same pulses
+    /// at the same events.
     pub fn step_back(&mut self, metric: &KerrSchild, dt: f64) {
+        if !self.is_active {
+            let back = dt.abs();
+            self.t = (self.t - back).max(0.0);
+            let g_tt = metric.metric_components(self.r)[0][0];
+            if g_tt < 0.0 {
+                self.tau = (self.tau - (-g_tt).sqrt() * back).max(0.0);
+            }
+            if let Some(ref mut geo) = self.geodesic {
+                geo.tau = self.tau;
+            }
+            self.trail.truncate(1);
+            self.trail.push([self.t, self.r, self.phi]);
+            return;
+        }
         if self.trail.len() > 1 {
             self.trail.pop();
             if let Some(&[prev_t, prev_r, prev_phi]) = self.trail.last() {
@@ -697,7 +741,10 @@ mod tests {
                     let uu = metric.norm(r, &u);
                     assert!((uu + 1.0).abs() < 1e-9, "u.u = {uu} for {mode:?} at r={r} (a={a})");
 
-                    let t = obs.tetrad(&metric);
+                    // The frame light leaves this observer isotropically in: the Gram-Schmidt
+                    // tetrad on their own 4-velocity, which is what `SignalField::emit_if_due`
+                    // builds a pulse out of.
+                    let t = Tetrad::from_four_velocity(&metric, r, &u);
                     let legs = [t.e0, t.e1, t.e2];
                     for i in 0..3 {
                         for j in 0..3 {

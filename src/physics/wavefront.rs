@@ -1,5 +1,12 @@
-//! Alice's signal, broadcast into the whole of her light cone: exact null geodesics carrying an
-//! exact frequency ratio.
+//! One observer's signal, broadcast into the whole of their light cone: exact null geodesics
+//! carrying an exact frequency ratio.
+//!
+//! Nothing in this module knows which observer is transmitting and which is listening. A
+//! `SignalField` is handed an *emitter* when a pulse is due and a *receiver* when arrivals are
+//! looked for, so the app runs one field for Alice's transmission (received by Bob) and a second
+//! for Bob's (received by Alice) out of the same code. Where a concrete example makes the physics
+//! easier to state below, it is Alice transmitting and Bob, released later on the same infall,
+//! listening.
 //!
 //! Everything in this module is integrated in the *coordinate time* t of the ingoing Kerr-Schild
 //! chart rather than in an affine parameter. That choice is forced by the geometry, not by
@@ -50,17 +57,27 @@
 //! negative takes infinite coordinate time and freezes onto the surface. The outgoing principal
 //! null direction sits on the second family, and so does a broad arc of every interior light cone
 //! (the arc dragged forward in phi, not the arc pointing outward in r, since frame dragging beats
-//! aberration inside r+). The stack Bob crosses is that family. An infalling worldline sweeps
-//! through the whole of it in finite proper time, and that is what Bob's receptions below record.
+//! aberration inside r+). The stack a later infaller crosses is that family. An infalling worldline
+//! sweeps through the whole of it in finite proper time, and that is what the receptions below
+//! record for a receiver who is still above r- when the emitter's frozen arcs settle onto it.
+//!
+//! Which of the two transmissions the app draws produces such a stack is not symmetric, and the
+//! asymmetry is the whole content of running both. Where Bob trails Alice on the same infall his
+//! pulses have to chase her inward, and what reaches her is the ingoing part of his cone, whose
+//! shift is finite on the branch of r- she crosses; his frozen family settles onto r- behind her,
+//! after she has already passed through, so she never meets it. She hears him with an ordinary
+//! shift and then stops hearing him at all - and where he is the deeper of the two his light climbs
+//! to her instead, which ends the same way, because what ends the transmission is the end of her
+//! worldline and not the direction his light had to travel.
 
 use crate::physics::geodesic::{R_STOP, geodesic_accel};
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::Observer;
 use crate::physics::tetrad::Tetrad;
 
-/// Directions per pulse: the whole of Alice's local light cone at five-degree spacing, with the
-/// count chosen so that alpha = 0, her own outward radial leg, lands on a ray rather than in a gap
-/// between two.
+/// Directions per pulse: the whole of the emitter's local light cone at five-degree spacing, with
+/// the count chosen so that alpha = 0, their own outward radial leg, lands on a ray rather than in
+/// a gap between two.
 pub const RAYS_PER_PULSE: usize = 72;
 
 /// Pulses kept at once. The oldest is dropped past this, which bounds both the drawing and the
@@ -73,9 +90,9 @@ pub const RAYS_PER_PULSE: usize = 72;
 /// well under it.
 pub const MAX_PULSES: usize = 64;
 
-/// Alice's proper-time interval between pulses, in units of M. Her whole infall from r = 4.5M is
-/// about 4.2M of her proper time, so this puts of order forty pulses on the wire before she reaches
-/// the ring.
+/// The emitter's proper-time interval between pulses, in units of M. A whole infall from r = 4.5M
+/// is about 4.2M of proper time, so this puts of order forty pulses on the wire before the emitter
+/// reaches the ring.
 ///
 /// The interval is not just a display rate: it decides whether the transmission reads as continuous
 /// on r-. A pulse's frozen arc co-rotates with the inner horizon at Omega_- = a / (r-^2 + a^2) while
@@ -500,67 +517,96 @@ pub fn limiting_blueshift(metric: &KerrSchild, delta_t: f64) -> f64 {
     (metric.inner_surface_gravity() * delta_t).exp()
 }
 
-/// One crossing of Bob's worldline by one sheet of one of Alice's wavefronts.
+/// One crossing of the receiver's worldline by one sheet of one of the emitter's wavefronts.
 ///
-/// A pulse reaches Bob more than once. Its crossing family sweeps past him first, while he is still
-/// well above r-, and arrives redshifted; the same pulse's frozen family is still standing on r-
-/// when he gets there, and he cuts through that stack in the last fraction of an M of his fall,
-/// with the blueshift that the Cauchy horizon is famous for. Both are recorded.
+/// A pulse can reach the receiver more than once. Where the receiver trails the emitter down the
+/// same infall, as Bob trails Alice, the pulse's crossing family sweeps past him first, while he is
+/// still well above r-, and arrives redshifted; the same pulse's frozen family is still standing on
+/// r- when he gets there, and he cuts through that stack in the last fraction of an M of his fall,
+/// with the blueshift that the Cauchy horizon is famous for. Both are recorded. The other way round
+/// there is no such second act: the light that reaches an emitter's *leader* is the ingoing part of
+/// the cone, which crosses r- like she does, and the frozen part never catches her up at all.
 #[allow(dead_code)] // the record is complete on purpose: the HUD reads the ratio, the (t, r)
-// diagram the event, and the proper time is what makes a reception quotable on Bob's own clock
+// diagram the event, and the proper time is what makes a reception quotable on the receiver's clock
 #[derive(Debug, Clone, Copy)]
 pub struct Reception {
     /// Serial number of the pulse this arrival belongs to.
     pub pulse_index: usize,
     /// Coordinate time of the reception event.
     pub t: f64,
-    /// Bob's proper time at reception.
-    pub tau_bob: f64,
-    /// Bob's radius at reception.
+    /// The receiver's proper time at reception.
+    pub tau_receiver: f64,
+    /// The receiver's radius at reception.
     pub r: f64,
-    /// nu(Bob) / nu(Alice at emission) for the ray that reached him.
+    /// nu(receiver) / nu(emitter at emission) for the ray that reached them.
     pub ratio: f64,
     /// Whether the receiving ray belongs to the frozen family, E - Omega_- L < 0, which never
     /// crosses r- and piles onto it, rather than to the crossing family that passes straight
     /// through. Decided by `NullRay::inner_horizon_energy` on whichever of the two bracketing rays
-    /// is nearer to Bob's azimuth.
+    /// is nearer to the receiver's azimuth.
     pub frozen_family: bool,
 }
 
-/// One emission event of Alice's, and the wavefront it launched.
-#[allow(dead_code)] // the emission event is recorded in full: the drawing needs the rays and the
-// track, and the tests need the event itself to check the kappa_- law pulse by pulse
-#[derive(Debug, Clone)]
-pub struct Pulse {
-    /// Serial number of the pulse, counting from the first one Alice sent.
-    pub index: usize,
+/// The emission event of a pulse that was received, kept as a record in its own right.
+///
+/// It is a copy of the four numbers that locate a `Pulse`'s emission event, plus the time of the
+/// arrival that made the pulse a delivery, and it exists because the emission event has to outlive
+/// the pulse. A transmitter running for a whole infall sends more pulses than the `MAX_PULSES` cap
+/// keeps - a hovering emitter alone sends about sixty before release at the app's default delay -
+/// and the pulse that carried the last signal to arrive is one of the oldest, so it is the first
+/// the cap throws away. The event it marks is a fact about the spacetime and does not stop being
+/// true when the drawing of its wavefront is dropped.
+#[derive(Debug, Clone, Copy)]
+pub struct Delivery {
+    /// Serial number of the pulse that was received.
+    pub pulse_index: usize,
     /// Coordinate time of the emission event.
     pub emitted_t: f64,
-    /// Alice's proper time at emission.
+    /// The emitter's proper time at emission.
     pub emitted_tau: f64,
     /// Radius of the emission event.
     pub emitted_r: f64,
     /// Azimuth of the emission event.
     pub emitted_phi: f64,
-    /// The whole of Alice's light cone at emission, `RAYS_PER_PULSE` exact null geodesics ordered
-    /// by their emission angle alpha, from alpha = 0, her own outward radial leg, round to
-    /// alpha = 2 pi - 2 pi / `RAYS_PER_PULSE`. She broadcasts in every direction, so the polyline
-    /// these rays form is closed: the last ray joins back to the first.
+    /// Coordinate time of the earliest arrival of this pulse: the event at which the delivery
+    /// became a fact, and so the time a rewind has to reach past before it can retract it.
+    pub received_t: f64,
+}
+
+/// One emission event of the emitter's, and the wavefront it launched.
+#[allow(dead_code)] // the emission event is recorded in full: the drawing needs the rays and the
+// track, and the tests need the event itself to check the kappa_- law pulse by pulse
+#[derive(Debug, Clone)]
+pub struct Pulse {
+    /// Serial number of the pulse, counting from the first one this emitter sent.
+    pub index: usize,
+    /// Coordinate time of the emission event.
+    pub emitted_t: f64,
+    /// The emitter's proper time at emission.
+    pub emitted_tau: f64,
+    /// Radius of the emission event.
+    pub emitted_r: f64,
+    /// Azimuth of the emission event.
+    pub emitted_phi: f64,
+    /// The whole of the emitter's light cone at emission, `RAYS_PER_PULSE` exact null geodesics
+    /// ordered by their emission angle alpha, from alpha = 0, their own outward radial leg, round
+    /// to alpha = 2 pi - 2 pi / `RAYS_PER_PULSE`. The emitter broadcasts in every direction, so the
+    /// polyline these rays form is closed: the last ray joins back to the first.
     pub rays: Vec<NullRay>,
     /// The outgoing principal null ray from the emission event, as (t, r) pairs: the pulse's
     /// representative in the (t, r) diagram, where a fan of azimuths cannot be drawn.
     pub pnd_track: Vec<(f64, f64)>,
-    /// One entry per sheet of the front that stood across Bob's azimuth on the previous detection
-    /// pass, carrying the side he was on. A sheet is keyed by the segment of the ray polyline and
-    /// the turn of azimuth it crosses him on, so folds and windings are tracked independently
-    /// instead of collapsing into one number, and a sheet that stops straddling him simply drops
-    /// out of the list.
+    /// One entry per sheet of the front that stood across the receiver's azimuth on the previous
+    /// detection pass, carrying the side they were on. A sheet is keyed by the segment of the ray
+    /// polyline and the turn of azimuth it crosses them on, so folds and windings are tracked
+    /// independently instead of collapsing into one number, and a sheet that stops straddling them
+    /// simply drops out of the list.
     sheets: Vec<SheetSide>,
-    /// Every crossing of Bob's worldline by this pulse, in the order he met them.
+    /// Every crossing of the receiver's worldline by this pulse, in the order they met them.
     pub receptions: Vec<Reception>,
 }
 
-/// Which side of one sheet of a wavefront Bob was on at the previous detection pass.
+/// Which side of one sheet of a wavefront the receiver was on at the previous detection pass.
 #[derive(Debug, Clone, Copy)]
 struct SheetSide {
     /// Index of the polyline segment (the ray pair) carrying this sheet. It is the whole key: each
@@ -569,9 +615,9 @@ struct SheetSide {
     /// The folded azimuth of the first ray jumps by a full turn whenever it passes the fold, which
     /// shifts every unwrapped angle and every winding number by one without anything having moved.
     segment: usize,
-    /// bob.r - r_front for this sheet, as both stood at that pass. Storing the side rather than
-    /// r_front alone is what makes Bob's own motion count: inside r+ the front has all but stopped
-    /// and it is Bob who does the crossing.
+    /// receiver.r - r_front for this sheet, as both stood at that pass. Storing the side rather
+    /// than r_front alone is what makes the receiver's own motion count: inside r+ the front has
+    /// all but stopped and it is the receiver who does the crossing.
     side: f64,
 }
 
@@ -593,35 +639,35 @@ impl Pulse {
         self.pnd_track.push((t + dt, pnd_advance(metric, r, dt)));
     }
 
-    /// Record every crossing of Bob's worldline by this wavefront on this pass.
+    /// Record every crossing of the receiver's worldline by this wavefront on this pass.
     ///
     /// The rays of a pulse are a closed polyline in the (r, phi) plane, ordered by their emission
-    /// angle: Alice broadcasts into her whole light cone, so the last ray joins back to the first
-    /// and that closing segment is a sheet like any other. Bob is located on the polyline through
-    /// the *unwrapped* azimuth of each ray relative to his: the first ray is placed within pi of Bob
-    /// and every later one within pi of its predecessor, so a front that frame dragging has wound
-    /// through several turns is still one continuous curve. On that unwrapped axis Bob is not one
-    /// angle but the whole family 0, +/-2 pi, +/-4 pi, ..., because a front that has wound one turn
-    /// further passes over him again. Each polyline segment straddling one of those angles is one
-    /// *sheet* of the front standing across his azimuth, and since every unwrapped step is folded
-    /// into [-pi, pi] a segment can straddle at most one of them, so the segment index alone names
-    /// the sheet.
+    /// angle: the emitter broadcasts into their whole light cone, so the last ray joins back to the
+    /// first and that closing segment is a sheet like any other. The receiver is located on the
+    /// polyline through the *unwrapped* azimuth of each ray relative to theirs: the first ray is
+    /// placed within pi of the receiver and every later one within pi of its predecessor, so a
+    /// front that frame dragging has wound through several turns is still one continuous curve. On
+    /// that unwrapped axis the receiver is not one angle but the whole family 0, +/-2 pi, +/-4 pi,
+    /// ..., because a front that has wound one turn further passes over them again. Each polyline
+    /// segment straddling one of those angles is one *sheet* of the front standing across their
+    /// azimuth, and since every unwrapped step is folded into [-pi, pi] a segment can straddle at
+    /// most one of them, so the segment index alone names the sheet.
     ///
     /// A sheet gives r_front by linear interpolation along the segment, and the shift by the same
     /// linear interpolation of the two bracketing rays' own frequency ratios, each evaluated at its
-    /// own event against Bob's 4-velocity. Interpolating the finished ratios rather than the raw
-    /// factors keeps the answer between two numbers that are both exact measurements, which matters
-    /// once the ratios span orders of magnitude. The family the arrival belongs to is read off the
-    /// nearer of the two bracketing rays with `NullRay::inner_horizon_energy`.
+    /// own event against the receiver's 4-velocity. Interpolating the finished ratios rather than
+    /// the raw factors keeps the answer between two numbers that are both exact measurements, which
+    /// matters once the ratios span orders of magnitude. The family the arrival belongs to is read
+    /// off the nearer of the two bracketing rays with `NullRay::inner_horizon_energy`.
     ///
-    /// A reception is a sign change of bob.r - r_front for one sheet between two consecutive passes
-    /// on which that same sheet stood across him. Tracking sheets separately rather than reducing
-    /// the front to a single representative radius is what makes both arrivals of a pulse show up:
-    /// the crossing family sweeping past Bob high above r-, and the frozen family waiting on r- for
-    /// him to fall through it. A sheet whose rays have reached the ring is retired with them, since
-    /// only segments with both ends still alive can be interpolated; that sheet simply stops being
-    /// tracked, and no crossing is invented for it.
-    fn detect(&mut self, metric: &KerrSchild, bob: &Observer, u_bob: &[f64; 3]) {
+    /// A reception is a sign change of receiver.r - r_front for one sheet between two consecutive
+    /// passes on which that same sheet stood across them. Tracking sheets separately rather than
+    /// reducing the front to a single representative radius is what makes both arrivals of a pulse
+    /// show up where both happen: the crossing family sweeping past a trailing receiver high above
+    /// r-, and the frozen family waiting on r- for them to fall through it. A sheet whose rays have
+    /// reached the ring is retired with them, since only segments with both ends still alive can be
+    /// interpolated; that sheet simply stops being tracked, and no crossing is invented for it.
+    fn detect(&mut self, metric: &KerrSchild, receiver: &Observer, u_receiver: &[f64; 3]) {
         if self.rays.len() < 2 {
             self.sheets.clear();
             return;
@@ -629,7 +675,7 @@ impl Pulse {
         let two_pi = 2.0 * std::f64::consts::PI;
         let wrap = |d: f64| d - two_pi * (d / two_pi).round();
         let mut rel = Vec::with_capacity(self.rays.len());
-        rel.push(wrap(self.rays[0].phi - bob.phi));
+        rel.push(wrap(self.rays[0].phi - receiver.phi));
         for i in 1..self.rays.len() {
             let prev = rel[i - 1];
             rel.push(prev + wrap(self.rays[i].phi - self.rays[i - 1].phi));
@@ -658,22 +704,22 @@ impl Pulse {
                     ((target - a) / span).clamp(0.0, 1.0)
                 };
                 let r_front = self.rays[i].r + w * (self.rays[j].r - self.rays[i].r);
-                let side = bob.r - r_front;
+                let side = receiver.r - r_front;
 
                 let was = self.sheets.iter().find(|s| s.segment == i).map(|s| s.side);
                 if let Some(prev) = was
                     && prev * side < 0.0
                 {
-                    let f0 = self.rays[i].frequency_ratio(metric, u_bob);
-                    let f1 = self.rays[j].frequency_ratio(metric, u_bob);
+                    let f0 = self.rays[i].frequency_ratio(metric, u_receiver);
+                    let f1 = self.rays[j].frequency_ratio(metric, u_receiver);
                     let ratio = f0 + w * (f1 - f0);
                     if ratio.is_finite() && ratio > 0.0 {
                         let nearer = if w < 0.5 { i } else { j };
                         self.receptions.push(Reception {
                             pulse_index: self.index,
-                            t: bob.t,
-                            tau_bob: bob.tau,
-                            r: bob.r,
+                            t: receiver.t,
+                            tau_receiver: receiver.tau,
+                            r: receiver.r,
                             ratio,
                             frozen_family: self.rays[nearer].frozen(metric),
                         });
@@ -686,26 +732,45 @@ impl Pulse {
     }
 }
 
-/// The 4-velocity the receiving observer measures with.
+/// Is this observer waiting for release on a worldline that exists?
 ///
-/// A released observer carries their own, whatever worldline they are on. Before release the
-/// observer is held at a fixed radius, and `Observer::step` already advances their clock as
-/// dtau = sqrt(-g_tt) dt while they wait, which is the static observer's proper time; the frame
-/// that matches that clock is the normalised time-translation Killing vector u = (1, 0, 0) /
-/// sqrt(-g_tt), so that is the frame their pre-release measurements are quoted in. No static
-/// observer exists at or inside the static limit, where g_tt >= 0, and there the free-fall value
-/// is used instead.
-fn measuring_four_velocity(metric: &KerrSchild, observer: &Observer) -> [f64; 3] {
-    if !observer.is_active {
+/// Before release `Observer::step` holds the observer at fixed (r, phi) and advances their clock as
+/// dtau = sqrt(-g_tt) dt, which is the static observer's proper time: the worldline they are on
+/// while they wait is an integral curve of the time-translation Killing vector. That curve is
+/// timelike only where g_tt < 0, i.e. outside the equatorial static limit r = 2M; inside it no
+/// rocket can hold phi fixed and there is no such observer to be.
+fn is_static_hover(metric: &KerrSchild, observer: &Observer) -> bool {
+    !observer.is_active && metric.metric_components(observer.r)[0][0] < 0.0
+}
+
+/// The 4-velocity to quote an observer's signals in, at emission and at reception alike.
+///
+/// A released observer carries their own, whatever worldline they are on. A hovering one is the
+/// static observer of `is_static_hover`, and the frame that matches the clock they are keeping is
+/// the normalised time-translation Killing vector u = (1, 0, 0) / sqrt(-g_tt). Where no static
+/// observer exists the free-fall value is used instead, which is also what a released observer
+/// gets.
+///
+/// This is a local correction, and deliberately local. `Observer::four_velocity` reports the
+/// *free-fall* 4-velocity for an observer who is in fact hovering, which is a latent inconsistency
+/// in that function: the telemetry, the drawn cones and the Distance-mode step estimate all read
+/// it, and none of them is being changed here. The signal code, which has to put a real tetrad at a
+/// real emission event and a real 4-velocity at a real reception event, corrects for it through
+/// this one function, so the frame a pulse is emitted into and the frame an arrival is measured in
+/// are both the frame of the worldline the observer is actually on.
+fn signalling_four_velocity(metric: &KerrSchild, observer: &Observer) -> [f64; 3] {
+    if is_static_hover(metric, observer) {
         let g_tt = metric.metric_components(observer.r)[0][0];
-        if g_tt < 0.0 {
-            return [1.0 / (-g_tt).sqrt(), 0.0, 0.0];
-        }
+        return [1.0 / (-g_tt).sqrt(), 0.0, 0.0];
     }
     observer.four_velocity(metric)
 }
 
-/// Every pulse Alice currently has in flight.
+/// Every pulse one emitter currently has in flight.
+///
+/// The field is agnostic about who is at each end of it: `emit_if_due` takes the emitter and
+/// `detect_receptions` the receiver, so the app carries one of these for Alice's transmission and
+/// a second for Bob's, both advanced on the same clock and both rewound by the same `step_back`.
 #[derive(Debug, Clone)]
 pub struct SignalField {
     /// Live pulses, oldest first.
@@ -716,10 +781,19 @@ pub struct SignalField {
     pub t: f64,
     /// Serial number the next pulse will carry.
     next_index: usize,
-    /// Alice's proper time at the last emission, or None before she has sent anything.
+    /// The emitter's proper time at the last emission, or None before they have sent anything.
     last_emit_tau: Option<f64>,
-    /// Alice's proper-time interval between pulses.
+    /// The emitter's proper-time interval between pulses.
     pub interval_tau: f64,
+    /// The newest delivery this transmission has made, remembered separately from the pulses so
+    /// that the `MAX_PULSES` cap cannot erase the causal boundary it marks. Maintained by
+    /// `detect_receptions` and wound back by `step_back`; read through `last_delivered_pulse`.
+    last_delivered: Option<Delivery>,
+    /// Every arrival this transmission has made, in the order they were recorded, for the same
+    /// reason: an arrival is an event that happened, and the cap dropping the wavefront that
+    /// carried it does not unhappen it. Each one is also kept on its own pulse for as long as that
+    /// pulse lives, which is what `Delivery` is read off; this is the copy that outlives it.
+    heard: Vec<Reception>,
 }
 
 impl Default for SignalField {
@@ -730,56 +804,74 @@ impl Default for SignalField {
             next_index: 0,
             last_emit_tau: None,
             interval_tau: EMISSION_INTERVAL_TAU,
+            last_delivered: None,
+            heard: Vec::new(),
         }
     }
 }
 
 impl SignalField {
-    /// Emit a pulse if Alice's own clock says one is due: at her release, and every
-    /// `interval_tau` of her proper time after that. A stalled or retired worldline sends nothing,
-    /// since a worldline that is no longer advancing has no proper time to space pulses by.
-    pub fn emit_if_due(&mut self, metric: &KerrSchild, alice: &Observer) {
-        if !alice.is_active || alice.r <= R_STOP {
+    /// Emit a pulse if the emitter's own clock says one is due: at the first call, and every
+    /// `interval_tau` of their proper time after that. A stalled or retired worldline sends
+    /// nothing, since a worldline that is no longer advancing has no proper time to space pulses
+    /// by.
+    ///
+    /// An observer still waiting for release transmits too, and must. While they wait they are the
+    /// static observer of `is_static_hover`, hovering at fixed (r, phi) with a perfectly good clock
+    /// ticking at dtau = sqrt(-g_tt) dt and a perfectly good orthonormal frame to broadcast into;
+    /// nothing in the geometry stops them, and cutting them off at their release would draw a
+    /// transmission that starts for no physical reason. So the cadence runs on their proper time
+    /// from the first call onward, through the release event and on down the infall, and the
+    /// emission frame is `signalling_four_velocity`: the static frame while they hover, their own
+    /// once they fall. The only observer with nothing to transmit from is one waiting at or inside
+    /// the static limit, where the hovering worldline does not exist; that one waits in silence.
+    pub fn emit_if_due(&mut self, metric: &KerrSchild, emitter: &Observer) {
+        if (!emitter.is_active && !is_static_hover(metric, emitter)) || emitter.r <= R_STOP {
             return;
         }
-        if let Some(geo) = alice.geodesic
+        if let Some(geo) = emitter.geodesic
             && geo.stalled
         {
             return;
         }
         if let Some(last) = self.last_emit_tau
-            && alice.tau < last + self.interval_tau
+            && emitter.tau < last + self.interval_tau
         {
             return;
         }
 
-        let tetrad = alice.tetrad(metric);
-        let u = alice.four_velocity(metric);
+        // The frame is built on `signalling_four_velocity` rather than on
+        // `Observer::four_velocity`, which would hand a hovering observer the free-fall frame of
+        // the radius they are standing still at. Light is isotropic in the frame of the worldline
+        // the emitter is actually on, and while they hover that is the static frame.
+        let u = signalling_four_velocity(metric, emitter);
+        let tetrad = Tetrad::from_four_velocity(metric, emitter.r, &u);
         let two_pi = 2.0 * std::f64::consts::PI;
         let rays = (0..RAYS_PER_PULSE)
             .map(|i| {
-                // alpha = 0 is her outward radial leg and the ray count divides the turn exactly,
-                // so the last ray stops one step short of alpha = 2 pi and the front closes.
+                // alpha = 0 is the emitter's outward radial leg and the ray count divides the
+                // turn exactly, so the last ray stops one step short of alpha = 2 pi and the front
+                // closes.
                 let alpha = two_pi * (i as f64) / (RAYS_PER_PULSE as f64);
                 NullRay::from_local_direction(
-                    metric, alice.t, alice.r, alice.phi, &tetrad, alpha, &u,
+                    metric, emitter.t, emitter.r, emitter.phi, &tetrad, alpha, &u,
                 )
             })
             .collect();
 
         self.pulses.push(Pulse {
             index: self.next_index,
-            emitted_t: alice.t,
-            emitted_tau: alice.tau,
-            emitted_r: alice.r,
-            emitted_phi: alice.phi,
+            emitted_t: emitter.t,
+            emitted_tau: emitter.tau,
+            emitted_r: emitter.r,
+            emitted_phi: emitter.phi,
             rays,
-            pnd_track: vec![(alice.t, alice.r)],
+            pnd_track: vec![(emitter.t, emitter.r)],
             sheets: Vec::new(),
             receptions: Vec::new(),
         });
         self.next_index += 1;
-        self.last_emit_tau = Some(alice.tau);
+        self.last_emit_tau = Some(emitter.tau);
         while self.pulses.len() > MAX_PULSES {
             self.pulses.remove(0);
         }
@@ -814,11 +906,11 @@ impl SignalField {
     /// emission point. A reception recorded after the target is unrecorded.
     ///
     /// The per-sheet bookkeeping of `Pulse::detect` is dropped rather than rewound, so the next
-    /// forward pass re-establishes which side of each sheet Bob stands on before it can call
-    /// anything a crossing. Rewinding a side is meaningless, and keeping the stale one would invent
-    /// a sign change out of the rewind itself.
+    /// forward pass re-establishes which side of each sheet the receiver stands on before it can
+    /// call anything a crossing. Rewinding a side is meaningless, and keeping the stale one would
+    /// invent a sign change out of the rewind itself.
     ///
-    /// `last_emit_tau` falls back to the newest surviving pulse, so Alice resumes on the same
+    /// `last_emit_tau` falls back to the newest surviving pulse, so the emitter resumes on the same
     /// cadence as time runs forward again, and `next_index` is left alone: serial numbers are not
     /// reused, and a re-emitted pulse is a new pulse even where it lands on an old emission event.
     ///
@@ -852,44 +944,98 @@ impl SignalField {
             pulse.receptions.retain(|rec| rec.t <= target_t);
             pulse.sheets.clear();
         }
+        self.heard.retain(|rec| rec.t <= target_t);
         self.last_emit_tau = self.pulses.iter().map(|p| p.emitted_tau).reduce(f64::max);
+        // A delivery is retracted only if the arrival that made it happened after the target time;
+        // one that had already happened by then still stands, even where the cap has since thrown
+        // its pulse away. Whichever of the standing record and the pulses in hand names the newer
+        // pulse wins, so a rewind that unsays the newest delivery falls back on the one before it
+        // as long as that pulse is still in the field.
+        let standing = self.last_delivered.filter(|d| d.received_t <= target_t);
+        let in_hand = newest_delivery(&self.pulses);
+        self.last_delivered = match (standing, in_hand) {
+            (Some(a), Some(b)) if b.pulse_index > a.pulse_index => Some(b),
+            (Some(a), _) => Some(a),
+            (None, b) => b,
+        };
         self.t = target_t;
     }
 
-    /// Record every crossing of Bob's worldline by every live wavefront on this pass.
+    /// Record every crossing of the receiver's worldline by every live wavefront on this pass.
     ///
-    /// Outside r+ a front overtakes Bob from below as it climbs outward; inside r+ everything falls
-    /// and it is Bob who overtakes a front that has all but stopped against r-. The per-sheet sign
-    /// change of `Pulse::detect` catches both, and catches them for each sheet of a folded front
-    /// separately, which is why a single pulse can be received more than once.
-    pub fn detect_receptions(&mut self, metric: &KerrSchild, bob: &Observer) {
-        let u_bob = measuring_four_velocity(metric, bob);
+    /// Outside r+ a front overtakes a receiver from below as it climbs outward; inside r+
+    /// everything falls and it is a trailing receiver who overtakes a front that has all but
+    /// stopped against r-. A receiver *ahead* of the emitter is caught only by the ingoing part of
+    /// each front, which runs at up to dr/dt = -1 and so outruns any timelike worldline. The
+    /// per-sheet sign change of `Pulse::detect` catches all of these, and catches them for each
+    /// sheet of a folded front separately, which is why a single pulse can be received more than
+    /// once.
+    pub fn detect_receptions(&mut self, metric: &KerrSchild, receiver: &Observer) {
+        let u_receiver = signalling_four_velocity(metric, receiver);
         for pulse in self.pulses.iter_mut() {
-            pulse.detect(metric, bob, &u_bob);
+            let before = pulse.receptions.len();
+            pulse.detect(metric, receiver, &u_receiver);
+            self.heard.extend_from_slice(&pulse.receptions[before..]);
+        }
+        // The record only ever moves forward here. Arrivals do not come in emission order, so a
+        // pulse older than the one on record can be heard at any time without changing which pulse
+        // was the last to get through; only a *newer* one does that. Going backwards is
+        // `step_back`'s job, and it has the target time to do it with.
+        if let Some(newest) = newest_delivery(&self.pulses)
+            && self.last_delivered.is_none_or(|old| old.pulse_index < newest.pulse_index)
+        {
+            self.last_delivered = Some(newest);
         }
     }
 
-    /// Every recorded crossing of Bob's worldline, from every pulse still in the field.
+    /// Every crossing of the receiver's worldline this transmission has made, including those
+    /// carried by pulses the `MAX_PULSES` cap has since dropped.
     pub fn receptions(&self) -> impl Iterator<Item = &Reception> {
-        self.pulses.iter().flat_map(|p| p.receptions.iter())
+        self.heard.iter()
     }
 
     /// The reception with the latest coordinate time. Arrivals do not come in emission order: the
-    /// frozen family of an early pulse can reach Bob long after the crossing family of a late one,
-    /// so they have to be compared by their own event time.
+    /// frozen family of an early pulse can reach the receiver long after the crossing family of a
+    /// late one, so they have to be compared by their own event time.
     pub fn last_reception(&self) -> Option<&Reception> {
         self.receptions().max_by(|a, b| a.t.total_cmp(&b.t))
     }
 
-    /// The largest shift Bob has measured so far, over all arrivals.
+    /// The largest shift the receiver has measured so far, over all arrivals.
     pub fn max_ratio(&self) -> Option<f64> {
         self.receptions().map(|r| r.ratio).reduce(f64::max)
     }
 
-    /// How many arrivals Bob has recorded in total, counting a pulse once per sheet of it that has
-    /// swept over him rather than once per pulse.
+    /// How many arrivals the receiver has recorded in total, counting a pulse once per sheet of it
+    /// that has swept over them rather than once per pulse.
     pub fn received_count(&self) -> usize {
-        self.pulses.iter().map(|p| p.receptions.len()).sum()
+        self.heard.len()
+    }
+
+    /// The emission event of the latest pulse of this transmission that has been received.
+    ///
+    /// Once the receiver's worldline has ended (`Observer::has_ended`) this is the last signal of
+    /// the emitter's that ever arrived, and its emission event is the boundary, on the emitter's
+    /// own worldline, of the causal past of the end of the receiver's: everything sent after it is
+    /// sent into a region the receiver has already left, and never arrives. Nothing here predicts
+    /// that boundary; it is read off the simulation, which is the only criterion this app trusts.
+    ///
+    /// It survives the `MAX_PULSES` cap, which matters: an emitter transmitting from t = 0 through
+    /// a whole infall sends of order a hundred pulses against a cap of sixty-four, and the last
+    /// pulse to be delivered is usually one of the first to have been sent. See `Delivery`.
+    pub fn last_delivered_pulse(&self) -> Option<Delivery> {
+        self.last_delivered
+    }
+
+    /// How many pulses this transmission sent after the given serial number: with
+    /// `last_delivered_pulse`, the count of transmissions that were sent and never arrived.
+    ///
+    /// Counted from the newest pulse's serial number rather than by counting the pulses in hand, so
+    /// that the answer is the number actually emitted even where the cap has dropped some of them,
+    /// and so that a rewind, which un-sends the newest pulses but leaves `next_index` alone, takes
+    /// the count back down with it.
+    pub fn pulses_after(&self, index: usize) -> usize {
+        self.pulses.last().map_or(0, |p| p.index.saturating_sub(index))
     }
 
     /// Drop every pulse and put the clock back to zero. This is the reset, not the rewind: it is
@@ -900,6 +1046,81 @@ impl SignalField {
         self.pulses.clear();
         self.t = 0.0;
         self.last_emit_tau = None;
+        self.last_delivered = None;
+        self.heard.clear();
+    }
+}
+
+/// The delivery of the newest pulse among these that has been received, or None if none has.
+fn newest_delivery(pulses: &[Pulse]) -> Option<Delivery> {
+    pulses
+        .iter()
+        .filter(|p| !p.receptions.is_empty())
+        .max_by_key(|p| p.index)
+        .map(|p| Delivery {
+            pulse_index: p.index,
+            emitted_t: p.emitted_t,
+            emitted_tau: p.emitted_tau,
+            emitted_r: p.emitted_r,
+            emitted_phi: p.emitted_phi,
+            received_t: p.receptions.iter().map(|r| r.t).fold(f64::INFINITY, f64::min),
+        })
+}
+
+/// The two transmissions the app carries at once: Alice's, which Bob receives, and Bob's, which
+/// Alice receives.
+///
+/// It exists so that there is exactly one description of how a step of the simulation moves both
+/// fields. The play loop, the arrow keys and the panel's transport buttons all go through it, so
+/// they cannot drift apart, and the order inside `advance` — carry the light, then emit, then
+/// listen — is stated once instead of three times.
+pub struct SignalPair<'a> {
+    /// Alice's transmission: emitted by Alice, received by Bob.
+    pub alice: &'a mut SignalField,
+    /// Bob's transmission: emitted by Bob, received by Alice.
+    pub bob: &'a mut SignalField,
+}
+
+impl SignalPair<'_> {
+    /// Carry both transmissions forward by dt of the simulation clock.
+    ///
+    /// The order matters and is the same for each field. Advancing first and emitting second keeps
+    /// a fresh pulse at its emitter's current event instead of one step behind it, and detecting
+    /// last means a pulse emitted this frame already has a recorded side for its receiver before
+    /// the next frame can move it.
+    ///
+    /// With no Alice there is nobody to emit her transmission and nobody for Bob's to reach, so
+    /// only Bob's field is carried, and it is carried rather than dropped: the light he has already
+    /// sent is still in flight whether or not anyone is left to hear it.
+    pub fn advance(
+        &mut self,
+        metric: &KerrSchild,
+        dt: f64,
+        alice: Option<&Observer>,
+        bob: &Observer,
+    ) {
+        self.alice.advance(metric, dt);
+        self.bob.advance(metric, dt);
+        if let Some(al) = alice {
+            self.alice.emit_if_due(metric, al);
+            self.bob.detect_receptions(metric, al);
+        }
+        self.bob.emit_if_due(metric, bob);
+        self.alice.detect_receptions(metric, bob);
+    }
+
+    /// Carry both transmissions back by dt of coordinate time, undoing `advance` rather than
+    /// deleting what it built.
+    pub fn step_back(&mut self, metric: &KerrSchild, dt: f64) {
+        self.alice.step_back(metric, dt);
+        self.bob.step_back(metric, dt);
+    }
+
+    /// Drop both transmissions and put both clocks back to zero: the reset that re-dropping the
+    /// observers or changing the geometry under them needs.
+    pub fn clear(&mut self) {
+        self.alice.clear();
+        self.bob.clear();
     }
 }
 
@@ -1734,12 +1955,43 @@ mod tests {
         let mut alice = Observer::new_with_phi(&metric, "Alice", 0.0, 4.5, 0.0, 0.25, params);
         let mut field = SignalField::default();
 
-        // Nothing is emitted before release, one pulse at release, and the next only after
-        // `interval_tau` of Alice's proper time.
+        // An observer still waiting for release transmits: they are the static observer at their
+        // hover radius, with a clock ticking at sqrt(-g_tt) and a frame to broadcast into, and
+        // r = 4.5M is well outside the static limit r = 2M where that worldline stops existing.
         let mut waiting = Observer::new_with_phi(&metric, "Alice", 0.0, 4.5, 3.0, 0.25, params);
         waiting.step(&metric, 0.5, 0.5);
-        field.emit_if_due(&metric, &waiting);
-        assert_eq!(field.pulses.len(), 0, "an unreleased Alice sends nothing");
+        assert!(!waiting.is_active && waiting.tau > 0.0, "she is hovering, and her clock runs");
+        let mut hover_field = SignalField::default();
+        hover_field.emit_if_due(&metric, &waiting);
+        assert_eq!(hover_field.pulses.len(), 1, "a hovering Alice transmits from the first call");
+        let hovered = hover_field.pulses[0].clone();
+        assert!(
+            (hovered.emitted_r - 4.5).abs() < 1e-12 && (hovered.emitted_t - 0.5).abs() < 1e-12,
+            "at the event she is hovering at: {:?}",
+            (hovered.emitted_t, hovered.emitted_r)
+        );
+        // The frame is the static one, not the free-fall frame `Observer::four_velocity` reports
+        // for her: light is isotropic in the frame of the worldline she is on. The two differ, and
+        // the pulse must be built on the one she is actually keeping time by.
+        let u_static = signalling_four_velocity(&metric, &waiting);
+        let g_tt = metric.metric_components(4.5)[0][0];
+        assert!(
+            (u_static[0] - 1.0 / (-g_tt).sqrt()).abs() < 1e-12
+                && u_static[1] == 0.0
+                && u_static[2] == 0.0,
+            "a hoverer signals in the static frame: {u_static:?}"
+        );
+        assert!(
+            (u_static[1] - waiting.four_velocity(&metric)[1]).abs() > 0.1,
+            "and that is not the free-fall frame the observer reports"
+        );
+        // Inside the static limit there is no such worldline, and a waiting observer is silent.
+        let mut deep = Observer::new_with_phi(&metric, "Alice", 0.0, 1.5, 3.0, 0.0, params);
+        deep.step(&metric, 0.5, 0.5);
+        let mut deep_field = SignalField::default();
+        deep_field.emit_if_due(&metric, &deep);
+        assert!(!deep.is_active);
+        assert_eq!(deep_field.pulses.len(), 0, "no static observer exists at r = 1.5M to transmit");
 
         let dt = 0.01;
         let mut t = 0.0;
@@ -1769,5 +2021,407 @@ mod tests {
         alice.step(&metric, t + dt, dt);
         field.emit_if_due(&metric, &alice);
         assert_eq!(field.pulses.len(), 1);
+    }
+
+    /// The two radial branches k_r of a null ray of conserved (E, L) at radius r, straight from the
+    /// null condition of the module header,
+    ///
+    ///     Delta k_r^2 + 2 (a L - 2 M r E) k_r + [L^2 - (r^2 + 2 M r) E^2] = 0,
+    ///
+    /// which is g^{mu nu} k_mu k_nu = 0 written out with the inverse metric of this chart. Nothing
+    /// about the ray's history enters: given the two conserved components (E, L) = (-k_t, k_phi),
+    /// the radial one is fixed up to the choice of branch at every radius it visits.
+    fn radial_covector_roots(metric: &KerrSchild, r: f64, e: f64, l: f64) -> (f64, f64) {
+        let delta = metric.delta(r);
+        let half_b = metric.a * l - 2.0 * metric.m * r * e;
+        let c = l * l - (r * r + 2.0 * metric.m * r) * e * e;
+        let disc = (half_b * half_b - delta * c).max(0.0).sqrt();
+        ((-half_b + disc) / delta, (-half_b - disc) / delta)
+    }
+
+    /// nu = -k . u for a ray of conserved (E, L) whose radial branch at this event is k_r, measured
+    /// by an observer of 4-velocity u: with k_mu = (-E, k_r, L) that is E u^t - k_r u^r - L u^phi.
+    fn frequency_from_constants(e: f64, k_r: f64, l: f64, u: &[f64; 3]) -> f64 {
+        e * u[0] - k_r * u[1] - l * u[2]
+    }
+
+    /// Bob's transmission, received by Alice: the mirror image of `run_transmission`, with the
+    /// emitter and the receiver swapped. Alice is released from r = 4.5M at t = 0 at phi = 0.25 and
+    /// Bob is held at the same radius until t = `delta_t`, both raindrops, exactly as the Drop
+    /// Observers button builds them. Returns the two worldlines and the field, run to `until` on a
+    /// fixed step.
+    ///
+    /// Bob transmits from t = 0, through the whole of his wait: while he hovers he is the static
+    /// observer at r = 4.5M, whose proper time runs at sqrt(-g_tt) = 0.745 of coordinate time, so
+    /// his pulses come every 0.134 M of t rather than every 0.1.
+    ///
+    /// No adaptive step is needed here, unlike `run_transmission`. Nothing of Bob's ever stands on
+    /// r- waiting for Alice: she is ahead of him, so the only rays of his that reach her are the
+    /// ones that outrun her, and they sweep over her out in the open where a fixed hundredth of an
+    /// M resolves them easily.
+    pub(super) fn run_return_transmission(
+        metric: &KerrSchild,
+        delta_t: f64,
+        until: f64,
+        dt: f64,
+    ) -> (Observer, Observer, SignalField) {
+        let params = WorldlineParams::default();
+        let mut alice = Observer::new_with_phi(metric, "Alice", 0.0, 4.5, 0.0, 0.25, params);
+        let mut bob = Observer::new_with_phi(metric, "Bob", 0.0, 4.5, delta_t, 0.0, params);
+        let mut field = SignalField::default();
+        let steps = (until / dt).round() as usize;
+        for i in 0..steps {
+            let t = ((i + 1) as f64) * dt;
+            alice.step(metric, t, dt);
+            bob.step(metric, t, dt);
+            field.advance(metric, dt);
+            field.emit_if_due(metric, &bob);
+            field.detect_receptions(metric, &alice);
+        }
+        (alice, bob, field)
+    }
+
+    #[test]
+    fn test_alice_receives_bobs_pulses_from_behind() {
+        // The return path, with Bob released 1 M of coordinate time after Alice from the same
+        // radius so that most of what he sends is sent while he is falling behind her. His pulses
+        // have to chase her, and only the part of each front that outruns her ever arrives: in this
+        // chart the ingoing principal null ray travels at dr/dt = -1, which no timelike worldline
+        // can match, so the ingoing arc of every pulse gains on her while the outward arc, which
+        // falls no faster than the raindrop congruence itself, never does. Her own frozen family is
+        // not in the picture at all: the rays of his that pile onto r- settle there behind her,
+        // after she has already crossed and gone on to the ring, so unlike Bob she never meets a
+        // stack.
+        //
+        // Measured with the step below: 26 arrivals, ratios from 1.081 down to 0.533, every one of
+        // them recorded before her worldline ends at t = 6.30. The mild blueshifts at the top of
+        // that range belong to the pulses he sends once he is falling: a prograde ray of his front
+        // caught by a receiver who has fallen deeper into the potential can come in above unity,
+        // where the ingoing ray of the same front cannot. Deeper in it is all redshift, because
+        // catching her from behind means catching an observer running away.
+        let metric = KerrSchild::new(1.0, 0.65);
+        let rp = metric.outer_horizon();
+        let (alice, _bob, field) = run_return_transmission(&metric, 1.0, 6.5, 0.005);
+
+        let mut heard: Vec<Reception> = field.receptions().copied().collect();
+        heard.sort_by(|a, b| a.t.total_cmp(&b.t));
+        assert!(heard.len() >= 10, "Alice should hear the transmission: {heard:?}");
+        assert!(alice.has_ended(), "and the run should carry her to the end of her worldline");
+        assert!(
+            heard.iter().any(|rec| {
+                field
+                    .pulses
+                    .iter()
+                    .any(|p| p.index == rec.pulse_index && p.emitted_r < 4.4)
+            }),
+            "some of what she hears must have been sent after he let go: {heard:?}"
+        );
+        for reception in heard.iter() {
+            assert!(
+                reception.ratio.is_finite() && reception.ratio > 0.0,
+                "every measured shift is finite and positive: {reception:?}"
+            );
+            // Inside r+ the only rays of his that can still reach her are the ones outrunning her,
+            // and those are redshifted: see the exact calculation in the next test, which gives the
+            // shift of the ingoing principal null ray between two raindrops as the quotient of
+            // their two values of u^t + u^r - a u^phi, a number below one whenever the receiver is
+            // the deeper of the two.
+            if reception.r < rp {
+                assert!(
+                    reception.ratio < 1.0,
+                    "light caught inside r+ from behind must be redshifted: {reception:?}"
+                );
+            }
+        }
+        let loudest = heard.iter().map(|r| r.ratio).fold(f64::MIN, f64::max);
+        let quietest = heard.iter().map(|r| r.ratio).fold(f64::MAX, f64::min);
+        println!(
+            "Bob -> Alice at Dt = 1: {} arrivals, ratio {quietest:.4} to {loudest:.4}, Alice ends at t = {:.2}",
+            heard.len(),
+            alice.t
+        );
+        // Nothing of his piles up on r- in front of her, so there is no blueshift of the kind Bob
+        // measures crossing her stack: the whole transmission stays inside a factor of two.
+        assert!(loudest < 2.0, "no stack for her to cut through: loudest = {loudest}");
+    }
+
+    #[test]
+    fn test_the_shift_alice_measures_on_bobs_light_is_the_exact_one() {
+        // The shift, computed twice by two routes that share nothing but the metric.
+        //
+        // Route one is the app's: `NullRay::frequency_ratio`, the ratio of `f_factor` at the
+        // reception event to the `f_emit` stored at emission, with the ray's direction carried
+        // there by the integrator.
+        //
+        // Route two uses only the ray's conserved covariant components. Normalise the ray at
+        // emission so that k^t = 1 there; then E = -k_t and L = k_phi are two numbers fixed for the
+        // whole flight, and at any radius the third component k_r is a root of the null condition
+        // of the module header, a quadratic in k_r with no reference to the ray's history at all.
+        // The frequency an observer of 4-velocity u measures is then -k . u = E u^t - k_r u^r -
+        // L u^phi, and the ratio between two events is the quotient of those. The integrated ray is
+        // asked one question only, which of the two radial branches it is on, and the residual of
+        // that identification is itself asserted below.
+        //
+        // Agreement between the two is therefore a measurement of how well the integration holds E
+        // and L over the flight. Measured: better than one part in 1e6 over the ~1 M of coordinate
+        // time the leading ray needs to catch her.
+        let metric = KerrSchild::new(1.0, 0.65);
+        let params = WorldlineParams::default();
+        let mut alice = Observer::new_with_phi(&metric, "Alice", 0.0, 4.5, 0.0, 0.25, params);
+        // The app's own delay, so the emitter here is the *static* Bob of the first pulse he sends,
+        // hovering at r = 4.5M and still 8 M of coordinate time from release. Both routes below
+        // therefore have to use the static 4-velocity, which is what `signalling_four_velocity`
+        // returns for him and what the emission tetrad was built on; `Observer::four_velocity`
+        // would hand back the free-fall value at that radius instead and the two routes would then
+        // be answering different questions.
+        let mut bob = Observer::new_with_phi(&metric, "Bob", 0.0, 4.5, 8.0, 0.0, params);
+        let mut field = SignalField::default();
+        let dt = 0.005;
+
+        // The probe: the leading ray of Bob's first pulse, the one with the most negative dr/dt,
+        // which is the ray of that front that gains on Alice fastest.
+        let mut probe: Option<(NullRay, f64, f64, f64)> = None;
+        let mut checked = false;
+        let mut t = 0.0;
+        for _ in 0..800 {
+            t += dt;
+            alice.step(&metric, t, dt);
+            bob.step(&metric, t, dt);
+            field.advance(&metric, dt);
+            field.emit_if_due(&metric, &bob);
+            field.detect_receptions(&metric, &alice);
+
+            if probe.is_none()
+                && let Some(pulse) = field.pulses.first()
+            {
+                let ray = *pulse
+                    .rays
+                    .iter()
+                    .min_by(|a, b| a.dr_dt.total_cmp(&b.dr_dt))
+                    .expect("a pulse has rays");
+                let g = metric.metric_components(ray.r);
+                let v = ray.direction();
+                let e = -(g[0][0] * v[0] + g[0][1] * v[1] + g[0][2] * v[2]);
+                let k_r = g[1][0] * v[0] + g[1][1] * v[1] + g[1][2] * v[2];
+                let l = g[2][0] * v[0] + g[2][1] * v[1] + g[2][2] * v[2];
+                // The same numbers must satisfy the null condition at the emission radius, which
+                // checks the quadratic itself before it is used anywhere.
+                let (root_a, root_b) = radial_covector_roots(&metric, ray.r, e, l);
+                let nearest = if (root_a - k_r).abs() < (root_b - k_r).abs() { root_a } else { root_b };
+                assert!(
+                    (nearest - k_r).abs() < 1e-9 * (1.0 + k_r.abs()),
+                    "k_r = {k_r} is not a root {root_a} / {root_b} of the null condition"
+                );
+                let u_bob = signalling_four_velocity(&metric, &bob);
+                assert!(!bob.is_active && u_bob[1] == 0.0, "the emitter is hovering: {u_bob:?}");
+                let nu_bob = frequency_from_constants(e, k_r, l, &u_bob);
+                assert!(nu_bob > 0.0, "the emitter measures a positive frequency: {nu_bob}");
+                probe = Some((ray, e, l, nu_bob));
+                continue;
+            }
+
+            if let Some((ray, e, l, nu_bob)) = probe.as_mut() {
+                ray.step(&metric, dt);
+                if checked || !ray.alive() || ray.r > alice.r {
+                    continue;
+                }
+                // The reception event: the leading ray has just caught Alice up in radius. She is
+                // an E = 1, L = 0 raindrop, so her 4-velocity at that radius *is* the raindrop
+                // congruence there, which is how both routes get to evaluate it at exactly the
+                // ray's radius rather than a fraction of a step away from it.
+                let u_alice = raindrop(&metric, ray.r);
+                let integrated = alice.four_velocity(&metric);
+                for mu in 0..3 {
+                    assert!(
+                        (u_alice[mu] - integrated[mu]).abs() < 2e-2 * (1.0 + integrated[mu].abs()),
+                        "the congruence value at r = {} is Alice's own u: {u_alice:?} vs {integrated:?}",
+                        ray.r
+                    );
+                }
+
+                let measured = ray.frequency_ratio(&metric, &u_alice);
+                // Which branch: the root the ray has been on since emission. The gap between that
+                // root and the ray's own k_r, in the emission normalisation, is the integration's
+                // drift off the null cone and off the conserved (E, L).
+                let g = metric.metric_components(ray.r);
+                let v = ray.direction();
+                let e_now = -(g[0][0] * v[0] + g[0][1] * v[1] + g[0][2] * v[2]);
+                let k_t_scale = *e / e_now;
+                let own_k_r = (g[1][0] * v[0] + g[1][1] * v[1] + g[1][2] * v[2]) * k_t_scale;
+                let (root_a, root_b) = radial_covector_roots(&metric, ray.r, *e, *l);
+                let k_r = if (root_a - own_k_r).abs() < (root_b - own_k_r).abs() {
+                    root_a
+                } else {
+                    root_b
+                };
+                let branch_gap = (k_r - own_k_r).abs() / (1.0 + own_k_r.abs());
+                assert!(
+                    branch_gap < 1e-4,
+                    "the ray must still be on a branch of its own null cone: {branch_gap}"
+                );
+
+                let predicted = frequency_from_constants(*e, k_r, *l, &u_alice) / *nu_bob;
+                println!(
+                    "reception at t = {:.3}, r = {:.4}: measured {measured:.8} vs predicted \
+                     {predicted:.8} (branch gap {branch_gap:e})",
+                    ray.t, ray.r
+                );
+                assert!(
+                    (measured - predicted).abs() < 1e-3 * predicted.abs(),
+                    "measured {measured} vs the (E, L) prediction {predicted}"
+                );
+                assert!(predicted > 0.0 && predicted.is_finite());
+                checked = true;
+            }
+        }
+        assert!(checked, "the leading ray of Bob's first pulse must catch Alice");
+
+        // The same statement in the one case that has a closed form, and the one the Theory Guide
+        // quotes: the ingoing principal null ray. It runs at dr/dt = -1 and dphi/dt = 0 everywhere
+        // in this chart, and the frequency any observer measures on it is nu/nu_inf = u^t + u^r -
+        // a u^phi (`KerrSchild::ingoing_frequency_ratio`), so between two raindrops the shift is
+        // just the quotient of their two values - no integration, no f_factor. It is a redshift
+        // whenever the receiver is the deeper of the two, which is Alice's whole situation here;
+        // for a = 0 the emitter at infinity and the receiver at the horizon give exactly 1/2, and
+        // that is the same formula with r_emit -> infinity.
+        let r_emit = 4.0;
+        let u_emit = raindrop(&metric, r_emit);
+        let mut pnd = NullRay {
+            t: 0.0,
+            r: r_emit,
+            phi: 0.0,
+            dr_dt: -1.0,
+            dphi_dt: 0.0,
+            f_emit: f_factor(&metric, r_emit, &[1.0, -1.0, 0.0], &u_emit),
+            death_t: None,
+        };
+        for _ in 0..600 {
+            pnd.step(&metric, 0.005);
+            if !pnd.alive() {
+                break;
+            }
+            let u_here = raindrop(&metric, pnd.r);
+            let measured = pnd.frequency_ratio(&metric, &u_here);
+            let closed_form = metric.ingoing_frequency_ratio(pnd.r, &u_here)
+                / metric.ingoing_frequency_ratio(r_emit, &u_emit);
+            assert!(
+                (measured - closed_form).abs() < 1e-6 * closed_form,
+                "ingoing PND shift {measured} vs (u^t + u^r - a u^phi) quotient {closed_form} at r = {}",
+                pnd.r
+            );
+            assert!(
+                measured < 1.0,
+                "a raindrop below the emitter must see the ingoing ray redshifted: {measured} at r = {}",
+                pnd.r
+            );
+        }
+    }
+
+    #[test]
+    fn test_bobs_late_pulses_never_reach_alice() {
+        // The point of running the transmission both ways, at the app's own default layout: Alice
+        // released from r = 4.5M at t = 0, Bob hovering at the same radius until t = 8. He
+        // transmits throughout the wait, as the static observer he is while he waits, and his
+        // pulses chase her down; her worldline ends on the ring at t = 6.30, and once it has, no
+        // later pulse of his has anywhere to arrive. The last one that did marks the event on his
+        // own worldline - a point on the vertical hover segment, hours of his proper time before he
+        // even lets go - beyond which nothing he sends can ever be heard: the boundary of the
+        // causal past of the end of her worldline. Nothing predicts that event here; it is read off
+        // the run, which is the only criterion this app trusts.
+        //
+        // Measured: 15 arrivals, ratios 0.362 to 0.751, and the last delivered pulse is #14, sent
+        // at t = 1.97 from r = 4.5 exactly (he has not moved) at his proper time 1.468, first heard
+        // by Alice at t = 5.51 when she was down at r = 0.99. The 83 pulses he sends after it - 45
+        // more from the hover and 38 on the way down - are never heard by anybody.
+        let metric = KerrSchild::new(1.0, 0.65);
+        let (alice, bob, field) = run_return_transmission(&metric, 8.0, 15.0, 0.01);
+        assert!(alice.has_ended(), "the run must carry Alice to the end of her worldline");
+        assert!(bob.is_active, "and carry Bob past his own release at t = 8");
+
+        let heard = field.received_count();
+        assert!(heard >= 5, "his hover transmission must reach her: {heard} arrivals");
+        let ratios: Vec<f64> = field.receptions().map(|r| r.ratio).collect();
+        assert!(
+            ratios.iter().all(|r| r.is_finite() && *r > 0.0 && *r < 1.0),
+            "a static emitter above a falling receiver is a redshift throughout: {ratios:?}"
+        );
+
+        let last = field
+            .last_delivered_pulse()
+            .expect("some of Bob's transmission reached her");
+        let later = field.pulses_after(last.pulse_index);
+        println!(
+            "default layout: {heard} arrivals, ratio {:.4} to {:.4}; last delivered #{} sent at \
+             t = {:.3}, r = {:.6}, Bob's tau = {:.3}, first heard at t = {:.3}; {later} later \
+             pulses never arrive",
+            ratios.iter().copied().fold(f64::MAX, f64::min),
+            ratios.iter().copied().fold(f64::MIN, f64::max),
+            last.pulse_index,
+            last.emitted_t,
+            last.emitted_r,
+            last.emitted_tau,
+            last.received_t
+        );
+        assert!(
+            (1.5..3.0).contains(&last.emitted_t),
+            "the cut-off is about 2 M into his wait: t = {}",
+            last.emitted_t
+        );
+        assert!(
+            (last.emitted_r - 4.5).abs() < 1e-9,
+            "and he had not moved when he sent it: r = {}",
+            last.emitted_r
+        );
+        assert!(last.emitted_t < 8.0, "so the boundary event is on his hover segment");
+        assert!(later >= 40, "he goes on transmitting long past it: {later}");
+
+        // Everything sent after that event is sent to nobody, hover pulses and infall pulses alike.
+        for pulse in field.pulses.iter() {
+            if pulse.index > last.pulse_index {
+                assert!(
+                    pulse.receptions.is_empty(),
+                    "pulse {} was sent after the last delivery and cannot have arrived: {:?}",
+                    pulse.index,
+                    pulse.receptions
+                );
+                assert!(
+                    pulse.emitted_t > last.emitted_t,
+                    "serial order is emission order: {} at t = {}",
+                    pulse.index,
+                    pulse.emitted_t
+                );
+            }
+        }
+        let after_release = field.pulses.iter().filter(|p| p.emitted_t >= 8.0).count();
+        assert!(after_release > 0, "he transmits after his release too");
+        assert!(
+            field
+                .pulses
+                .iter()
+                .filter(|p| p.emitted_t >= 8.0)
+                .all(|p| p.receptions.is_empty()),
+            "and none of those {after_release} pulses is ever heard"
+        );
+        // Nothing arrives after her worldline ends, either.
+        let end_t = alice.trail.iter().map(|p| p[0]).fold(0.0f64, f64::max);
+        for reception in field.receptions() {
+            assert!(
+                reception.t <= end_t + 1e-9,
+                "an arrival at t = {} is past the end of her worldline",
+                reception.t
+            );
+        }
+
+        // The record outlives the wavefront. By t = 15 Bob has sent about a hundred pulses against
+        // a cap of `MAX_PULSES`, so the pulse that carried the last delivery is long gone from the
+        // field; the delivery is not, which is the whole reason `Delivery` is kept separately.
+        assert!(
+            field.pulses.iter().all(|p| p.index != last.pulse_index),
+            "the delivering pulse should have been evicted by now"
+        );
+        assert!(
+            field.pulses.first().map(|p| p.index).unwrap_or(0) > last.pulse_index,
+            "every pulse still in hand is newer than it"
+        );
     }
 }

@@ -2,7 +2,7 @@ use crate::gui::theme::Theme;
 use crate::physics::geodesic::GeodesicState;
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::{Observer, ObserverMode, WorldlineParams};
-use crate::physics::wavefront::SignalField;
+use crate::physics::wavefront::{SignalField, SignalPair};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReferenceFrame {
@@ -19,6 +19,22 @@ impl ReferenceFrame {
             Self::Alice => "Alice's Rest Frame (45° Cones)",
         }
     }
+}
+
+/// The two transmissions a canvas draws, each with the state of its own checkbox: Alice's signal,
+/// which Bob receives, and Bob's, which Alice receives. They travel together because every drawing
+/// path needs all four, and because the pair is one idea - the same field code run once in each
+/// direction, so that the user can see both what reaches Bob and what stops reaching Alice.
+#[derive(Clone, Copy)]
+pub struct SignalViews<'a> {
+    /// Alice's transmission, emitted by Alice and received by Bob.
+    pub alice: &'a SignalField,
+    /// Whether "Alice's Signal (pulses)" is ticked.
+    pub show_alice: bool,
+    /// Bob's transmission, emitted by Bob and received by Alice.
+    pub bob: &'a SignalField,
+    /// Whether "Bob's Signal (pulses)" is ticked.
+    pub show_bob: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -41,6 +57,8 @@ pub struct AppControls {
     /// Draw Alice's signal pulses on the equatorial view and their principal-null tracks
     /// in the (t, r) diagram.
     pub show_signal: bool,
+    /// The same for Bob's own transmission, which Alice receives.
+    pub show_bob_signal: bool,
     /// Draw the family of outgoing principal null rays trapped between r+ and r- in the (t, r)
     /// diagram.
     pub show_outgoing_rays: bool,
@@ -69,6 +87,7 @@ impl Default for AppControls {
             step_distance_km: 1000.0,
             show_river: true,
             show_signal: true,
+            show_bob_signal: true,
             show_outgoing_rays: true,
             show_streamlines: true,
             enable_dual_infall: true,
@@ -118,7 +137,7 @@ impl AppControls {
         metric: &mut KerrSchild,
         bob: &mut Observer,
         alice: &mut Option<Observer>,
-        signal: &mut SignalField,
+        mut signals: SignalPair<'_>,
         current_time: &mut f64,
     ) {
         ui.heading(egui::RichText::new("SPACETIME LAB").strong().color(Theme::HORIZON_OUTER));
@@ -155,7 +174,7 @@ impl AppControls {
                 }
                 if ui.button("⏮ Reset").clicked() {
                     *current_time = 0.0;
-                    signal.clear();
+                    signals.clear();
                     let params = self.worldline_params();
                     bob.reset_with_phi(metric, 0.0, 3.8, 0.0, params);
                     if let Some(al) = alice {
@@ -179,10 +198,12 @@ impl AppControls {
                     // stepped back by however much of the step is left above zero.
                     let back = current_step.min(*current_time);
                     *current_time -= back;
-                    // The field is rewound, not dropped: `SignalField::step_back` integrates every
-                    // ray back along the null geodesic it came in on, revives the ones that died
-                    // inside the interval, and un-sends the pulses emitted inside it.
-                    signal.step_back(metric, back);
+                    // The fields are rewound, not dropped: `SignalField::step_back` integrates
+                    // every ray back along the null geodesic it came in on, revives the ones that
+                    // died inside the interval, and un-sends the pulses emitted inside it. Both
+                    // transmissions go back together, exactly as `SpacetimeApp::step_backward`
+                    // does it.
+                    signals.step_back(metric, back);
                     bob.step_back(metric, current_step);
                     if let Some(al) = alice {
                         al.step_back(metric, current_step);
@@ -198,11 +219,10 @@ impl AppControls {
                     if let Some(al) = alice {
                         al.step(metric, *current_time, current_step);
                     }
-                    signal.advance(metric, current_step);
-                    if let Some(al) = alice {
-                        signal.emit_if_due(metric, al);
-                    }
-                    signal.detect_receptions(metric, bob);
+                    // One description of a step forward, shared with the play loop and the arrow
+                    // keys: carry both transmissions, let each emitter emit, then let each receiver
+                    // listen.
+                    signals.advance(metric, current_step, alice.as_ref(), bob);
                 }
             });
 
@@ -255,6 +275,10 @@ impl AppControls {
             ui.checkbox(&mut self.show_signal, "Alice's Signal (pulses)")
                 .on_hover_text(
                     "Alice broadcasts a pulse into the whole of her own light cone every 0.1 M of her proper time, and every ray of it is an exact null geodesic of the coded metric. Colour is the frequency a local raindrop measures against Alice's emission, from a tenfold redshift through white to a thousandfold blueshift. Inside r₊ the rays that never reach r₋ are the prograde ones, dragged forward in ϕ: that is the arc of the pulse around α = 90°, running from about 45° to 135° well inside r₊, wider than that just below r₊ and narrowing as Alice nears r₋, its edges lying exactly where E − Ω₋L changes sign. On the equatorial view that arc is drawn in salmon: the part of each ring sent prograde enough to have negative energy along the inner horizon's rotating generator, E − Ω₋L < 0, which never crosses the drawn r₋ circle but piles onto it from outside while co-rotating at Ω₋, whereas the rest of the ring crosses at finite time. The salmon arc is about a third of the ring for a pulse sent just inside r₊ and only a sliver for one sent close to r₋, and it is beaded with dots because the arc collapses onto r₋ faster than a pixel can show. Those arcs stack up against the Cauchy horizon while the rest of the pulse falls through it, and because the pulses are close enough together for consecutive arcs to overlap there, an infaller crossing r₋ where they stand cuts through several sheets in a row, each blueshifted on the scale exp(κ₋Δt). Each loop is one pulse and encloses Alice, since light is isotropic in Alice's own frame, and the dot on the loop marks the emission event on Alice's trail. Inside r₊ the flow carries the whole loop inward, so the loop's outer edge never gets further from the hole than that dot: the river model, drawn with light.",
+                );
+            ui.checkbox(&mut self.show_bob_signal, "Bob's Signal (pulses)")
+                .on_hover_text(
+                    "Bob broadcasts exactly as Alice does, a whole light cone of exact null geodesics every 0.1 M of his own proper time, and he starts at t = 0, before he is released: while he waits he is the static observer at his hover radius, with a clock ticking at √(−g_tt) of coordinate time and an orthonormal frame to broadcast into, and nothing in the geometry stops him transmitting from it. His pulses come every 0.134 M of coordinate time while he hovers at r = 4.5M and every 0.1 M of his own once he falls. The colours mean the same thing as Alice's: the shift a local raindrop measures against his emission. His fronts are drawn at half stroke width and his emission dots in his own mint, so the two transmissions can be told apart without touching the shift colouring, which is a measurement. What is not the same is the physics of the return path. In the layout Drop Observers builds, Bob is behind Alice on the same infall, so his pulses chase her inward, and the only part of each one that ever catches her is the ingoing part of his cone: it runs at up to dr/dt = −1 in this chart, which no timelike worldline can match. That is the light whose shift is finite on the branch of r₋ she actually crosses, so unlike Alice → Bob there is no stack for her to cut through. His frozen family, E − Ω₋L < 0, does pile onto r₋ from outside, but it settles there behind her, after she has already gone through, so she never meets it. (In the layout the app starts in he is the deeper of the two instead, and his light climbs to her: the shift then starts as a small blueshift, because the fall toward the light beats the recession, and turns over into a redshift as he drops away below her.) And because her worldline ends — on the ring, or frozen on r₋ — his transmission stops arriving: the last pulse of his that reached her is ringed on his worldline in both views, and it marks the boundary of the causal past of the end of her worldline. At the default Δt = 8 that ring sits on his vertical hover segment, at about t = 2, because by the time he is released she has already reached the ring and nothing he sends after t ≈ 2 can catch her. Everything he sends after that event never arrives, however long he goes on sending.",
                 );
             ui.checkbox(&mut self.show_outgoing_rays, "Outgoing Light Between r₊ and r₋ (pink lines)")
                 .on_hover_text(
@@ -313,7 +337,7 @@ impl AppControls {
                 }
                 if preset_changed {
                     *current_time = 0.0;
-                    signal.clear();
+                    signals.clear();
                     let params = self.worldline_params();
                     bob.reset_with_phi(metric, 0.0, 3.8, 0.0, params);
                     if let Some(al) = alice {
@@ -446,14 +470,14 @@ impl AppControls {
                 ui.label(egui::RichText::new("Alice drops from r = 4.5M at t = 0; Bob hovers there and is released at t = Δt, so his worldline trails hers by about Δt in coordinate time the whole way in.").small().color(Theme::TEXT_MUTED));
                 if ui.button("Drop Observers").clicked() {
                     *current_time = 0.0;
-                    signal.clear();
+                    signals.clear();
                     let params = self.worldline_params();
                     *alice = Some(Observer::new_with_phi(metric, "Alice", 0.0, 4.5, 0.0, 0.25, params));
                     *bob = Observer::new_with_phi(metric, "Bob", 0.0, 4.5, self.delta_t_delay, 0.0, params);
                 }
             } else {
                 *alice = None;
-                signal.clear();
+                signals.clear();
             }
         });
 
