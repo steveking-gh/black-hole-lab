@@ -35,7 +35,10 @@
 //!
 //! so the ratio of the frequency measured at reception to the frequency measured at emission is
 //! f_receive / f_emit with E cancelling. Each ray therefore only has to remember the one number
-//! f_emit, and no affine normalisation is ever needed.
+//! f_emit, and no affine normalisation is ever needed. A ray also keeps the direction it left with,
+//! v_emit, which is what lets `NullRay::gain_between` re-evaluate f at the emission event against
+//! some observer other than the emitter - the shift between two raindrops along the ray, say, which
+//! is what the equatorial view colours its fronts by.
 //!
 //! Which rays pile up on r- and which cross it is settled exactly, and it is not simply the
 //! outward half of the cone. Lowering the null condition to the covariant components (k_t, k_r,
@@ -257,6 +260,20 @@ pub struct NullRay {
     /// `f_factor` evaluated at the emission event against the emitter's 4-velocity. The frequency
     /// ratio anywhere later on the ray is the current factor divided by this one.
     pub f_emit: f64,
+    /// The ray's direction v^mu = (1, dr/dt, dphi/dt) at the *emission* event, kept as it was let
+    /// go rather than recomputed from the current state.
+    ///
+    /// `f_emit` answers one question about that event - what the emitter themselves measured - and
+    /// it answers it in a form that has already thrown the direction away. Anything that wants the
+    /// shift between some *other* observer at the emission event and some other observer here has
+    /// to evaluate `f_factor` at the emission event again, against a different 4-velocity, and
+    /// that needs the direction the ray had there. Keeping it costs three numbers per ray and
+    /// makes `gain_between` exact rather than a reconstruction: the emission event is not on the
+    /// integrated track any more once the ray has moved, and nothing else stores it.
+    ///
+    /// The radius of the emission event is not carried here because the pulse already owns it, as
+    /// `Pulse::emitted_r`, and every ray of a pulse left the same event.
+    pub v_emit: [f64; 3],
     /// Coordinate time at which the ray left the field (r > `R_ESCAPE`) or reached the ring
     /// (r < R_STOP), or None while it is still running.
     ///
@@ -327,6 +344,7 @@ impl NullRay {
             dr_dt,
             dphi_dt,
             f_emit: f_factor(metric, r, &v, u_emitter),
+            v_emit: v,
             death_t: None,
             death_end: None,
         }
@@ -362,6 +380,43 @@ impl NullRay {
             return 1.0;
         }
         f_factor(metric, self.r, &self.direction(), u_observer) / self.f_emit
+    }
+
+    /// nu(`u_now_observer` here) / nu(`u_emit_observer` at the emission event) for this ray: the
+    /// shift between two observers of the caller's choosing, neither of them necessarily the
+    /// emitter.
+    ///
+    /// `frequency_ratio` asks what this ray's frequency is *now* against what the emitter measured
+    /// as it left, which is the question a reception asks. This asks the other one: hold the ray
+    /// fixed and change the observer at *both* ends. The emitter's own frame then drops out of the
+    /// answer entirely, and with `u_emit_observer` and `u_now_observer` taken from one congruence -
+    /// the raindrops, say, the E = 1, L = 0 infallers from rest at infinity, which exist at every
+    /// radius including inside both horizons - what comes back is the ordinary
+    /// gravitational-plus-Doppler shift between two members of that congruence along the ray.
+    ///
+    /// Both ends are the same `f_factor` construction as everywhere else in this module, so the
+    /// ray's conserved energy E and its affine scale cancel out of the quotient exactly, and the
+    /// result is finite and positive at and inside both horizons. Two properties are worth naming
+    /// because a display leans on them. At the emission event itself the two f_factors are the same
+    /// number computed twice - same radius, same direction, same observer - so the gain is exactly
+    /// 1 for every ray of a fresh pulse, whatever the emitter was doing. And for a ray of the
+    /// frozen family, E - Omega_- L < 0, it grows like exp(kappa_- t) without bound, because the
+    /// raindrops keep falling through a surface the ray never crosses.
+    ///
+    /// `r_emit` is the radius of the emission event, which the ray does not carry: it belongs to
+    /// the pulse (`Pulse::emitted_r`), and every ray of a pulse shares it.
+    pub fn gain_between(
+        &self,
+        metric: &KerrSchild,
+        r_emit: f64,
+        u_emit_observer: &[f64; 3],
+        u_now_observer: &[f64; 3],
+    ) -> f64 {
+        let f_there = f_factor(metric, r_emit, &self.v_emit, u_emit_observer);
+        if f_there.abs() < 1e-300 {
+            return 1.0;
+        }
+        f_factor(metric, self.r, &self.direction(), u_now_observer) / f_there
     }
 
     /// The ray's energy relative to the null generator of the inner horizon, per unit k^t:
@@ -2191,6 +2246,7 @@ mod tests {
             dr_dt,
             dphi_dt,
             f_emit: f_factor(metric, r, &v, &u),
+            v_emit: v,
             death_t: None,
             death_end: None,
         }
@@ -4978,6 +5034,7 @@ mod tests {
             dr_dt: -1.0,
             dphi_dt: 0.0,
             f_emit: f_factor(&metric, r_emit, &[1.0, -1.0, 0.0], &u_emit),
+            v_emit: [1.0, -1.0, 0.0],
             death_t: None,
             death_end: None,
         };
@@ -5391,6 +5448,160 @@ mod tests {
         );
         assert!(worst_t < 1e-3, "a crossing time moved {worst_t} M with the step size");
         assert!(worst_ratio < 1e-3, "a crossing shift moved {worst_ratio} with the step size");
+    }
+
+    /// The gain of a ray between two raindrops, the quantity the equatorial view colours its
+    /// fronts by: the frequency the drop at the ray's current event measures, over the frequency
+    /// the drop passing the emitter measured as the ray left. The drawing code assembles it from
+    /// `NullRay::gain_between` and `Pulse::emitted_r`, and so does this.
+    fn ray_gain(metric: &KerrSchild, pulse: &Pulse, ray: &NullRay) -> f64 {
+        let u_emit = raindrop(metric, pulse.emitted_r);
+        let u_now = raindrop(metric, ray.r);
+        ray.gain_between(metric, pulse.emitted_r, &u_emit, &u_now)
+    }
+
+    #[test]
+    fn test_a_fresh_front_has_gain_one_on_every_ray_whatever_the_emitter_is_doing() {
+        // The property the wavefront colouring is built on. Held against the emitter's own frame,
+        // the rays of one pulse are spread across the whole shift ramp the instant they leave -
+        // that is aberration, and it is a true statement about the emission. Held between two
+        // members of the raindrop congruence, one at the emission event and one at the ray's
+        // current event, they are all exactly 1 at emission, because at that moment the two ends
+        // are the same f_factor computed twice: same radius, same direction, same observer. So a
+        // fresh front is one uniform colour however the emitter was moving, and everything the
+        // colour later shows is gain the light picked up on its way.
+        //
+        // "Exactly" is meant: the two evaluations are bit-for-bit identical expressions, so the
+        // tolerance below is round-off in the division and nothing else.
+        let metric = KerrSchild::new(1.0, 0.65);
+        let params = WorldlineParams::default();
+
+        // Three emitters at the same radius, on three quite different worldlines: one hovering
+        // (never released, so `is_static_hover` and the static frame), one falling as a raindrop
+        // from rest at infinity, and one on a prograde geodesic with real angular momentum, whose
+        // aberration is the strongest of the three.
+        let emitters: [(&str, Observer); 3] = [
+            (
+                "a static hoverer at r = 4.5",
+                Observer::new_with_phi(&metric, "Hover", 0.0, 4.5, 100.0, 0.0, params),
+            ),
+            (
+                "a raindrop released at r = 4.5",
+                Observer::new_with_phi(&metric, "Rain", 0.0, 4.5, 0.0, 0.0, params),
+            ),
+            (
+                "a prograde faller at r = 4.5, E = 1.3, L = 2.0",
+                Observer::new_with_phi(
+                    &metric,
+                    "Prograde",
+                    0.0,
+                    4.5,
+                    0.0,
+                    0.0,
+                    WorldlineParams::new(1.3, 2.0, false),
+                ),
+            ),
+        ];
+
+        for (what, emitter) in emitters.iter() {
+            let mut field = SignalField::default();
+            field.emit_if_due(&metric, emitter);
+            let pulse = field.pulses.first().unwrap_or_else(|| panic!("{what} must emit"));
+            assert!(pulse.rays.len() >= 64, "{what}: {} rays", pulse.rays.len());
+
+            // The emitter-relative ratio, for contrast: this is the quantity the receptions and the
+            // HUD use, and it is exactly what a front must not be coloured by, because it is
+            // already spread out before the light has gone anywhere.
+            let u_here = raindrop(&metric, pulse.emitted_r);
+            let (mut lo, mut hi) = (f64::INFINITY, 0.0f64);
+            let mut worst_gain = 0.0f64;
+            for ray in pulse.rays.iter() {
+                let gain = ray_gain(&metric, pulse, ray);
+                assert!(gain.is_finite() && gain > 0.0, "{what}: gain {gain}");
+                worst_gain = worst_gain.max((gain - 1.0).abs());
+                let ratio = ray.frequency_ratio(&metric, &u_here);
+                lo = lo.min(ratio);
+                hi = hi.max(ratio);
+            }
+            println!(
+                "{what}: every one of the {} rays leaves at gain 1 to {worst_gain:.3e}, while the \
+                 ratio against the emitter's own frame already runs from {lo:.4} to {hi:.4}",
+                pulse.rays.len()
+            );
+            assert!(
+                worst_gain < 1e-12,
+                "{what}: a ray left at gain {} away from 1; a fresh front must be one colour",
+                worst_gain
+            );
+        }
+    }
+
+    #[test]
+    fn test_the_frozen_family_climbs_the_gain_ramp_without_bound() {
+        // The other end of the ramp. A pulse let go inside r+ splits into the family that crosses
+        // r- at finite coordinate time and the family with E - Omega_- L < 0, which cannot: those
+        // rays settle onto r- as r - r- ~ exp(-kappa_- t) while the raindrops go on falling
+        // through the surface, so the frequency a drop at the ray's event measures runs away like
+        // exp(kappa_- t). At a = 0.90, kappa_- = (r- - r+) / (2 (r-^2 + a^2)) = -0.386 per M, so
+        // 30 M of it is e^11.6 ~ 1e5 - which is why the drawn ramp runs to a gain of 1e5 where the
+        // reception ramp stops at 1e3. They are different quantities with different ranges.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let rp = metric.outer_horizon();
+        let alice = Observer::new_with_phi(
+            &metric,
+            "Alice",
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            WorldlineParams::default(),
+        );
+        assert!(alice.r < rp, "the pulse must be let go inside r+ = {rp}");
+        let mut field = SignalField::default();
+        field.emit_if_due(&metric, &alice);
+        assert_eq!(field.pulses.len(), 1);
+        let dt = 0.02;
+        let steps = 1500; // 30 M of coordinate time
+        for _ in 0..steps {
+            field.advance(&metric, dt);
+        }
+
+        let pulse = &field.pulses[0];
+        let mut frozen = 0;
+        let mut smallest_frozen = f64::INFINITY;
+        let mut largest = 0.0f64;
+        let mut live = 0;
+        for ray in pulse.rays.iter() {
+            if !ray.alive() {
+                continue;
+            }
+            live += 1;
+            let gain = ray_gain(&metric, pulse, ray);
+            assert!(
+                gain.is_finite() && gain > 0.0,
+                "a live ray at r = {} has gain {gain}, which is not a measurement",
+                ray.r
+            );
+            largest = largest.max(gain);
+            if ray.frozen(&metric) {
+                frozen += 1;
+                smallest_frozen = smallest_frozen.min(gain);
+            }
+        }
+        println!(
+            "{} M after a pulse of {} rays was let go at r = 1.0 at a = 0.90, {live} are still \
+             running and {frozen} of them are frozen (E - Omega_- L < 0); the dimmest frozen ray \
+             has gained {smallest_frozen:.4e} and the brightest ray of the whole front \
+             {largest:.4e}",
+            (steps as f64) * dt,
+            pulse.rays.len()
+        );
+        assert!(frozen > 0, "a pulse let go inside r+ must have a frozen family");
+        assert!(
+            smallest_frozen > 100.0,
+            "every frozen ray must have climbed well up the ramp in 30 M: the dimmest is at \
+             {smallest_frozen}"
+        );
     }
 }
 

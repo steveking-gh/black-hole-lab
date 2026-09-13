@@ -405,6 +405,7 @@ impl eframe::App for SpacetimeApp {
                             self.controls.use_km,
                             self.controls.frame_of_ref,
                             self.controls.font_scale,
+                            self.controls.draw_front_arcs,
                         );
                     },
                 );

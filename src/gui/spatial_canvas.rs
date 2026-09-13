@@ -44,6 +44,7 @@ impl SpatialCanvas {
         use_km: bool,
         frame_of_ref: ReferenceFrame,
         font_scale: f32,
+        draw_front_arcs: bool,
     ) {
         let desired_size = egui::Vec2::new(ui.available_width(), canvas_height);
         let (response, painter) = ui.allocate_painter(desired_size, egui::Sense::drag());
@@ -326,9 +327,18 @@ impl SpatialCanvas {
             signals.bob,
             Theme::BOB_COLOR,
             Theme::SECONDARY_FRONT_WIDTH,
+            draw_front_arcs,
             &to_screen,
         );
-        draw_signal_field(&painter, metric, signals.alice, Theme::ALICE_COLOR, 1.0, &to_screen);
+        draw_signal_field(
+            &painter,
+            metric,
+            signals.alice,
+            Theme::ALICE_COLOR,
+            1.0,
+            draw_front_arcs,
+            &to_screen,
+        );
 
         // 6. Both worldline trails, drawn together and before anything that sits on them: the
         // reception ticks below and the observers' own markers.
@@ -406,8 +416,11 @@ impl SpatialCanvas {
                  Spin a/M: {:.3}\n\
                  Drag: Ω_H = {:.3}/M = {:.3e} rad/s\n\
                  River: colour √(1−α²) vs ZAMO (1 at r₊); length √(2M/r) (1 at 2M)\n\
-                 Signal: salmon = frozen family (E − Ω₋L < 0, ends on the other branch of r₋)\n\
-                 Bob's fronts: same shift colours at half stroke, mint emission dots\n\
+                 Front colour: ν an infaller here measures ÷ ν the infaller passing the emitter\n\
+                 measured as it left: deep red ×1 (every front is born red), yellow ×10,\n\
+                 white ×30, blue ×1000, violet ×100000, maroon below ×1\n\
+                 Beaded arcs on r₋: the frozen family (E − Ω₋L < 0, never crosses this branch)\n\
+                 Bob's fronts: same gain colours at half stroke, mint emission dots\n\
                  Receptions: triangle on the receiver's trail in the sender's colour (amber = Alice → Bob, mint = Bob → Alice)\n\
                  🔍 Zoom: {:.0} px/M (Scroll to zoom, drag to pan)",
                 metric.format_physical_distance(1.0),
@@ -435,8 +448,11 @@ impl SpatialCanvas {
                  Spin a/M: {:.3}\n\
                  Drag: Ω_H = {:.3}/M\n\
                  River: colour √(1−α²) vs ZAMO (1 at r₊); length √(2M/r) (1 at 2M)\n\
-                 Signal: salmon = frozen family (E − Ω₋L < 0, ends on the other branch of r₋)\n\
-                 Bob's fronts: same shift colours at half stroke, mint emission dots\n\
+                 Front colour: ν an infaller here measures ÷ ν the infaller passing the emitter\n\
+                 measured as it left: deep red ×1 (every front is born red), yellow ×10,\n\
+                 white ×30, blue ×1000, violet ×100000, maroon below ×1\n\
+                 Beaded arcs on r₋: the frozen family (E − Ω₋L < 0, never crosses this branch)\n\
+                 Bob's fronts: same gain colours at half stroke, mint emission dots\n\
                  Receptions: triangle on the receiver's trail in the sender's colour (amber = Alice → Bob, mint = Bob → Alice)\n\
                  🔍 Zoom: {:.0} px/M (Scroll to zoom, drag to pan)",
                 metric.format_physical_distance(1.0),
@@ -483,17 +499,33 @@ impl SpatialCanvas {
 /// The same code draws Alice's field and Bob's, because it is the same physics either way. What
 /// tells them apart on screen is `emission_colour`, the colour of the dot marking each emission
 /// event on its emitter's trail, and `width_scale`, which thins the secondary field's strokes (see
-/// `Theme::SECONDARY_FRONT_WIDTH`). The shift colouring of the fronts themselves is not available
+/// `Theme::SECONDARY_FRONT_WIDTH`). The gain colouring of the fronts themselves is not available
 /// as an identifying mark: it is a measurement, and it has to mean the same thing in both fields.
 ///
 /// The emitter broadcasts into their whole light cone, so each pulse is a *closed* polyline through
 /// the Kerr-Schild positions of its surviving rays, ordered by emission angle and with the last ray
-/// joined back to the first. Each segment is coloured by the frequency a *local raindrop* would
-/// measure on it against the emission. The raindrop is the reference because it is the one
-/// frame that exists at every radius, inside both horizons included, so the colour means the same
-/// thing across the whole picture: it is the shift a body falling freely from rest at infinity
-/// would see, not a shift quoted against a frame that stops existing at r+. A segment takes the mean of its two
-/// endpoints' ratios, so the ramp is continuous along the front.
+/// joined back to the first. Each segment is coloured by the *gain* its light has picked up since it
+/// was let go:
+///
+///     gain = nu(a raindrop at the ray's current event) / nu(the raindrop passing the emitter as it left),
+///
+/// the two `f_factor` evaluations of `NullRay::gain_between`, with the ray's conserved energy and
+/// affine scale cancelling out of the quotient. Both observers are drops of the E = 1, L = 0
+/// congruence - free fall from rest at infinity - which is the one family of observers that exists
+/// at every radius, inside both horizons included, so the colour means the same thing across the
+/// whole picture rather than being quoted against a frame that stops existing at r+. It is a real
+/// measured shift, the ordinary gravitational-plus-Doppler one between two members of that
+/// congruence along the ray, and nothing about the emitter's own motion enters it.
+///
+/// That last property is why the front is coloured by this and not by the emitter-relative ratio the
+/// receptions and the HUD quote. Held against the emitter, the rays of one pulse are already spread
+/// across the whole ramp at the instant they leave - the prograde half aberrated blue, the retrograde
+/// half red - so a fresh front is born split in two, which says something true about the emission but
+/// nothing at all about where the light has since been. Held between raindrops, every ray of a pulse
+/// starts at gain exactly 1, because at the emission event the two f_factors are the same number
+/// computed twice: a new front comes out one uniform deep red and then earns its way up the ramp as
+/// it falls, and what the colour then shows is what the light has gained on its way here. A segment
+/// takes the mean of its two endpoints' gains, so the ramp is continuous along the front.
 ///
 /// Segments with a dead endpoint are skipped: a ray that has reached the ring is gone, and the front
 /// genuinely ends there rather than jumping across the gap.
@@ -505,17 +537,21 @@ impl SpatialCanvas {
 /// the radius the pulse left them at, and the loop's outer edge never gets further from the hole
 /// than that dot, which is the statement the drawing exists to make.
 ///
-/// The frozen family is drawn twice over, in salmon, because otherwise it cannot be seen at all.
+/// The frozen family is drawn twice over, heavily, because otherwise it cannot be seen at all.
 /// Every ray whose `NullRay::inner_horizon_energy` is negative approaches r- as r - r- ~
 /// exp(-kappa_- t) while co-rotating at Omega_-, so within a few M of coordinate time the whole arc
-/// has collapsed to a fraction of a pixel of the magenta r- circle, where the ordinary shift ramp
-/// leaves it indistinguishable from the circle underneath. So: a segment with *both* ends frozen is
-/// drawn in `Theme::FROZEN_FRONT` at width 2, and every frozen ray also gets a small filled dot, so
-/// an arc squeezed below a pixel of width still reads as a beaded arc riding the Cauchy horizon. All
-/// of it is drawn after every ordinary segment of every pulse, so no later front paints over it. A
-/// segment with one frozen end and one crossing end keeps the ordinary colouring: that pair is the
-/// tear in the loop, where the front is being pulled apart into its two families, and it belongs to
-/// neither.
+/// has collapsed to a fraction of a pixel of the magenta r- circle, where a hairline stroke leaves
+/// it indistinguishable from the circle underneath. So: a segment with *both* ends frozen is drawn
+/// at width 2 and at `Theme::FRONT_FROZEN_ALPHA`, and every frozen ray also gets a small filled dot,
+/// so an arc squeezed below a pixel of width still reads as a beaded arc riding the Cauchy horizon.
+/// All of it is drawn after every ordinary segment of every pulse, so no later front paints over it.
+/// What is *not* special about it any more is its colour: it takes the same `Theme::front_colour` of
+/// the same gain as every other segment, and the dots take their own ray's, so the exponential climb
+/// of the frozen stack up the ramp - it is what runs the ramp out to a gain of 1e5 - is on screen
+/// instead of being flattened into one marker colour. The extra weight is legibility and says
+/// nothing about the physics. A segment with one frozen end and one crossing end is drawn in the
+/// ordinary pass: that pair is the tear in the loop, where the front is being pulled apart into its
+/// two families, and it belongs to neither.
 /// Largest azimuthal span of one drawn piece of a wavefront segment, in radians.
 ///
 /// A segment of the front is the piece of null surface between two neighbouring rays, and what it
@@ -589,12 +625,40 @@ fn segment_arc<F: Fn((f64, f64)) -> Pos2>(
         .collect()
 }
 
+/// What one segment of a front is drawn as, under the user's choice of `draw_arcs`: either the
+/// curve of `segment_arc`, or the straight chord between the two rays' own screen positions.
+///
+/// The choice is a drawing choice and only a drawing choice. `Pulse::scan` interpolates linearly in
+/// (r, phi) between the same two rays either way, so which of these two polylines is on screen
+/// changes nothing about where a reception happens or what shift it is measured at; what it changes
+/// is whether the drawn front is the same curve the reception test is testing. With arcs on it is,
+/// and that is the default. With them off the drawing is faster and the front reads as the raw
+/// polygon on its rays, which is worth being able to see - but in the deep interior it is wrong in
+/// a way worth naming: inside r- neighbouring rays wind at wildly different rates and end up most
+/// of a radian apart, and the chord between two such rays cuts straight across the annulus and
+/// through the disk inside the ring, drawing spikes into the singularity that no ray ever took.
+fn segment_polyline<F: Fn((f64, f64)) -> Pos2>(
+    metric: &KerrSchild,
+    from: (f64, f64),
+    to: (f64, f64),
+    ends: (Pos2, Pos2),
+    draw_arcs: bool,
+    to_screen: &F,
+) -> Vec<Pos2> {
+    if draw_arcs {
+        segment_arc(metric, from, to, to_screen)
+    } else {
+        vec![ends.0, ends.1]
+    }
+}
+
 fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
     painter: &egui::Painter,
     metric: &KerrSchild,
     signal: &SignalField,
     emission_colour: Color32,
     width_scale: f32,
+    draw_front_arcs: bool,
     to_screen: &F,
 ) {
     // `derivatives` reads only (E, L) off the state and takes the radius as an argument, so one
@@ -609,9 +673,10 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
         150,
     );
     // The frozen family of every pulse, held back and drawn last so that it lies on top of both the
-    // r- circle and the ordinary fronts it is buried in.
-    let mut frozen_segments: Vec<Vec<Pos2>> = Vec::new();
-    let mut frozen_dots: Vec<Pos2> = Vec::new();
+    // r- circle and the ordinary fronts it is buried in. Each carries its own colour, which is the
+    // same gain colouring every other segment gets: only the weight and the opacity are special.
+    let mut frozen_segments: Vec<(Vec<Pos2>, Color32)> = Vec::new();
+    let mut frozen_dots: Vec<(Pos2, Color32)> = Vec::new();
     for pulse in signal.pulses.iter() {
         // A spent pulse is kept in the field so that stepping backwards can bring it back, but it
         // has no front left to draw and no dot to anchor.
@@ -622,7 +687,13 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
         if n < 2 {
             continue;
         }
-        let ratios: Vec<f64> = pulse
+        // The drop that was passing the emitter as this pulse left, which is the denominator of
+        // every ray's gain: one per pulse, because every ray of a pulse left the same event.
+        let u_emit = {
+            let (ut, ur, up) = raindrop.derivatives(metric, pulse.emitted_r);
+            [ut, ur, up]
+        };
+        let gains: Vec<f64> = pulse
             .rays
             .iter()
             .map(|ray| {
@@ -630,7 +701,7 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
                     return 1.0;
                 }
                 let (ut, ur, up) = raindrop.derivatives(metric, ray.r);
-                ray.frequency_ratio(metric, &[ut, ur, up])
+                ray.gain_between(metric, pulse.emitted_r, &u_emit, &[ut, ur, up])
             })
             .collect();
         // One classification and one projection per ray per frame, both of which the segment loop
@@ -651,22 +722,28 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
             if !pulse.rays[i].alive() || !pulse.rays[j].alive() {
                 continue;
             }
-            let arc = segment_arc(
+            let arc = segment_polyline(
                 metric,
                 (pulse.rays[i].r, pulse.rays[i].phi),
                 (pulse.rays[j].r, pulse.rays[j].phi),
+                (points[i], points[j]),
+                draw_front_arcs,
                 to_screen,
             );
+            let gain = 0.5 * (gains[i] + gains[j]);
             if frozen[i] && frozen[j] {
-                frozen_segments.push(arc);
+                frozen_segments.push((arc, Theme::front_colour(gain, Theme::FRONT_FROZEN_ALPHA)));
                 continue;
             }
-            let colour = Theme::shift_colour(0.5 * (ratios[i] + ratios[j]), Theme::SHIFT_ALPHA);
-            painter.add(egui::Shape::line(arc, Stroke::new(1.2 * width_scale, colour)));
+            painter.add(egui::Shape::line(
+                arc,
+                Stroke::new(1.2 * width_scale, Theme::front_colour(gain, Theme::SHIFT_ALPHA)),
+            ));
         }
         for (i, point) in points.iter().enumerate() {
             if frozen[i] {
-                frozen_dots.push(*point);
+                frozen_dots
+                    .push((*point, Theme::front_colour(gains[i], Theme::FRONT_FROZEN_ALPHA)));
             }
         }
         // The anchor: where on Alice's trail this loop was let go of.
@@ -674,12 +751,11 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
         painter.circle_filled(emitted, 2.0, dot);
     }
 
-    for segment in frozen_segments {
-        let stroke = Stroke::new(2.0 * width_scale, Theme::FROZEN_FRONT);
-        painter.add(egui::Shape::line(segment, stroke));
+    for (segment, colour) in frozen_segments {
+        painter.add(egui::Shape::line(segment, Stroke::new(2.0 * width_scale, colour)));
     }
-    for point in frozen_dots {
-        painter.circle_filled(point, 1.6 * width_scale, Theme::FROZEN_FRONT);
+    for (point, colour) in frozen_dots {
+        painter.circle_filled(point, 1.6 * width_scale, colour);
     }
 }
 
@@ -737,6 +813,139 @@ mod tests {
     /// so a curve of constant r is a circle in the drawing and this is its radius.
     fn embedded_radius(point: Pos2) -> f64 {
         ((point.x as f64).powi(2) + (point.y as f64).powi(2)).sqrt()
+    }
+
+    #[test]
+    fn test_the_front_ramp_starts_deep_red_and_ends_violet() {
+        // The three statements the wavefront colouring makes to the eye. A front is born at gain 1
+        // and must come out at the deep-red stop exactly, because every ray of a fresh pulse is at
+        // that gain and the whole point is that the loop is one colour. The frozen family runs to
+        // a gain of 1e5 within a run, and that end of the ramp must be the violet stop rather than
+        // saturating early or wrapping. And in between, the direction of travel has to read as
+        // "more blueshift" all the way up, which for this palette means the blue channel never
+        // goes back down between the yellow of a tenfold gain and the violet at the top.
+        let deep_red = Theme::front_colour(1.0, 255);
+        assert_eq!(
+            (deep_red.r(), deep_red.g(), deep_red.b()),
+            (
+                Theme::FRONT_RED_RGB[0],
+                Theme::FRONT_RED_RGB[1],
+                Theme::FRONT_RED_RGB[2]
+            ),
+            "a front at gain 1 must be exactly the deep-red stop"
+        );
+        let violet = Theme::front_colour(1e5, 255);
+        assert_eq!(
+            (violet.r(), violet.g(), violet.b()),
+            (
+                Theme::FRONT_VIOLET_RGB[0],
+                Theme::FRONT_VIOLET_RGB[1],
+                Theme::FRONT_VIOLET_RGB[2]
+            ),
+            "a gain of 1e5 must be exactly the violet stop"
+        );
+        // And past the top of the ramp it stays there rather than running off it: the brightest
+        // rays of a real front reach 1e6 within thirty M.
+        assert_eq!(Theme::front_colour(1e9, 255), violet, "the ramp is clamped at the top");
+
+        // Below 1 it darkens towards maroon rather than brightening: a ray can lose frequency
+        // between two raindrops, and that must not look like a gain.
+        let maroon = Theme::front_colour(0.1, 255);
+        assert_eq!(
+            (maroon.r(), maroon.g(), maroon.b()),
+            (
+                Theme::FRONT_MAROON_RGB[0],
+                Theme::FRONT_MAROON_RGB[1],
+                Theme::FRONT_MAROON_RGB[2]
+            ),
+            "a tenfold loss must be exactly the maroon stop"
+        );
+        let dimmer = Theme::front_colour(0.5, 255);
+        assert!(
+            (dimmer.r() as u32 + dimmer.g() as u32 + dimmer.b() as u32)
+                < (deep_red.r() as u32 + deep_red.g() as u32 + deep_red.b() as u32),
+            "losing frequency must darken the deep red, not brighten it: {dimmer:?}"
+        );
+
+        // Monotone in blue from a tenfold gain to the top of the ramp, sampled finely enough to
+        // catch a dip inside any one leg of the ramp as well as at the joins.
+        let mut previous = 0u8;
+        let mut worst: Option<(f64, u8, u8)> = None;
+        for step in 0..=400 {
+            let log = Theme::FRONT_LOG_YELLOW
+                + (Theme::FRONT_LOG_MAX - Theme::FRONT_LOG_YELLOW) * (step as f64) / 400.0;
+            let blue = Theme::front_colour(10.0_f64.powf(log), 255).b();
+            if blue < previous && worst.is_none() {
+                worst = Some((log, previous, blue));
+            }
+            previous = blue;
+        }
+        assert!(
+            worst.is_none(),
+            "the blue channel must never fall between gains of 10 and 1e5: {worst:?}"
+        );
+        println!(
+            "the front ramp: gain 1 -> {:?}, 10 -> {:?}, 30 -> {:?}, 1e3 -> {:?}, 1e5 -> {:?}, \
+             and 0.1 -> {:?}",
+            (deep_red.r(), deep_red.g(), deep_red.b()),
+            {
+                let c = Theme::front_colour(10.0, 255);
+                (c.r(), c.g(), c.b())
+            },
+            {
+                let c = Theme::front_colour(10.0_f64.powf(1.5), 255);
+                (c.r(), c.g(), c.b())
+            },
+            {
+                let c = Theme::front_colour(1e3, 255);
+                (c.r(), c.g(), c.b())
+            },
+            (violet.r(), violet.g(), violet.b()),
+            (maroon.r(), maroon.g(), maroon.b()),
+        );
+    }
+
+    #[test]
+    fn test_with_the_arcs_turned_off_a_segment_is_the_chord_between_its_two_rays() {
+        // The checkbox, at the one place it acts. With the arcs on, a segment between two rays a
+        // radian apart on r- is the curve linear in (r, phi) between them, which is dozens of
+        // points lying on the r- circle. With them off it is the two ray positions and nothing in
+        // between - the straight chord, which for this pair dips well inside r-. Both are drawings
+        // of the same segment of the same front; `Pulse::scan` interpolates in (r, phi) either
+        // way, so nothing about a reception moves when the box is unticked.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let rm = metric.inner_horizon();
+        let to_screen = |(x, y): (f64, f64)| Pos2::new(x as f32, y as f32);
+        let (from, to) = ((rm, 0.3), (rm, 1.5));
+        let ends = (
+            to_screen(metric.cartesian_position(from.0, from.1)),
+            to_screen(metric.cartesian_position(to.0, to.1)),
+        );
+
+        let chord = segment_polyline(&metric, from, to, ends, false, &to_screen);
+        assert_eq!(chord, vec![ends.0, ends.1], "with the arcs off a segment is its two ends");
+
+        let arc = segment_polyline(&metric, from, to, ends, true, &to_screen);
+        assert_eq!(
+            arc,
+            segment_arc(&metric, from, to, &to_screen),
+            "with the arcs on a segment is exactly what `segment_arc` draws"
+        );
+        assert!(arc.len() > 20, "and that is the subdivided curve: {} points", arc.len());
+        // The two agree at the ends and nowhere else: same front, two drawings of it.
+        assert_eq!((arc[0], arc[arc.len() - 1]), (chord[0], chord[1]));
+        let circle = (rm * rm + metric.a * metric.a).sqrt();
+        let chord_mid = Pos2::new(
+            0.5 * (chord[0].x + chord[1].x),
+            0.5 * (chord[0].y + chord[1].y),
+        );
+        println!(
+            "over 1.2 rad of r- the arc is {} points on the rho = {circle:.4} circle; the chord is \
+             2 points whose midpoint sits at rho = {:.4}, inside it",
+            arc.len(),
+            embedded_radius(chord_mid)
+        );
+        assert!(embedded_radius(chord_mid) < circle - 0.15);
     }
 
     #[test]
