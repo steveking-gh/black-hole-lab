@@ -27,7 +27,12 @@ pub struct SpacetimeApp {
 
 impl Default for SpacetimeApp {
     fn default() -> Self {
-        let metric = KerrSchild::with_solar_mass(1.0, 0.65, 10.0);
+        // Sagittarius A*, the `PRESETS` row: M = 1 in geometric units, a/M = 0.90, 4.15e6 M_sun.
+        // The hole the app opens on is the one at the centre of this galaxy rather than a generic
+        // stellar-mass one, and the preset row lights up by itself because the highlight is read
+        // off the metric (`active_preset`). At this spin r+ = 1.436M and r- = 0.564M, so the
+        // trapped region is narrow and the Cauchy horizon is well clear of the ring.
+        let metric = KerrSchild::with_solar_mass(1.0, 0.90, 4.15e6);
         // Both start as raindrops: E = 1, L = 0, ingoing.
         let bob = Observer::new(&metric, "Bob", 0.0, 3.8, 0.0);
         let alice = Some(Observer::new_with_phi(
@@ -400,7 +405,7 @@ impl eframe::App for SpacetimeApp {
 
                         ui.heading("Alice's signal and the two branches of r₋");
                         ui.label(
-                            "Alice's pulses are exact null geodesics, and she broadcasts each one into the whole of her light cone, every direction at once. Which rays of a pulse cross r₋ and which never do is decided by the sign of E − Ω₋L, the ray's energy relative to the null generator of the inner horizon, with Ω₋ = a/(r₋² + a²). Rays with positive relative energy fall straight through; rays with negative relative energy take infinite coordinate time and accumulate on r₋, so in this chart the inner horizon is the stack of all the outgoing light of the interior. In her own frame the accumulating rays are the prograde ones, the arc dragged forward in ϕ around α = 90°: it runs from about α = 45° to α = 135° well inside r₊, is wider than that just below r₊, and narrows as she approaches r₋, its edges being exactly where E − Ω₋L changes sign. Bob meets each pulse twice: first its crossing sheet sweeps over him on the way down with an ordinary shift, then he cuts through its frozen arc, standing on r₋, in the last twentieth of an M above the horizon. Alice sends a pulse every 0.1 M of her proper time, so consecutive arcs overlap and he crosses several sheets in a row, each blueshifted on the scale exp(κ₋Δt) with κ₋ = (r₊ − r₋)/(2(r₋² + a²)): about 560 for Δt = 4M and 3×10⁵ for Δt = 8M at a = 0.65. The light she sends as she crosses is shifted by exactly that factor; a pulse sent earlier by some lead time is shifted by exp(κ₋ × lead) more, having had that long to freeze as well. Each arc co-rotates at Ω₋ while it waits, so one emitter's transmission illuminates a band of r₋ rather than all of it, and how much of the stack Bob meets depends on where he crosses; the surface that covers every azimuth is built from the whole history of the interior. The ratio is finite because both observers cross the same smooth surface of exact Kerr. It diverges only as Δt → ∞, which is the Marolf and Ori (2012) statement that a hole which lives forever meets every late infaller with an outgoing null shock on this branch of r₋. The other branch, reached only as v → ∞, suffers Poisson and Israel mass inflation instead. Both make the exact continuation past r₋ physically untrustworthy, which is the content of strong cosmic censorship."
+                            "Alice's pulses are exact null geodesics, and she broadcasts each one into the whole of her light cone, every direction at once. Which rays of a pulse cross r₋ and which never do is decided by the sign of E − Ω₋L, the ray's energy relative to the null generator of the inner horizon, with Ω₋ = a/(r₋² + a²). Rays with positive relative energy fall straight through; rays with negative relative energy take infinite coordinate time and accumulate on r₋, so in this chart the inner horizon is the stack of all the outgoing light of the interior. In her own frame the accumulating rays are the prograde ones, the arc dragged forward in ϕ around α = 90°: it runs from about α = 45° to α = 135° well inside r₊, is wider than that just below r₊, and narrows as she approaches r₋, its edges being exactly where E − Ω₋L changes sign. Bob meets each pulse twice: first its crossing sheet sweeps over him on the way down with an ordinary shift, then he cuts through its frozen arc, standing on r₋, in the last twentieth of an M above the horizon. Alice sends a pulse every 0.1 M of her proper time, so consecutive arcs overlap and he crosses several sheets in a row, each blueshifted on the scale exp(κ₋Δt) with κ₋ = (r₊ − r₋)/(2(r₋² + a²)): about 560 for Δt = 4M and 3×10⁵ for Δt = 8M at a = 0.65, and a far gentler 4.7 and 22 at the app's default a = 0.90, where κ₋ is 0.386/M rather than 1.58/M. The light she sends as she crosses is shifted by exactly that factor; a pulse sent earlier by some lead time is shifted by exp(κ₋ × lead) more, having had that long to freeze as well. Each arc co-rotates at Ω₋ while it waits, so one emitter's transmission illuminates a band of r₋ rather than all of it, and how much of the stack Bob meets depends on where he crosses; the surface that covers every azimuth is built from the whole history of the interior. The ratio is finite because both observers cross the same smooth surface of exact Kerr. It diverges only as Δt → ∞, which is the Marolf and Ori (2012) statement that a hole which lives forever meets every late infaller with an outgoing null shock on this branch of r₋. The other branch, reached only as v → ∞, suffers Poisson and Israel mass inflation instead. Both make the exact continuation past r₋ physically untrustworthy, which is the content of strong cosmic censorship."
                         );
                         ui.add_space(8.0);
 
@@ -417,6 +422,7 @@ impl eframe::App for SpacetimeApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gui::controls::active_preset;
     use crate::physics::geodesic::GeodesicState;
     use eframe::App;
 
@@ -427,6 +433,37 @@ mod tests {
             let mut frame = eframe::Frame::_new_kittest();
             app.ui(ui, &mut frame);
         });
+    }
+
+    #[test]
+    fn test_the_default_hole_is_the_sagittarius_a_star_preset() {
+        // The highlight in the control panel's preset row is read off the metric, so this is also
+        // the assertion that the app opens with that row lit.
+        let app = SpacetimeApp::default();
+        assert_eq!(active_preset(&app.metric), Some("Sagittarius A* (4.15M M☉)"));
+        assert!((app.metric.a_star() - 0.90).abs() < 1e-12);
+        assert!((app.metric.m_solar - 4.15e6).abs() < 1.0);
+        // The horizons every other default-metric test is measured against: r+- = M +- sqrt(M^2 -
+        // a^2) = 1 +- 0.43589.
+        assert!((app.metric.outer_horizon() - 1.43589).abs() < 1e-5, "{}", app.metric.outer_horizon());
+        assert!((app.metric.inner_horizon() - 0.56411).abs() < 1e-5, "{}", app.metric.inner_horizon());
+        // 1 M is 6.1e6 km at this mass, which is what the km readouts and the Distance step mode
+        // are scaled by.
+        assert!((app.metric.r_grav_km() / 6.13e6 - 1.0).abs() < 0.01, "{}", app.metric.r_grav_km());
+
+        // Distance step mode still has room to work at that scale. The default 1,000 km step is
+        // 1.63e-4 M here rather than the 0.068 M it was at ten solar masses, and the arrow step it
+        // implies sits well inside the [1e-8, 500] clamp instead of being pinned to an end of it.
+        // The slider's own range is derived from r_grav (min = max(r_grav_km * 1e-6, 0.1) = 6.1 km,
+        // max = max(r_grav_km * 2, 1e5) = 1.2e7 km), so all four quick-picks, 10 km included, stay
+        // inside it.
+        let mut app = app;
+        assert!((app.metric.km_to_r(1000.0) / 1.63e-4 - 1.0).abs() < 0.01);
+        app.controls.step_mode = StepMode::Distance;
+        app.controls.step_distance_km = 1000.0;
+        let step = app.arrow_step();
+        assert!(step > 1e-8 && step < 500.0, "the distance step is clamped: {step}");
+        assert!((app.metric.r_grav_km() * 1e-6) < 10.0, "the 10 km quick-pick is below the slider floor");
     }
 
     #[test]
@@ -701,10 +738,9 @@ mod tests {
 
     #[test]
     fn test_fixed_distance_stepping() {
+        // The default hole is Sagittarius A* (4.15e6 M_solar), where 1000 km is a fine step
+        // (1.63e-4 M); no metric override is needed any more.
         let mut app = SpacetimeApp::default();
-        // Use Sagittarius A* (4.15e6 M_solar) where 1000 km is a fine step (~0.000163 M)
-        app.metric = KerrSchild::with_solar_mass(1.0, 0.9, 4.15e6);
-        app.bob.reset_with_phi(&app.metric, 0.0, 3.8, 0.0, WorldlineParams::default());
         app.controls.is_playing = false;
         app.controls.step_mode = StepMode::Distance;
         app.controls.step_distance_km = 1000.0;

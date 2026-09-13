@@ -69,6 +69,15 @@
 //! shift and then stops hearing him at all - and where he is the deeper of the two his light climbs
 //! to her instead, which ends the same way, because what ends the transmission is the end of her
 //! worldline and not the direction his light had to travel.
+//!
+//! What a (t, r) diagram can show of any of this is not a ray but a range. A pulse is a closed
+//! curve in (r, phi); projected onto the radial axis it is the interval between its innermost and
+//! its outermost live ray, and that interval swept up in coordinate time is `Pulse::extent_track`,
+//! the wedge the spacetime canvas draws. Its lower edge is bounded exactly by the ingoing edge of
+//! the emitter's own light cone, and its upper edge freezes onto r- for every pulse emitted inside
+//! r+, which is why the wedges stack against the Cauchy horizon there. A worldline inside a wedge
+//! is only in *range* of the pulse; whether the pulse reaches it is a question about azimuth, which
+//! the projection has thrown away and only the per-sheet crossing test of `Pulse::detect` answers.
 
 use crate::physics::geodesic::{R_STOP, geodesic_accel};
 use crate::physics::kerr_schild::KerrSchild;
@@ -124,15 +133,12 @@ const DIRECTION_STEP_FRACTION: f64 = 0.004;
 /// Hard cap on substeps per ray per call, so a large dt cannot stall a frame.
 const MAX_SUBSTEPS: usize = 200;
 
-/// Coordinate time between stored points of a principal-null track.
+/// Coordinate time between stored points of a track: of a pulse's radial extent, and of the
+/// master outgoing principal null ray of the interior.
 const TRACK_DT: f64 = 0.2;
 
-/// Points past which a principal-null track stops growing.
+/// Points past which a track stops growing.
 const TRACK_MAX_POINTS: usize = 4000;
-
-/// A track stops being extended once it is this close to r-, where it has effectively joined the
-/// Cauchy horizon and every further point would land on the same pixel.
-const TRACK_R_MINUS_EPS: f64 = 1e-5;
 
 /// State vector of a ray in coordinate time: y = (r, phi, v^r, v^phi).
 type RayState = [f64; 4];
@@ -452,8 +458,10 @@ fn substep_count(y: &RayState, k1: &RayState, dt: f64) -> usize {
 ///
 /// This is a one-dimensional problem because `KerrSchild::radial_null_slopes` gives dr/dt as an
 /// explicit function of r alone: the outgoing PND congruence is a solution of the geodesic equation
-/// in closed form, so no direction has to be carried. That makes it the cheap representative of a
-/// pulse in the (t, r) diagram, and the exact shape of the outgoing light stack of Feature B.
+/// in closed form, so no direction has to be carried. That is what makes the outgoing light stack
+/// of the interior cheap enough to redraw every frame. A pulse's own reach in the (t, r) diagram is
+/// not this curve and is not drawn from it: it is measured off the pulse's own rays, in
+/// `Pulse::radial_extent`.
 fn pnd_advance(metric: &KerrSchild, r: f64, dt: f64) -> f64 {
     let slope = |r: f64| metric.radial_null_slopes(r.max(R_STOP)).dr_dt_outgoing;
     let n = ((slope(r).abs() * dt / MAX_DR_PER_SUBSTEP).ceil().max(1.0))
@@ -575,7 +583,7 @@ pub struct Delivery {
 
 /// One emission event of the emitter's, and the wavefront it launched.
 #[allow(dead_code)] // the emission event is recorded in full: the drawing needs the rays and the
-// track, and the tests need the event itself to check the kappa_- law pulse by pulse
+// extent track, and the tests need the event itself to check the kappa_- law pulse by pulse
 #[derive(Debug, Clone)]
 pub struct Pulse {
     /// Serial number of the pulse, counting from the first one this emitter sent.
@@ -593,9 +601,43 @@ pub struct Pulse {
     /// to alpha = 2 pi - 2 pi / `RAYS_PER_PULSE`. The emitter broadcasts in every direction, so the
     /// polyline these rays form is closed: the last ray joins back to the first.
     pub rays: Vec<NullRay>,
-    /// The outgoing principal null ray from the emission event, as (t, r) pairs: the pulse's
-    /// representative in the (t, r) diagram, where a fan of azimuths cannot be drawn.
-    pub pnd_track: Vec<(f64, f64)>,
+    /// The pulse's *radial extent*, as (t, r_min, r_max) over the rays that were still alive at
+    /// that time: what the pulse is on the (t, r) diagram, where the fan of azimuths cannot be
+    /// drawn. It is seeded with (t_emit, r_emit, r_emit), the emission event, extended at the
+    /// `TRACK_DT` cadence by `Pulse::extend_track`, truncated by `SignalField::step_back`, and it
+    /// stops growing once every ray of the pulse is dead.
+    ///
+    /// Drawn as a wedge, its lower edge has an exact bound, and that bound is not the 45-degree
+    /// ingoing principal ray. The steepest ingoing null direction of this chart is the inner edge
+    /// of the light cone, `KerrSchild::null_wedge(r).dr_dt_in`, which is the ingoing
+    /// *zero-angular-momentum* ray and not a principal one: the null condition's discriminant at
+    /// dr/dt = -1 is exactly a^2, so -1 lies strictly inside the cone wherever the hole spins. The
+    /// edge is -1.010 at r = 4.5M for a = 0.65 and -1.020 there for a = 0.90, and it steepens
+    /// inward, reaching -1.28 at r = M and -2.27 at r = 0.2M for a = 0.90. The bound is therefore
+    /// the solution of
+    ///
+    ///     dR/dt = null_wedge(R).dr_dt_in,     R(t_emit) = r_emit,
+    ///
+    /// which is the straight line r_emit - (t - t_emit) only for a = 0. Every r_min of the track
+    /// sits at or above R(t): no ray of the pulse can be more ingoing than the cone at the radius
+    /// it is passing through, and the comparison theorem carries that pointwise statement into a
+    /// statement about the curves.
+    ///
+    /// Two things hold r_min off the envelope: the five-degree discretisation of the cone, which
+    /// leaves the most ingoing of the `RAYS_PER_PULSE` rays up to 2.5 degrees off the extremal
+    /// direction, and the death of that ray at the ring, after which the minimum is taken over
+    /// whatever is still alive and lifts away from the bound for good. Before that death the gap
+    /// is at most 8e-4 M, measured in
+    /// `test_extent_track_lower_edge_hugs_the_steepest_ingoing_ray`, so the drawn lower edge is
+    /// the ingoing edge of the emitter's own light cone to well within a pixel - and it runs up to
+    /// 0.07 M *below* the 45-degree line over an infall at a = 0.65, which is why the 45-degree
+    /// line is not what is claimed here.
+    ///
+    /// The upper edge has no closed form: it is the outermost live ray, which is the emitter's
+    /// outward radial leg only while the pulse is outside r+. Inside r+ every ray falls, and the
+    /// outermost of them tends to the outgoing principal null direction of r-, so the upper edge
+    /// freezes onto the Cauchy horizon while the lower edge runs on to the ring.
+    pub extent_track: Vec<(f64, f64, f64)>,
     /// One entry per sheet of the front that stood across the receiver's azimuth on the previous
     /// detection pass, carrying the side they were on. A sheet is keyed by the segment of the ray
     /// polyline and the turn of azimuth it crosses them on, so folds and windings are tracked
@@ -622,21 +664,42 @@ struct SheetSide {
 }
 
 impl Pulse {
-    /// Extend the pulse's principal-null track by dt, unless it has already joined r- or grown to
-    /// its cap.
-    fn extend_track(&mut self, metric: &KerrSchild, dt: f64) {
-        let rm = metric.inner_horizon();
-        let Some(&(t, r)) = self.pnd_track.last() else {
+    /// The radial interval the pulse's live rays span right now, or None once none of them is
+    /// alive.
+    ///
+    /// The front is a closed curve in (r, phi), and its projection onto the r axis is exactly this
+    /// interval. A dead ray is left out of it, because its state stands at the event it died on
+    /// rather than at the current time; a pulse whose every ray has reached the ring or left the
+    /// field has no extent at all, and that is what stops its track growing.
+    fn radial_extent(&self) -> Option<(f64, f64)> {
+        let mut lo = f64::INFINITY;
+        let mut hi = f64::NEG_INFINITY;
+        for ray in self.rays.iter().filter(|ray| ray.alive()) {
+            lo = lo.min(ray.r);
+            hi = hi.max(ray.r);
+        }
+        (lo <= hi).then_some((lo, hi))
+    }
+
+    /// Record the pulse's radial extent at the field time `t`, if a `TRACK_DT` has gone by since
+    /// the last stored point and the pulse still has a ray alive.
+    ///
+    /// The cadence is measured against the last stored point rather than accumulated per call, so
+    /// a run of short frames stores one point per `TRACK_DT` of coordinate time exactly as one
+    /// long frame does, and the drawn wedge does not depend on the frame rate. Nothing is
+    /// interpolated: a point is stored at whatever time the first frame past a cadence boundary
+    /// lands on, because the extent is read off the rays and the rays only ever stand at times
+    /// they have been stepped to.
+    fn extend_track(&mut self, t: f64) {
+        let Some(&(last_t, ..)) = self.extent_track.last() else {
             return;
         };
-        if self.pnd_track.len() >= TRACK_MAX_POINTS
-            || r > R_ESCAPE
-            || r <= R_STOP
-            || (r - rm).abs() < TRACK_R_MINUS_EPS
-        {
+        if self.extent_track.len() >= TRACK_MAX_POINTS || t < last_t + TRACK_DT {
             return;
         }
-        self.pnd_track.push((t + dt, pnd_advance(metric, r, dt)));
+        if let Some((r_min, r_max)) = self.radial_extent() {
+            self.extent_track.push((t, r_min, r_max));
+        }
     }
 
     /// Record every crossing of the receiver's worldline by this wavefront on this pass.
@@ -866,7 +929,7 @@ impl SignalField {
             emitted_r: emitter.r,
             emitted_phi: emitter.phi,
             rays,
-            pnd_track: vec![(emitter.t, emitter.r)],
+            extent_track: vec![(emitter.t, emitter.r, emitter.r)],
             sheets: Vec::new(),
             receptions: Vec::new(),
         });
@@ -877,7 +940,8 @@ impl SignalField {
         }
     }
 
-    /// Advance every live ray and every principal-null track by dt of coordinate time.
+    /// Advance every live ray by dt of coordinate time, then record how far each pulse's radial
+    /// extent now reaches.
     ///
     /// `NullRay::step` carries a dead ray forward on the clock without moving it, so every ray of
     /// the field reads the same t as the field itself and `step_back` can ask each of them the one
@@ -887,11 +951,13 @@ impl SignalField {
             return;
         }
         self.t += dt;
+        let t = self.t;
         for pulse in self.pulses.iter_mut() {
             for ray in pulse.rays.iter_mut() {
                 ray.step(metric, dt);
             }
-            pulse.extend_track(metric, dt);
+            // After the rays and never before: the extent is read off where they now stand.
+            pulse.extend_track(t);
         }
     }
 
@@ -902,8 +968,8 @@ impl SignalField {
     /// The target time is dt before the latest event in the field, and everything else follows from
     /// it. A pulse emitted after the target was never sent and goes. Every ray of a pulse that
     /// survives is integrated back to the target, reviving if it died inside the interval. A
-    /// principal-null track is truncated to the points it had reached by then, never below its own
-    /// emission point. A reception recorded after the target is unrecorded.
+    /// extent track is truncated to the points it had reached by then, never below its seed, the
+    /// emission event itself. A reception recorded after the target is unrecorded.
     ///
     /// The per-sheet bookkeeping of `Pulse::detect` is dropped rather than rewound, so the next
     /// forward pass re-establishes which side of each sheet the receiver stands on before it can
@@ -935,12 +1001,12 @@ impl SignalField {
                 ray.step_back(metric, dt);
             }
             let keep = pulse
-                .pnd_track
+                .extent_track
                 .iter()
-                .take_while(|(t, _)| *t <= target_t + 1e-9)
+                .take_while(|(t, _, _)| *t <= target_t + 1e-9)
                 .count()
                 .max(1);
-            pulse.pnd_track.truncate(keep);
+            pulse.extent_track.truncate(keep);
             pulse.receptions.retain(|rec| rec.t <= target_t);
             pulse.sheets.clear();
         }
@@ -1840,6 +1906,111 @@ mod tests {
         field
     }
 
+    /// One RK4 step of the steepest ingoing null curve, dr/dt = `KerrSchild::null_wedge`'s inner
+    /// edge, which is the exact lower envelope of every null ray's radius: no ray can be more
+    /// ingoing than the cone allows at the radius it is passing through.
+    fn ingoing_edge_advance(metric: &KerrSchild, r: f64, dt: f64) -> f64 {
+        let slope = |r: f64| metric.null_wedge(r.max(R_STOP)).dr_dt_in;
+        let n = 64;
+        let h = dt / n as f64;
+        let mut r = r;
+        for _ in 0..n {
+            let k1 = slope(r);
+            let k2 = slope(r + 0.5 * h * k1);
+            let k3 = slope(r + 0.5 * h * k2);
+            let k4 = slope(r + h * k3);
+            r += (h / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4);
+        }
+        r
+    }
+
+    #[test]
+    fn test_extent_track_lower_edge_hugs_the_steepest_ingoing_ray() {
+        // What the (t, r) diagram draws for a pulse is the interval [min r, max r] over its live
+        // rays, and the lower edge of that interval is bounded exactly, by the steepest ingoing
+        // null curve through the emission event: dr/dt = `null_wedge(r).dr_dt_in`, the inner edge
+        // of the local cone. That edge is *not* the 45-degree ingoing principal ray whenever the
+        // hole spins - the null discriminant at dr/dt = -1 is exactly a^2, so -1 sits strictly
+        // inside the cone and the edge is steeper - and this test measures both gaps, to the exact
+        // envelope and to the 45-degree line, so the difference is on the record rather than
+        // assumed.
+        //
+        // The bound is not attained, for two reasons. The cone is sampled at five degrees, so the
+        // most ingoing of the `RAYS_PER_PULSE` rays sits up to 2.5 degrees off the extremal
+        // direction. And once that ray reaches the ring it leaves the extent, after which the
+        // minimum is taken over rays that are still falling and the gap opens for good; the close
+        // tracking is asserted while the innermost ray is still outside r+, where nothing has died
+        // and the discretisation is the only error.
+        let metric = KerrSchild::new(1.0, 0.65);
+        let rp = metric.outer_horizon();
+        let field = run_field_to(&metric, 8.0, 0.01);
+        assert!(field.pulses.len() > 10, "expected a transmission in flight: {}", field.pulses.len());
+
+        let mut points = 0;
+        let mut outside = 0;
+        let mut worst_gap = 0.0f64;
+        let mut worst_outside = 0.0f64;
+        let mut worst_45_outside = 0.0f64;
+        let mut below_45 = 0;
+        for pulse in field.pulses.iter() {
+            let seed = pulse.extent_track[0];
+            assert_eq!(
+                (seed.0, seed.1, seed.2),
+                (pulse.emitted_t, pulse.emitted_r, pulse.emitted_r),
+                "pulse {} does not start at its own emission event",
+                pulse.index
+            );
+            let mut envelope = pulse.emitted_r;
+            let mut envelope_t = pulse.emitted_t;
+            for &(t, r_min, r_max) in pulse.extent_track.iter() {
+                assert!(r_min <= r_max, "pulse {}: extent {r_min} > {r_max} at t = {t}", pulse.index);
+                if t > envelope_t {
+                    envelope = ingoing_edge_advance(&metric, envelope, t - envelope_t);
+                    envelope_t = t;
+                }
+                let gap = r_min - envelope;
+                assert!(
+                    gap > -1e-6,
+                    "pulse {}: r_min = {r_min} is below the steepest ingoing null curve at \
+                     {envelope}, t = {t}",
+                    pulse.index
+                );
+                points += 1;
+                worst_gap = worst_gap.max(gap);
+                if r_min - (pulse.emitted_r - (t - pulse.emitted_t)) < 0.0 {
+                    below_45 += 1;
+                }
+                if r_min > rp {
+                    outside += 1;
+                    worst_outside = worst_outside.max(gap);
+                    worst_45_outside = worst_45_outside
+                        .max((r_min - (pulse.emitted_r - (t - pulse.emitted_t))).abs());
+                }
+            }
+        }
+        println!(
+            "extent tracks: {points} points, {outside} with r_min outside r+; worst gap to the \
+             exact ingoing envelope {worst_gap:.3e} (outside r+ {worst_outside:.3e}); {below_45} \
+             points lie below the 45-degree line, worst |offset| from it outside r+ \
+             {worst_45_outside:.3e}"
+        );
+        assert!(outside > 100, "the measurement needs a decent sample: {outside} points");
+        assert!(
+            worst_outside < 2e-3,
+            "outside r+ the innermost ray should hug the cone's ingoing edge: gap {worst_outside}"
+        );
+        assert!(
+            worst_outside > 1e-5,
+            "and it is a five-degree sampling of the cone, not the edge itself: gap {worst_outside}"
+        );
+        // The 45-degree line is not a bound at a = 0.65: the ingoing edge of the cone is steeper
+        // than -1 wherever the hole spins, so the drawn lower edge dips below it.
+        assert!(
+            below_45 > 0,
+            "at a = 0.65 the steepest ingoing ray beats dr/dt = -1, so some point must be below it"
+        );
+    }
+
     #[test]
     fn test_field_step_back_removes_later_pulses_and_receptions() {
         // The whole field is reversible, not just one ray. A transmission run to t = 12 and then
@@ -1880,6 +2051,22 @@ mod tests {
                 "a pulse emitted at t = {} survived a rewind to t = 9",
                 pulse.emitted_t
             );
+            // The extent track is truncated with everything else, and never below its seed.
+            let seed = pulse.extent_track[0];
+            assert_eq!(
+                (seed.0, seed.1, seed.2),
+                (pulse.emitted_t, pulse.emitted_r, pulse.emitted_r),
+                "pulse {} lost its emission event to the rewind",
+                pulse.index
+            );
+            for &(t, r_min, r_max) in pulse.extent_track.iter() {
+                assert!(
+                    t <= 9.0 + 1e-9 || pulse.extent_track.len() == 1,
+                    "pulse {}: an extent point at t = {t} survived a rewind to t = 9",
+                    pulse.index
+                );
+                assert!(r_min <= r_max, "pulse {}: extent {r_min} > {r_max} at t = {t}", pulse.index);
+            }
             for reception in pulse.receptions.iter() {
                 assert!(
                     reception.t <= 9.0 + 1e-9,

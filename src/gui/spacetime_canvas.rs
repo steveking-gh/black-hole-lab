@@ -35,12 +35,13 @@ type CachedOutgoingRay = (f64, f64, Vec<(f64, f64)>);
 /// inside r+, in units of M. The geometry is stationary, so the congruence is one curve repeated at
 /// this interval; the spacing is a drawing choice and nothing else depends on it.
 ///
-/// It has to be small against the time a ray spends visibly off r-. With kappa_- = 1.58/M at
-/// a = 0.65 the offset r - r- decays by e every 0.63M, so a ray is inside one pixel of the r- line
-/// within a couple of M of arriving; at the 4M spacing this started with, at most one ray was ever
-/// mid-swing and the bunching that is the whole point of the picture could not be seen. At 1M
-/// several rays are in flight at once and the exponential crowding onto r- is drawn rather than
-/// asserted.
+/// It has to be small against the time a ray spends visibly off r-, which is 1/kappa_-: 0.63M at
+/// a = 0.65, and 2.59M at the app's default a = 0.90, whose inner horizon is slacker
+/// (kappa_- = 0.386/M). The fast case is the binding one - there a ray is inside one pixel of the
+/// r- line within a couple of M of arriving - and at the 4M spacing this started with, at most one
+/// ray was ever mid-swing and the bunching that is the whole point of the picture could not be
+/// seen. At 1M several rays are in flight at once at either spin, and the exponential crowding onto
+/// r- is drawn rather than asserted.
 const OUTGOING_RAY_SPACING: f64 = 1.0;
 
 /// Cap on how many members of that congruence are drawn in one frame, so that a very wide time
@@ -926,30 +927,72 @@ impl SpacetimeCanvas {
             }
         }
 
-        // The two transmissions. A wavefront is a fan of azimuths, which a (t, r) diagram cannot
-        // show, so each pulse is drawn as its outgoing principal null ray from the emission event:
-        // the exact null geodesic that represents where the front's leading edge stands in radius.
-        // Each field is drawn in its own emitter's colour, faint, so the tracks read as light in
-        // flight rather than as worldlines.
-        let draw_tracks = |field: &SignalField, colour: Color32| {
-            let faint = Color32::from_rgba_unmultiplied(colour.r(), colour.g(), colour.b(), 110);
+        // The two transmissions. A wavefront is a closed curve in (r, phi) and this diagram has
+        // no azimuth to draw it on, so what is drawn is the one thing the projection does define:
+        // the pulse's radial extent, [min r, max r] over its live rays, swept up in t. That is the
+        // wedge of `Pulse::extent_track`. Its lower edge is the ingoing edge of the emitter's own
+        // light cone, carried from the emission event - the 45-degree line dr/dt = -1 only for a
+        // hole with no spin, and slightly steeper than that for one that spins (-1.010 at r = 4.5M
+        // for a = 0.65, -2.27 at r = 0.2M for a = 0.90) - and its upper edge is the outermost ray,
+        // which outside r+ climbs and inside r+ falls and freezes onto r-. A worldline inside a
+        // wedge is *in range* of that pulse - some ray of it stands at that radius - which is not
+        // the same as receiving it, because the diagram cannot show azimuth and the receiver may be
+        // at another one. The reception dots below are the actual arrivals.
+        //
+        // Each field is drawn in its emitter's colour: the interior in `Theme::WEDGE_FILL_ALPHA`,
+        // faint enough that the forty-odd wedges of a whole infall stack up without flattening into
+        // a block, and the two edges as thin lines at `Theme::WEDGE_EDGE_ALPHA`. Inside r+ every
+        // upper edge freezes on r-, so those edges pile onto the Cauchy horizon exactly as the pink
+        // congruence does, and that pile is what a later infaller cuts through.
+        //
+        // The fill is laid down as a strip of quads between consecutive track points rather than as
+        // one polygon: the wedge is not convex in general - the upper edge bends back onto r- while
+        // the lower edge runs on to the ring - and a quad spanning two adjacent times, with its two
+        // horizontal sides, always is.
+        let draw_wedges = |field: &SignalField, colour: Color32| {
+            let shade = |alpha: u8| {
+                Color32::from_rgba_unmultiplied(colour.r(), colour.g(), colour.b(), alpha)
+            };
+            let fill = shade(Theme::WEDGE_FILL_ALPHA);
+            let edge_stroke = Stroke::new(1.0, shade(Theme::WEDGE_EDGE_ALPHA));
             for pulse in field.pulses.iter() {
-                let points: Vec<Pos2> = pulse
-                    .pnd_track
+                let visible: Vec<(f64, f64, f64)> = pulse
+                    .extent_track
                     .iter()
-                    .filter(|(t, _)| *t >= t_min && *t <= t_max)
-                    .map(|&(t, r)| Pos2::new(to_screen_x(r), to_screen_y(t)))
+                    .copied()
+                    .filter(|(t, _, _)| *t >= t_min && *t <= t_max)
                     .collect();
-                if points.len() >= 2 {
-                    painter.add(PathShape::line(points, Stroke::new(1.0, faint)));
+                if visible.len() < 2 {
+                    continue;
+                }
+                for pair in visible.windows(2) {
+                    let (t0, lo0, hi0) = pair[0];
+                    let (t1, lo1, hi1) = pair[1];
+                    let (y0, y1) = (to_screen_y(t0), to_screen_y(t1));
+                    painter.add(PathShape::convex_polygon(
+                        vec![
+                            Pos2::new(to_screen_x(lo0), y0),
+                            Pos2::new(to_screen_x(hi0), y0),
+                            Pos2::new(to_screen_x(hi1), y1),
+                            Pos2::new(to_screen_x(lo1), y1),
+                        ],
+                        fill,
+                        egui::epaint::PathStroke::NONE,
+                    ));
+                }
+                for edge in [
+                    visible.iter().map(|&(t, lo, _)| Pos2::new(to_screen_x(lo), to_screen_y(t))).collect::<Vec<_>>(),
+                    visible.iter().map(|&(t, _, hi)| Pos2::new(to_screen_x(hi), to_screen_y(t))).collect::<Vec<_>>(),
+                ] {
+                    painter.add(PathShape::line(edge, edge_stroke));
                 }
             }
         };
         if signals.show_bob {
-            draw_tracks(signals.bob, Theme::BOB_COLOR);
+            draw_wedges(signals.bob, Theme::BOB_COLOR);
         }
         if signals.show_alice {
-            draw_tracks(signals.alice, Theme::ALICE_COLOR);
+            draw_wedges(signals.alice, Theme::ALICE_COLOR);
         }
 
         // Alice Worldline & Marker. The info boxes are registered last, below, so that a drag on

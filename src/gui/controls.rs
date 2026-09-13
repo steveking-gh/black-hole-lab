@@ -54,8 +54,8 @@ pub struct AppControls {
     /// Draw the animated raindrop flow (the Painlevé-Gullstrand / Doran river) on the
     /// equatorial view.
     pub show_river: bool,
-    /// Draw Alice's signal pulses on the equatorial view and their principal-null tracks
-    /// in the (t, r) diagram.
+    /// Draw Alice's signal pulses on the equatorial view and their radial extent, as wedges, in
+    /// the (t, r) diagram.
     pub show_signal: bool,
     /// The same for Bob's own transmission, which Alice receives.
     pub show_bob_signal: bool,
@@ -118,6 +118,23 @@ const PRESETS: [(&str, f64, f64, f64); 6] = [
 /// The step-distance quick-picks in Distance step mode, as (label, km).
 const STEP_DISTANCE_PRESETS: [(&str, f64); 4] =
     [("10k km", 10_000.0), ("1,000 km", 1000.0), ("100 km", 100.0), ("10 km", 10.0)];
+
+/// The preset the metric currently *is*, by label, or None if it is not one of them.
+///
+/// The highlight in the preset row is read off the geometry through this rather than remembered,
+/// so nothing can drift out of step with the hole and dragging the mass or spin slider drops the
+/// highlight by itself. It is also how a test can ask what the app's default hole is without
+/// duplicating the table.
+pub fn active_preset(metric: &KerrSchild) -> Option<&'static str> {
+    PRESETS
+        .iter()
+        .find(|&&(_, m, a_star, m_solar)| {
+            same_to_a_millionth(metric.m, m)
+                && same_to_a_millionth(metric.a_star(), a_star)
+                && same_to_a_millionth(metric.m_solar, m_solar)
+        })
+        .map(|&(label, ..)| label)
+}
 
 /// Agreement of two values to one part in a million, with an absolute floor of that
 /// same size so that a spin of zero can be compared at all. Every slider step is larger than this.
@@ -274,11 +291,11 @@ impl AppControls {
                 );
             ui.checkbox(&mut self.show_signal, "Alice's Signal (pulses)")
                 .on_hover_text(
-                    "Alice broadcasts a pulse into the whole of her own light cone every 0.1 M of her proper time, and every ray of it is an exact null geodesic of the coded metric. Colour is the frequency a local raindrop measures against Alice's emission, from a tenfold redshift through white to a thousandfold blueshift. Inside r₊ the rays that never reach r₋ are the prograde ones, dragged forward in ϕ: that is the arc of the pulse around α = 90°, running from about 45° to 135° well inside r₊, wider than that just below r₊ and narrowing as Alice nears r₋, its edges lying exactly where E − Ω₋L changes sign. On the equatorial view that arc is drawn in salmon: the part of each ring sent prograde enough to have negative energy along the inner horizon's rotating generator, E − Ω₋L < 0, which never crosses the drawn r₋ circle but piles onto it from outside while co-rotating at Ω₋, whereas the rest of the ring crosses at finite time. The salmon arc is about a third of the ring for a pulse sent just inside r₊ and only a sliver for one sent close to r₋, and it is beaded with dots because the arc collapses onto r₋ faster than a pixel can show. Those arcs stack up against the Cauchy horizon while the rest of the pulse falls through it, and because the pulses are close enough together for consecutive arcs to overlap there, an infaller crossing r₋ where they stand cuts through several sheets in a row, each blueshifted on the scale exp(κ₋Δt). Each loop is one pulse and encloses Alice, since light is isotropic in Alice's own frame, and the dot on the loop marks the emission event on Alice's trail. Inside r₊ the flow carries the whole loop inward, so the loop's outer edge never gets further from the hole than that dot: the river model, drawn with light.",
+                    "Alice broadcasts a pulse into the whole of her own light cone every 0.1 M of her proper time, and every ray of it is an exact null geodesic of the coded metric. Colour is the frequency a local raindrop measures against Alice's emission, from a tenfold redshift through white to a thousandfold blueshift. Inside r₊ the rays that never reach r₋ are the prograde ones, dragged forward in ϕ: that is the arc of the pulse around α = 90°, running from about 45° to 135° well inside r₊, wider than that just below r₊ and narrowing as Alice nears r₋, its edges lying exactly where E − Ω₋L changes sign. On the equatorial view that arc is drawn in salmon: the part of each ring sent prograde enough to have negative energy along the inner horizon's rotating generator, E − Ω₋L < 0, which never crosses the drawn r₋ circle but piles onto it from outside while co-rotating at Ω₋, whereas the rest of the ring crosses at finite time. The salmon arc is about a third of the ring for a pulse sent just inside r₊ and only a sliver for one sent close to r₋, and it is beaded with dots because the arc collapses onto r₋ faster than a pixel can show. Those arcs stack up against the Cauchy horizon while the rest of the pulse falls through it, and because the pulses are close enough together for consecutive arcs to overlap there, an infaller crossing r₋ where they stand cuts through several sheets in a row, each blueshifted on the scale exp(κ₋Δt). Each loop is one pulse and encloses Alice, since light is isotropic in Alice's own frame, and the dot on the loop marks the emission event on Alice's trail. Inside r₊ the flow carries the whole loop inward, so the loop's outer edge never gets further from the hole than that dot: the river model, drawn with light. On the (t, r) diagram, where azimuth cannot be drawn at all, a pulse is its radial extent: a wedge from the emission event, filled faintly in her amber, whose lower edge is the most ingoing ray of the pulse and whose upper edge is the outermost one. The lower edge is the ingoing edge of Alice's own light cone carried forward - the 45° line dr/dt = −1 for a hole with no spin, a little steeper for one that spins, and steeper again the deeper it goes - and inside r₊ it runs on to the ring while the upper edge freezes on r₋, so the upper edges of her interior pulses stack up on the Cauchy horizon exactly as the pink congruence does, and that stack is what a later infaller cuts through. A worldline inside a wedge is in range of that pulse, not necessarily receiving it: the diagram cannot say whether the ray standing at that radius is at the receiver's azimuth. The dots on a worldline are the actual receptions, and they are the only marks of one.",
                 );
             ui.checkbox(&mut self.show_bob_signal, "Bob's Signal (pulses)")
                 .on_hover_text(
-                    "Bob broadcasts exactly as Alice does, a whole light cone of exact null geodesics every 0.1 M of his own proper time, and he starts at t = 0, before he is released: while he waits he is the static observer at his hover radius, with a clock ticking at √(−g_tt) of coordinate time and an orthonormal frame to broadcast into, and nothing in the geometry stops him transmitting from it. His pulses come every 0.134 M of coordinate time while he hovers at r = 4.5M and every 0.1 M of his own once he falls. The colours mean the same thing as Alice's: the shift a local raindrop measures against his emission. His fronts are drawn at half stroke width and his emission dots in his own mint, so the two transmissions can be told apart without touching the shift colouring, which is a measurement. What is not the same is the physics of the return path. In the layout Drop Observers builds, Bob is behind Alice on the same infall, so his pulses chase her inward, and the only part of each one that ever catches her is the ingoing part of his cone: it runs at up to dr/dt = −1 in this chart, which no timelike worldline can match. That is the light whose shift is finite on the branch of r₋ she actually crosses, so unlike Alice → Bob there is no stack for her to cut through. His frozen family, E − Ω₋L < 0, does pile onto r₋ from outside, but it settles there behind her, after she has already gone through, so she never meets it. (In the layout the app starts in he is the deeper of the two instead, and his light climbs to her: the shift then starts as a small blueshift, because the fall toward the light beats the recession, and turns over into a redshift as he drops away below her.) And because her worldline ends — on the ring, or frozen on r₋ — his transmission stops arriving: the last pulse of his that reached her is ringed on his worldline in both views, and it marks the boundary of the causal past of the end of her worldline. At the default Δt = 8 that ring sits on his vertical hover segment, at about t = 2, because by the time he is released she has already reached the ring and nothing he sends after t ≈ 2 can catch her. Everything he sends after that event never arrives, however long he goes on sending.",
+                    "Bob broadcasts exactly as Alice does, a whole light cone of exact null geodesics every 0.1 M of his own proper time, and he starts at t = 0, before he is released: while he waits he is the static observer at his hover radius, with a clock ticking at √(−g_tt) of coordinate time and an orthonormal frame to broadcast into, and nothing in the geometry stops him transmitting from it. His pulses come every 0.134 M of coordinate time while he hovers at r = 4.5M and every 0.1 M of his own once he falls. The colours mean the same thing as Alice's: the shift a local raindrop measures against his emission. His fronts are drawn at half stroke width and his emission dots in his own mint, so the two transmissions can be told apart without touching the shift colouring, which is a measurement. What is not the same is the physics of the return path. In the layout Drop Observers builds, Bob is behind Alice on the same infall, so his pulses chase her inward, and the only part of each one that ever catches her is the ingoing part of his cone: it runs at up to dr/dt = −1 in this chart, which no timelike worldline can match. That is the light whose shift is finite on the branch of r₋ she actually crosses, so unlike Alice → Bob there is no stack for her to cut through. His frozen family, E − Ω₋L < 0, does pile onto r₋ from outside, but it settles there behind her, after she has already gone through, so she never meets it. (In the layout the app starts in he is the deeper of the two instead, and his light climbs to her: the shift then starts as a small blueshift, because the fall toward the light beats the recession, and turns over into a redshift as he drops away below her.) And because her worldline ends — on the ring, or frozen on r₋ — his transmission stops arriving: the last pulse of his that reached her is ringed on his worldline in both views, and it marks the boundary of the causal past of the end of her worldline. At the default Δt = 8 that ring sits on his vertical hover segment: at the app's default hole it marks the pulse he sends at t = 1.84, which reaches her at t = 5.20, most of an M before her worldline ends at t = 6.06. He is released long after that, so nothing of his release or of his own fall ever reaches her: everything he sends past that event never arrives, however long he goes on sending. On the (t, r) diagram his pulses are drawn exactly as hers are, each as the wedge of its own radial extent but in his mint: lower edge the most ingoing ray, upper edge the outermost, a worldline inside the wedge in range of the pulse rather than receiving it, and the dots the actual arrivals.",
                 );
             ui.checkbox(&mut self.show_outgoing_rays, "Outgoing Light Between r₊ and r₋ (pink lines)")
                 .on_hover_text(
@@ -326,11 +343,9 @@ impl AppControls {
             ui.label(egui::RichText::new("Presets (Sets Mass & Spin):").small());
             ui.horizontal_wrapped(|ui| {
                 let mut preset_changed = false;
+                let highlighted = active_preset(metric);
                 for (label, m, a_star, m_solar) in PRESETS {
-                    let active = same_to_a_millionth(metric.m, m)
-                        && same_to_a_millionth(metric.a_star(), a_star)
-                        && same_to_a_millionth(metric.m_solar, m_solar);
-                    if ui.selectable_label(active, label).clicked() {
+                    if ui.selectable_label(highlighted == Some(label), label).clicked() {
                         *metric = KerrSchild::with_solar_mass(m, a_star * m, m_solar);
                         preset_changed = true;
                     }

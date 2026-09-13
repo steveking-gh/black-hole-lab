@@ -42,6 +42,25 @@ impl Theme {
     /// hers are in `ALICE_COLOR`.
     pub const SECONDARY_FRONT_WIDTH: f32 = 0.5;
 
+    /// Fill opacity of one pulse's wedge on the (t, r) diagram, in the emitter's own colour: the
+    /// band between the innermost and the outermost ray of that pulse, which is everything the
+    /// projection onto (t, r) can say about a front that is really a curve in (r, phi).
+    ///
+    /// The number is set by the stacking, not by how one wedge looks. The wedges of a whole infall
+    /// overlap - inside r+ every one of them covers the ground between the ring and r-, so a pixel
+    /// down there is under all of them at once - and n layers of alpha a cover what is beneath them
+    /// to a total opacity of 1 - (1 - a/255)^n. At a = 10 that is 0.18 for five layers, 0.33
+    /// for ten, 0.55 for twenty and 0.80 for the forty-odd pulses of a full run: still short of
+    /// flat, and the count is legible as brightness the whole way up. At 14, the top of the band
+    /// worth trying, twenty layers already reach 0.68 and the last twenty add almost nothing.
+    pub const WEDGE_FILL_ALPHA: u8 = 10;
+
+    /// Opacity of the two edges of that wedge, the innermost and outermost ray. Seven times the
+    /// fill, so a single pulse's reach is readable against its own interior, and low enough that
+    /// the upper edges of the interior pulses - which all freeze onto r- - read as a stack of
+    /// separate lines rather than as one thick line on the horizon.
+    pub const WEDGE_EDGE_ALPHA: u8 = 70;
+
     // Light Cones, keyed to the observer rather than to the diagram, so a cone keeps its
     // identity in every reference frame. Fills sit at roughly 90% transparency; the edges use
     // the same hue at an alpha that still reads over the region shading.
