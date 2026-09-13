@@ -72,6 +72,19 @@ pub struct AppControls {
     pub use_km: bool,
     pub frame_of_ref: ReferenceFrame,
     pub font_scale: f32,
+    /// Standing request from the panel for the (t, r) view to go back to where it starts.
+    ///
+    /// Set by every control that puts the simulation clock back to zero, and consumed once, in
+    /// `SpacetimeApp::ui`, through `take_view_reset`. The canvas is panned in time by dragging it,
+    /// and that pan is an offset from the *current* clock; putting the clock back to zero while
+    /// leaving the pan standing left the user looking at an empty stretch of diagram above or
+    /// below the run they had just restarted, with no obvious way back to it.
+    ///
+    /// It is a request rather than a direct write because the panel is handed the physics - the
+    /// metric, the observers, the two fields and the clock - and not the canvases. Putting the
+    /// canvases in its hands as well, so that one button could reach into both, is a wider door
+    /// than this needs.
+    pub view_reset_requested: bool,
 }
 
 impl Default for AppControls {
@@ -95,6 +108,7 @@ impl Default for AppControls {
             use_km: true,
             frame_of_ref: ReferenceFrame::DistantObserver,
             font_scale: 1.0,
+            view_reset_requested: false,
         }
     }
 }
@@ -144,6 +158,47 @@ impl AppControls {
         WorldlineParams::new(self.energy, self.l_ang, self.outgoing_start)
     }
 
+    /// Put the run back to its opening state: the clock to zero, both transmissions dropped, and
+    /// the two observers re-dropped at the events the app opens on - Alice at r = 4.5M and Bob at
+    /// r = 3.8M, both released at t = 0.
+    ///
+    /// The transmissions are cleared rather than rewound. A rewind keeps the light in flight, and
+    /// there is none to keep: the wavefronts standing in the field were emitted by worldlines that
+    /// this is about to replace, and where the geometry itself has just changed under them they are
+    /// null geodesics of a metric that no longer applies.
+    ///
+    /// Both callers - the transport's Reset button and the preset row, which resets the run because
+    /// it has changed the hole - also want the (t, r) view put back where it starts, so the request
+    /// is raised here rather than at each of them.
+    ///
+    /// It is `pub(crate)` because the Reset button is an egui widget and a test cannot click it
+    /// without a harness that drives the pointer:
+    /// `app::tests::test_resetting_the_run_puts_the_time_pan_back_to_the_start` calls the action
+    /// the button calls and then runs a real frame of the app over it.
+    pub(crate) fn reset_run(
+        &mut self,
+        metric: &KerrSchild,
+        bob: &mut Observer,
+        alice: &mut Option<Observer>,
+        signals: &mut SignalPair<'_>,
+        current_time: &mut f64,
+    ) {
+        *current_time = 0.0;
+        signals.clear();
+        let params = self.worldline_params();
+        bob.reset_with_phi(metric, 0.0, 3.8, 0.0, params);
+        if let Some(al) = alice {
+            al.reset_with_phi(metric, 0.0, 4.5, 0.25, params);
+        }
+        self.view_reset_requested = true;
+    }
+
+    /// Whether the (t, r) view has been asked to go back to the start since this was last called,
+    /// clearing the request. Called once a frame by `SpacetimeApp::ui`, after the panel has run.
+    pub fn take_view_reset(&mut self) -> bool {
+        std::mem::take(&mut self.view_reset_requested)
+    }
+
     pub fn render_panel(
         &mut self,
         ui: &mut egui::Ui,
@@ -186,13 +241,7 @@ impl AppControls {
                     self.is_playing = !self.is_playing;
                 }
                 if ui.button("⏮ Reset").clicked() {
-                    *current_time = 0.0;
-                    signals.clear();
-                    let params = self.worldline_params();
-                    bob.reset_with_phi(metric, 0.0, 3.8, 0.0, params);
-                    if let Some(al) = alice {
-                        al.reset_with_phi(metric, 0.0, 4.5, 0.25, params);
-                    }
+                    self.reset_run(metric, bob, alice, &mut signals, current_time);
                 }
                 let current_step = match self.step_mode {
                     StepMode::Time => self.step_size,
@@ -341,13 +390,7 @@ impl AppControls {
                     }
                 }
                 if preset_changed {
-                    *current_time = 0.0;
-                    signals.clear();
-                    let params = self.worldline_params();
-                    bob.reset_with_phi(metric, 0.0, 3.8, 0.0, params);
-                    if let Some(al) = alice {
-                        al.reset_with_phi(metric, 0.0, 4.5, 0.25, params);
-                    }
+                    self.reset_run(metric, bob, alice, &mut signals, current_time);
                 }
             });
 
@@ -479,6 +522,9 @@ impl AppControls {
                     let params = self.worldline_params();
                     *alice = Some(Observer::new_with_phi(metric, "Alice", 0.0, 4.5, 0.0, 0.25, params));
                     *bob = Observer::new_with_phi(metric, "Bob", 0.0, 4.5, self.delta_t_delay, 0.0, params);
+                    // The clock is back at zero, so the diagram's own pan in time has to go with
+                    // it; see `view_reset_requested`.
+                    self.view_reset_requested = true;
                 }
             } else {
                 *alice = None;

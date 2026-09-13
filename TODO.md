@@ -18,8 +18,11 @@ Known limitations, documented in code, not scheduled:
 
 - A hovering observer's `Observer::four_velocity` reports the free-fall value; the signal code
   corrects for it locally. Telemetry, cones and the Distance-step estimate still read it.
-- The reception detector keys a sheet by polyline-segment index; at coarse steps a fast-winding
-  front can hand a sheet to a different segment between passes and a crossing is missed.
+- The drawn inner edge of a wedge steps off the ring as soon as the last of the 72 sampled rays
+  is swallowed, while the continuum front leaves it smoothly: the rays whose L/E is just above the
+  boundary between the two fates turn arbitrarily close to the ring and linger, and 72 samples
+  cannot resolve them. Documented in `Pulse::radial_extent` and measured in
+  `test_the_swallowed_front_sits_on_the_ring` (a step of 0.32 M at a = 0.90 from r = 0.45).
 - Frozen-family classification is recomputed per ray per frame; cache at emission if it matters.
 
 Ideas offered, not requested: a Penrose-diagram inset; merging and pushing `gr-fidelity`.

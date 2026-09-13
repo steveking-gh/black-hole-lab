@@ -284,6 +284,19 @@ impl eframe::App for SpacetimeApp {
                 );
             });
         });
+        // Reset, a preset change and Drop Observers all put the clock back to zero, and the (t, r)
+        // canvas is panned in time by an offset from the clock, so the pan has to go back with it
+        // or the user is left looking at an empty stretch of diagram above the run they have just
+        // restarted. The panel raises the request and it is taken here, before the canvases are
+        // drawn, so the reset shows in the same frame as the click.
+        //
+        // Only the pan in time is put back. The radial pan and the zoom are a choice about what
+        // part of the geometry to look at - the Focus r- and Focus Bob buttons in the header set
+        // them deliberately - and none of these actions changes the geometry the way it changes the
+        // clock; Reset Zoom in the header is what puts those back.
+        if self.controls.take_view_reset() {
+            self.spacetime_canvas.time_offset = 0.0;
+        }
 
         // 4. Central Panel: Split View between Spacetime (t, r) and Spatial (x, y)
         egui::CentralPanel::default().show(ui, |ui| {
@@ -438,6 +451,61 @@ mod tests {
             let mut frame = eframe::Frame::_new_kittest();
             app.ui(ui, &mut frame);
         });
+    }
+
+    #[test]
+    fn test_resetting_the_run_puts_the_time_pan_back_to_the_start() {
+        // Dragging the (t, r) canvas pans it in time, and that pan is an offset from the simulation
+        // clock rather than an absolute time. Reset, a preset change and Drop Observers all put the
+        // clock back to zero; before this, the pan stayed where it was, and the user was left
+        // looking at a stretch of empty diagram with the restarted run somewhere off the edge of
+        // it. Every control that zeroes the clock now raises `view_reset_requested`, and this walks
+        // the whole path: the action, the request, and the frame that consumes it.
+        let mut app = SpacetimeApp::default();
+        app.controls.is_playing = false;
+        for _ in 0..40 {
+            app.step_forward(0.1);
+        }
+        // A pan of two M up the diagram, as a drag would leave it, and a radial pan and zoom with
+        // it so that the two can be told apart.
+        app.spacetime_canvas.time_offset = 2.0;
+        app.spacetime_canvas.r_offset = 1.25;
+        app.spacetime_canvas.max_r = 0.05;
+
+        // The Reset button's own action, through the panel rather than around it.
+        app.controls.reset_run(
+            &app.metric,
+            &mut app.bob,
+            &mut app.alice,
+            &mut SignalPair { alice: &mut app.signal, bob: &mut app.bob_signal },
+            &mut app.current_time,
+        );
+        assert_eq!(app.current_time, 0.0, "the reset puts the clock back");
+        assert!(app.controls.view_reset_requested, "and asks for the view to go back with it");
+        assert_eq!(
+            app.spacetime_canvas.time_offset, 2.0,
+            "the panel cannot reach the canvas itself: the request is still standing"
+        );
+
+        // One frame of the app, which is where the request is taken.
+        egui::__run_test_ui(|ui| {
+            let mut frame = eframe::Frame::_new_kittest();
+            app.ui(ui, &mut frame);
+        });
+        assert_eq!(app.spacetime_canvas.time_offset, 0.0, "the pan in time is back at the start");
+        assert!(!app.controls.view_reset_requested, "and the request has been consumed");
+        // The radial pan and the zoom are a separate choice and are deliberately left standing.
+        assert_eq!(app.spacetime_canvas.r_offset, 1.25);
+        assert_eq!(app.spacetime_canvas.max_r, 0.05);
+
+        // A second frame changes nothing: the request is a one-shot, not a mode that would fight
+        // the user's next drag.
+        app.spacetime_canvas.time_offset = 1.0;
+        egui::__run_test_ui(|ui| {
+            let mut frame = eframe::Frame::_new_kittest();
+            app.ui(ui, &mut frame);
+        });
+        assert_eq!(app.spacetime_canvas.time_offset, 1.0, "a consumed request does not fire twice");
     }
 
     #[test]
@@ -1390,10 +1458,8 @@ mod tests {
         // rewind of several steps, and its exact crossing time is the target.
         //
         // Deliberately the last one. Landing further back moves the whole pass grid of everything
-        // that follows, and a sheet is keyed by the index of the polyline segment carrying it, so a
-        // front winding fast enough can hand the crossing to a different segment between two passes
-        // and have neither of them see it. That dropout is a property of the sheet key at a given
-        // step size, not of the rewind, and it is measured where it belongs, in
+        // that follows, and what a re-interpolated crossing time is worth at a given step size is
+        // measured where it belongs, in
         // `wavefront::tests::test_one_pulse_crossings_are_the_same_at_a_quarter_of_the_step`.
         let target = alice_then
             .iter()

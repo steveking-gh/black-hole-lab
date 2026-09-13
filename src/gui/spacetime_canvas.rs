@@ -844,15 +844,18 @@ impl SpacetimeCanvas {
 
         // The two transmissions. A wavefront is a closed curve in (r, phi) and this diagram has
         // no azimuth to draw it on, so what is drawn is the one thing the projection does define:
-        // the pulse's radial extent, [min r, max r] over its live rays, swept up in t. That is the
+        // the pulse's radial extent, [min r, max r] over its front, swept up in t. That is the
         // wedge of `Pulse::extent_track`. Its lower edge is the ingoing edge of the emitter's own
         // light cone, carried from the emission event - the 45-degree line dr/dt = -1 only for a
         // hole with no spin, and slightly steeper than that for one that spins (-1.010 at r = 4.5M
         // for a = 0.65, -2.27 at r = 0.2M for a = 0.90) - and its upper edge is the outermost ray,
-        // which outside r+ climbs and inside r+ falls and freezes onto r-. A worldline inside a
-        // wedge is *in range* of that pulse - some ray of it stands at that radius - which is not
-        // the same as receiving it, because the diagram cannot show azimuth and the receiver may be
-        // at another one. The reception dots below are the actual arrivals.
+        // which outside r+ climbs and inside r+ falls and freezes onto r-. While the pulse is being
+        // swallowed the lower edge stands on the ring: the rays are a sampling of a continuous
+        // front, and `Pulse::radial_extent` is what says when the front itself is down there rather
+        // than only the innermost sample of it. A worldline inside a wedge is *in range* of that
+        // pulse - some part of the front stands at that radius - which is not the same as receiving
+        // it, because the diagram cannot show azimuth and the receiver may be at another one. The
+        // reception dots below are the actual arrivals.
         //
         // Each field is drawn in its emitter's colour: the interior in `Theme::WEDGE_FILL_ALPHA`,
         // faint enough that the forty-odd wedges of a whole infall stack up without flattening into
