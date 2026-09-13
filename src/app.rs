@@ -1,7 +1,7 @@
 use crate::gui::cauchy_effects::CauchyEffects;
 use crate::gui::controls::{AppControls, ReferenceFrame, SignalViews, StepMode};
 use crate::gui::spacetime_canvas::SpacetimeCanvas;
-use crate::gui::spatial_canvas::SpatialCanvas;
+use crate::gui::spatial_canvas::{FrontStyle, SpatialCanvas};
 use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::{Observer, ObserverPair};
@@ -405,7 +405,10 @@ impl eframe::App for SpacetimeApp {
                             self.controls.use_km,
                             self.controls.frame_of_ref,
                             self.controls.font_scale,
-                            self.controls.draw_front_arcs,
+                            FrontStyle {
+                                arcs: self.controls.draw_front_arcs,
+                                hide_wound: self.controls.hide_wound_segments,
+                            },
                         );
                     },
                 );

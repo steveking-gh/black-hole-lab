@@ -8,6 +8,26 @@ use crate::physics::observer::Observer;
 use crate::physics::wavefront::SignalField;
 use egui::{Color32, Pos2, Stroke, Vec2};
 
+/// How the wavefronts of a transmission are drawn on this canvas: the two view settings of the
+/// Simulation Control panel that decide what is put on screen *between* the calculated rays.
+///
+/// Both are drawing choices in the strict sense. `Pulse::scan` interpolates in (r, phi) along the
+/// same segments whatever this struct says, so nothing here can move an arrival, change a measured
+/// shift or touch the integration; what they change is how much of the picture is inference and how
+/// much is the raw output of the integrator. They travel together in one value because they answer
+/// the same question, and because two bare bools threaded through two call layers is how the wrong
+/// one eventually gets passed.
+#[derive(Clone, Copy)]
+pub struct FrontStyle {
+    /// Draw each segment of a front as the curve linear in (r, phi) between its two rays
+    /// (`segment_arc`), or draw nothing between them and leave the front as its calculated points.
+    /// See `FRONT_POINT_RADIUS`.
+    pub arcs: bool,
+    /// Drop the segments whose two rays have wound more than `MAX_RESOLVED_WINDING` apart, which
+    /// the sampling cannot resolve and which the interpolation draws along a curve no ray took.
+    pub hide_wound: bool,
+}
+
 pub struct SpatialCanvas {
     pub zoom: f32,
     pub pan_offset: Vec2,
@@ -44,7 +64,7 @@ impl SpatialCanvas {
         use_km: bool,
         frame_of_ref: ReferenceFrame,
         font_scale: f32,
-        draw_front_arcs: bool,
+        style: FrontStyle,
     ) {
         let desired_size = egui::Vec2::new(ui.available_width(), canvas_height);
         let (response, painter) = ui.allocate_painter(desired_size, egui::Sense::drag());
@@ -327,7 +347,7 @@ impl SpatialCanvas {
             signals.bob,
             Theme::BOB_COLOR,
             Theme::SECONDARY_FRONT_WIDTH,
-            draw_front_arcs,
+            style,
             &to_screen,
         );
         draw_signal_field(
@@ -336,7 +356,7 @@ impl SpatialCanvas {
             signals.alice,
             Theme::ALICE_COLOR,
             1.0,
-            draw_front_arcs,
+            style,
             &to_screen,
         );
 
@@ -404,6 +424,14 @@ impl SpatialCanvas {
         // Horizon angular velocity Ω_H = a / (2 M r₊) is a rate per unit coordinate time, so in
         // geometric units it is a number per M; only dividing by t_g = GM/c³ makes it rad/s.
         let omega_h = metric.a / (2.0 * metric.m * rp);
+        // The cut, stated on the canvas as well as in the panel's tip: a gap in a drawn front has
+        // to say for itself that it is deliberate.
+        let wound_line = if style.hide_wound {
+            "Segments wound past a full turn are not drawn: the front there straddles a photon\n\
+             orbit and two rays cannot resolve it\n"
+        } else {
+            ""
+        };
         let legend_text = if use_km {
             format!(
                 "Equatorial View (θ = π/2, x + iy = (r + ia) e^{{iϕ}})\n\
@@ -420,6 +448,7 @@ impl SpatialCanvas {
                  measured as it left: deep red ×1 (every front is born red), yellow ×10,\n\
                  white ×30, blue ×1000, violet ×100000, maroon below ×1\n\
                  Beaded arcs on r₋: the frozen family (E − Ω₋L < 0, never crosses this branch)\n\
+                 {}\
                  Bob's fronts: same gain colours at half stroke, mint emission dots\n\
                  Receptions: triangle on the receiver's trail in the sender's colour (amber = Alice → Bob, mint = Bob → Alice)\n\
                  🔍 Zoom: {:.0} px/M (Scroll to zoom, drag to pan)",
@@ -434,6 +463,7 @@ impl SpatialCanvas {
                 metric.a_star(),
                 omega_h,
                 omega_h / metric.t_grav_seconds(),
+                wound_line,
                 self.zoom,
             )
         } else {
@@ -452,6 +482,7 @@ impl SpatialCanvas {
                  measured as it left: deep red ×1 (every front is born red), yellow ×10,\n\
                  white ×30, blue ×1000, violet ×100000, maroon below ×1\n\
                  Beaded arcs on r₋: the frozen family (E − Ω₋L < 0, never crosses this branch)\n\
+                 {}\
                  Bob's fronts: same gain colours at half stroke, mint emission dots\n\
                  Receptions: triangle on the receiver's trail in the sender's colour (amber = Alice → Bob, mint = Bob → Alice)\n\
                  🔍 Zoom: {:.0} px/M (Scroll to zoom, drag to pan)",
@@ -466,6 +497,7 @@ impl SpatialCanvas {
                 rho_m,
                 metric.a_star(),
                 omega_h,
+                wound_line,
                 self.zoom,
             )
         };
@@ -524,11 +556,19 @@ impl SpatialCanvas {
 /// nothing at all about where the light has since been. Held between raindrops, every ray of a pulse
 /// starts at gain exactly 1, because at the emission event the two f_factors are the same number
 /// computed twice: a new front comes out one uniform deep red and then earns its way up the ramp as
-/// it falls, and what the colour then shows is what the light has gained on its way here. A segment
-/// takes the mean of its two endpoints' gains, so the ramp is continuous along the front.
+/// it falls, and what the colour then shows is what the light has gained on its way here. The gain
+/// is carried *along* each segment rather than averaged over it: log10(gain) is interpolated
+/// linearly between the two rays in the same loop coordinate the position is interpolated in, and
+/// the polyline is cut into bands of at most `FRONT_BAND_DECADES` each, every band drawn at the
+/// colour of its own midpoint (see `banded_segment`). Where the front is being torn apart - one ray
+/// freezing onto r- while its neighbour crosses - a single segment spans the whole ramp, and one
+/// mean colour said the far end had gained a hundred thousandfold when it had gained nothing.
 ///
 /// Segments with a dead endpoint are skipped: a ray that has reached the ring is gone, and the front
-/// genuinely ends there rather than jumping across the gap.
+/// genuinely ends there rather than jumping across the gap. Segments wound past
+/// `MAX_RESOLVED_WINDING` are skipped too, when `FrontStyle::hide_wound` is set, because two samples
+/// that far apart no longer bound a resolved piece of front; each of their two rays is then drawn as
+/// its own dot instead, so the cut reads as a gap with marked ends rather than as a silent hole.
 ///
 /// Every pulse also gets a dot at its own emission event, in the emitter's own colour. Without it
 /// the nested loops inside r+ read as circles drawn around the hole, which is the wrong picture:
@@ -591,6 +631,36 @@ const MAX_ARC_STEP: f64 = 0.05;
 /// `MAX_ARC_STEP`, rather than truncated.
 const MAX_ARC_PIECES: usize = 2000;
 
+/// The azimuthal separation past which a neighbouring pair of rays no longer bounds a *resolved*
+/// piece of front: one whole turn of the hole.
+///
+/// A segment joins two rays let go 2.5 degrees apart at the default sampling, and everything drawn
+/// between them is the interpolation linear in (r, phi) of `segment_arc`. That is a faithful
+/// picture of the front while the pair stays together, and it stops being one the moment the pair
+/// straddles a critical impact parameter. At a = 0.90 the prograde equatorial photon orbit sits at
+/// r_ph = 1.56, just outside r+ = 1.44: a ray let go marginally inside the critical angle spirals
+/// in and freezes on r-, its neighbour marginally outside it hangs on r_ph for tens of M and then
+/// escapes, and the real front between them is *pinned on that orbit* - a spiral in from the far
+/// ray to r_ph, a pile-up of turns at r_ph that no sampling of the light cone can resolve, and a
+/// spiral from r_ph down to r-. Two rays cannot carry that shape. What the interpolation draws
+/// instead is an Archimedean spiral with its winding spread evenly over every radius between the
+/// two ends, r+ included, and because the outer ray runs away at nearly c while the winding grows
+/// only at Omega_-, those turns drift steadily outward across the outer horizon as the run goes on.
+/// No ray does that, and nothing else in the picture does either: it is the one place where the arc
+/// between two neighbours is not a statement about the front but an artefact of joining two samples
+/// that no longer belong to one another.
+///
+/// A full turn is where the claim becomes indefensible rather than where the error becomes large.
+/// Past 2 pi the two rays have gone round the hole relative to one another at least once, so the
+/// segment covers every azimuth and the sampling has no information at all about what the front
+/// does inside it: the drawn curve is then chosen entirely by the interpolation. Below it the arc
+/// still misplaces the winding, but it is one arc between two neighbours on the same sheet, and it
+/// is the same curve `Pulse::scan` tests. Only the two segments straddling the prograde and the
+/// retrograde critical angle get there - about two per pulse - so dropping them removes those and
+/// nothing else. Reception is not one of the things it removes: `Pulse::scan` interpolates along
+/// every segment whether or not it is drawn, so an arrival happens at the same event either way.
+const MAX_RESOLVED_WINDING: f64 = std::f64::consts::TAU;
+
 /// The drawn polyline of one segment of a front: the curve linear in (r, phi) from one ray to the
 /// next, embedded point by point. See `MAX_ARC_STEP`.
 ///
@@ -638,7 +708,93 @@ fn segment_arc<F: Fn((f64, f64)) -> Pos2>(
 /// rays most of a radian apart in the deep interior is drawn along a curve no ray was integrated
 /// on - and the dots are the part that is not. Nothing about a reception moves when the box is
 /// unticked; `Pulse::scan` interpolates along the same segments either way.
+///
+/// The same dot marks each end of a segment dropped for winding past `MAX_RESOLVED_WINDING`, in
+/// that ray's own gain colour and at the ordinary `Theme::SHIFT_ALPHA`: those two calculated points
+/// are still calculated points, and it is only the inference between them that has been withdrawn.
+/// A ray already drawn as a dot - every live ray in points-only mode, and the frozen family's
+/// heavier beads - is not drawn twice for it.
 const FRONT_POINT_RADIUS: f32 = 1.6;
+
+/// How much of the gain ramp one flat-coloured band of a segment may cover, in decades of gain.
+///
+/// A segment is drawn in the colour of the gain its light carries, and its two rays need not carry
+/// anything like the same gain. Where the front is being torn apart - one ray settling onto r- and
+/// climbing like exp(kappa_- t) up the ramp while its neighbour crosses and is gone - a single
+/// segment runs from gain 1 to gain 1e5: five decades, the whole ramp from deep red to violet.
+/// Painted in one colour that segment is violet along its entire length, which says the light at
+/// the far end has gained a hundred thousandfold when it has gained nothing at all, and the ramp
+/// then reads as a jump at a ray rather than as the climb along the front that it is.
+///
+/// So the gain is carried along the segment: log10(gain) is interpolated linearly in the same loop
+/// coordinate s that `segment_arc` interpolates the position in, and the polyline is cut into bands
+/// of at most this many decades, each drawn at the colour of its own midpoint. A quarter of a
+/// decade is under half the narrowest leg of `Theme::FRONT_STOPS` - the half-decade from deep red
+/// to orange - so no band can straddle a stop of the ramp unnoticed, and the five-decade case costs
+/// twenty polylines where it used to cost one. The interpolation is in log10 because that is the
+/// coordinate the ramp itself is keyed to, so a band is a fixed slice of the drawn ramp rather than
+/// a fixed slice of a quantity spanning five orders of magnitude.
+const FRONT_BAND_DECADES: f64 = 0.25;
+
+/// Most bands one segment may be cut into: the same kind of guarantee `MAX_ARC_PIECES` makes about
+/// the pieces.
+///
+/// The clamp `Theme::front_colour` puts on log10(gain) already holds any segment to the six decades
+/// of the ramp, so twenty-four bands is the most the physics can ask for and this cap is not
+/// reached in any state the field can be in. It is here so that no later widening of the ramp, and
+/// no unphysical gain that finds its way past the clamps, can turn one segment of one pulse into
+/// unbounded work in a frame that has to be drawn now.
+const MAX_FRONT_BANDS: usize = 64;
+
+/// log10 of a gain, clamped to the two ends of the wavefront ramp exactly as `Theme::front_colour`
+/// clamps it, so that interpolating between two of these and colouring the result agrees with
+/// colouring the two ends directly. A non-positive or non-finite gain, which no real measurement
+/// produces, sits at the dark end.
+fn front_log(gain: f64) -> f64 {
+    if gain.is_finite() && gain > 0.0 {
+        gain.log10().clamp(Theme::FRONT_LOG_MIN, Theme::FRONT_LOG_MAX)
+    } else {
+        Theme::FRONT_LOG_MIN
+    }
+}
+
+/// Cut one drawn segment into bands of nearly constant gain: the polyline of `segment_arc` split at
+/// shared boundary points, each piece paired with the gain to colour it by. See
+/// `FRONT_BAND_DECADES`.
+///
+/// `gain_from` belongs to the ray at s = 0 and `gain_to` to the ray at s = 1, the same loop
+/// coordinate `segment_arc` walks the position along, so band b covers the s-range from b/bands to
+/// (b + 1)/bands of that same curve and is coloured at the gain interpolated to its midpoint. The
+/// interpolation is linear in log10(gain), clamped as the ramp clamps it.
+///
+/// Consecutive bands share their boundary point rather than abutting, so the drawn front has no
+/// gaps in it: the concatenation of the bands, each shared point counted once, is the original
+/// polyline in order. A segment whose two ends carry the same gain is one band over the whole arc,
+/// which is the common case and costs nothing over drawing it directly. Asking for more bands than
+/// the arc has pieces would need boundary points that are not on the polyline, so the count falls
+/// back to the piece count instead: the colour of a two-point segment is then quantised more
+/// coarsely than `FRONT_BAND_DECADES` asks for, which is all two points can carry anyway.
+fn banded_segment(arc: Vec<Pos2>, gain_from: f64, gain_to: f64) -> Vec<(Vec<Pos2>, f64)> {
+    let (log_from, log_to) = (front_log(gain_from), front_log(gain_to));
+    let gain_at = |s: f64| 10.0_f64.powf(log_from + s * (log_to - log_from));
+    let pieces = arc.len().saturating_sub(1);
+    let wanted = ((log_to - log_from).abs() / FRONT_BAND_DECADES).ceil().max(1.0) as usize;
+    let bands = wanted.clamp(1, MAX_FRONT_BANDS).min(pieces.max(1));
+    if bands <= 1 || pieces == 0 {
+        return vec![(arc, gain_at(0.5))];
+    }
+    (0..bands)
+        .map(|b| {
+            // Integer bounds, so band b ends exactly where band b + 1 begins and the last ends on
+            // the final point of the arc: the bands tile the segment with no gap and no overlap
+            // beyond the single point each consecutive pair shares.
+            let start = b * pieces / bands;
+            let end = (b + 1) * pieces / bands;
+            let s_mid = 0.5 * ((start + end) as f64) / (pieces as f64);
+            (arc[start..=end].to_vec(), gain_at(s_mid))
+        })
+        .collect()
+}
 
 fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
     painter: &egui::Painter,
@@ -646,7 +802,7 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
     signal: &SignalField,
     emission_colour: Color32,
     width_scale: f32,
-    draw_front_arcs: bool,
+    style: FrontStyle,
     to_screen: &F,
 ) {
     // `derivatives` reads only (E, L) off the state and takes the radius as an argument, so one
@@ -704,11 +860,27 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
             .map(|ray| to_screen(metric.cartesian_position(ray.r, ray.phi)))
             .collect();
 
+        // The two ends of every segment dropped for winding: each is a live calculated point whose
+        // segment has been withdrawn, and each is drawn as its own dot below so that the cut reads
+        // as a gap with marked ends rather than as a silent hole in the front.
+        let mut cut_end = vec![false; n];
         // n segments rather than n - 1: the closing one runs from the last ray back to the first.
         // With the arcs off there are no segments at all, only the points below.
-        for i in (0..n).filter(|_| draw_front_arcs) {
+        for i in (0..n).filter(|_| style.arcs) {
             let j = (i + 1) % n;
             if !pulse.rays[i].alive() || !pulse.rays[j].alive() {
+                continue;
+            }
+            // The raw, unfolded winding between the pair, which is the span `segment_arc` would
+            // draw this segment over. Past a whole turn the two samples no longer bound a resolved
+            // piece of front and the curve between them is the interpolation's own invention, so
+            // nothing is drawn there and the two ends are marked instead. See
+            // `MAX_RESOLVED_WINDING`.
+            if style.hide_wound
+                && (pulse.rays[j].phi - pulse.rays[i].phi).abs() > MAX_RESOLVED_WINDING
+            {
+                cut_end[i] = true;
+                cut_end[j] = true;
                 continue;
             }
             let arc = segment_arc(
@@ -717,26 +889,38 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
                 (pulse.rays[j].r, pulse.rays[j].phi),
                 to_screen,
             );
-            let gain = 0.5 * (gains[i] + gains[j]);
-            if frozen[i] && frozen[j] {
-                frozen_segments.push((arc, Theme::front_colour(gain, Theme::FRONT_FROZEN_ALPHA)));
-                continue;
+            // The gain is carried along the segment rather than averaged over it: one polyline per
+            // band of at most `FRONT_BAND_DECADES`, and a single band over the whole arc in the
+            // common case where the two rays carry the same gain.
+            let frozen_pair = frozen[i] && frozen[j];
+            for (band, gain) in banded_segment(arc, gains[i], gains[j]) {
+                if frozen_pair {
+                    frozen_segments
+                        .push((band, Theme::front_colour(gain, Theme::FRONT_FROZEN_ALPHA)));
+                } else {
+                    painter.add(egui::Shape::line(
+                        band,
+                        Stroke::new(
+                            1.2 * width_scale,
+                            Theme::front_colour(gain, Theme::SHIFT_ALPHA),
+                        ),
+                    ));
+                }
             }
-            painter.add(egui::Shape::line(
-                arc,
-                Stroke::new(1.2 * width_scale, Theme::front_colour(gain, Theme::SHIFT_ALPHA)),
-            ));
         }
         for (i, point) in points.iter().enumerate() {
             if !pulse.rays[i].alive() {
                 continue;
             }
             if frozen[i] {
+                // A frozen ray already carries a bead, which is this same dot drawn heavier, so it
+                // is not drawn a second time for being the end of a cut segment.
                 frozen_dots
                     .push((*point, Theme::front_colour(gains[i], Theme::FRONT_FROZEN_ALPHA)));
-            } else if !draw_front_arcs {
+            } else if !style.arcs || cut_end[i] {
                 // The calculated point itself: with the arcs on it is implied by the two segments
-                // meeting there, with them off it is all there is of this ray.
+                // meeting there, with them off it is all there is of this ray, and at the end of a
+                // segment dropped for winding it is what is left once the inference is withdrawn.
                 painter.circle_filled(
                     *point,
                     FRONT_POINT_RADIUS * width_scale,
@@ -905,7 +1089,11 @@ mod tests {
 
     /// Count what `draw_signal_field` puts into a painter for one field: the polylines (segments
     /// of front) and the filled circles (calculated points, frozen beads and emission dots).
-    fn count_front_shapes(metric: &KerrSchild, field: &SignalField, draw_arcs: bool) -> (usize, usize) {
+    fn count_front_shapes(
+        metric: &KerrSchild,
+        field: &SignalField,
+        style: FrontStyle,
+    ) -> (usize, usize) {
         fn tally(shape: &egui::Shape, lines: &mut usize, circles: &mut usize) {
             match shape {
                 egui::Shape::Path(_) | egui::Shape::LineSegment { .. } => *lines += 1,
@@ -925,7 +1113,7 @@ mod tests {
                 ui.allocate_painter(egui::Vec2::new(400.0, 400.0), egui::Sense::hover());
             let to_screen =
                 |(x, y): (f64, f64)| Pos2::new(200.0 + 60.0 * x as f32, 200.0 - 60.0 * y as f32);
-            draw_signal_field(&painter, metric, field, Theme::ALICE_COLOR, 1.0, draw_arcs, &to_screen);
+            draw_signal_field(&painter, metric, field, Theme::ALICE_COLOR, 1.0, style, &to_screen);
         });
         let (mut lines, mut circles) = (0, 0);
         for clipped in output.shapes.iter() {
@@ -965,8 +1153,12 @@ mod tests {
             live_pulses.iter().map(|p| p.rays.iter().filter(|r| r.alive()).count()).sum();
         assert!(live > 100, "the field has a front to draw: {live} live rays");
 
-        let (lines_on, circles_on) = count_front_shapes(&metric, &field, true);
-        let (lines_off, circles_off) = count_front_shapes(&metric, &field, false);
+        // The winding cut is held off in both counts, so what is measured here is the one
+        // checkbox this test is about and not the two of them together.
+        let (lines_on, circles_on) =
+            count_front_shapes(&metric, &field, FrontStyle { arcs: true, hide_wound: false });
+        let (lines_off, circles_off) =
+            count_front_shapes(&metric, &field, FrontStyle { arcs: false, hide_wound: false });
         println!(
             "arcs on: {lines_on} polylines and {circles_on} circles; arcs off: {lines_off} \
              polylines and {circles_off} circles, over {live} live rays in {} pulses",
@@ -980,6 +1172,218 @@ mod tests {
             "with the arcs off every live ray is one dot, plus one emission dot per pulse"
         );
         assert!(circles_off > circles_on, "and that is more dots than the frozen beads alone");
+    }
+
+    #[test]
+    fn test_a_segment_is_drawn_in_bands_of_the_gain_along_it() {
+        // A segment from a ray at gain 1 to a ray at gain 1e5: the whole ramp in one segment, which
+        // is what the pair being torn apart carries - one ray settling onto r- and climbing like
+        // exp(kappa_- t), its neighbour crossing at the gain it was born with. Painted in one
+        // colour that segment said its deep-red end had gained a hundred thousandfold. Instead the
+        // polyline is cut into bands of at most `FRONT_BAND_DECADES` of gain, each coloured at the
+        // gain interpolated to its own midpoint in the same loop coordinate `segment_arc` walks the
+        // position along, so the ramp runs *along* the segment from one ray to the other.
+        let arc: Vec<Pos2> = (0..=100).map(|k| Pos2::new(k as f32, 0.0)).collect();
+        let bands = banded_segment(arc.clone(), 1.0, 1e5);
+        let n = bands.len();
+        assert_eq!(n, 20, "five decades in quarter-decade bands: {n} bands");
+        assert!(n <= MAX_FRONT_BANDS);
+
+        // Every band's gain is log10 interpolated to the midpoint of its own s-range, and every
+        // band covers exactly the pieces of the arc in that range.
+        for (b, (points, gain)) in bands.iter().enumerate() {
+            let (start, end) = (b * 100 / n, (b + 1) * 100 / n);
+            let s_mid = 0.5 * ((start + end) as f64) / 100.0;
+            let expect = 10.0_f64.powf(5.0 * s_mid);
+            assert!((gain / expect - 1.0).abs() < 1e-12, "band {b}: {gain} against {expect}");
+            assert_eq!(points.len(), end - start + 1, "band {b} covers its own pieces");
+        }
+
+        // The two ends of the segment come out at the two ends of the ramp, and each band's colour
+        // is `Theme::front_colour` of the gain at that band's midpoint - nothing else.
+        let first = Theme::front_colour(bands[0].1, Theme::SHIFT_ALPHA);
+        let last = Theme::front_colour(bands[n - 1].1, Theme::SHIFT_ALPHA);
+        assert_eq!(
+            first,
+            Theme::front_colour(10.0_f64.powf(5.0 * 0.025), Theme::SHIFT_ALPHA),
+            "the first band is coloured at the gain of its own midpoint, s = 0.025"
+        );
+        assert!(
+            bands[0].1 < 10.0_f64.powf(Theme::FRONT_LOG_ORANGE),
+            "the first band is still on the deep-red leg of the ramp: gain {}",
+            bands[0].1
+        );
+        assert!(first.r() > first.b(), "and reads red: {first:?}");
+        assert!(
+            bands[n - 1].1 > 10.0_f64.powf(Theme::FRONT_LOG_BLUE),
+            "the last band is past the blue stop: gain {}",
+            bands[n - 1].1
+        );
+        assert!(last.b() > last.r(), "and reads violet: {last:?}");
+
+        // No gaps: consecutive bands share their boundary point, and the bands laid end to end are
+        // the original arc in order with nothing left out and nothing left uncoloured.
+        for pair in bands.windows(2) {
+            assert_eq!(
+                pair[0].0.last(),
+                pair[1].0.first(),
+                "consecutive bands must share their boundary point"
+            );
+        }
+        let mut union: Vec<Pos2> = vec![bands[0].0[0]];
+        for (points, _) in bands.iter() {
+            union.extend_from_slice(&points[1..]);
+        }
+        assert_eq!(union, arc, "the bands are the arc, in order");
+        println!(
+            "a segment from gain 1 to gain 1e5 over 100 pieces is drawn as {n} bands, the first at \
+             gain {:.4} ({:?}) and the last at {:.4e} ({:?})",
+            bands[0].1,
+            (first.r(), first.g(), first.b()),
+            bands[n - 1].1,
+            (last.r(), last.g(), last.b()),
+        );
+
+        // And the common case costs nothing: both ends at the same gain is one band over the whole
+        // arc, drawn exactly as it was before there were bands at all.
+        let flat = banded_segment(arc.clone(), 7.0, 7.0);
+        assert_eq!(flat.len(), 1, "equal gains at the two ends is a single band");
+        assert_eq!(flat[0].0, arc, "and it is the whole arc");
+        assert!((flat[0].1 - 7.0).abs() < 1e-12, "at that gain: {}", flat[0].1);
+    }
+
+    #[test]
+    fn test_a_segment_wound_past_a_full_turn_is_cut_and_its_two_ends_marked() {
+        use crate::physics::observer::{Observer, WorldlineParams};
+        let metric = KerrSchild::new(1.0, 0.90);
+
+        // First, one pulse with the winding put in by hand, so that exactly one pair of the loop is
+        // past a whole turn and every other pair is well inside one. A closed front cannot have a
+        // single wound pair and nothing else - the azimuth differences around the loop sum to zero
+        // - so the three turns of the one segment are paid back over the other eleven, a sixth of a
+        // turn each, which is what a front in the deep interior looks like anyway.
+        let emitter =
+            Observer::new_with_phi(&metric, "Alice", 0.0, 4.5, 0.0, 0.0, WorldlineParams::default());
+        let mut field = SignalField::default();
+        field.rays_per_pulse = 12;
+        field.emit_if_due(&metric, &emitter);
+        assert_eq!(field.pulses.len(), 1, "one pulse, let go at r = 4.5");
+        let n = field.pulses[0].rays.len();
+        assert_eq!(n, 12);
+        assert!(field.pulses[0].rays.iter().all(|ray| ray.alive()), "a fresh pulse is all alive");
+        // The wound pair is put between two rays of the crossing family, so that the two dots the
+        // cut leaves are ordinary dots rather than beads the frozen pass would have drawn anyway.
+        let frozen: Vec<bool> =
+            field.pulses[0].rays.iter().map(|ray| ray.frozen(&metric)).collect();
+        let i0 = (0..n - 1)
+            .find(|&i| !frozen[i] && !frozen[i + 1])
+            .expect("a pulse let go at r = 4.5 has neighbouring rays outside the frozen family");
+        let tau = std::f64::consts::TAU;
+        let mut phi = 0.0;
+        for k in 0..n {
+            field.pulses[0].rays[k].phi = phi;
+            phi += if k == i0 { 3.0 * tau } else { -3.0 * tau / ((n - 1) as f64) };
+        }
+        let wound: Vec<usize> = (0..n)
+            .filter(|&i| {
+                let j = (i + 1) % n;
+                (field.pulses[0].rays[j].phi - field.pulses[0].rays[i].phi).abs()
+                    > MAX_RESOLVED_WINDING
+            })
+            .collect();
+        assert_eq!(wound, vec![i0], "exactly one pair is past a full turn, by construction");
+
+        let (lines_kept, circles_kept) =
+            count_front_shapes(&metric, &field, FrontStyle { arcs: true, hide_wound: false });
+        let (lines_cut, circles_cut) =
+            count_front_shapes(&metric, &field, FrontStyle { arcs: true, hide_wound: true });
+        println!(
+            "a hand-built pulse of {n} rays with one pair three turns apart: {lines_kept} \
+             polylines and {circles_kept} circles drawn whole, {lines_cut} and {circles_cut} with \
+             the wound segment cut"
+        );
+        assert_eq!(lines_kept, n, "every live segment of a fresh pulse is one band, so one polyline");
+        assert_eq!(lines_cut, lines_kept - 1, "the wound segment, and only it, is not drawn");
+        assert_eq!(
+            circles_cut,
+            circles_kept + 2,
+            "and its two rays are marked as dots, so the cut reads as a gap with ends"
+        );
+
+        // Now the same cut on a front nobody built by hand. A whole light cone is let go at r = 4.5
+        // at a = 0.90 and integrated for 40 M. What winds a pair there is the pair straddling a
+        // photon-orbit critical angle: the ray inside it hangs on the orbit and then settles onto
+        // r-, where it co-rotates at Omega_- = 0.9 per M for ever, while its neighbour outside it
+        // is long gone outward, so the raw difference between them grows without bound. Those are
+        // exactly the segments the interpolation cannot speak for, and they are the ones dropped.
+        let mut field = SignalField::default();
+        field.emit_if_due(&metric, &emitter);
+        let dt = 0.02;
+        for _ in 0..2000 {
+            field.advance(&metric, dt);
+        }
+        let pulse = &field.pulses[0];
+        let n = pulse.rays.len();
+
+        // The gains the drawing colours by, computed here exactly as `draw_signal_field` computes
+        // them, so that the bands counted are the bands drawn.
+        let raindrop = GeodesicState::new_infall(&metric, 0.0, 12.0, 1.0, 0.0);
+        let u_emit = {
+            let (ut, ur, up) = raindrop.derivatives(&metric, pulse.emitted_r);
+            [ut, ur, up]
+        };
+        let gain_of = |i: usize| {
+            let ray = &pulse.rays[i];
+            let (ut, ur, up) = raindrop.derivatives(&metric, ray.r);
+            ray.gain_between(&metric, pulse.emitted_r, &u_emit, &[ut, ur, up])
+        };
+        let to_screen =
+            |(x, y): (f64, f64)| Pos2::new(200.0 + 60.0 * x as f32, 200.0 - 60.0 * y as f32);
+
+        let (mut wound, mut bands_lost, mut largest, mut live_pairs) = (0usize, 0usize, 0.0f64, 0);
+        for i in 0..n {
+            let j = (i + 1) % n;
+            if !pulse.rays[i].alive() || !pulse.rays[j].alive() {
+                continue;
+            }
+            live_pairs += 1;
+            let d_phi = pulse.rays[j].phi - pulse.rays[i].phi;
+            if d_phi.abs() <= MAX_RESOLVED_WINDING {
+                continue;
+            }
+            wound += 1;
+            largest = largest.max(d_phi.abs());
+            let arc = segment_arc(
+                &metric,
+                (pulse.rays[i].r, pulse.rays[i].phi),
+                (pulse.rays[j].r, pulse.rays[j].phi),
+                &to_screen,
+            );
+            // Each band of a drawn segment is one polyline, so this is what the cut removes.
+            bands_lost += banded_segment(arc, gain_of(i), gain_of(j)).len();
+        }
+        assert!(
+            wound > 0,
+            "within 40 M of a pulse let go at r = 4.5 at a = 0.90, some live pair must have wound \
+             past a full turn; none of the {live_pairs} live pairs did"
+        );
+
+        let (lines_kept, _) =
+            count_front_shapes(&metric, &field, FrontStyle { arcs: true, hide_wound: false });
+        let (lines_cut, _) =
+            count_front_shapes(&metric, &field, FrontStyle { arcs: true, hide_wound: true });
+        println!(
+            "after 40 M a pulse of {n} rays let go at r = 4.5 has {live_pairs} live neighbouring \
+             pairs, {wound} of them past a full turn (the largest {:.2} turns); the drawing goes \
+             from {lines_kept} polylines to {lines_cut}, the {bands_lost} bands those segments \
+             were drawn in",
+            largest / tau
+        );
+        assert_eq!(
+            lines_kept - lines_cut,
+            bands_lost,
+            "the cut must remove exactly the wound segments and nothing else"
+        );
     }
 
     #[test]
