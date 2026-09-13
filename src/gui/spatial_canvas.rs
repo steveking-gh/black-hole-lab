@@ -528,6 +528,52 @@ impl SpatialCanvas {
 /// segment with one frozen end and one crossing end keeps the ordinary colouring: that pair is the
 /// tear in the loop, where the front is being pulled apart into its two families, and it belongs to
 /// neither.
+/// Largest azimuthal span of one drawn piece of a wavefront segment, in radians.
+///
+/// A segment of the front is the piece of null surface between two neighbouring rays, and what it
+/// looks like in the equatorial plane is decided by the two rays' (r, phi), not by the straight
+/// line between their screen positions. The two differ by nothing worth drawing while the rays are
+/// close together in azimuth, and by the whole picture where they are not - which is the deep
+/// interior. Inside r- the annulus that Region III occupies is thin (at a = 0.90 the embedding puts
+/// r- at rho = 1.06 and the ring at rho = 0.90), and the rays there wind at wildly different rates:
+/// dphi/dt reaches about -5 per M for a ray near the ring against +0.8 for one settling onto r-.
+/// Neighbouring rays are then most of a radian apart, and the chord between them cuts straight
+/// across the annulus and through the disk inside the ring, which drew as spikes into the
+/// singularity that no ray ever took.
+///
+/// So each segment is drawn as the curve linear in (r, phi) between its two ends, with the azimuth
+/// difference folded into [-pi, pi] and the span cut into pieces no wider than this before each is
+/// embedded. That is the same interpolation along the same segment that `Pulse::scan` uses to
+/// decide where the front crosses a receiver, so what is drawn and what is detected are one thing.
+/// Two frozen rays sitting on r- are now joined by an arc of the r- circle rather than by a chord
+/// dipping inside it.
+const MAX_ARC_STEP: f64 = 0.05;
+
+/// The drawn polyline of one segment of a front: the curve linear in (r, phi) from one ray to the
+/// next, embedded point by point. See `MAX_ARC_STEP`.
+fn segment_arc<F: Fn((f64, f64)) -> Pos2>(
+    metric: &KerrSchild,
+    from: (f64, f64),
+    to: (f64, f64),
+    to_screen: &F,
+) -> Vec<Pos2> {
+    let two_pi = 2.0 * std::f64::consts::PI;
+    // The same fold `Pulse::scan` applies: a segment spans the short way round, never the long one.
+    let d_phi = {
+        let raw = to.1 - from.1;
+        raw - two_pi * (raw / two_pi).round()
+    };
+    let pieces = (d_phi.abs() / MAX_ARC_STEP).ceil().max(1.0) as usize;
+    (0..=pieces)
+        .map(|k| {
+            let s = (k as f64) / (pieces as f64);
+            let r = from.0 + s * (to.0 - from.0);
+            let phi = from.1 + s * d_phi;
+            to_screen(metric.cartesian_position(r, phi))
+        })
+        .collect()
+}
+
 fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
     painter: &egui::Painter,
     metric: &KerrSchild,
@@ -549,7 +595,7 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
     );
     // The frozen family of every pulse, held back and drawn last so that it lies on top of both the
     // r- circle and the ordinary fronts it is buried in.
-    let mut frozen_segments: Vec<[Pos2; 2]> = Vec::new();
+    let mut frozen_segments: Vec<Vec<Pos2>> = Vec::new();
     let mut frozen_dots: Vec<Pos2> = Vec::new();
     for pulse in signal.pulses.iter() {
         // A spent pulse is kept in the field so that stepping backwards can bring it back, but it
@@ -576,6 +622,8 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
         // would otherwise repeat for each of the two segments a ray belongs to.
         let frozen: Vec<bool> =
             pulse.rays.iter().map(|ray| ray.alive() && ray.frozen(metric)).collect();
+        // The ray positions themselves, which the frozen dots sit on; the segments between them
+        // are drawn as arcs in (r, phi) rather than as chords between these points.
         let points: Vec<Pos2> = pulse
             .rays
             .iter()
@@ -588,12 +636,18 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
             if !pulse.rays[i].alive() || !pulse.rays[j].alive() {
                 continue;
             }
+            let arc = segment_arc(
+                metric,
+                (pulse.rays[i].r, pulse.rays[i].phi),
+                (pulse.rays[j].r, pulse.rays[j].phi),
+                to_screen,
+            );
             if frozen[i] && frozen[j] {
-                frozen_segments.push([points[i], points[j]]);
+                frozen_segments.push(arc);
                 continue;
             }
             let colour = Theme::shift_colour(0.5 * (ratios[i] + ratios[j]), Theme::SHIFT_ALPHA);
-            painter.line_segment([points[i], points[j]], Stroke::new(1.2 * width_scale, colour));
+            painter.add(egui::Shape::line(arc, Stroke::new(1.2 * width_scale, colour)));
         }
         for (i, point) in points.iter().enumerate() {
             if frozen[i] {
@@ -606,7 +660,8 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
     }
 
     for segment in frozen_segments {
-        painter.line_segment(segment, Stroke::new(2.0 * width_scale, Theme::FROZEN_FRONT));
+        let stroke = Stroke::new(2.0 * width_scale, Theme::FROZEN_FRONT);
+        painter.add(egui::Shape::line(segment, stroke));
     }
     for point in frozen_dots {
         painter.circle_filled(point, 1.6 * width_scale, Theme::FROZEN_FRONT);
@@ -657,4 +712,101 @@ fn draw_spatial_trail<F: Fn((f64, f64)) -> Pos2>(
         .collect();
     let faint = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 120);
     painter.add(egui::Shape::line(points, Stroke::new(width, faint)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The embedded radius of a chart point: |x + i y| = |(r + i a) e^{i phi}| = sqrt(r^2 + a^2),
+    /// so a curve of constant r is a circle in the drawing and this is its radius.
+    fn embedded_radius(point: Pos2) -> f64 {
+        ((point.x as f64).powi(2) + (point.y as f64).powi(2)).sqrt()
+    }
+
+    #[test]
+    fn test_a_segment_between_two_frozen_rays_is_drawn_along_r_minus() {
+        // Two rays of the same front frozen on the Cauchy horizon, most of a radian apart in
+        // azimuth: the front between them lies on r-, and that is what has to be drawn. The chord
+        // between their two screen positions does not - it cuts the chord of the circle, which at
+        // this separation is well inside r- and, deeper in, inside the ring itself.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let rm = metric.inner_horizon();
+        let to_screen = |(x, y): (f64, f64)| Pos2::new(x as f32, y as f32);
+        let circle = (rm * rm + metric.a * metric.a).sqrt();
+
+        let arc = segment_arc(&metric, (rm, 0.3), (rm, 1.5), &to_screen);
+        // 1.2 radians in pieces of at most `MAX_ARC_STEP`, so 24 or 25 of them.
+        assert!(arc.len() >= 25 && arc.len() <= 26, "{} points", arc.len());
+        for pair in arc.windows(2) {
+            let step = (pair[1] - pair[0]).length() as f64;
+            assert!(step <= MAX_ARC_STEP * circle * 1.01, "a piece spans {step}");
+        }
+        let worst = arc
+            .iter()
+            .map(|p| (embedded_radius(*p) - circle).abs())
+            .fold(0.0f64, f64::max);
+
+        // The chord for comparison: its midpoint is the sagitta of the arc inside the circle.
+        let chord_mid = Pos2::new(
+            0.5 * (arc[0].x + arc[arc.len() - 1].x),
+            0.5 * (arc[0].y + arc[arc.len() - 1].y),
+        );
+        let sagitta = circle - embedded_radius(chord_mid);
+        println!(
+            "an arc of {} pieces over 1.2 rad of r- stays within {worst:.3e} M of the r- circle \
+             (rho = {circle:.4}); the chord it replaces dips {sagitta:.4} M inside it",
+            arc.len() - 1
+        );
+        // 1e-6 rather than round-off: the drawn points are f32 screen coordinates.
+        assert!(worst < 1e-6, "the drawn arc must lie on the r- circle: {worst}");
+        assert!(sagitta > 0.15, "and the chord it replaces must not: {sagitta}");
+
+        // A segment whose ends are close in azimuth is one straight piece, as it always was: the
+        // subdivision costs nothing where it buys nothing.
+        let short = segment_arc(&metric, (rm, 0.0), (rm, 0.04), &to_screen);
+        assert_eq!(short.len(), 2, "a short segment is still a single line");
+
+        // The azimuth difference is folded into [-pi, pi], exactly as `Pulse::scan` folds it, so a
+        // segment always spans the short way round however the two ends' azimuths are unwrapped.
+        let two_pi = 2.0 * std::f64::consts::PI;
+        let folded = segment_arc(&metric, (rm, 0.3), (rm, 1.5 - two_pi), &to_screen);
+        assert!(
+            folded.len().abs_diff(arc.len()) <= 1,
+            "the same span, cut into {} pieces rather than {}",
+            folded.len() - 1,
+            arc.len() - 1
+        );
+        for (a, b) in [(folded[0], arc[0]), (folded[folded.len() - 1], arc[arc.len() - 1])] {
+            assert!((a.x - b.x).abs() < 1e-4 && (a.y - b.y).abs() < 1e-4, "{a:?} vs {b:?}");
+        }
+        for point in folded.iter() {
+            assert!((embedded_radius(*point) - circle).abs() < 1e-6);
+        }
+
+        // And a segment deep inside r-, where the two rays are far apart in azimuth and a chord
+        // would cut through the disk inside the ring: every drawn point stays outside the ring.
+        let ring = metric.a;
+        let deep = segment_arc(&metric, (0.05, 0.0), (0.5, 2.5), &to_screen);
+        let closest = deep
+            .iter()
+            .map(|p| embedded_radius(*p))
+            .fold(f64::INFINITY, f64::min);
+        let chord_closest = {
+            let mid = Pos2::new(
+                0.5 * (deep[0].x + deep[deep.len() - 1].x),
+                0.5 * (deep[0].y + deep[deep.len() - 1].y),
+            );
+            embedded_radius(mid)
+        };
+        println!(
+            "a segment from (r = 0.05, phi = 0) to (r = 0.5, phi = 2.5) is drawn in {} pieces and \
+             never comes closer to the centre than rho = {closest:.4}, against the ring at \
+             rho = {ring:.4}; the midpoint of the chord it replaces sits at rho = \
+             {chord_closest:.4}, inside the ring",
+            deep.len() - 1
+        );
+        assert!(closest > ring, "the drawn front must stay outside the ring: {closest}");
+        assert!(chord_closest < ring, "whereas the chord does not: {chord_closest}");
+    }
 }

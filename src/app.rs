@@ -1363,18 +1363,19 @@ mod tests {
         // must survive as one arrival, not vanish and not be recorded twice when the same interval
         // is stepped forward again.
         //
-        // Both outcomes are safe now, and for the same reason. If the arrival is kept, the priming
-        // pass puts the receiver on the far side of that sheet, where the crossing has already
-        // happened, and nothing later calls it a crossing again. If round-off puts it a bit past
-        // the target and it is dropped, the priming pass finds the receiver a hair short of the
-        // sheet and the next step re-records the crossing at the same event, because the stamp is
-        // the interpolated crossing rather than the pass. Either way there is exactly one arrival
-        // there, at the time it always had.
+        // The stamp is the interpolated crossing, which is first-order accurate in the pass
+        // interval, so landing on it leaves the record and the geometry free to disagree over an
+        // O(dt^2) window: the arrival is on the record, and the receiver may or may not have
+        // reached that sheet yet at the rewound state. `SignalField::prime` settles it by looking,
+        // and both outcomes give exactly one arrival. If the crossing has happened, the primed side
+        // is the far one, the arrival stands and nothing calls it a crossing again. If it has not,
+        // the arrival is retracted - the pass that recorded it is inside the interval being
+        // undone - and the next step forward brackets the same crossing and records it again,
+        // moved by the O(dt^2) the stamp was uncertain by. Measured here: the arrival is retracted
+        // and comes back 1.2e-5 M later, which is 0.03 dt^2.
         //
-        // What does move is everything *after* the target, and legitimately: the rewind lands
-        // between two of the pass times the first run used, so the arrivals inside that interval
-        // are re-interpolated over a different pair of passes. Those come back to O(dt^2), which is
-        // what the last assertion allows and the printout measures.
+        // Everything before the target is untouched to round-off. Nothing follows the target here,
+        // by choice; see the note on the sheet key below.
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
         let step = 0.02;
@@ -1413,8 +1414,12 @@ mod tests {
             .filter(|rec| (rec.t - target).abs() < 1e-9)
             .count();
         println!(
-            "rewound {interval:.5} M onto the arrival at t = {target}: it is {} the rewind",
-            if on_the_boundary == 1 { "kept by" } else { "dropped by" }
+            "rewound {interval:.5} M onto the arrival at t = {target}: the priming pass {} it",
+            if on_the_boundary == 1 {
+                "finds the crossing already made and keeps"
+            } else {
+                "finds the receiver still short of the sheet and retracts"
+            }
         );
         assert!(on_the_boundary <= 1, "an arrival cannot be kept twice: {on_the_boundary}");
 
@@ -1433,30 +1438,42 @@ mod tests {
         );
         let alice_now = reception_list(&app.signal);
         let bob_now = reception_list(&app.bob_signal);
+        let boundary: Vec<_> = alice_now
+            .iter()
+            .filter(|rec| (rec.1 - target).abs() < 1e-3)
+            .copied()
+            .collect();
         assert_eq!(
-            alice_now.iter().filter(|rec| (rec.1 - target).abs() < 1e-6).count(),
+            boundary.len(),
             1,
             "the arrival on the boundary must be there exactly once: {alice_now:?}"
         );
+        println!(
+            "after the same interval forward it is back once, {:.3e} M from where it was, which is \
+             {:.2} dt^2",
+            (boundary[0].1 - target).abs(),
+            (boundary[0].1 - target).abs() / (step * step)
+        );
 
-        // Everything up to the target is untouched; everything after it was re-interpolated over a
-        // different pair of passes and comes back to O(dt^2).
+        // The whole record, either side of the target: the same arrivals in the same order, the
+        // ones before the target to round-off and the one on it to the O(dt^2) its stamp was
+        // uncertain by.
         for (label, now, then) in [
             ("Alice -> Bob", &alice_now, &alice_then),
             ("Bob -> Alice", &bob_now, &bob_then),
         ] {
-            let before: Vec<_> = now.iter().copied().filter(|rec| rec.1 <= target).collect();
-            let then_before: Vec<_> = then.iter().copied().filter(|rec| rec.1 <= target).collect();
-            assert_same_receptions(label, &before, &then_before, 1e-9, 1e-9);
+            let strictly_before: Vec<_> =
+                now.iter().copied().filter(|rec| rec.1 < target - 1e-3).collect();
+            let then_before: Vec<_> =
+                then.iter().copied().filter(|rec| rec.1 < target - 1e-3).collect();
+            assert_same_receptions(label, &strictly_before, &then_before, 1e-9, 1e-9);
             let (worst_t, worst_ratio) = assert_same_receptions(label, now, then, 1e-3, 1e-3);
             println!(
-                "{label}: {} arrivals, {} of them at or before the target and unchanged to 1e-9; \
-                 the {} after it, re-interpolated over a pass grid the rewind has shifted, move \
-                 at most {worst_t:.3e} M in time and {worst_ratio:.3e} relative in shift, against \
-                 dt^2 = {:.1e}",
+                "{label}: {} arrivals, {} of them before the target and unchanged to 1e-9; over \
+                 the whole record nothing moved more than {worst_t:.3e} M in time or \
+                 {worst_ratio:.3e} relative in shift, against dt^2 = {:.1e}",
                 now.len(),
-                before.len(),
-                now.len() - before.len(),
+                strictly_before.len(),
                 step * step
             );
         }

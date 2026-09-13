@@ -61,6 +61,33 @@
 //! sweeps through the whole of it in finite proper time, and that is what the receptions below
 //! record for a receiver who is still above r- when the emitter's frozen arcs settle onto it.
 //!
+//! What becomes of the rest of a pulse - the part that crosses r- instead of freezing onto it - is
+//! settled by an exact statement of the same kind, and it is worth stating because it is what the
+//! deep interior of the equatorial view is showing. For an equatorial null geodesic of conserved
+//! (E, L) the radial motion obeys (r^2 dr/dlambda)^2 = R(r) with
+//!
+//!     R(r) = [E (r^2 + a^2) - a L]^2 - Delta (L - a E)^2
+//!          = r [ E^2 r^3 + (a^2 E^2 - L^2) r + 2 M (L - a E)^2 ],
+//!
+//! so a ray turns only where the cubic in the bracket vanishes. Near the ring that cubic tends to
+//! 2 M (L - a E)^2, which is positive for every ray except the one with L = a E exactly, so the
+//! potential is positive in a neighbourhood of r = 0 and the fate of a ray is decided by whether
+//! the negative middle term (a^2 E^2 - L^2) r can overcome that constant before r gets small: a ray
+//! with no zero above the ring falls monotonically into it, and one with a zero turns there and
+//! climbs back out, arbitrarily close to the ring as L/E approaches the boundary between the two.
+//! Measured on a whole cone let go at r = 0.45 inside r- at a = 0.90, sixty of the seventy-two rays
+//! reach the ring and twelve turn; the twelve then climb to r- and freeze onto it from below, since
+//! Region III is where the *outgoing* congruence accumulates on the Cauchy horizon from the inside.
+//! `test_a_pulse_inside_r_minus_ends_on_the_ring_or_turns` checks every ray against the turning
+//! radius of its own (E, L), and no live ray has ever been found below one.
+//!
+//! That is also why a front deep inside r- is drawn as a set of arcs rather than as a polygon of
+//! chords. Rays a few degrees apart in emission angle end up most of a radian apart in azimuth
+//! there - the ones near the ring wind at dphi/dt of about -5 per M against +0.8 for the ones
+//! settling onto r- - and Region III is a thin annulus in the Kerr-Schild embedding, so a straight
+//! screen chord between two neighbouring rays cuts across it and through the disk inside the ring.
+//! The front never goes there; see `spatial_canvas::MAX_ARC_STEP`.
+//!
 //! Which of the two transmissions the app draws produces such a stack is not symmetric, and the
 //! asymmetry is the whole content of running both. Where Bob trails Alice on the same infall his
 //! pulses have to chase her inward, and what reaches her is the ingoing part of his cone, whose
@@ -418,13 +445,25 @@ impl NullRay {
     /// r = 1.07 where it belonged at r = 2.46. Played frames were accurate only because they are a
     /// fiftieth of an M long. Nothing here is tuned to the caller's step size at all now.
     ///
-    /// Only a forward step retires a ray at R_STOP or `R_ESCAPE`; a ray running backwards is
-    /// retracing ground it has already covered inside the field, and applying the test there would
-    /// only re-kill a ray at the boundary it is climbing away from. Either way the ray is left
-    /// standing at the last event *inside* the field rather than at the first one outside it, which
-    /// is what makes the death reversible: `ray_rhs` clamps r to R_STOP, so its value below the
-    /// ring is not the equation the ray came in on, and a state kept out there could not be
-    /// integrated back through.
+    /// The two boundaries of the field are not the same kind of thing and are not handled the
+    /// same way.
+    ///
+    /// `R_ESCAPE` is a drawing limit in ordinary geometry: a forward step whose substep lands
+    /// beyond it retires the ray at the last event inside, and a backward step ignores it, because
+    /// a ray running backwards is retracing ground it has already covered and the test would only
+    /// re-kill it at the boundary it is climbing away from.
+    ///
+    /// R_STOP is the ring, where the equation itself gives out, so nothing is ever evaluated below
+    /// it in either direction. A substep any of whose stages would fall below R_STOP is rejected
+    /// and halved, exactly as one that fails the error test is, and a ray that cannot take even a
+    /// `MIN_SUBSTEP` without reaching under the ring has arrived: it is retired where it stands,
+    /// which is above R_STOP and integrated with nothing but the true equation. That is also what
+    /// makes the death reversible - the state kept is one the geodesic actually passed through, so
+    /// the backward integration retraces from it with nothing but the scheme's own error - and it
+    /// is why `ray_rhs` needs no clamp. A ray whose radial turning point is inside a substep of
+    /// the ring is retired there rather than turned; at R_STOP = 0.02 M that is the ring swallowing
+    /// it, which `test_a_pulse_inside_r_minus_ends_on_the_ring_or_turns` measures against the exact
+    /// turning radius of each ray's own (E, L).
     fn integrate(&mut self, metric: &KerrSchild, dt: f64) -> RayStep {
         let forward = dt > 0.0;
         let sign = if forward { 1.0 } else { -1.0 };
@@ -449,7 +488,18 @@ impl NullRay {
                     return RayStep::BudgetExhausted;
                 }
                 budget -= 1;
-                let (candidate, slope, error) = ray_dopri5(metric, &y, &k, sign * h);
+                let Some((candidate, slope, error)) = ray_dopri5(metric, &y, &k, sign * h) else {
+                    // A stage of this substep would have been evaluated below the ring. Shrink it
+                    // until it fits above; when even the smallest substep does not, the ray has
+                    // reached the ring and is retired at the last event it did reach.
+                    if h <= MIN_SUBSTEP {
+                        self.commit(&y, t_now);
+                        self.death_t = Some(t_now);
+                        return RayStep::Integrated;
+                    }
+                    h *= 0.5;
+                    continue;
+                };
                 let estimate = error[0].abs().max(error[1].abs());
                 let sane = candidate.iter().all(|c| c.is_finite()) && estimate.is_finite();
                 if sane && (estimate <= SUBSTEP_TOLERANCE || h <= MIN_SUBSTEP) {
@@ -466,7 +516,7 @@ impl NullRay {
                 h *= if sane { substep_factor(estimate) } else { 0.5 };
             };
 
-            if forward && (next[0] < R_STOP || next[0] > R_ESCAPE) {
+            if forward && next[0] > R_ESCAPE {
                 self.commit(&y, t_now);
                 self.death_t = Some(t_now);
                 return RayStep::Integrated;
@@ -493,10 +543,17 @@ impl NullRay {
 ///
 /// `geodesic_accel` returns acc^mu = -Gamma^mu_{alpha beta} v^alpha v^beta, so the non-affine
 /// equation d v^i/dt = -Gamma^i vv + v^i Gamma^t vv is simply acc[i] - v^i acc[t].
+///
+/// The radius is used as it stands: this is the true equation at every point it is asked about,
+/// and it is never asked about a point below R_STOP. `ray_dopri5` refuses to build a stage there
+/// and `NullRay::integrate` shrinks the substep until none of them is, so the assertion below is
+/// the statement of an invariant rather than a guard. Clamping r instead, which is what this used
+/// to do, fed a different equation into a substep that could still be accepted, and left the ray's
+/// death standing on a state partly integrated with it.
 fn ray_rhs(metric: &KerrSchild, y: &RayState) -> RayState {
-    let r = y[0].max(R_STOP);
+    debug_assert!(y[0] >= R_STOP, "ray_rhs evaluated below the ring at r = {}", y[0]);
     let v = [1.0, y[2], y[3]];
-    let acc = geodesic_accel(metric, r, &v);
+    let acc = geodesic_accel(metric, y[0], &v);
     [y[2], y[3], acc[1] - y[2] * acc[0], acc[2] - y[3] * acc[0]]
 }
 
@@ -505,6 +562,12 @@ fn ray_rhs(metric: &KerrSchild, y: &RayState) -> RayState {
 /// Returns the fifth-order state at y + h, the slope of `ray_rhs` there, and the difference between
 /// the fifth-order state and the embedded fourth-order one, component by component: the local error
 /// estimate the substep control of `NullRay::integrate` runs on.
+///
+/// Returns None instead if any stage of the step would be evaluated below R_STOP, the ring, where
+/// the equation gives out. The seventh stage is the step's own result, so this covers the state the
+/// step would produce as well as the interior stages that produce it: a step that comes back is a
+/// step that stayed in the geometry throughout. The caller shrinks and retries, and retires the ray
+/// when even `MIN_SUBSTEP` will not fit.
 ///
 /// The seventh stage is evaluated at the fifth-order state itself, so the slope returned is both
 /// the last stage of this step's error estimate and the first stage of the next step (the
@@ -516,7 +579,7 @@ fn ray_dopri5(
     y: &RayState,
     k1: &RayState,
     h: f64,
-) -> (RayState, RayState, RayState) {
+) -> Option<(RayState, RayState, RayState)> {
     // Rows two to seven of the tableau's a_{ij}. The last row is the fifth-order solution's own
     // weights, which is what makes its stage argument the new state.
     const A: [[f64; 6]; 6] = [
@@ -549,6 +612,11 @@ fn ray_dopri5(
             }
             *c += h * sum;
         }
+        // Not `< R_STOP`: a stage that has gone non-finite is no more evaluable than one below
+        // the ring, and both are the caller's cue to shrink and, in the end, to retire the ray.
+        if !arg[0].is_finite() || arg[0] < R_STOP {
+            return None;
+        }
         k[stage + 1] = ray_rhs(metric, &arg);
         next = arg;
     }
@@ -561,7 +629,7 @@ fn ray_dopri5(
         }
         *e = h * sum;
     }
-    (next, k[6], error)
+    Some((next, k[6], error))
 }
 
 /// The largest substep the two geometric caps allow from this state, in coordinate time and always
@@ -670,12 +738,18 @@ pub struct Reception {
     segment: usize,
     /// receiver.r - r_front for that sheet on the pass that found the crossing: which side of the
     /// sheet the crossing left the receiver on.
-    ///
-    /// Neither of these two is drawn or reported. They are here so that a crossing cannot be
-    /// recorded twice: crossings of one sheet must alternate in the side they leave the receiver
-    /// on, and a rewind that lands on a crossing it keeps is the one thing that can offer the same
-    /// crossing to the record a second time. See `Pulse::scan`.
     side_after: f64,
+    /// Coordinate time of the *pass* that found the crossing, as against `t`, the interpolated
+    /// crossing itself. The two differ by up to one pass interval.
+    ///
+    /// None of these three is drawn or reported; they exist for one job, done in
+    /// `SignalField::prime`. A rewind decides what to keep by the interpolated `t`, which is only
+    /// first-order accurate, so a target landing in the O(dt^2) window between `t` and the true
+    /// crossing keeps an arrival whose crossing has not happened yet at the rewound state. The
+    /// three together say so exactly: the pass that noticed it is inside the interval being undone
+    /// (`t_pass` after the target) and the primed side is still the near one (opposite to
+    /// `side_after`) on the sheet it belongs to (`segment`).
+    t_pass: f64,
 }
 
 /// The emission event of a pulse that was received, kept as a record in its own right.
@@ -938,28 +1012,17 @@ impl Pulse {
                 let f1 = self.rays[j].frequency_ratio(metric, u_receiver);
                 let ratio = f0 + w * (f1 - f0);
 
-                // Crossings of one sheet alternate in the side they leave the receiver on: the
-                // sheet is a fixed pair of rays and each crossing of it puts them on the other side
-                // of it. A sign change that would leave them on the side the last recorded crossing
-                // of this same sheet already left them on is therefore that crossing again, not a
-                // new one.
-                //
-                // Time running forward never offers such a thing. A rewind can: a crossing is
-                // stamped at the interpolated event, which is first-order accurate in the pass
-                // interval, so a rewind whose target lands between that stamp and the true crossing
-                // keeps the arrival on the record and yet primes the sheet on the near side of it,
-                // and the next step forward finds the same change of side all over again. Whichever
-                // way round the two are, the arrival is kept once and counted once.
+                // A sign change on a sheet that was tracked at the previous pass is a crossing,
+                // and nothing here second-guesses it. A sheet drops out of straddling the receiver
+                // and comes back as the front winds, and while it is away the receiver can pass it
+                // by another segment, so no rule that compares this crossing with the last one
+                // recorded on the same sheet is safe: it would suppress a real arrival every time a
+                // sheet handed the receiver over to a neighbour and took them back. The one case
+                // where the same crossing can be offered twice is a rewind, and it is settled
+                // there, at the rewound state, by `SignalField::prime`.
                 let was = self.sheets.iter().find(|s| s.segment == i).copied();
-                let already_recorded = self
-                    .receptions
-                    .iter()
-                    .rev()
-                    .find(|rec| rec.segment == i)
-                    .is_some_and(|rec| rec.side_after * side > 0.0);
                 if let Some(prev) = was
                     && record
-                    && !already_recorded
                     && prev.side * side < 0.0
                 {
                     // Where in the interval between the two passes the side changed sign.
@@ -978,6 +1041,7 @@ impl Pulse {
                             frozen_family: self.rays[nearer].frozen(metric),
                             segment: i,
                             side_after: side,
+                            t_pass: receiver.t,
                         });
                     }
                 }
@@ -993,6 +1057,63 @@ impl Pulse {
             }
         }
         self.sheets = sheets;
+    }
+
+    /// Drop the arrivals that the state just primed says have not happened yet, and return them.
+    ///
+    /// Called only from `SignalField::prime`, immediately after a priming pass has filled `sheets`
+    /// with the sides at the rewound state, and only for a rewind to `target_t`.
+    ///
+    /// A rewind keeps the arrivals whose interpolated crossing time is at or before its target.
+    /// That stamp is first-order accurate in the pass interval, so for a target inside the O(dt^2)
+    /// window between the stamp and the crossing it actually estimates, the record says an arrival
+    /// has happened while the geometry at the rewound state says the receiver has not reached the
+    /// sheet yet. Left alone, the next step forward finds that same change of side and records the
+    /// arrival a second time.
+    ///
+    /// The disagreement is exactly detectable, and only in that window. For each sheet standing
+    /// across the receiver now, the last arrival recorded on it is retracted when both of these
+    /// hold:
+    ///
+    /// * the pass that noticed it is inside the interval being undone (`t_pass` after `target_t`),
+    ///   so the rewind has taken the field back to before the observation itself; and
+    /// * the primed side is opposite to the side that arrival left the receiver on, so the crossing
+    ///   has not happened at the rewound state.
+    ///
+    /// An arrival noticed at or before the target is consistent with the primed state by
+    /// construction and is left alone, whatever side it left the receiver on. A retracted arrival
+    /// is not lost: the next step forward brackets the same crossing and records it again, from the
+    /// primed pass instead of the one the rewind undid, which moves it by the O(dt^2) the stamp was
+    /// uncertain by in the first place.
+    fn retract_unseen(&mut self, target_t: f64) -> Vec<Reception> {
+        let mut doomed: Vec<usize> = Vec::new();
+        for sheet in self.sheets.iter() {
+            let last = self
+                .receptions
+                .iter()
+                .enumerate()
+                .rfind(|(_, rec)| rec.segment == sheet.segment);
+            if let Some((index, rec)) = last
+                && rec.t_pass > target_t
+                && rec.side_after * sheet.side < 0.0
+            {
+                doomed.push(index);
+            }
+        }
+        if doomed.is_empty() {
+            return Vec::new();
+        }
+        let mut retracted = Vec::new();
+        let mut index = 0;
+        self.receptions.retain(|rec| {
+            let keep = !doomed.contains(&index);
+            if !keep {
+                retracted.push(*rec);
+            }
+            index += 1;
+            keep
+        });
+        retracted
     }
 }
 
@@ -1282,11 +1403,38 @@ impl SignalField {
     ///
     /// It must be called with the receiver already rewound, which is why `SignalPair::step_back`
     /// takes the observers and why both call sites wind the worldlines back before the fields.
-    pub fn prime(&mut self, metric: &KerrSchild, receiver: &Observer) {
+    ///
+    /// Priming is also the one place that can tell whether an arrival the rewind kept has in fact
+    /// happened at the rewound state, because it is the one place that has both the record and the
+    /// sides in hand: see `Pulse::retract_unseen`, which is what `target_t` is for. `target_t` is
+    /// the time the rewind landed on, which after `step_back` is the field's own clock.
+    pub fn prime(&mut self, metric: &KerrSchild, receiver: &Observer, target_t: f64) {
         let u_receiver = signalling_four_velocity(metric, receiver);
+        let mut retracted: Vec<Reception> = Vec::new();
         for pulse in self.pulses.iter_mut() {
             pulse.scan(metric, receiver, &u_receiver, false);
+            retracted.extend(pulse.retract_unseen(target_t));
         }
+        if retracted.is_empty() {
+            return;
+        }
+        // The same arrival is held in three places, and all three have to let go of it: the pulse
+        // (done above), the heard log that outlives the pulse, and the delivery record, which names
+        // the arrival that made a pulse a delivery.
+        self.heard.retain(|rec| {
+            !retracted.iter().any(|gone| gone.pulse_index == rec.pulse_index && gone.t == rec.t)
+        });
+        let standing = self.last_delivered.filter(|delivery| {
+            !retracted.iter().any(|gone| {
+                gone.pulse_index == delivery.pulse_index && gone.t == delivery.received_t
+            })
+        });
+        let in_hand = newest_delivery(&self.pulses);
+        self.last_delivered = match (standing, in_hand) {
+            (Some(a), Some(b)) if b.pulse_index > a.pulse_index => Some(b),
+            (Some(a), _) => Some(a),
+            (None, b) => b,
+        };
     }
 
     /// Every crossing of the receiver's worldline this transmission has made, including those
@@ -1444,10 +1592,12 @@ impl SignalPair<'_> {
         self.alice.step_back(metric, dt);
         self.bob.step_back(metric, dt);
         // Each field is primed against its own receiver: Alice's transmission is received by Bob,
-        // and Bob's by Alice.
-        self.alice.prime(metric, bob);
+        // and Bob's by Alice. A field's own clock is the time its rewind landed on, which is the
+        // target the priming pass reconciles the reception record against.
+        let (alice_target, bob_target) = (self.alice.t, self.bob.t);
+        self.alice.prime(metric, bob, alice_target);
         if let Some(al) = alice {
-            self.bob.prime(metric, al);
+            self.bob.prime(metric, al, bob_target);
         }
     }
 
@@ -1957,6 +2107,169 @@ mod tests {
         );
     }
 
+    /// The exact radial potential of an equatorial null geodesic of conserved (E, L), divided by
+    /// the overall r that every term of it carries:
+    ///
+    ///     R(r) = [E (r^2 + a^2) - a L]^2 - Delta (L - a E)^2
+    ///          = r [ E^2 r^3 + (a^2 E^2 - L^2) r + 2 M (L - a E)^2 ],
+    ///
+    /// so this is the cubic in the bracket. The motion needs R >= 0, so a ray falling inward stops
+    /// at the largest zero of this cubic below it and comes back out; a ray with no zero below it
+    /// reaches r = 0. Nothing about the ray's history enters, and the whole thing is homogeneous of
+    /// degree two in (E, L), so the per-unit-k^t values the integration carries give the same roots
+    /// as the affinely normalised ones.
+    fn radial_potential(metric: &KerrSchild, e: f64, l: f64, r: f64) -> f64 {
+        let q = l - metric.a * e;
+        e * e * r * r * r + (metric.a * metric.a * e * e - l * l) * r + 2.0 * metric.m * q * q
+    }
+
+    /// The exact turning radius of such a ray somewhere below `from`: the largest root of
+    /// `radial_potential` in (0, from), or None if the potential stays positive all the way down,
+    /// in which case nothing stops the ray reaching the ring.
+    fn turning_radius(metric: &KerrSchild, e: f64, l: f64, from: f64) -> Option<f64> {
+        let steps = 20_000;
+        let mut hi = from;
+        let mut hi_value = radial_potential(metric, e, l, hi);
+        for i in 1..=steps {
+            let lo = from * (1.0 - (i as f64) / (steps as f64));
+            let lo_value = radial_potential(metric, e, l, lo);
+            if hi_value * lo_value <= 0.0 {
+                // Bisect the bracket to machine precision.
+                let (mut a, mut b) = (lo, hi);
+                for _ in 0..80 {
+                    let mid = 0.5 * (a + b);
+                    if radial_potential(metric, e, l, mid) * lo_value > 0.0 {
+                        a = mid;
+                    } else {
+                        b = mid;
+                    }
+                }
+                return Some(0.5 * (a + b));
+            }
+            hi = lo;
+            hi_value = lo_value;
+        }
+        None
+    }
+
+    #[test]
+    fn test_a_pulse_inside_r_minus_ends_on_the_ring_or_turns() {
+        // What becomes of a pulse emitted inside the Cauchy horizon, measured against the exact
+        // radial potential of each ray rather than against an expectation. A whole light cone is
+        // let go at r = 0.45 at a = 0.90 (r- = 0.564, so this is Region III) and integrated for
+        // 20 M of coordinate time.
+        //
+        // The potential is R(r) = r [E^2 r^3 + (a^2 E^2 - L^2) r + 2M (L - aE)^2], and near r = 0
+        // the last two terms decide: R ~ 2M (L - aE)^2 r + (a^2 E^2 - L^2) r^2, positive for small
+        // r whenever L != aE, so a ray with no zero of the cubic above the ring falls all the way
+        // in. That is most of the cone. The rays that do turn are the ones whose L/E is far enough
+        // above a for the cubic's negative middle term to win before the constant does, and they
+        // turn arbitrarily close to the ring as L/E approaches that boundary.
+        //
+        // Three things are asserted, all of them exact statements about the geodesics: no live ray
+        // ever goes below the turning radius of its own (E, L); every ray whose potential stays
+        // positive down to R_STOP reaches the ring; and every ray that survives 20 M ends on r-,
+        // from below, which is where the outgoing family of Region III accumulates.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let rm = metric.inner_horizon();
+        let r0 = 0.45;
+        let u = raindrop(&metric, r0);
+        let tetrad = Tetrad::from_four_velocity(&metric, r0, &u);
+        let two_pi = 2.0 * std::f64::consts::PI;
+        let mut rays: Vec<NullRay> = (0..RAYS_PER_PULSE)
+            .map(|i| {
+                let alpha = two_pi * (i as f64) / (RAYS_PER_PULSE as f64);
+                NullRay::from_local_direction(&metric, 0.0, r0, 0.0, &tetrad, alpha, &u)
+            })
+            .collect();
+
+        // (E, L) per unit k^t at emission, and the turning radius they imply.
+        let constants: Vec<(f64, f64)> = rays
+            .iter()
+            .map(|ray| {
+                let g = metric.metric_components(ray.r);
+                let v = ray.direction();
+                let e = -(g[0][0] * v[0] + g[0][1] * v[1] + g[0][2] * v[2]);
+                let l = g[2][0] * v[0] + g[2][1] * v[1] + g[2][2] * v[2];
+                (e, l)
+            })
+            .collect();
+        let turning: Vec<Option<f64>> = constants
+            .iter()
+            .map(|&(e, l)| turning_radius(&metric, e, l, r0))
+            .collect();
+
+        let mut lowest: Vec<f64> = rays.iter().map(|ray| ray.r).collect();
+        let mut l_over_e_drift = 0.0f64;
+        let start_l_over_e: Vec<f64> = rays.iter().map(|ray| ray.l_over_e(&metric)).collect();
+        let dt = 0.01;
+        for _ in 0..2000 {
+            for (i, ray) in rays.iter_mut().enumerate() {
+                ray.step(&metric, dt);
+                if ray.alive() {
+                    lowest[i] = lowest[i].min(ray.r);
+                }
+            }
+        }
+
+        let mut died = 0;
+        let mut survived = 0;
+        let mut worst_below_turning = 0.0f64;
+        let mut worst_off_r_minus = 0.0f64;
+        for (i, ray) in rays.iter().enumerate() {
+            let (e, l) = constants[i];
+            let floor = turning[i].unwrap_or(0.0);
+            worst_below_turning = worst_below_turning.max(floor - lowest[i]);
+            assert!(
+                lowest[i] > floor - 1e-3,
+                "ray {i} reached r = {} below its turning radius {floor} (E = {e}, L = {l})",
+                lowest[i]
+            );
+            if ray.alive() {
+                survived += 1;
+                worst_off_r_minus = worst_off_r_minus.max((ray.r - rm).abs());
+                assert!(
+                    ray.r < rm && rm - ray.r < 1e-3,
+                    "ray {i} survived 20 M but is at r = {} rather than on r- = {rm} from below",
+                    ray.r
+                );
+                // The scale-free constant of the motion, over the whole 20 M.
+                let drift = (ray.l_over_e(&metric) - start_l_over_e[i]).abs()
+                    / (1.0 + start_l_over_e[i].abs());
+                l_over_e_drift = l_over_e_drift.max(drift);
+            } else {
+                died += 1;
+                assert!(
+                    turning[i].is_none_or(|turn| turn < R_STOP + 1e-3),
+                    "ray {i} reached the ring although it should have turned at {:?}",
+                    turning[i]
+                );
+            }
+            // The converse, for the rays that were sent inward: with no turning point above the
+            // ring there is nothing to stop them, so they must be the ones that died.
+            let ingoing = rays[i].dr_dt < 0.0;
+            if ingoing && turning[i].is_none_or(|turn| turn <= R_STOP) {
+                assert!(
+                    !ray.alive(),
+                    "ray {i} was sent inward with no turning point and must reach the ring: \
+                     r = {}, turning {:?}",
+                    ray.r,
+                    turning[i]
+                );
+            }
+        }
+        let turners = turning.iter().filter(|t| t.is_some()).count();
+        println!(
+            "a pulse from r = {r0} inside r- = {rm:.4}, after 20 M: {died} of {} rays have reached \
+             the ring and {survived} are alive, all of them within {worst_off_r_minus:.3e} M of r- \
+             from below; {turners} rays have a turning point above the ring, the worst excursion \
+             below one is {worst_below_turning:.3e} M, and L/E of the survivors is held to \
+             {l_over_e_drift:.3e} relative over the whole run",
+            rays.len()
+        );
+        assert!(died > 0 && survived > 0, "the run should show both fates: {died} and {survived}");
+    }
+
     #[test]
     fn test_frozen_family_is_the_prograde_arc_and_narrows_inward() {
         // Which part of a pulse freezes, read straight off the emission event rather than off a
@@ -2067,12 +2380,14 @@ mod tests {
         // the two directions do not cut the interval in the same places.
         //
         // Measured over a whole light cone at r = 3 and again in Region II at r = 1, the eight
-        // directions come back to between 2e-15 and 1.8e-8 of where they started. The large end of
+        // directions come back to between 1e-16 and 8.2e-8 of where they started. The large end of
         // that belongs to the rays that run into the stiff last decade of radius above the ring,
-        // some of them reaching it and being revived on the way out; 1e-7 covers the worst of them
-        // (1.8e-8, at alpha = 270 degrees from r = 3) and 1e-8 does not. Under the fixed
-        // subdivision this replaces the same measurement was 8.4e-6, three orders of magnitude
-        // worse, because the substep count for the whole interval was read off one end of it.
+        // most of them reaching it and being revived on the way out: since the ring death is a
+        // rejected substep rather than a clamped equation, such a ray stops within a hair of R_STOP
+        // and its retrace starts from the stiffest point of its path. 1e-6 covers the worst of
+        // them (8.2e-8, at alpha = 270 degrees from r = 3) with a decade to spare. Under the fixed
+        // subdivision this replaces the same measurement was 8.4e-6, and the deaths were a whole
+        // substep short of the ring.
         let metric = KerrSchild::new(1.0, 0.65);
         let two_pi = 2.0 * std::f64::consts::PI;
         for &(r0, span) in &[(3.0f64, 4.0f64), (1.0, 1.5)] {
@@ -2100,7 +2415,7 @@ mod tests {
                 worst = worst.max(err);
                 println!("r0={r0} alpha={alpha}: retrace error {err:e}");
                 assert!(
-                    err < 1e-7,
+                    err < 1e-6,
                     "r0={r0} alpha={alpha}: retrace error {err}, {ray:?} vs {start:?}"
                 );
             }
@@ -2114,7 +2429,7 @@ mod tests {
         // R_STOP well inside 1 M and stops there with its full state kept; two M later it is still
         // exactly where it stopped, and stepping the two M back walks it away from the boundary and
         // all the way home along the geodesic it came in on. Measured error on the round trip:
-        // 2.8e-10 in the worst of the four carried numbers, against 3.3e-7 under the fixed
+        // 4.7e-10 in the worst of the four carried numbers, against 3.3e-7 under the fixed
         // subdivision this replaces.
         let metric = KerrSchild::new(1.0, 0.65);
         let r0 = 0.5;
@@ -2129,12 +2444,20 @@ mod tests {
         }
         let death_t = ray.death_t.expect("the inward ray must reach the ring");
         assert!(death_t < 1.0, "and reach it inside 1 M: death_t = {death_t}");
-        // The state kept is the last event inside the field, one substep short of the boundary,
-        // which is why the ray is left just outside R_STOP rather than just inside it.
+        // The state kept is the last event the ray reached with the true equation: a substep is
+        // rejected and halved if any of its stages would fall below R_STOP, so the ray stops just
+        // above the ring rather than just inside it, and much closer to it than the old clamped
+        // scheme's one-substep-short death. Measured: 1.4e-9 M above R_STOP.
+        println!("the ray stopped {:.3e} M above R_STOP = {R_STOP}", ray.r - R_STOP);
         assert!(
             (R_STOP..R_STOP + MAX_DR_PER_SUBSTEP).contains(&ray.r),
             "with its state kept at the ring: r = {}",
             ray.r
+        );
+        assert!(
+            ray.r - R_STOP < 1e-6,
+            "and kept there, not a substep short of it: r - R_STOP = {}",
+            ray.r - R_STOP
         );
         assert!(
             (ray.t - 2.0).abs() < 1e-12,
@@ -2149,6 +2472,11 @@ mod tests {
         let err = state_gap(&ray, &start);
         println!("revived ray: worst component error {err:e}");
         assert!(err < 1e-8, "revival error {err}: {ray:?} vs {start:?}");
+        assert!(
+            (ray.r - r0).abs() < 1e-8,
+            "and back to the radius it started at: r = {} vs {r0}",
+            ray.r
+        );
     }
 
     /// The transmission of `run_transmission` on a plain fixed step, run to a given coordinate
@@ -2395,6 +2723,115 @@ mod tests {
         assert!(
             closest < 0.02,
             "and they should reach the horizon: the nearest is {closest} M above it"
+        );
+    }
+
+    #[test]
+    fn test_a_sheet_handed_over_and_taken_back_records_both_of_its_crossings() {
+        // A sheet is a pair of rays, and inside r+ the front winds fast enough that the pair
+        // straddling the receiver's azimuth changes from pass to pass: a sheet drops out of the
+        // tracking and comes back, and while it is away the receiver can pass through the front by
+        // one of its neighbours. This is that handoff, built by hand so that it is unambiguous.
+        //
+        // Four rays at one radius, spaced so that exactly one segment of the closed loop straddles
+        // the receiver's azimuth, and the loop is rotated between passes to hand that duty from one
+        // segment to another:
+        //
+        //   1. segment 0 straddles; the front sweeps outward past the receiver     (crossing one)
+        //   2. the loop rotates by half a radian, and segment 3 straddles instead;
+        //      the front sweeps back inward past the receiver                      (crossing two)
+        //   3. the loop rotates back, segment 0 straddles again, and the front
+        //      sweeps outward past the receiver a second time                      (crossing three)
+        //
+        // All three are real arrivals. The third is the one a rule keyed to the last crossing
+        // recorded on the same sheet gets wrong: it leaves the receiver on the same side as
+        // crossing one did, because crossing two - which put them back - was recorded on a
+        // different segment. An earlier version of `Pulse::scan` suppressed exactly this, and was
+        // measured doing so: with that rule in place this test records two arrivals, not three.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let params = WorldlineParams::default();
+        let r_receiver = 3.0;
+        let mut bob =
+            Observer::new_with_phi(&metric, "Bob", 0.0, r_receiver, 0.0, 0.0, params);
+        let u_receiver = signalling_four_velocity(&metric, &bob);
+
+        // The loop: four rays of a real emission at r = 3, whose azimuths are then set by hand.
+        // Steps of 1.5 rad and a closing step of 2 pi - 4.5, so the loop winds once and exactly one
+        // of its four segments contains the receiver's azimuth.
+        let u = raindrop(&metric, r_receiver);
+        let tetrad = Tetrad::from_four_velocity(&metric, r_receiver, &u);
+        let rays: Vec<NullRay> = (0..4)
+            .map(|i| {
+                let alpha = 0.5 * std::f64::consts::PI * (i as f64);
+                NullRay::from_local_direction(&metric, 0.0, r_receiver, 0.0, &tetrad, alpha, &u)
+            })
+            .collect();
+        let mut pulse = Pulse {
+            index: 0,
+            emitted_t: 0.0,
+            emitted_tau: 0.0,
+            emitted_r: r_receiver,
+            emitted_phi: 0.0,
+            rays,
+            extent_track: vec![(0.0, r_receiver, r_receiver)],
+            sheets: Vec::new(),
+            receptions: Vec::new(),
+        };
+
+        // One detection pass with the loop put where the caller says: every ray at radius `r_front`
+        // and the loop rotated by `turn`.
+        let base = [-0.3f64, 1.2, 2.7, 4.2];
+        let pass = |pulse: &mut Pulse, bob: &mut Observer, t: f64, r_front: f64, turn: f64| {
+            for (ray, phi) in pulse.rays.iter_mut().zip(base.iter()) {
+                ray.t = t;
+                ray.r = r_front;
+                ray.phi = phi + turn;
+            }
+            bob.t = t;
+            bob.tau = 0.8 * t;
+            pulse.scan(&metric, bob, &u_receiver, true);
+            pulse.sheets.iter().map(|sheet| sheet.segment).collect::<Vec<_>>()
+        };
+
+        // 1. Segment 0 straddles: the front starts inside the receiver and sweeps out past them.
+        assert_eq!(pass(&mut pulse, &mut bob, 0.1, 2.9, 0.0), vec![0], "segment 0 should straddle");
+        assert!(pulse.receptions.is_empty(), "the first pass only establishes the side");
+        assert_eq!(pass(&mut pulse, &mut bob, 0.2, 3.1, 0.0), vec![0]);
+        assert_eq!(pulse.receptions.len(), 1, "the front swept out past the receiver");
+
+        // 2. The loop rotates: segment 3 takes over, and the receiver passes back through the front
+        //    by that segment instead.
+        assert_eq!(pass(&mut pulse, &mut bob, 0.3, 3.1, 0.5), vec![3], "segment 3 should straddle");
+        assert_eq!(pulse.receptions.len(), 1, "the handoff itself is not a crossing");
+        assert_eq!(pass(&mut pulse, &mut bob, 0.4, 2.9, 0.5), vec![3]);
+        assert_eq!(pulse.receptions.len(), 2, "the front swept back in past the receiver");
+
+        // 3. The loop rotates back and segment 0 sweeps out past the receiver a second time.
+        assert_eq!(pass(&mut pulse, &mut bob, 0.5, 2.9, 0.0), vec![0], "segment 0 again");
+        assert_eq!(pulse.receptions.len(), 2, "coming back is not a crossing either");
+        assert_eq!(pass(&mut pulse, &mut bob, 0.6, 3.1, 0.0), vec![0]);
+        assert_eq!(
+            pulse.receptions.len(),
+            3,
+            "the second crossing of segment 0 is a real arrival and must be recorded: {:?}",
+            pulse.receptions
+        );
+
+        let events: Vec<(usize, f64)> =
+            pulse.receptions.iter().map(|rec| (rec.segment, rec.t)).collect();
+        println!("handoff: three crossings, (segment, t) = {events:?}");
+        assert_eq!(events[0].0, 0);
+        assert_eq!(events[1].0, 3);
+        assert_eq!(events[2].0, 0);
+        // Each is stamped inside the pass interval that found it, and the two crossings of segment
+        // 0 leave the receiver on the same side, which is the whole point.
+        for (rec, (lo, hi)) in pulse.receptions.iter().zip([(0.1, 0.2), (0.3, 0.4), (0.5, 0.6)]) {
+            assert!(rec.t > lo && rec.t < hi, "{rec:?} is outside ({lo}, {hi})");
+            assert!(rec.ratio.is_finite() && rec.ratio > 0.0, "{rec:?}");
+        }
+        assert!(
+            pulse.receptions[0].side_after * pulse.receptions[2].side_after > 0.0,
+            "the two crossings of segment 0 leave the receiver on the same side"
         );
     }
 
@@ -3061,7 +3498,7 @@ mod tests {
         // which at a = 0.90 is 2.3e3 over 20 M; the same amplification acts on any difference
         // between two ways of cutting the path. The measurement that says so is in the test: each
         // of the two rewinds is also compared with the state it should return to, and both miss by
-        // the same 1.2e-5 to 1.4e-5 that they differ from each other by. So the assertion for a
+        // the same 3.6e-5, which is the size of their disagreement. So the assertion for a
         // rewind is 1e-6 or the round trip's own residual, whichever is larger, and the round trip
         // is printed either way.
         let metric = KerrSchild::new(1.0, 0.90);
