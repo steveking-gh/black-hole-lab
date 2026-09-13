@@ -139,6 +139,16 @@ const DISTANCE_STEP_STALLED_DT: f64 = 0.1;
 /// only on how long one press of an arrow key is allowed to be worth.
 const DISTANCE_STEP_MIN_SPEED: f64 = 0.01;
 
+/// The hover tips on the four OBSERVER BOB mode buttons. Each says what worldline the option is,
+/// which 4-velocity it puts at Bob's event, where that worldline exists, what happens where it does
+/// not - `Observer::effective_mode`'s fallback - and what the mode is for. The two fallback
+/// sentences quote `impossible_mode_note` word for word, so the tip, the note under the buttons and
+/// the telemetry box cannot describe the same Bob differently.
+const FREE_FALL_TIP: &str = "A timelike geodesic: Bob falls with no thrust at all and his accelerometer reads exactly zero, which is the whole content of the word. Which geodesic is fixed by the two conserved quantities he was dropped with, the energy per unit mass E = −u_t and the axial angular momentum per unit mass L = u_ϕ on the Dual Observer sliders, and his four-velocity is the one the integrator is carrying along that curve, so the telemetry, the frame his pulses go out into and the frame his receptions are measured in are all the same object as the worldline being drawn. E = 1 with L = 0 is the raindrop, dropped from rest at infinity and falling straight in; that is the congruence the River of Space is made of, so Bob is then riding one of the drops. A geodesic exists at every radius and this is the only mode that does: he crosses the ergosphere, the outer horizon r₊ and the Cauchy horizon r₋ in finite proper time with nothing local happening to him at any of them, and for the equatorial L = 0 case the fall ends on the ring, where the curvature is genuinely infinite and the chart stops. Give him enough prograde angular momentum and he freezes onto r₋ instead, his proper time reaching a finite limit while the coordinate clock runs on. It is the mode the light cones and both transmissions read most naturally in, because an infaller is the observer the whole interior picture is drawn for.";
+const MANUAL_DRAG_TIP: &str = "Bob's position is yours: drag his marker on either canvas, or set his radius on the slider below, and he stays exactly where you put him while the clock runs. What the two boost sliders set is his velocity — β_r radially and β_ϕ azimuthally, as fractions of c — relative to the local raindrop, the observer dropped from rest at infinity passing through that same point, which is the one reference frame that exists at every radius, between the horizons included. His four-velocity is that raindrop frame boosted by (β_r, β_ϕ), so the telemetry, the rest-frame view and the pulses he transmits are all drawn for an observer moving at that velocity through the point you are holding him at, while the point itself does not drift. Those two statements are not one worldline, and here that is deliberate: the position is an input rather than an integration, so the drawn marker and the reported velocity are answering different questions, and this is the only mode in which they are allowed to. β = 0 reproduces the free-fall frame exactly; anything else is a rocket, and the thrust that holding it would cost is what the telemetry quotes as a_thrust. Let go of the marker and free fall resumes from the new event with his conserved E and L unchanged, rather than from wherever he was before you picked him up.";
+const STATIC_TIP: &str = "Bob hovers: fixed r and fixed ϕ, station-keeping against the distant stars, with a four-velocity along the time-translation Killing vector ∂/∂t normalised to unit length. The thrust that costs is real, it is what the telemetry reports as a_prop, and it grows without bound as he nears the static limit. That worldline exists only where ∂/∂t is timelike, g_tt < 0, which on the equator means r > 2M — outside the ergosphere, not merely outside the horizon. Inside the ergosphere the frame dragging is total: holding ϕ fixed is a spacelike motion there and no rocket, however powerful, can do it. The selection is kept rather than refused, because it is a standing request and resumes by itself the moment Bob is somewhere it can exist again, but what he actually does in the meantime is fall freely — in position as much as in velocity — and this panel and his telemetry box both read “Static impossible here (r ≤ 2M): falling freely” while that lasts. It is the mode for the exterior: gravitational blueshift, the redshift of an infaller's signal and the weight of the hole are all statements about what a static observer measures.";
+const ZAMO_TIP: &str = "The zero-angular-momentum observer, the frame in which a spinning hole looks as unrotating as it can. He holds his radius like the static observer but does not fight the frame dragging: he is swept around at the local dragging rate ω = −g_tϕ/g_ϕϕ, exactly fast enough that his own angular momentum L = u_ϕ vanishes, and his four-velocity is γ(1, 0, ω). Light leaves him with no built-in swirl, which is why the River of Space quotes its flow speed past him, β = √(1 − α²), reaching c at the outer horizon, and why he is the observer the lapse α belongs to. A fixed-r worldline is timelike only outside the outer horizon r₊, so unlike the static observer he survives the whole ergosphere — going along with the dragging is precisely what the static observer cannot afford to stop doing. At r₊ and inside it the radial direction is timelike and nothing can hold a radius at all; the selection is kept, Bob falls freely instead, and this panel and his telemetry box both read “ZAMO impossible inside r₊: falling freely” until he is back outside. Use it to read the ergosphere, where it is the only hovering observer there is.";
+
 /// What to say about an observer whose selected mode cannot exist where they are, or None when the
 /// selection is fine.
 ///
@@ -487,10 +497,14 @@ impl AppControls {
             ui.label(egui::RichText::new("🧑 OBSERVER BOB").strong().color(Theme::BOB_COLOR));
 
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut bob.mode, ObserverMode::FreeFall, "Free Fall");
-                ui.selectable_value(&mut bob.mode, ObserverMode::ManualDrag, "Drag / Manual");
-                ui.selectable_value(&mut bob.mode, ObserverMode::Static, "Static");
-                ui.selectable_value(&mut bob.mode, ObserverMode::Zamo, "ZAMO");
+                ui.selectable_value(&mut bob.mode, ObserverMode::FreeFall, "Free Fall")
+                    .on_hover_text(FREE_FALL_TIP);
+                ui.selectable_value(&mut bob.mode, ObserverMode::ManualDrag, "Drag / Manual")
+                    .on_hover_text(MANUAL_DRAG_TIP);
+                ui.selectable_value(&mut bob.mode, ObserverMode::Static, "Static")
+                    .on_hover_text(STATIC_TIP);
+                ui.selectable_value(&mut bob.mode, ObserverMode::Zamo, "ZAMO")
+                    .on_hover_text(ZAMO_TIP);
             });
 
             // A static observer needs r > 2M (timelike d/dt); a ZAMO needs r > r+ (a fixed-r
@@ -528,7 +542,13 @@ impl AppControls {
                     .color(Theme::TEXT_MUTED),
                 );
 
-                if ui.button("Reset Bob's Thrusters").clicked() {
+                if ui
+                    .button("Reset Bob's Thrusters")
+                    .on_hover_text(
+                        "Set both boosts back to zero, which puts Bob at rest in the local raindrop frame: β = 0 is free fall exactly, and his proper acceleration goes back to nothing.",
+                    )
+                    .clicked()
+                {
                     bob.beta_r = 0.0;
                     bob.beta_phi = 0.0;
                 }
