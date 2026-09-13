@@ -96,7 +96,11 @@ const PRESETS: [(&str, f64, f64, f64); 6] = [
     ("Extreme Kerr (a=0.998)", 1.0, 0.998, 10.0),
 ];
 
-/// Agreement of two of those parameters to one part in a million, with an absolute floor of that
+/// The step-distance quick-picks in Distance step mode, as (label, km).
+const STEP_DISTANCE_PRESETS: [(&str, f64); 4] =
+    [("10k km", 10_000.0), ("1,000 km", 1000.0), ("100 km", 100.0), ("10 km", 10.0)];
+
+/// Agreement of two values to one part in a million, with an absolute floor of that
 /// same size so that a spin of zero can be compared at all. Every slider step is larger than this.
 fn same_to_a_millionth(x: f64, y: f64) -> bool {
     (x - y).abs() <= 1e-6 * y.abs().max(1.0)
@@ -167,7 +171,7 @@ impl AppControls {
                     }
                 };
                 if ui
-                    .button("⏪ Step Back (←)")
+                    .button("← Step Back")
                     .on_hover_text("Step back by Step Size / Distance (Left Arrow key)")
                     .clicked()
                 {
@@ -185,7 +189,7 @@ impl AppControls {
                     }
                 }
                 if ui
-                    .button("⏭ Step Fwd (→)")
+                    .button("Step Fwd →")
                     .on_hover_text("Step forward by Step Size / Distance (Right Arrow key)")
                     .clicked()
                 {
@@ -231,18 +235,15 @@ impl AppControls {
                             .logarithmic(true)
                             .text("Step Dist (km)"),
                     );
+                    // The quick-pick that matches the slider's value is filled like the active
+                    // step mode above it, and read off the value rather than remembered, so
+                    // dragging the slider off a preset drops the fill by itself.
                     ui.horizontal(|ui| {
-                        if ui.button("10k km").clicked() {
-                            self.step_distance_km = 10_000.0;
-                        }
-                        if ui.button("1,000 km").clicked() {
-                            self.step_distance_km = 1000.0;
-                        }
-                        if ui.button("100 km").clicked() {
-                            self.step_distance_km = 100.0;
-                        }
-                        if ui.button("10 km").clicked() {
-                            self.step_distance_km = 10.0;
+                        for (label, km) in STEP_DISTANCE_PRESETS {
+                            let active = same_to_a_millionth(self.step_distance_km, km);
+                            if ui.selectable_label(active, label).clicked() {
+                                self.step_distance_km = km;
+                            }
                         }
                     });
                 }
@@ -255,7 +256,7 @@ impl AppControls {
                 .on_hover_text(
                     "Alice broadcasts a pulse into the whole of her own light cone every 0.1 M of her proper time, and every ray of it is an exact null geodesic of the coded metric. Colour is the frequency a local raindrop measures against Alice's emission, from a tenfold redshift through white to a thousandfold blueshift. Inside r₊ the rays that never reach r₋ are the prograde ones, dragged forward in ϕ: that is the arc of the pulse around α = 90°, running from about 45° to 135° well inside r₊, wider than that just below r₊ and narrowing as Alice nears r₋, its edges lying exactly where E − Ω₋L changes sign. On the equatorial view that arc is drawn in salmon: the part of each ring sent prograde enough to have negative energy along the inner horizon's rotating generator, E − Ω₋L < 0, which never crosses the drawn r₋ circle but piles onto it from outside while co-rotating at Ω₋, whereas the rest of the ring crosses at finite time. The salmon arc is about a third of the ring for a pulse sent just inside r₊ and only a sliver for one sent close to r₋, and it is beaded with dots because the arc collapses onto r₋ faster than a pixel can show. Those arcs stack up against the Cauchy horizon while the rest of the pulse falls through it, and because the pulses are close enough together for consecutive arcs to overlap there, an infaller crossing r₋ where they stand cuts through several sheets in a row, each blueshifted on the scale exp(κ₋Δt). Each loop is one pulse and encloses Alice, since light is isotropic in Alice's own frame, and the dot on the loop marks the emission event on Alice's trail. Inside r₊ the flow carries the whole loop inward, so the loop's outer edge never gets further from the hole than that dot: the river model, drawn with light.",
                 );
-            ui.checkbox(&mut self.show_outgoing_rays, "Outgoing Light Inside r₊")
+            ui.checkbox(&mut self.show_outgoing_rays, "Outgoing Light Between r₊ and r₋ (pink lines)")
                 .on_hover_text(
                     "The pink lines in the (t, r) diagram are outgoing principal null rays of the interior. Each leaves r₊, falls, and piles onto r₋ without ever crossing it. Every line is the same ray translated in t, and r − r₋ shrinks like exp(−κ₋t), so the pile-up is exponential and the last stretch of every ray lies within a pixel of r₋. The Cauchy horizon in this chart is where the outgoing light of the whole interior accumulates, and a worldline falling through r₋ cuts the whole pile in finite proper time.",
                 );
