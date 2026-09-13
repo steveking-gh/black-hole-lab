@@ -73,15 +73,20 @@ impl SpacetimeApp {
     }
 
     /// What one press of an arrow key is worth in coordinate time: the Δt slider in Time mode, and
-    /// in Distance mode the time Bob needs to cover the requested Δr at his current coordinate
-    /// speed.
+    /// in Distance mode the time an observer who is moving needs to cover the requested Δr at
+    /// their current coordinate speed.
+    ///
+    /// Which observer that is, and what happens when nobody is moving in r - a hovering Bob, or a
+    /// Static or ZAMO Bob holding his radius, has no time in which he covers Δr, and there is no
+    /// honest number to divide by - is `AppControls::distance_step`. The panel's Step Back and
+    /// Step Fwd buttons ask the same function, so a keypress and a click cannot mean different
+    /// intervals.
     fn arrow_step(&self) -> f64 {
         match self.controls.step_mode {
             StepMode::Time => self.controls.step_size,
             StepMode::Distance => {
-                let delta_r_m = self.metric.km_to_r(self.controls.step_distance_km);
-                let v_coord = self.bob.velocity_c(&self.metric).abs().max(0.01);
-                (delta_r_m / v_coord).clamp(1e-8, 500.0)
+                self.controls
+                    .distance_step(&self.metric, &self.bob, self.alice.as_ref())
             }
         }
     }
@@ -150,9 +155,9 @@ impl eframe::App for SpacetimeApp {
             let sim_dt = match self.controls.step_mode {
                 StepMode::Time => dt * self.controls.play_speed,
                 StepMode::Distance => {
-                    let delta_r_m = self.metric.km_to_r(self.controls.step_distance_km);
-                    let v_coord = self.bob.velocity_c(&self.metric).abs().max(0.01);
-                    let base_step = (delta_r_m / v_coord).clamp(1e-8, 500.0);
+                    let base_step =
+                        self.controls
+                            .distance_step(&self.metric, &self.bob, self.alice.as_ref());
                     (dt / 0.01667).clamp(0.2, 3.0) * base_step
                 }
             };
@@ -442,6 +447,8 @@ mod tests {
     use super::*;
     use crate::gui::controls::active_preset;
     use crate::physics::geodesic::GeodesicState;
+    use crate::physics::observer::ObserverMode;
+    use crate::physics::wavefront::Pulse;
     use eframe::App;
 
     #[test]
@@ -978,9 +985,7 @@ mod tests {
         app.controls.step_mode = StepMode::Distance;
         app.controls.step_distance_km = 1000.0;
 
-        let delta_r_m = app.metric.km_to_r(app.controls.step_distance_km);
-        let v_coord = app.bob.velocity_c(&app.metric).abs().max(0.01);
-        let sim_dt = (delta_r_m / v_coord).clamp(1e-8, 500.0);
+        let sim_dt = app.arrow_step();
 
         let initial_r = app.bob.r;
         app.bob.step(&app.metric, app.current_time + sim_dt, sim_dt);
@@ -993,6 +998,160 @@ mod tests {
             "Expected ~1000 km movement, got {:.2} km",
             actual_dr_km
         );
+    }
+
+    #[test]
+    fn test_a_distance_step_needs_somebody_who_is_moving_in_r() {
+        // Distance mode asks "how long does Bob need to cover Δr?", and for a Bob who is not
+        // moving in r that question has no answer. It used to get one anyway: `four_velocity`
+        // handed a hovering Bob the free-fall value at his radius, so the step was quoted off a
+        // speed he did not have. Now his dr/dt is exactly zero - it is the static worldline he is
+        // on - and the fallbacks are stated rather than fallen into.
+        let mut app = SpacetimeApp::default();
+        app.controls.is_playing = false;
+        app.controls.step_mode = StepMode::Distance;
+        app.controls.step_distance_km = 1000.0;
+
+        // 1. Both falling: Bob's own speed, as before.
+        let falling = app.arrow_step();
+        assert!(app.bob.velocity_c(&app.metric) < 0.0);
+        assert!(falling > 1e-8 && falling < 500.0, "a real step: {falling}");
+
+        // 2. Bob hovering, Alice falling: Alice's speed, and a step of the same order rather than
+        //    the 500 M the old 0.01c floor clamped a stationary Bob to.
+        app.bob = Observer::new(&app.metric, "Bob", 0.0, 3.8, 8.0);
+        app.bob.step(&app.metric, 0.5, 0.5);
+        assert!(!app.bob.is_active && app.bob.velocity_c(&app.metric) == 0.0, "he is hovering");
+        let alice_paced = app.arrow_step();
+        let alice_speed = app.alice.as_ref().unwrap().velocity_c(&app.metric).abs();
+        let expected = app.metric.km_to_r(1000.0) / alice_speed.max(0.01);
+        assert!(
+            (alice_paced - expected).abs() < 1e-12,
+            "a hovering Bob is paced by Alice: {alice_paced} vs {expected}"
+        );
+        assert!(alice_paced < 1.0, "and not by the 500 M clamp: {alice_paced}");
+
+        // 3. Nobody moving in r: the fixed fallback, which claims nothing about a distance.
+        app.alice = None;
+        assert!((app.arrow_step() - 0.1).abs() < 1e-12, "step = {}", app.arrow_step());
+
+        // 4. A Static Bob outside the static limit holds his radius by choice, and is treated the
+        //    same way: there is no time in which he covers Δr either.
+        app.bob = Observer::new(&app.metric, "Bob", 0.0, 5.0, 0.0);
+        app.bob.mode = ObserverMode::Static;
+        assert!(app.bob.mode_admissible(&app.metric) && app.bob.velocity_c(&app.metric) == 0.0);
+        assert!((app.arrow_step() - 0.1).abs() < 1e-12);
+
+        // 5. ...but a Static selection at a radius where it is impossible is falling, so it paces
+        //    the step like any other faller.
+        app.bob = Observer::new(&app.metric, "Bob", 0.0, 1.9, 0.0);
+        app.bob.mode = ObserverMode::Static;
+        assert!(!app.bob.mode_admissible(&app.metric));
+        assert!(app.bob.velocity_c(&app.metric) < 0.0, "he is falling, and the step follows him");
+        assert!(app.arrow_step() < 0.1);
+    }
+
+    /// Is (x, y) inside the closed polygon? Ray casting along +x, counting edge crossings; a point
+    /// with an odd number of them is inside. Only ever handed a wavefront loop, which is a closed
+    /// polygon by construction: the emission angles divide the turn exactly, so the last ray joins
+    /// back to the first.
+    fn point_in_polygon(poly: &[(f64, f64)], x: f64, y: f64) -> bool {
+        let mut inside = false;
+        let mut j = poly.len() - 1;
+        for i in 0..poly.len() {
+            let (xi, yi) = poly[i];
+            let (xj, yj) = poly[j];
+            if (yi > y) != (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi {
+                inside = !inside;
+            }
+            j = i;
+        }
+        inside
+    }
+
+    /// The pulse's current wavefront as a closed polygon in Kerr-Schild Cartesian coordinates,
+    /// x + i y = (r + i a) e^{i phi}, or None once any ray of it has died.
+    ///
+    /// A dead ray is left standing at the boundary it reached rather than removed, so dropping it
+    /// from the polyline would close the loop across a chord that is not part of the front and
+    /// keeping it would put a vertex on a ray that is no longer advancing. Either way the loop has
+    /// stopped being the pulse's wavefront, so the pulse is simply not asked.
+    fn closed_front(metric: &KerrSchild, pulse: &Pulse) -> Option<Vec<(f64, f64)>> {
+        pulse
+            .rays
+            .iter()
+            .map(|ray| ray.alive().then(|| metric.cartesian_position(ray.r, ray.phi)))
+            .collect()
+    }
+
+    #[test]
+    fn test_an_observer_never_leaves_the_light_they_have_emitted() {
+        // The user-visible fact the fix restores. A pulse is emitted isotropically in the emitter's
+        // own frame, so the emitter is at the centre of it; a timelike worldline can never overtake
+        // its own light, so the emitter stays inside every front they have sent for as long as that
+        // front is a closed loop. Drawn, that is the loops staying wrapped around the marker.
+        //
+        // Bob selected Static at r = 1.9M with a = 0.90 - inside the ergosphere, where no static
+        // observer exists - is the configuration from the bug report. Held at fixed r while his
+        // pulses were emitted into a frame falling inward at 0.73c, every one of his fronts ran
+        // away from him and he ended up outside his own past light cones: a causality violation
+        // manufactured by the inconsistency, since the light and the worldline were being drawn
+        // from two different Bobs.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let mut bob = Observer::new(&metric, "Bob", 0.0, 1.9, 0.0);
+        bob.mode = ObserverMode::Static;
+        assert!(!bob.mode_admissible(&metric), "no static observer exists at r = 1.9M");
+
+        let mut alice = Observer::new(&metric, "Alice", 0.0, 4.5, 0.0);
+        assert!(alice.mode_admissible(&metric));
+
+        for (who, obs) in [("Bob (Static, refused)", &mut bob), ("Alice (free fall)", &mut alice)] {
+            let mut field = SignalField::default();
+            let dt = 0.01;
+            let mut t = 0.0;
+            let (mut checked, mut skipped, mut pulses) = (0usize, 0usize, 0usize);
+            while t < 3.0 - 1e-12 {
+                t += dt;
+                obs.step(&metric, t, dt);
+                // The order the app advances a field in: carry the light, then emit.
+                field.advance(&metric, dt);
+                field.emit_if_due(&metric, obs);
+                pulses = pulses.max(field.pulses.len());
+
+                let (x, y) = obs.cartesian_position(&metric);
+                for pulse in field.pulses.iter() {
+                    // A pulse emitted on this very step is still a point, so there is no polygon
+                    // to be inside of yet.
+                    if pulse.emitted_t >= field.t - 1e-12 {
+                        continue;
+                    }
+                    match closed_front(&metric, pulse) {
+                        Some(front) => {
+                            assert!(
+                                point_in_polygon(&front, x, y),
+                                "{who}: at t = {t:.2} (r = {:.4}) he is outside the front of \
+                                 pulse #{} emitted at t = {:.2}, r = {:.4}",
+                                obs.r,
+                                pulse.index,
+                                pulse.emitted_t,
+                                pulse.emitted_r
+                            );
+                            checked += 1;
+                        }
+                        None => skipped += 1,
+                    }
+                }
+                if obs.has_ended() {
+                    break;
+                }
+            }
+            println!(
+                "{who}: {checked} in-front checks over {pulses} pulses, {skipped} skipped for \
+                 dead rays; ended at t = {:.2}, r = {:.4}",
+                obs.t, obs.r
+            );
+            assert!(checked > 200, "{who}: only {checked} checks - the test proved nothing");
+        }
     }
 
     #[test]

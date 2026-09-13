@@ -129,6 +129,35 @@ const PRESETS: [(&str, f64, f64, f64); 6] = [
 const STEP_DISTANCE_PRESETS: [(&str, f64); 4] =
     [("10k km", 10_000.0), ("1,000 km", 1000.0), ("100 km", 100.0), ("10 km", 10.0)];
 
+/// What a Distance-mode step is worth in coordinate time when nobody on the canvas is moving in r,
+/// which is `AppControls::step_size`'s own default: see `AppControls::distance_step`.
+const DISTANCE_STEP_STALLED_DT: f64 = 0.1;
+
+/// The floor put under the coordinate speed a Distance-mode step is divided by. Near a turning
+/// point |dr/dt| runs to zero and Δr / |dr/dt| runs away with it; this bounds the step at
+/// 100 Δr of coordinate time. It is not a floor on anybody's velocity - nothing physical reads it -
+/// only on how long one press of an arrow key is allowed to be worth.
+const DISTANCE_STEP_MIN_SPEED: f64 = 0.01;
+
+/// What to say about an observer whose selected mode cannot exist where they are, or None when the
+/// selection is fine.
+///
+/// One sentence, stated once, so that the Bob panel and the telemetry box on the canvas cannot
+/// describe the same observer differently. It says what is happening rather than what is being
+/// drawn: the worldline really is the free-fall one now, in position as much as in velocity, and
+/// the selection is still standing and will resume the moment it becomes possible again.
+pub fn impossible_mode_note(obs: &Observer, metric: &KerrSchild) -> Option<&'static str> {
+    if obs.mode_admissible(metric) {
+        return None;
+    }
+    match obs.mode {
+        ObserverMode::Static => Some("Static impossible here (r ≤ 2M): falling freely"),
+        ObserverMode::Zamo => Some("ZAMO impossible inside r₊: falling freely"),
+        // `mode_admissible` is unconditionally true for these two.
+        ObserverMode::FreeFall | ObserverMode::ManualDrag => None,
+    }
+}
+
 /// The preset the metric currently *is*, by label, or None if it is not one of them.
 ///
 /// The highlight in the preset row is read off the geometry through this rather than remembered,
@@ -199,6 +228,39 @@ impl AppControls {
         std::mem::take(&mut self.view_reset_requested)
     }
 
+    /// What one Distance-mode step is worth in coordinate time: the time an observer who is
+    /// actually moving needs to cover the requested Δr at their coordinate speed |dr/dt|.
+    ///
+    /// The step is quoted for Bob, so it is his speed whenever he has one. He does not always have
+    /// one. A Bob still waiting for release stands on the static worldline his clock is keeping, a
+    /// Static or ZAMO Bob holds his radius by construction, and for all three dr/dt is exactly
+    /// zero: "the time for Bob to cover Δr" is then not a long time, it is an undefined one, and
+    /// dividing by a floored speed to get one is inventing an answer. Alice's coordinate speed is
+    /// used instead whenever she is on the canvas and falling, since she is then the worldline
+    /// crossing the radii the user is stepping through; and if neither of them is moving in r the
+    /// step falls back to a fixed `DISTANCE_STEP_STALLED_DT` of coordinate time, which claims
+    /// nothing about a distance at all.
+    ///
+    /// `DISTANCE_STEP_MIN_SPEED` bounds a step taken near a turning point, and the result is
+    /// clamped into [1e-8, 500] M besides.
+    pub fn distance_step(
+        &self,
+        metric: &KerrSchild,
+        bob: &Observer,
+        alice: Option<&Observer>,
+    ) -> f64 {
+        let delta_r_m = metric.km_to_r(self.step_distance_km);
+        let moving = [Some(bob), alice]
+            .into_iter()
+            .flatten()
+            .map(|obs| obs.velocity_c(metric).abs())
+            .find(|speed| *speed > 0.0);
+        match moving {
+            Some(speed) => (delta_r_m / speed.max(DISTANCE_STEP_MIN_SPEED)).clamp(1e-8, 500.0),
+            None => DISTANCE_STEP_STALLED_DT,
+        }
+    }
+
     pub fn render_panel(
         &mut self,
         ui: &mut egui::Ui,
@@ -245,11 +307,7 @@ impl AppControls {
                 }
                 let current_step = match self.step_mode {
                     StepMode::Time => self.step_size,
-                    StepMode::Distance => {
-                        let delta_r_m = metric.km_to_r(self.step_distance_km);
-                        let v_coord = bob.velocity_c(metric).abs().max(0.01);
-                        (delta_r_m / v_coord).clamp(1e-8, 500.0)
-                    }
+                    StepMode::Distance => self.distance_step(metric, bob, alice.as_ref()),
                 };
                 if ui
                     .button("← Step Back")
@@ -314,6 +372,9 @@ impl AppControls {
                         egui::Slider::new(&mut self.step_distance_km, min_dist..=max_dist)
                             .logarithmic(true)
                             .text("Step Dist (km)"),
+                    )
+                    .on_hover_text(
+                        "How far Bob should move in r per step. The step is still taken in coordinate time: Δt = Δr / |dr/dt| at his current coordinate speed. A Bob who is not moving in r — hovering before release, or holding a radius as a Static or ZAMO observer — has no such time, so Alice's speed is used instead while she is falling, and if neither of them is moving in r the step is a fixed 0.1 M of coordinate time and the distance is not being honoured at all.",
                     );
                     // The quick-pick that matches the slider's value is filled like the active
                     // step mode above it, and read off the value rather than remembered, so
@@ -433,19 +494,13 @@ impl AppControls {
             });
 
             // A static observer needs r > 2M (timelike d/dt); a ZAMO needs r > r+ (a fixed-r
-            // worldline can only be timelike outside the outer horizon). When the selection is
-            // impossible where Bob actually is, say so and fall back to the free-fall worldline.
-            if !bob.mode_admissible(metric) {
-                let why = match bob.mode {
-                    ObserverMode::Static => "(no static observer can exist here: r ≤ 2M)",
-                    ObserverMode::Zamo => "(no ZAMO inside r₊)",
-                    _ => "",
-                };
-                ui.label(
-                    egui::RichText::new(format!("{} — showing free fall", why))
-                        .small()
-                        .color(Theme::TEXT_MUTED),
-                );
+            // worldline can only be timelike outside the outer horizon). Where the selection is
+            // impossible, Bob does not merely *look* like a free-faller: `Observer::effective_mode`
+            // puts him on the free-fall worldline in position as well as in velocity, and the
+            // selection is kept so that it resumes by itself if he ever gets back out. The wording
+            // is the telemetry box's, so the two cannot say different things about the same Bob.
+            if let Some(note) = impossible_mode_note(bob, metric) {
+                ui.label(egui::RichText::new(note).small().color(Theme::TEXT_MUTED));
             }
 
             if bob.mode == ObserverMode::ManualDrag {

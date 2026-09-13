@@ -1,4 +1,4 @@
-use crate::gui::controls::{ReferenceFrame, SignalViews};
+use crate::gui::controls::{impossible_mode_note, ReferenceFrame, SignalViews};
 use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::local_frame::{LocalFrame, SurfaceCharacter};
@@ -200,7 +200,14 @@ fn telemetry_lines(
     };
     let v_proper_str = format!("dr/dτ   = {:+.2}c", u_prop);
 
-    let a_str = if is_geodesic || a_prop < 0.05 {
+    // A Static or ZAMO selection at a radius where that worldline does not exist is not quietly
+    // shown as free fall: it *is* free fall - `Observer::effective_mode` steps the observer along
+    // it - and the line says which selection was refused and why, in the Bob panel's own words.
+    // Every other line of the box is already the free-faller's, because they are all read off the
+    // one 4-velocity the worldline is being drawn from.
+    let a_str = if let Some(note) = impossible_mode_note(obs, metric) {
+        note.to_string()
+    } else if is_geodesic || a_prop < 0.05 {
         "a_prop = 0.00g (Free Fall)".to_string()
     } else {
         format!("a_thrust = {:.1}g", a_prop)

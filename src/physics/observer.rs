@@ -358,29 +358,72 @@ impl Observer {
         }
     }
 
+    /// The mode the observer is *actually* following at the event they now stand on: the selected
+    /// `mode` where it is admissible there, and free fall where it is not.
+    ///
+    /// The selection itself is never touched. It is the user's standing request, so a Static or
+    /// ZAMO choice made at a radius where that worldline does not exist resumes by itself the
+    /// moment the observer is back somewhere it does.
+    ///
+    /// Everything that says what the worldline *does* dispatches on this rather than on `mode`:
+    /// `four_velocity_at`, `advance`, `rewind_to`, and the release test in `step`. That is the
+    /// whole of the fix. Dispatching the 4-velocity on admissibility while dispatching the motion
+    /// on the raw selection is what drew a Static observer at fixed r inside the ergosphere while
+    /// every quantity derived from his u - the telemetry dr/dt, the tetrad his pulses were emitted
+    /// into, the frame his receptions were measured in - belonged to a worldline falling inward at
+    /// 0.73c. His pulses, isotropic in that falling frame, then ran away from the point he was
+    /// drawn at until he stood outside his own past light cones, which no timelike worldline can
+    /// ever do.
+    pub fn effective_mode(&self, metric: &KerrSchild) -> ObserverMode {
+        if Self::mode_admissible_at(self.mode, metric, self.r) {
+            self.mode
+        } else {
+            ObserverMode::FreeFall
+        }
+    }
+
+    /// u^mu = (1, 0, 0) / sqrt(-g_tt), the normalised time-translation Killing vector, at every
+    /// radius where d/dt is timelike, and None inside the equatorial static limit r = 2M where it
+    /// is not and no static observer exists.
+    fn static_four_velocity(metric: &KerrSchild, r: f64) -> Option<[f64; 3]> {
+        let g_tt = metric.metric_components(r)[0][0];
+        (g_tt < 0.0).then(|| [1.0 / (-g_tt).sqrt(), 0.0, 0.0])
+    }
+
     /// Contravariant 4-velocity u^mu = (u^t, u^r, u^phi) at the observer's current event,
     /// normalised so that g_{mu nu} u^mu u^nu = -1.
     ///
-    /// If the selected mode cannot exist at the current radius (see `mode_admissible`) the
-    /// free-fall 4-velocity is returned instead, so the display never shows a spacelike "observer".
+    /// It is the 4-velocity of the worldline the observer is *on*, not of the one they asked for.
+    /// The dispatch is on `effective_mode`, so a Static or ZAMO selection at a radius where that
+    /// worldline cannot exist reports the free-fall value - and `advance` moves the observer along
+    /// free fall to match. The two are one object; nothing here may describe a motion the stepper
+    /// does not take.
     ///
     /// A released free-faller reports the *integrated* 4-velocity carried by its geodesic state,
     /// so every derived quantity (`velocity_c`, `proper_velocity_c`, the signal pulses, the
     /// rest-frame view) follows the worldline actually being drawn, outgoing phases and turning
-    /// points included. Before release the worldline has not started, so the closed-form value at the
-    /// hover radius is used instead.
+    /// points included. It has to be standing on the observer's current event to be read, because
+    /// that is the only state in which it describes them: a mode that holds r fixed leaves it
+    /// parked at whatever event it was last integrated to, and the closed-form congruence value at
+    /// the current radius is the honest answer until the next step re-seeds it there.
     ///
-    /// That last case is a known inconsistency, left standing here on purpose. An observer waiting
-    /// for release is not falling: `step` holds them at fixed (r, phi) and ticks their clock at the
-    /// static rate sqrt(-g_tt), so the worldline they are on is the static one and the free-fall
-    /// value returned here is not its 4-velocity. Everything that reads this function - the
-    /// telemetry, the drawn cones, the Distance-mode step estimate - has always read it that way.
-    /// The signal code cannot afford to: a pulse has to be emitted isotropically in the frame of
-    /// the worldline the emitter is actually on, and an arrival has to be measured in it. So
-    /// `wavefront::signalling_four_velocity` corrects for it locally, returning the normalised
-    /// time-translation Killing vector for a hovering observer where one exists.
+    /// An observer waiting for release is on neither. `hover` holds them at fixed (r, phi) and
+    /// ticks their clock at dtau = sqrt(-g_tt) dt, so the worldline they are on while they wait is
+    /// an integral curve of the time-translation Killing vector, and that is what is reported:
+    /// `static_four_velocity` at the hover radius, which is the frame their clock, their pulses and
+    /// their telemetry all belong to. Waiting at or inside the static limit is the one case with no
+    /// worldline under it at all - no rocket can hold phi fixed there, `hover` does not advance the
+    /// clock, and `wavefront::emit_if_due` keeps the observer silent - and the closed-form free-fall
+    /// value at that radius is reported instead, which is the worldline they join the instant they
+    /// are released.
     pub fn four_velocity(&self, metric: &KerrSchild) -> [f64; 3] {
-        if self.mode == ObserverMode::FreeFall && self.is_active {
+        if !self.is_active {
+            if let Some(u) = Self::static_four_velocity(metric, self.r) {
+                return u;
+            }
+        } else if self.effective_mode(metric) == ObserverMode::FreeFall
+            && self.geodesic_stands_on_current_event()
+        {
             if let Some(geo) = self.geodesic {
                 return geo.u;
             }
@@ -394,13 +437,23 @@ impl Observer {
     /// free fall stays on the closed-form *ingoing* solution here rather than on the integrated
     /// state: `four_acceleration` needs u^mu(r), a function of the radius alone, and the
     /// integrated u is a function of the worldline parameter instead.
+    ///
+    /// Two radii are in play and they are not the same one. The *family* is chosen by
+    /// `effective_mode`, which is a statement about the observer's current event, because the
+    /// family differentiated here has to be the family `advance` is stepping along; the closed
+    /// form is then evaluated at the radius asked for, and each mode arm still guards on
+    /// admissibility *there*, because that is where its square roots have to be real. The two can
+    /// only disagree when the finite-difference stencil straddles a boundary - h ~ 1e-5 r, so
+    /// nowhere but within a whisker of r = 2M or r = r+ - and the fixed-r modes have u^r = 0
+    /// exactly, so `four_acceleration` takes no finite difference for them at all and the stencil
+    /// never gets built. Where the guard does fire, on a direct call at a radius the mode cannot
+    /// exist at, free fall is the honest answer: there is no such observer there to quote.
     fn four_velocity_at(&self, metric: &KerrSchild, r: f64) -> [f64; 3] {
         let r = r.max(1e-4);
-        match self.mode {
+        match self.effective_mode(metric) {
             ObserverMode::Static if Self::mode_admissible_at(ObserverMode::Static, metric, r) => {
                 // u^mu = (1, 0, 0) / sqrt(-g_tt): the normalised time-translation Killing vector.
-                let g_tt = metric.metric_components(r)[0][0];
-                [1.0 / (-g_tt).sqrt(), 0.0, 0.0]
+                Self::static_four_velocity(metric, r).expect("admissible above the static limit")
             }
             ObserverMode::Zamo if Self::mode_admissible_at(ObserverMode::Zamo, metric, r) => {
                 // u^mu = gamma (1, 0, omega) with omega = -g_tphi/g_phiphi (so u_phi = 0) and
@@ -423,7 +476,10 @@ impl Observer {
                 // free fall exactly, and any beta != 0 is a rocket with real proper acceleration.
                 Self::raindrop_tetrad(metric, r).boost(self.beta_r, self.beta_phi)
             }
-            // An inadmissible Static / Zamo selection lands here and rides free fall instead.
+            // Free fall, whether it was selected or whether it is what an inadmissible Static /
+            // ZAMO selection has been reduced to by `effective_mode`, plus the boundary case
+            // above where the closed form of an admissible fixed-r mode runs out at the radius
+            // asked for.
             _ => self.free_fall_four_velocity(metric, r),
         }
     }
@@ -520,13 +576,58 @@ impl Observer {
         // clock and keep it there for the rest of the run (0.03 M of it at a release of t = 4.03
         // stepped at 0.1). The other modes have no separate clock to start - they were already
         // moving in t while they waited - so they cover the full step.
-        let releasing = !self.is_active && self.mode == ObserverMode::FreeFall;
+        let releasing = !self.is_active && self.effective_mode(metric) == ObserverMode::FreeFall;
         self.is_active = true;
         let interval = if releasing { (current_sim_time - self.release_t).max(0.0) } else { dt };
         self.advance(metric, interval);
     }
 
-    /// One released step, in whatever mode the observer is in.
+    /// Is the geodesic state standing on the observer's current event?
+    ///
+    /// The geodesic *is* the free-fall step, so before one is taken the two have to be the same
+    /// event or the fall starts somewhere the observer is not. They part company whenever the
+    /// observer has been moved by something else: a Static or ZAMO step, a drag, or a mode the
+    /// user has just switched away from. The one case where they legitimately differ is the wait
+    /// before release, where `hover` parks the geodesic at t = release_t - the event the fall
+    /// starts at - while the observer's own clock tracks the simulation below it. Hence the `max`.
+    fn geodesic_stands_on_current_event(&self) -> bool {
+        match self.geodesic {
+            None => false,
+            Some(geo) => {
+                let t_ref = self.t.max(self.release_t);
+                (geo.t - t_ref).abs() <= 1e-9 * (1.0 + t_ref.abs())
+                    && (geo.r - self.r).abs() <= 1e-9 * (1.0 + self.r.abs())
+            }
+        }
+    }
+
+    /// Put a geodesic under the observer at the event they now stand on, unless the one they carry
+    /// is already there.
+    ///
+    /// This is what lets an impossible Static or ZAMO selection fall: the mode that was holding r
+    /// fixed leaves no geodesic behind it, so one is seeded here with the observer's own conserved
+    /// (E, L) on the ingoing root, exactly as `release_from_drag` re-seeds when the user lets go of
+    /// the marker, and proper time carries on from where the observer's clock stands. It is also
+    /// what stops a mode switch from teleporting anybody: the new worldline starts at the current
+    /// event rather than wherever the old geodesic state happened to be left.
+    fn seed_geodesic_at_current_event(&mut self, metric: &KerrSchild) {
+        if self.geodesic_stands_on_current_event() {
+            return;
+        }
+        let (energy, l_ang) = self
+            .geodesic
+            .map(|geo| (geo.energy, geo.l_ang))
+            .unwrap_or((1.0, 0.0));
+        let mut geo = GeodesicState::new_infall(metric, self.t, self.r, energy, l_ang);
+        geo.phi = self.phi;
+        geo.tau = self.tau;
+        self.geodesic = Some(geo);
+    }
+
+    /// One released step, along the worldline the observer is actually on - `effective_mode`, not
+    /// the raw selection. A Static or ZAMO choice at a radius where that worldline does not exist
+    /// therefore falls freely in *position* as well as in velocity, which is the whole point: the
+    /// 4-velocity every other part of the app reads is the 4-velocity of the curve stepped here.
     ///
     /// It is a separate function because `rewind_to` finishes on it: after dropping the recorded
     /// events past the target the observer is put back on the last one it kept and then carried
@@ -535,8 +636,9 @@ impl Observer {
     /// Anything the forward step refuses to do - moving a worldline that has reached the ring, for
     /// one - the landing refuses in the same way, without a second statement of the rule.
     fn advance(&mut self, metric: &KerrSchild, dt: f64) {
-        match self.mode {
+        match self.effective_mode(metric) {
             ObserverMode::FreeFall => {
+                self.seed_geodesic_at_current_event(metric);
                 if let Some(ref mut geo) = self.geodesic {
                     if geo.stalled {
                         // Frozen on r-: the worldline asymptotes to a surface of constant r as
@@ -560,7 +662,8 @@ impl Observer {
                 self.t += dt;
             }
             ObserverMode::Static | ObserverMode::Zamo => {
-                // Fixed r: advance along u^mu. dphi/dt = u^phi/u^t (zero for Static, the
+                // Fixed r, and reached only where that worldline exists, so `four_velocity` is
+                // the fixed-r one: advance along u^mu. dphi/dt = u^phi/u^t (zero for Static, the
                 // frame-dragging rate omega for the ZAMO) and dtau/dt = 1/u^t.
                 let u = self.four_velocity(metric);
                 let ut = u[0].max(1e-9);
@@ -597,7 +700,9 @@ impl Observer {
     ///
     /// The fixed-r modes never record anything - `advance` moves them analytically at constant
     /// u^mu - so they are wound back analytically too, by subtracting exactly what a forward step
-    /// of the same interval adds.
+    /// of the same interval adds. Which arm applies is decided by `effective_mode`, the same
+    /// question `advance` asks, so an impossible Static or ZAMO selection is wound back along the
+    /// free fall it was actually stepped along, off the trail its forward steps recorded.
     pub fn rewind_to(&mut self, metric: &KerrSchild, t_target: f64) {
         if t_target >= self.t {
             return;
@@ -607,7 +712,7 @@ impl Observer {
             return;
         }
         self.is_active = true;
-        match self.mode {
+        match self.effective_mode(metric) {
             ObserverMode::FreeFall => {
                 let keep = self
                     .trail
@@ -1689,6 +1794,229 @@ mod tests {
     }
 
     #[test]
+    fn test_an_impossible_fixed_r_selection_falls_in_position_as_well_as_in_velocity() {
+        // The bug this test exists for: `four_velocity_at` fell back to free fall where a Static
+        // or ZAMO selection was impossible, while `advance` went on running the fixed-r arm from
+        // that borrowed 4-velocity. The observer was then drawn standing still at a radius nothing
+        // can stand still at, while his telemetry, his emission tetrad and the frame his arrivals
+        // were measured in all belonged to a worldline falling inward at 0.73c.
+        //
+        // At a = 0.90 the outer horizon is r+ = 1.436M and the equatorial static limit is 2M, so
+        // r = 1.9M is inside the ergosphere (no static observer, but a perfectly good ZAMO) and
+        // r = 1.2M is inside r+ (no ZAMO either). Both selections must now fall, and fall along
+        // exactly the geodesic a Free Fall selection would have followed from the same event.
+        let metric = KerrSchild::new(1.0, 0.90);
+        assert!(metric.outer_horizon() < 1.9 && 1.9 < 2.0 * metric.m);
+        assert!(1.2 < metric.outer_horizon());
+
+        for &(mode, r0) in &[(ObserverMode::Static, 1.9), (ObserverMode::Zamo, 1.2)] {
+            let mut obs = observer_at(&metric, mode, r0);
+            let mut reference = observer_at(&metric, ObserverMode::FreeFall, r0);
+            assert!(!obs.mode_admissible(&metric), "{mode:?} must be impossible at r = {r0}");
+            assert_eq!(obs.effective_mode(&metric), ObserverMode::FreeFall);
+
+            let dt = 0.01;
+            let mut t = 0.0;
+            let mut steps_that_moved = 0;
+            while t < 2.0 - 1e-12 {
+                let r_before = obs.r;
+                let tau_before = obs.tau;
+                t += dt;
+                obs.step(&metric, t, dt);
+                reference.step(&metric, t, dt);
+
+                // The selection is kept: it is the user's standing request, and it would resume by
+                // itself if the observer ever got back out to a radius where it exists.
+                assert_eq!(obs.mode, mode, "the selection must survive the fallback");
+
+                if obs.has_ended() {
+                    break;
+                }
+                steps_that_moved += 1;
+                assert!(obs.r < r_before, "{mode:?} at r0 = {r0}: r = {} did not fall", obs.r);
+
+                let geo = obs.geodesic.expect("the fallback must be riding a geodesic");
+                let u = obs.four_velocity(&metric);
+                assert_eq!(u, geo.u, "{mode:?} at r0 = {r0}: telemetry is off the worldline");
+                let uu = metric.norm(obs.r, &u);
+                assert!((uu + 1.0).abs() < 1e-8, "{mode:?} at r0 = {r0}: u.u = {uu}");
+                assert_eq!(obs.tau, geo.tau, "{mode:?}: the clock must be the geodesic's");
+                assert!(obs.tau > tau_before, "{mode:?}: and it must run");
+
+                // Same event, same equation, same integrator as a Free Fall selection would give.
+                assert_eq!(
+                    (obs.t, obs.r, obs.phi, obs.tau),
+                    (reference.t, reference.r, reference.phi, reference.tau),
+                    "{mode:?} at r0 = {r0}: the fallback worldline is not the free-fall one"
+                );
+            }
+            assert!(steps_that_moved > 20, "{mode:?} at r0 = {r0}: nothing was integrated");
+            println!(
+                "{mode:?} refused at r0 = {r0}: fell to r = {:.4} in {steps_that_moved} steps, \
+                 tau = {:.4}",
+                obs.r, obs.tau
+            );
+        }
+    }
+
+    #[test]
+    fn test_every_mode_steps_along_the_four_velocity_it_reports() {
+        // The invariant that would have caught the bug, and the one that keeps it caught: over one
+        // step of dt the observer's (r, phi) must change by (u^r/u^t, u^phi/u^t) dt to first order,
+        // with u the 4-velocity `four_velocity` reported at the *start* of the step. It is the
+        // statement that the drawn worldline and the quoted 4-velocity are one object, which is
+        // what every derived quantity - the emission tetrad, the reception frame, the telemetry -
+        // silently assumes.
+        //
+        // The residual is O(dt^2) by construction, since the exact change is
+        // (u^r/u^t) dt + O(dt^2) whatever the mode; with dt = 1e-4 the measured worst case over
+        // this grid is 2.41e-8 in r and 2.39e-8 in phi, both for free fall at r = 0.3M where u
+        // varies on the scale of r itself, i.e. 2.4 dt^2. The tolerance below is 50 dt^2, a factor
+        // of 20 of headroom over that and still three orders of magnitude tighter than the failure
+        // this test is here to catch: a Static selection at r = 1.9M, held at fixed r while
+        // reporting dr/dt = -0.73c, misses by 7.3e-5 = 7300 dt^2.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let dt = 1e-4;
+        let radii = [0.3, 0.5, 0.8, 1.0, 1.2, 1.436, 1.5, 1.9, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0];
+        let mut worst = (0.0f64, 0.0f64, ObserverMode::FreeFall, 0.0f64);
+
+        for &mode in &[
+            ObserverMode::FreeFall,
+            ObserverMode::Static,
+            ObserverMode::Zamo,
+            ObserverMode::ManualDrag,
+        ] {
+            for &r0 in radii.iter() {
+                let mut obs = observer_at(&metric, mode, r0);
+                let u = obs.four_velocity(&metric);
+                let ut = u[0];
+                assert!(ut > 0.0, "{mode:?} at r = {r0}: u^t = {ut} does not move forward in t");
+                assert!(
+                    (metric.norm(r0, &u) + 1.0).abs() < 1e-8,
+                    "{mode:?} at r = {r0}: u.u = {}",
+                    metric.norm(r0, &u)
+                );
+
+                obs.step(&metric, dt, dt);
+
+                if mode == ObserverMode::ManualDrag {
+                    // The one mode whose worldline is an *input*. Its position is the user's mouse,
+                    // not an integration, so there is no step for the invariant to be about: beta
+                    // states a 4-velocity at the event under the cursor, and `advance` carries the
+                    // clock and nothing else. The consistency that can be demanded of it is that
+                    // the position does not drift out from under the user's hand.
+                    assert_eq!(
+                        (obs.r, obs.phi),
+                        (r0, 0.0),
+                        "a dragged observer is positioned, not stepped"
+                    );
+                    continue;
+                }
+
+                // `GeodesicState` folds phi into [0, 2 pi), so the step's change in azimuth is the
+                // shortest way round from where it started, not the raw difference.
+                let two_pi = 2.0 * std::f64::consts::PI;
+                let d_phi = (obs.phi - 0.0 + std::f64::consts::PI).rem_euclid(two_pi)
+                    - std::f64::consts::PI;
+                let res_r = (obs.r - r0 - (u[1] / ut) * dt).abs();
+                let res_phi = (d_phi - (u[2] / ut) * dt).abs();
+                assert!(
+                    res_r < 50.0 * dt * dt && res_phi < 50.0 * dt * dt,
+                    "{mode:?} at r = {r0}: stepped to (dr, dphi) = ({}, {}) but reported \
+                     ({}, {}) dt - residuals ({res_r:.3e}, {res_phi:.3e})",
+                    obs.r - r0,
+                    obs.phi,
+                    u[1] / ut,
+                    u[2] / ut
+                );
+                if res_r.max(res_phi) > worst.0.max(worst.1) {
+                    worst = (res_r, res_phi, mode, r0);
+                }
+            }
+        }
+        println!(
+            "worst (r, phi) residual over the grid at dt = {dt:.0e}: \
+             ({:.3e}, {:.3e}) for {:?} at r = {} - dt^2 = {:.0e}",
+            worst.0, worst.1, worst.2, worst.3, dt * dt
+        );
+    }
+
+    #[test]
+    fn test_a_hovering_observer_reports_the_clock_it_is_actually_keeping() {
+        // Before release the observer is held at fixed (r, phi) with dtau = sqrt(-g_tt) dt, so the
+        // worldline under them is the static one and that is the 4-velocity they must report. This
+        // used to report the free-fall value at the hover radius instead - the second, older
+        // instance of the same inconsistency - and `wavefront::signalling_four_velocity` corrected
+        // for it locally so that the pulses at least went out into the right frame.
+        let metric = KerrSchild::new(1.0, 0.65);
+        let params = WorldlineParams::default();
+        let mut bob = Observer::new_with_phi(&metric, "Bob", 0.0, 4.5, 8.0, 0.0, params);
+        bob.step(&metric, 0.5, 0.5);
+        assert!(!bob.is_active && bob.tau > 0.0, "he is hovering, and his clock runs");
+
+        let g_tt = metric.metric_components(4.5)[0][0];
+        let u = bob.four_velocity(&metric);
+        assert_eq!(u, [1.0 / (-g_tt).sqrt(), 0.0, 0.0], "the static 4-velocity: {u:?}");
+        assert!((metric.norm(4.5, &u) + 1.0).abs() < 1e-12, "u.u = {}", metric.norm(4.5, &u));
+        // And the clock the hover keeps is that worldline's: dtau/dt = 1/u^t.
+        assert!(
+            (bob.tau - 0.5 / u[0]).abs() < 1e-12,
+            "tau = {} vs dt / u^t = {}",
+            bob.tau,
+            0.5 / u[0]
+        );
+        // Which makes him a rocket, not a free-faller, and the telemetry now says so.
+        assert!(!bob.is_free_falling(&metric), "hovering costs thrust");
+        assert!(bob.velocity_c(&metric) == 0.0, "and he is not moving in r while he waits");
+
+        // Once he is released the report follows the worldline he is then on.
+        let mut t = 8.0;
+        while t < 8.5 {
+            t += 0.05;
+            bob.step(&metric, t, 0.05);
+        }
+        assert!(bob.is_active);
+        assert_eq!(bob.four_velocity(&metric), bob.geodesic.unwrap().u);
+        assert!(bob.velocity_c(&metric) < 0.0, "and he is falling");
+    }
+
+    #[test]
+    fn test_a_mode_switch_changes_the_worldline_and_not_the_event() {
+        // Switching mode is a statement about the future. The fixed-r modes leave the geodesic
+        // state parked wherever it was last used, so resuming free fall from it would have
+        // teleported the observer back to that event; `seed_geodesic_at_current_event` puts a
+        // fresh geodesic under him where he now stands, with his own conserved (E, L).
+        let metric = KerrSchild::new(1.0, 0.65);
+        let mut bob = observer_at(&metric, ObserverMode::Static, 5.0);
+        let mut t = 0.0;
+        while t < 6.0 - 1e-12 {
+            t += 0.1;
+            bob.step(&metric, t, 0.1);
+        }
+        assert!((bob.r - 5.0).abs() < 1e-12 && (bob.t - 6.0).abs() < 1e-9, "he hovered");
+
+        let event = (bob.t, bob.r, bob.phi, bob.tau);
+        bob.mode = ObserverMode::FreeFall;
+        assert_eq!(
+            (bob.t, bob.r, bob.phi, bob.tau),
+            event,
+            "the switch alone must not move him"
+        );
+        bob.step(&metric, 6.1, 0.1);
+        assert!((bob.t - 6.1).abs() < 1e-9, "he stays on the clock: t = {}", bob.t);
+        assert!(bob.r < 5.0 && bob.r > 4.8, "and falls from r = 5, not from the seed: {}", bob.r);
+        assert!(bob.tau > event.3, "his clock runs on rather than restarting: {}", bob.tau);
+
+        // And back again: a radius where Static exists resumes the fixed-r worldline from the
+        // event the fall has reached, with no jump.
+        let landed = (bob.t, bob.r, bob.phi);
+        bob.mode = ObserverMode::Static;
+        bob.step(&metric, 6.2, 0.1);
+        assert!((bob.r - landed.1).abs() < 1e-12, "the hover resumes at r = {}", bob.r);
+        assert!((bob.phi - landed.2).abs() < 1e-12, "and at the azimuth he had reached");
+    }
+
+    #[test]
     fn test_is_free_falling_separates_geodesics_from_hovering() {
         // The telemetry label "(Free Fall)" is driven by this predicate, so it must not be fooled
         // by the numerical residual of a geodesic, nor call a hovering rocket weightless.
@@ -1709,3 +2037,4 @@ mod tests {
         }
     }
 }
+

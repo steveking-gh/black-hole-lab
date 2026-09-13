@@ -1558,26 +1558,20 @@ fn is_static_hover(metric: &KerrSchild, observer: &Observer) -> bool {
     !observer.is_active && metric.metric_components(observer.r)[0][0] < 0.0
 }
 
-/// The 4-velocity to quote an observer's signals in, at emission and at reception alike.
+/// The 4-velocity to quote an observer's signals in, at emission and at reception alike: the
+/// 4-velocity of the worldline the observer is on, and nothing else.
 ///
-/// A released observer carries their own, whatever worldline they are on. A hovering one is the
-/// static observer of `is_static_hover`, and the frame that matches the clock they are keeping is
-/// the normalised time-translation Killing vector u = (1, 0, 0) / sqrt(-g_tt). Where no static
-/// observer exists the free-fall value is used instead, which is also what a released observer
-/// gets.
-///
-/// This is a local correction, and deliberately local. `Observer::four_velocity` reports the
-/// *free-fall* 4-velocity for an observer who is in fact hovering, which is a latent inconsistency
-/// in that function: the telemetry, the drawn cones and the Distance-mode step estimate all read
-/// it, and none of them is being changed here. The signal code, which has to put a real tetrad at a
-/// real emission event and a real 4-velocity at a real reception event, corrects for it through
-/// this one function, so the frame a pulse is emitted into and the frame an arrival is measured in
-/// are both the frame of the worldline the observer is actually on.
+/// It is `Observer::four_velocity`, and this function exists only to say why the signal code may
+/// use it unqualified. A pulse has to be emitted isotropically in the frame of the worldline the
+/// emitter is actually travelling on, and an arrival has to be measured in the frame of the one the
+/// receiver is actually travelling on; anything less than that puts a real tetrad at an event no
+/// worldline passes through. `Observer::four_velocity` now guarantees it in every case - the
+/// released faller reports the geodesic being integrated, the hoverer of `is_static_hover` reports
+/// the static frame its clock is keeping, and an impossible Static or ZAMO selection reports the
+/// free fall it is being stepped along - so the local correction this used to apply for hovering
+/// emitters is gone, and with it the last place where the drawn worldline and the quoted frame
+/// could disagree.
 fn signalling_four_velocity(metric: &KerrSchild, observer: &Observer) -> [f64; 3] {
-    if is_static_hover(metric, observer) {
-        let g_tt = metric.metric_components(observer.r)[0][0];
-        return [1.0 / (-g_tt).sqrt(), 0.0, 0.0];
-    }
     observer.four_velocity(metric)
 }
 
@@ -1660,10 +1654,9 @@ impl SignalField {
             return;
         }
 
-        // The frame is built on `signalling_four_velocity` rather than on
-        // `Observer::four_velocity`, which would hand a hovering observer the free-fall frame of
-        // the radius they are standing still at. Light is isotropic in the frame of the worldline
-        // the emitter is actually on, and while they hover that is the static frame.
+        // Light is isotropic in the frame of the worldline the emitter is actually on: their own
+        // once they fall, the static frame while they hover. That is what
+        // `signalling_four_velocity` returns, for every mode and at every radius.
         let u = signalling_four_velocity(metric, emitter);
         let tetrad = Tetrad::from_four_velocity(metric, emitter.r, &u);
         let two_pi = 2.0 * std::f64::consts::PI;
@@ -4200,9 +4193,8 @@ mod tests {
             "at the event she is hovering at: {:?}",
             (hovered.emitted_t, hovered.emitted_r)
         );
-        // The frame is the static one, not the free-fall frame `Observer::four_velocity` reports
-        // for her: light is isotropic in the frame of the worldline she is on. The two differ, and
-        // the pulse must be built on the one she is actually keeping time by.
+        // The frame is the static one: light is isotropic in the frame of the worldline she is on,
+        // and while she waits that is the integral curve of d/dt her clock is keeping time by.
         let u_static = signalling_four_velocity(&metric, &waiting);
         let g_tt = metric.metric_components(4.5)[0][0];
         assert!(
@@ -4211,9 +4203,10 @@ mod tests {
                 && u_static[2] == 0.0,
             "a hoverer signals in the static frame: {u_static:?}"
         );
-        assert!(
-            (u_static[1] - waiting.four_velocity(&metric)[1]).abs() > 0.1,
-            "and that is not the free-fall frame the observer reports"
+        assert_eq!(
+            u_static,
+            waiting.four_velocity(&metric),
+            "and that is the frame the observer reports too: there is no correction left here"
         );
         // Inside the static limit there is no such worldline, and a waiting observer is silent.
         let mut deep = Observer::new_with_phi(&metric, "Alice", 0.0, 1.5, 3.0, 0.0, params);
@@ -4401,9 +4394,7 @@ mod tests {
         // The app's own delay, so the emitter here is the *static* Bob of the first pulse he sends,
         // hovering at r = 4.5M and still 8 M of coordinate time from release. Both routes below
         // therefore have to use the static 4-velocity, which is what `signalling_four_velocity`
-        // returns for him and what the emission tetrad was built on; `Observer::four_velocity`
-        // would hand back the free-fall value at that radius instead and the two routes would then
-        // be answering different questions.
+        // returns for him and what the emission tetrad was built on.
         let mut bob = Observer::new_with_phi(&metric, "Bob", 0.0, 4.5, 8.0, 0.0, params);
         let mut field = SignalField::default();
         let dt = 0.005;
