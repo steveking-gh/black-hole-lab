@@ -529,29 +529,56 @@ impl SpatialCanvas {
 /// across the annulus and through the disk inside the ring, which drew as spikes into the
 /// singularity that no ray ever took.
 ///
-/// So each segment is drawn as the curve linear in (r, phi) between its two ends, with the azimuth
-/// difference folded into [-pi, pi] and the span cut into pieces no wider than this before each is
-/// embedded. That is the same interpolation along the same segment that `Pulse::scan` uses to
-/// decide where the front crosses a receiver, so what is drawn and what is detected are one thing.
-/// Two frozen rays sitting on r- are now joined by an arc of the r- circle rather than by a chord
-/// dipping inside it.
+/// So each segment is drawn as the curve linear in (r, phi) between its two ends, over the *raw*
+/// azimuth difference `to.1 - from.1`, cut into pieces no wider than this before each is embedded.
+/// That is the same interpolation along the same segment that `Pulse::scan` uses to decide where
+/// the front crosses a receiver, so what is drawn and what is detected are one thing. Two frozen
+/// rays sitting on r- are now joined by an arc of the r- circle rather than by a chord dipping
+/// inside it.
 const MAX_ARC_STEP: f64 = 0.05;
+
+/// Most pieces one segment of a front may be cut into, however far apart in azimuth its two ends
+/// have wound.
+///
+/// Nothing in the physics bounds that separation. A ray let go on very nearly the critical impact
+/// parameter hangs on one of the unstable circular photon orbits outside r+ (at a = 0.90 the
+/// equatorial ones are at r = 1.56 prograde and r = 3.89 retrograde) for as long as it takes to
+/// fall off them, going round and round while the neighbour it was emitted next to escapes or
+/// falls in; the difference between the two grows for as long as that lasts, and all of it is
+/// front. `test_a_wound_front_of_a_real_pulse_is_drawn_over_its_raw_azimuth_difference` measures
+/// 3.7 turns in one segment of one ordinary pulse within 60 M, and the number has no ceiling in
+/// it. The cap is therefore not a physical claim and not a cost measurement; it is the guarantee
+/// that no state of the field can turn one segment of one pulse into an unbounded amount of work
+/// in a frame that has to be drawn now. It sits far above anything a run has been seen to reach -
+/// 2000 pieces at `MAX_ARC_STEP` is 100 radians, sixteen turns of the hole - and a segment that
+/// did hit it would still be drawn over the whole of its span, in pieces coarser than
+/// `MAX_ARC_STEP`, rather than truncated.
+const MAX_ARC_PIECES: usize = 2000;
 
 /// The drawn polyline of one segment of a front: the curve linear in (r, phi) from one ray to the
 /// next, embedded point by point. See `MAX_ARC_STEP`.
+///
+/// The azimuth difference is taken raw and is never folded into [-pi, pi], and that is exact rather
+/// than a choice. Every ray of a pulse leaves the emission event at the emitter's own azimuth and
+/// carries phi as a continuously integrated coordinate that is never reduced mod 2 pi (see
+/// `NullRay::phi`), so the difference between two neighbouring rays is a continuous function of
+/// time starting at zero: the integrated phi already *is* the unwrapped coordinate, and the raw
+/// difference already is the physical winding between the pair. Folding agrees with it only while
+/// |d_phi| < pi, which is exactly what a front that has wound around the hole violates: past half
+/// a turn the fold flips the sign, and the arc that ran the long way round is redrawn the short
+/// way, through the near side of the picture - spokes popping into existence across the drawing as
+/// the fronts wind. Unfolded, a segment several turns long is drawn as several turns of arc, which
+/// is what that piece of the front is. Frame dragging inside r+ pulls neighbouring rays apart by
+/// most of a radian, which is what `MAX_ARC_STEP` is for; what takes a pair past half a turn is a
+/// ray hung on a circular photon orbit outside r+, which is what `MAX_ARC_PIECES` is for.
 fn segment_arc<F: Fn((f64, f64)) -> Pos2>(
     metric: &KerrSchild,
     from: (f64, f64),
     to: (f64, f64),
     to_screen: &F,
 ) -> Vec<Pos2> {
-    let two_pi = 2.0 * std::f64::consts::PI;
-    // The same fold `Pulse::scan` applies: a segment spans the short way round, never the long one.
-    let d_phi = {
-        let raw = to.1 - from.1;
-        raw - two_pi * (raw / two_pi).round()
-    };
-    let pieces = (d_phi.abs() / MAX_ARC_STEP).ceil().max(1.0) as usize;
+    let d_phi = to.1 - from.1;
+    let pieces = (d_phi.abs() / MAX_ARC_STEP).ceil().max(1.0).min(MAX_ARC_PIECES as f64) as usize;
     (0..=pieces)
         .map(|k| {
             let s = (k as f64) / (pieces as f64);
@@ -755,23 +782,6 @@ mod tests {
         let short = segment_arc(&metric, (rm, 0.0), (rm, 0.04), &to_screen);
         assert_eq!(short.len(), 2, "a short segment is still a single line");
 
-        // The azimuth difference is folded into [-pi, pi], exactly as `Pulse::scan` folds it, so a
-        // segment always spans the short way round however the two ends' azimuths are unwrapped.
-        let two_pi = 2.0 * std::f64::consts::PI;
-        let folded = segment_arc(&metric, (rm, 0.3), (rm, 1.5 - two_pi), &to_screen);
-        assert!(
-            folded.len().abs_diff(arc.len()) <= 1,
-            "the same span, cut into {} pieces rather than {}",
-            folded.len() - 1,
-            arc.len() - 1
-        );
-        for (a, b) in [(folded[0], arc[0]), (folded[folded.len() - 1], arc[arc.len() - 1])] {
-            assert!((a.x - b.x).abs() < 1e-4 && (a.y - b.y).abs() < 1e-4, "{a:?} vs {b:?}");
-        }
-        for point in folded.iter() {
-            assert!((embedded_radius(*point) - circle).abs() < 1e-6);
-        }
-
         // And a segment deep inside r-, where the two rays are far apart in azimuth and a chord
         // would cut through the disk inside the ring: every drawn point stays outside the ring.
         let ring = metric.a;
@@ -796,5 +806,195 @@ mod tests {
         );
         assert!(closest > ring, "the drawn front must stay outside the ring: {closest}");
         assert!(chord_closest < ring, "whereas the chord does not: {chord_closest}");
+    }
+
+    /// The azimuth of a chart point: x + i y = (r + i a) e^{i phi}, so the argument is phi plus
+    /// atan(a/r), and at fixed r a difference of arguments is a difference of phi.
+    fn chart_azimuth((x, y): (f64, f64)) -> f64 {
+        y.atan2(x)
+    }
+
+    /// The total azimuth a polyline of chart points sweeps, signed, counting the turns rather than
+    /// folding them away: each piece is at most `MAX_ARC_STEP`, so the piece's own difference is
+    /// unambiguous, and the sum of the pieces telescopes to the whole swept angle.
+    fn swept_azimuth(points: &[(f64, f64)]) -> f64 {
+        let two_pi = 2.0 * std::f64::consts::PI;
+        points
+            .windows(2)
+            .map(|pair| {
+                let d = chart_azimuth(pair[1]) - chart_azimuth(pair[0]);
+                d - two_pi * (d / two_pi).round()
+            })
+            .sum()
+    }
+
+    #[test]
+    fn test_a_segment_that_has_wound_is_drawn_the_long_way_round() {
+        // Two neighbouring rays of one front, at the same radius, whose integrated azimuths differ
+        // by 2 pi + 0.3: one of them has lapped the other round the hole. Both left the emission
+        // event at the emitter's azimuth and both carry phi as a continuously integrated
+        // coordinate, so that difference is not a representative of an angle - it is the winding
+        // between the pair, and the piece of front between them is one whole turn plus 0.3 rad.
+        // All of it has to be drawn.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let rm = metric.inner_horizon();
+        let two_pi = 2.0 * std::f64::consts::PI;
+        let span = two_pi + 0.3;
+
+        // The chart points `segment_arc` embeds, in full f64, recorded on the way through the
+        // projection: what is measured here is the curve the function generates, not the f32
+        // screen coordinates it is finally rounded to.
+        let chart = std::cell::RefCell::new(Vec::new());
+        let to_screen = |(x, y): (f64, f64)| {
+            chart.borrow_mut().push((x, y));
+            Pos2::new(x as f32, y as f32)
+        };
+
+        let arc = segment_arc(&metric, (rm, 0.3), (rm, 0.3 + span), &to_screen);
+        let points = chart.into_inner();
+        assert_eq!(points.len(), arc.len(), "one chart point embedded per drawn point");
+
+        // 2 pi + 0.3 = 6.583 rad in pieces of at most `MAX_ARC_STEP` = 0.05, so 132 of them.
+        let pieces = (span / MAX_ARC_STEP).ceil() as usize;
+        assert_eq!(pieces, 132);
+        assert_eq!(
+            arc.len(),
+            pieces + 1,
+            "a segment of {span:.4} rad is {pieces} pieces of at most {MAX_ARC_STEP} rad"
+        );
+
+        let swept = swept_azimuth(&points);
+        println!(
+            "a segment whose two rays differ by 2 pi + 0.3 = {span:.6} rad is drawn as {} pieces \
+             sweeping {swept:.15} rad: one whole turn of the hole plus 0.3",
+            arc.len() - 1
+        );
+        assert!(
+            (swept - span).abs() < 1e-9,
+            "the drawn arc must sweep the raw difference {span}, not {swept}. Folding it into \
+             [-pi, pi] gives 2 pi + 0.3 - 2 pi = 0.3 - the same azimuth reached the other way \
+             round the hole, which is -(2 pi - 0.3) of travel - and would have drawn 7 pieces of \
+             a short arc across the near side of the picture instead of the {} pieces of the turn \
+             the front actually made",
+            arc.len() - 1
+        );
+
+        // Every piece is still on the r- circle and still no wider than `MAX_ARC_STEP`: winding
+        // changes how far round the arc goes, not what it is drawn along.
+        let circle = (rm * rm + metric.a * metric.a).sqrt();
+        for pair in points.windows(2) {
+            let d = chart_azimuth(pair[1]) - chart_azimuth(pair[0]);
+            let d = d - two_pi * (d / two_pi).round();
+            assert!(d.abs() <= MAX_ARC_STEP * (1.0 + 1e-12), "a piece spans {d} rad");
+        }
+        for point in points.iter() {
+            let rho = (point.0 * point.0 + point.1 * point.1).sqrt();
+            assert!((rho - circle).abs() < 1e-12, "the arc must stay on r-: {rho} vs {circle}");
+        }
+    }
+
+    #[test]
+    fn test_a_wound_front_of_a_real_pulse_is_drawn_over_its_raw_azimuth_difference() {
+        // The same statement about a front nobody built by hand.
+        //
+        // A whole light cone is let go at r = 2.0 at a = 0.90 and integrated for 60 M of
+        // coordinate time at the frame step. What winds a front there is the unstable circular
+        // photon orbits outside r+ (at a = 0.90 the equatorial ones sit at r = 1.56 prograde and
+        // r = 3.89 retrograde): a ray let go on very nearly the critical impact parameter hangs at
+        // one of them for tens of M, going round and round, while the neighbour it was emitted
+        // next to has long since escaped outward or spiralled in. Their azimuths are then several
+        // whole turns apart, and the segment of front between them is that whole spiral. It is one
+        // continuous piece of the null surface, however many times it goes round.
+        //
+        // (Emission from inside r+ does not do this: the rays that wind fastest there are the ones
+        // being carried onto the ring, and they reach it and die within a couple of M. Over 20 M
+        // of a pulse let go at r = 1.0, no pair of *live* neighbours ever gets past 1.1 rad.)
+        let metric = KerrSchild::new(1.0, 0.90);
+        let alice = Observer::new_with_phi(
+            &metric,
+            "Alice",
+            0.0,
+            2.0,
+            0.0,
+            0.0,
+            crate::physics::observer::WorldlineParams::default(),
+        );
+        let mut field = SignalField::default();
+        field.emit_if_due(&metric, &alice);
+        assert_eq!(field.pulses.len(), 1, "one pulse, let go at r = 2.0");
+        let dt = 0.017;
+        let steps = 3530; // 60.01 M of coordinate time
+        for _ in 0..steps {
+            field.advance(&metric, dt);
+        }
+
+        let pulse = &field.pulses[0];
+        let n = pulse.rays.len();
+        let pi = std::f64::consts::PI;
+        let mut wound: Vec<(usize, f64)> = Vec::new();
+        let mut live_pairs = 0;
+        for i in 0..n {
+            let j = (i + 1) % n;
+            if !pulse.rays[i].alive() || !pulse.rays[j].alive() {
+                continue;
+            }
+            live_pairs += 1;
+            let raw = pulse.rays[j].phi - pulse.rays[i].phi;
+            if raw.abs() > pi {
+                wound.push((i, raw));
+            }
+        }
+        let largest = wound.iter().map(|&(_, d)| d.abs()).fold(0.0f64, f64::max);
+        println!(
+            "after {:.2} M a pulse of {n} rays let go at r = 2.0 at a = 0.90 has {live_pairs} live \
+             neighbouring pairs, {} of them more than half a turn apart; the largest raw |d phi| \
+             is {largest:.3} rad ({:.2} turns)",
+            (steps as f64) * dt,
+            wound.len(),
+            largest / (2.0 * pi)
+        );
+        assert!(
+            !wound.is_empty(),
+            "a ray hung on a circular photon orbit must wind past half a turn away from its \
+             neighbour within 60 M; none of the {live_pairs} live pairs did"
+        );
+
+        // Each of them is drawn over exactly that raw difference. The fold would have replaced it
+        // with the same angle mod 2 pi, which is a short arc across the near side of the picture
+        // and not the spiral the front is.
+        for &(i, raw) in wound.iter() {
+            let j = (i + 1) % n;
+            let chart = std::cell::RefCell::new(Vec::new());
+            let to_screen = |(x, y): (f64, f64)| {
+                chart.borrow_mut().push((x, y));
+                Pos2::new(x as f32, y as f32)
+            };
+            let arc = segment_arc(
+                &metric,
+                (pulse.rays[i].r, pulse.rays[i].phi),
+                (pulse.rays[j].r, pulse.rays[j].phi),
+                &to_screen,
+            );
+            let points = chart.into_inner();
+            assert_eq!(points.len(), arc.len());
+            // The two ends are at different radii, and arg = phi + atan(a/r), so the swept
+            // argument is the swept phi plus the change in that offset across the segment.
+            let offset = (metric.a / pulse.rays[j].r).atan() - (metric.a / pulse.rays[i].r).atan();
+            let swept = swept_azimuth(&points) - offset;
+            let folded = raw - 2.0 * pi * (raw / (2.0 * pi)).round();
+            assert!(
+                (swept - raw).abs() < 1e-9,
+                "segment {i} must be drawn over its raw difference {raw}, not {swept}; the fold \
+                 would have drawn {folded} instead"
+            );
+            assert!(
+                (folded - raw).abs() > 1.0,
+                "segment {i}: the raw {raw} and the folded {folded} must be the two different \
+                 pictures this test is about"
+            );
+            // And the piece count is the span, not the fold: pieces of at most `MAX_ARC_STEP`.
+            let pieces = (raw.abs() / MAX_ARC_STEP).ceil().min(MAX_ARC_PIECES as f64) as usize;
+            assert_eq!(arc.len(), pieces + 1, "segment {i} of {raw} rad in {} pieces", arc.len() - 1);
+        }
     }
 }

@@ -1290,14 +1290,41 @@ impl Pulse {
     /// The rays of a pulse are a closed polyline in the (r, phi) plane, ordered by their emission
     /// angle: the emitter broadcasts into their whole light cone, so the last ray joins back to the
     /// first and that closing segment is a sheet like any other. The receiver is located on the
-    /// polyline through the *unwrapped* azimuth of each ray relative to theirs: the first ray is
-    /// placed within pi of the receiver and every later one within pi of its predecessor, so a
-    /// front that frame dragging has wound through several turns is still one continuous curve. On
-    /// that unwrapped axis the receiver is not one angle but the whole family 0, +/-2 pi, +/-4 pi,
-    /// ..., because a front that has wound one turn further passes over them again. Each polyline
-    /// segment straddling one of those angles is one *sheet* of the front standing across their
-    /// azimuth, and since every unwrapped step is folded into [-pi, pi] a segment can straddle at
-    /// most one of them.
+    /// polyline through the *unwrapped* azimuth of each ray relative to theirs.
+    ///
+    /// Only the first ray is placed against the receiver, and only because it has to be: the
+    /// receiver's own azimuth is an angle, kept in [0, 2 pi) by `Observer`, so folding
+    /// rays[0].phi - receiver.phi into [-pi, pi] is a choice of which turn to call zero and nothing
+    /// more. Every step after it is the *raw* difference of two integrated azimuths, and that is
+    /// exact rather than a convention. Every ray of the pulse left the emission event at the
+    /// emitter's own azimuth, and `NullRay::phi` is integrated continuously and never reduced mod
+    /// 2 pi, so the difference between two neighbouring rays is a continuous function of time
+    /// starting at zero: the integrated phi already is the unwrapped coordinate, and the raw
+    /// difference already is the physical winding between the pair. Folding it into [-pi, pi]
+    /// agrees with that only while the pair are less than half a turn apart, and a front that has
+    /// wound - a ray hung on a circular photon orbit for tens of M while the neighbour it was
+    /// emitted next to fell in, say - is exactly the case that violates it: past half a turn the
+    /// fold flips the sign of the step and lays that piece of the front down on the wrong side of
+    /// the hole. The raw steps also telescope, so the loop closes back on rel[0] exactly, which is
+    /// the statement that a front is a closed curve.
+    ///
+    /// On that unwrapped axis the receiver is not one angle but the whole family 0, +/-2 pi,
+    /// +/-4 pi, ..., because a front that has wound one turn further passes over them again. Each
+    /// crossing of one of those angles by a polyline segment is one *sheet* of the front standing
+    /// across their azimuth. A segment whose two rays have wound several turns apart crosses
+    /// several of them and carries a sheet at each: those are real, separate pieces of front
+    /// standing across the receiver's azimuth at their own radii, and each is tracked on its own.
+    ///
+    /// One consequence is worth stating on its own, because the fold got it wrong the other way. A
+    /// loop all of whose rays are alive crosses the receiver's azimuth an *even* number of times:
+    /// the raw steps telescope to zero round the loop, so such a front has no net winding, and
+    /// every sheet is paired with the one the loop makes coming back - the near side and the far
+    /// side of the same front, which is what a receiver at a fixed azimuth is actually swept by. A
+    /// front that genuinely encircles the hole is not a counter-example: to enclose it some ray of
+    /// the loop has to have gone into it, and that ray is dead, so both of its segments are skipped
+    /// and what is left is an open arc of live rays that may span any number of turns. The fold
+    /// used to invent a net winding for any loop whose rays happened to span a full turn, and drop
+    /// the returning sheet.
     ///
     /// A sheet is identified from one pass to the next by *where it is*, not by which segment
     /// carries it. Its position is the loop coordinate
@@ -1367,19 +1394,21 @@ impl Pulse {
             self.sheets.clear();
             return;
         }
+        let n = self.rays.len();
         let two_pi = 2.0 * std::f64::consts::PI;
+        // The one fold: which turn of the receiver's azimuth to call zero. Everything after it is
+        // the raw difference of two continuously integrated azimuths, which is already unwrapped.
         let wrap = |d: f64| d - two_pi * (d / two_pi).round();
-        let mut rel = Vec::with_capacity(self.rays.len());
+        let mut rel = Vec::with_capacity(n);
         rel.push(wrap(self.rays[0].phi - receiver.phi));
-        for i in 1..self.rays.len() {
-            let prev = rel[i - 1];
-            rel.push(prev + wrap(self.rays[i].phi - self.rays[i - 1].phi));
+        for i in 1..n {
+            rel.push(rel[i - 1] + (self.rays[i].phi - self.rays[i - 1].phi));
         }
 
-        // The closing segment runs from the last ray back to the first, its far end unwrapped by
-        // one more folded step so that the whole loop stays on the one continuous azimuth axis.
-        let n = self.rays.len();
-        let closing = rel[n - 1] + wrap(self.rays[0].phi - self.rays[n - 1].phi);
+        // The closing segment runs from the last ray back to the first, over the raw difference
+        // like every other step. Those steps telescope, so this lands back on rel[0] to within
+        // rounding: the loop of rays is closed, and stays closed however far it has wound.
+        let closing = rel[n - 1] + (self.rays[0].phi - self.rays[n - 1].phi);
         let mut sheets: Vec<SheetSide> = Vec::new();
         for i in 0..n {
             let j = (i + 1) % n;
@@ -3778,20 +3807,25 @@ mod tests {
 
     #[test]
     fn test_a_sheet_handed_over_and_taken_back_records_both_of_its_crossings() {
-        // A sheet is a pair of rays, and inside r+ the front winds fast enough that the pair
-        // straddling the receiver's azimuth changes from pass to pass: a sheet drops out of the
-        // tracking and comes back, and while it is away the receiver can pass through the front by
-        // one of its neighbours. This is that handoff, built by hand so that it is unambiguous.
+        // A sheet is a pair of rays, and the pair straddling the receiver's azimuth changes from
+        // pass to pass as the front deforms: a sheet drops out of the tracking and comes back, and
+        // while it is away the receiver can pass through the front by one of its neighbours. This
+        // is that handoff, built by hand so that it is unambiguous.
         //
-        // Four rays at one radius, spaced so that exactly one segment of the closed loop straddles
-        // the receiver's azimuth, and the loop is rotated between passes to hand that duty from one
-        // segment to another:
+        // Six rays of one loop, at two radii. Rays 0, 1 and 2 are the near part of the front, at
+        // the radius the receiver is about to be swept by; rays 3, 4 and 5 are the far part, parked
+        // at r = 30. The loop is closed and every ray of it is alive, so its rays' azimuths - which
+        // are integrated continuously and differenced raw - telescope to zero round the loop: the
+        // front has no net winding, and it therefore crosses the receiver's azimuth an even number
+        // of times. Here it crosses twice, once on the near part and once on the far part coming
+        // back, and only the near one is ever close enough to the receiver to be an arrival. The
+        // far sheet stands outside r = 6 throughout and never crosses them.
         //
-        //   1. segment 0 straddles; the front sweeps outward past the receiver     (crossing one)
-        //   2. the loop rotates by half a radian, and segment 3 straddles instead;
-        //      the front sweeps back inward past the receiver                      (crossing two)
-        //   3. the loop rotates back, segment 0 straddles again, and the front
-        //      sweeps outward past the receiver a second time                      (crossing three)
+        //   1. segment 1 carries the near sheet; the front sweeps outward past the receiver (one)
+        //   2. the loop rotates by a quarter of a radian and segment 0 carries it instead;
+        //      the front sweeps back inward past the receiver                              (two)
+        //   3. the loop rotates back, segment 1 carries it again, and the front sweeps
+        //      outward past the receiver a second time                                   (three)
         //
         // All three are real arrivals. The third is the one a rule keyed to the last crossing
         // recorded on the same sheet gets wrong: it leaves the receiver on the same side as
@@ -3805,14 +3839,13 @@ mod tests {
             Observer::new_with_phi(&metric, "Bob", 0.0, r_receiver, 0.0, 0.0, params);
         let u_receiver = signalling_four_velocity(&metric, &bob);
 
-        // The loop: four rays of a real emission at r = 3, whose azimuths are then set by hand.
-        // Steps of 1.5 rad and a closing step of 2 pi - 4.5, so the loop winds once and exactly one
-        // of its four segments contains the receiver's azimuth.
+        // The loop: six rays of a real emission at r = 3, whose azimuths and radii are then set by
+        // hand.
         let u = raindrop(&metric, r_receiver);
         let tetrad = Tetrad::from_four_velocity(&metric, r_receiver, &u);
-        let rays: Vec<NullRay> = (0..4)
+        let rays: Vec<NullRay> = (0..6)
             .map(|i| {
-                let alpha = 0.5 * std::f64::consts::PI * (i as f64);
+                let alpha = 2.0 * std::f64::consts::PI * (i as f64) / 6.0;
                 NullRay::from_local_direction(&metric, 0.0, r_receiver, 0.0, &tetrad, alpha, &u)
             })
             .collect();
@@ -3829,14 +3862,14 @@ mod tests {
             receptions: Vec::new(),
         };
 
-        // One detection pass with the loop put where the caller says: every ray at radius `r_front`
-        // and the loop rotated by `turn`.
-        let base = [-0.3f64, 1.2, 2.7, 4.2];
+        // One detection pass with the loop put where the caller says: the near rays at `r_front`,
+        // the far ones at r = 30, and the whole loop rotated by `turn`.
+        let base = [-0.5f64, -0.1, 0.3, 1.5, 3.0, 1.5];
         let pass = |pulse: &mut Pulse, bob: &mut Observer, t: f64, r_front: f64, turn: f64| {
-            for (ray, phi) in pulse.rays.iter_mut().zip(base.iter()) {
+            for (k, ray) in pulse.rays.iter_mut().enumerate() {
                 ray.t = t;
-                ray.r = r_front;
-                ray.phi = phi + turn;
+                ray.r = if k < 3 { r_front } else { 30.0 };
+                ray.phi = base[k] + turn;
             }
             bob.t = t;
             bob.tau = 0.8 * t;
@@ -3844,45 +3877,54 @@ mod tests {
             pulse.sheets.iter().map(|sheet| sheet.segment).collect::<Vec<_>>()
         };
 
-        // 1. Segment 0 straddles: the front starts inside the receiver and sweeps out past them.
-        assert_eq!(pass(&mut pulse, &mut bob, 0.1, 2.9, 0.0), vec![0], "segment 0 should straddle");
-        assert!(pulse.receptions.is_empty(), "the first pass only establishes the side");
-        assert_eq!(pass(&mut pulse, &mut bob, 0.2, 3.1, 0.0), vec![0]);
+        // 1. Segment 1 carries the near sheet: the front starts inside the receiver and sweeps out
+        //    past them. Segment 5, the closing one, carries the far sheet the whole way through.
+        assert_eq!(
+            pass(&mut pulse, &mut bob, 0.1, 2.9, 0.0),
+            vec![1, 5],
+            "the near sheet on segment 1, the far one on the closing segment"
+        );
+        assert!(pulse.receptions.is_empty(), "the first pass only establishes the sides");
+        assert_eq!(pass(&mut pulse, &mut bob, 0.2, 3.1, 0.0), vec![1, 5]);
         assert_eq!(pulse.receptions.len(), 1, "the front swept out past the receiver");
 
-        // 2. The loop rotates: segment 3 takes over, and the receiver passes back through the front
-        //    by that segment instead.
-        assert_eq!(pass(&mut pulse, &mut bob, 0.3, 3.1, 0.5), vec![3], "segment 3 should straddle");
+        // 2. The loop rotates: segment 0 takes over, and the receiver passes back through the
+        //    front by that segment instead.
+        assert_eq!(
+            pass(&mut pulse, &mut bob, 0.3, 3.1, 0.25),
+            vec![0, 5],
+            "segment 0 should carry the near sheet now"
+        );
         assert_eq!(pulse.receptions.len(), 1, "the handoff itself is not a crossing");
-        assert_eq!(pass(&mut pulse, &mut bob, 0.4, 2.9, 0.5), vec![3]);
+        assert_eq!(pass(&mut pulse, &mut bob, 0.4, 2.9, 0.25), vec![0, 5]);
         assert_eq!(pulse.receptions.len(), 2, "the front swept back in past the receiver");
 
-        // 3. The loop rotates back and segment 0 sweeps out past the receiver a second time.
-        assert_eq!(pass(&mut pulse, &mut bob, 0.5, 2.9, 0.0), vec![0], "segment 0 again");
+        // 3. The loop rotates back and segment 1 sweeps out past the receiver a second time.
+        assert_eq!(pass(&mut pulse, &mut bob, 0.5, 2.9, 0.0), vec![1, 5], "segment 1 again");
         assert_eq!(pulse.receptions.len(), 2, "coming back is not a crossing either");
-        assert_eq!(pass(&mut pulse, &mut bob, 0.6, 3.1, 0.0), vec![0]);
+        assert_eq!(pass(&mut pulse, &mut bob, 0.6, 3.1, 0.0), vec![1, 5]);
         assert_eq!(
             pulse.receptions.len(),
             3,
-            "the second crossing of segment 0 is a real arrival and must be recorded: {:?}",
+            "the second crossing of segment 1 is a real arrival and must be recorded: {:?}",
             pulse.receptions
         );
 
         let events: Vec<(usize, f64)> =
             pulse.receptions.iter().map(|rec| (rec.segment, rec.t)).collect();
         println!("handoff: three crossings, (segment, t) = {events:?}");
-        assert_eq!(events[0].0, 0);
-        assert_eq!(events[1].0, 3);
-        assert_eq!(events[2].0, 0);
+        assert_eq!(events[0].0, 1);
+        assert_eq!(events[1].0, 0);
+        assert_eq!(events[2].0, 1);
         // Each is stamped inside the pass interval that found it, and the two crossings of segment
-        // 0 leave the receiver on the same side, which is the whole point.
+        // 1 leave the receiver on the same side, which is the whole point.
         for (rec, (lo, hi)) in pulse.receptions.iter().zip([(0.1, 0.2), (0.3, 0.4), (0.5, 0.6)]) {
             assert!(rec.t > lo && rec.t < hi, "{rec:?} is outside ({lo}, {hi})");
             assert!(rec.ratio.is_finite() && rec.ratio > 0.0, "{rec:?}");
         }
         assert!(
             pulse.receptions[0].side_after * pulse.receptions[2].side_after > 0.0,
-            "the two crossings of segment 0 leave the receiver on the same side"
+            "the two crossings of segment 1 leave the receiver on the same side"
         );
     }
 
@@ -3894,8 +3936,12 @@ mod tests {
         // that used to be dropped: the new key had no remembered side, so nothing compared the two
         // sides and no arrival was recorded.
         //
-        // Twelve rays evenly spaced round the loop, and one step that both rotates the whole front
-        // by two of those spacings and carries it from inside the receiver's radius to outside it.
+        // Twelve rays. Six of them are the near part of the front, evenly spaced 0.2 rad apart at
+        // the radius the receiver is about to be swept by; six are the far part, out at r = 30.
+        // One step both rotates the whole loop by two of those spacings and carries the near part
+        // from inside the receiver's radius to outside it. The far part carries the second sheet
+        // that a closed loop of live rays must have - the front crosses the receiver's azimuth on
+        // the way out and again on the way back - and it stands outside r = 4 throughout.
         let metric = KerrSchild::new(1.0, 0.90);
         let params = WorldlineParams::default();
         let r_receiver = 3.0;
@@ -3922,14 +3968,16 @@ mod tests {
             receptions: Vec::new(),
         };
 
-        let step = 2.0 * std::f64::consts::PI / 12.0;
+        let step = 0.2;
+        // The near arc runs from -0.5 to +0.5 in steps of `step`, so before any rotation the
+        // receiver's azimuth falls halfway along segment 2; the far arc goes out to 4.5 rad and
+        // comes back, and the closing segment carries it back across the receiver's azimuth.
+        let base = [-0.5f64, -0.3, -0.1, 0.1, 0.3, 0.5, 1.5, 3.0, 4.5, 4.5, 3.0, 1.5];
         let pass = |pulse: &mut Pulse, bob: &mut Observer, t: f64, r_front: f64, turn: f64| {
             for (k, ray) in pulse.rays.iter_mut().enumerate() {
                 ray.t = t;
-                ray.r = r_front;
-                // -0.2 puts the receiver's azimuth 38% of the way along segment 0 before any
-                // rotation; `turn` then carries the whole loop round rigidly.
-                ray.phi = -0.2 + turn + step * (k as f64);
+                ray.r = if k < 6 { r_front } else { 30.0 };
+                ray.phi = base[k] + turn;
             }
             bob.t = t;
             bob.tau = 0.8 * t;
@@ -3938,20 +3986,23 @@ mod tests {
         };
 
         let before = pass(&mut pulse, &mut bob, 0.1, 2.9, 0.0);
-        assert_eq!(before.len(), 1, "exactly one sheet may straddle the receiver: {before:?}");
-        assert_eq!(before[0].0, 0, "and it is segment 0: {before:?}");
-        assert!(pulse.receptions.is_empty(), "the first pass only establishes the side");
+        assert_eq!(before.len(), 2, "the near sheet and the far one: {before:?}");
+        assert_eq!(before[0].0, 2, "the near sheet is on segment 2: {before:?}");
+        assert_eq!(before[1].0, 11, "and the far one on the closing segment: {before:?}");
+        assert!(pulse.receptions.is_empty(), "the first pass only establishes the sides");
 
         let after = pass(&mut pulse, &mut bob, 0.2, 3.1, 2.0 * step);
-        assert_eq!(after.len(), 1, "still exactly one sheet: {after:?}");
-        assert_eq!(after[0].0, 10, "carried now by the segment two round the loop: {after:?}");
+        assert_eq!(after.len(), 2, "still two sheets: {after:?}");
+        assert_eq!(after[0].0, 0, "carried now by the segment two round the loop: {after:?}");
+        assert_eq!(after[1].0, 11, "the far sheet has not moved segment: {after:?}");
         assert_eq!(
             pulse.receptions.len(),
             1,
-            "the front swept out past the receiver and that is an arrival, whichever segment was \
-             carrying it: {:?}",
+            "the near part of the front swept out past the receiver and that is an arrival, \
+             whichever segment was carrying it; the far sheet never came near them: {:?}",
             pulse.receptions
         );
+        assert_eq!(pulse.receptions[0].segment, 0, "recorded on the segment that now carries it");
         let moved = (after[0].1 - before[0].1).rem_euclid(12.0);
         println!(
             "a sheet handed from segment {} to segment {} in one pass - two indices, a loop \
@@ -3967,6 +4018,242 @@ mod tests {
             "the sheet must have moved two segments along the loop: {moved}"
         );
         assert!(pulse.receptions[0].t > 0.1 && pulse.receptions[0].t < 0.2);
+    }
+
+    #[test]
+    fn test_a_wound_front_is_detected_on_the_raw_azimuth_difference() {
+        // A front that has wound, and a receiver the fold cannot see it reach.
+        //
+        // Four rays whose integrated azimuths are 0.3, 2 pi + 0.6, 4 pi + 0.9 and 6 pi + 1.2: each
+        // neighbour has lapped the one before it once round the hole, which is what a few tens of
+        // M near a circular photon orbit does to a real pulse. Those raw differences are the
+        // physical winding between the pairs, so the polyline through them spans three whole turns
+        // and crosses the receiver's azimuth - the family 0, +/-2 pi, +/-4 pi, ... on the unwrapped
+        // axis - six times, three on the way out and three on the way back.
+        //
+        // Folded into [-pi, pi] the same four rays read as 0.3, 0.6, 0.9, 1.2: a loop that sits
+        // entirely between the receiver's azimuth and half a turn past it, crossing nothing. The
+        // fold does not put this front on the wrong side of the hole so much as delete it - the
+        // receiver is never in front of it at all, and no arrival is ever recorded.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let params = WorldlineParams::default();
+        let r_receiver = 6.0;
+        let mut bob = Observer::new_with_phi(&metric, "Bob", 0.0, r_receiver, 0.0, 0.0, params);
+        let u_receiver = signalling_four_velocity(&metric, &bob);
+        let two_pi = 2.0 * std::f64::consts::PI;
+        let u = raindrop(&metric, r_receiver);
+        let tetrad = Tetrad::from_four_velocity(&metric, r_receiver, &u);
+        let rays: Vec<NullRay> = (0..4)
+            .map(|i| {
+                let alpha = 0.5 * std::f64::consts::PI * (i as f64);
+                NullRay::from_local_direction(&metric, 0.0, r_receiver, 0.0, &tetrad, alpha, &u)
+            })
+            .collect();
+        let mut pulse = Pulse {
+            index: 0,
+            emitted_t: 0.0,
+            emitted_tau: 0.0,
+            emitted_r: r_receiver,
+            emitted_phi: 0.0,
+            rays,
+            extent_track: vec![(0.0, r_receiver, r_receiver)],
+            track_dt: TRACK_MIN_DT,
+            sheets: Vec::new(),
+            receptions: Vec::new(),
+        };
+
+        // Ray 0 is the inner end of the front and the other three are 4 M outside it, so of the six
+        // sheets the innermost is the one the closing segment carries down to ray 0. That is the
+        // one the receiver at r = 6 meets, as the whole front is moved out from r_front = 4.5 to
+        // r_front = 5.0 between the two passes. The azimuths are the same on both passes, so the
+        // fold sees the same thing on either.
+        let base = [0.3, two_pi + 0.6, 2.0 * two_pi + 0.9, 3.0 * two_pi + 1.2];
+        let pass = |pulse: &mut Pulse, bob: &mut Observer, t: f64, r_front: f64| {
+            for (k, ray) in pulse.rays.iter_mut().enumerate() {
+                ray.t = t;
+                ray.r = if k == 0 { r_front } else { r_front + 4.0 };
+                ray.phi = base[k];
+            }
+            bob.t = t;
+            bob.tau = 0.8 * t;
+            pulse.scan(&metric, bob, &u_receiver, true);
+            pulse.sheets.iter().map(|sheet| (sheet.segment, sheet.side)).collect::<Vec<_>>()
+        };
+
+        // What the fold would have made of the same four rays, on both passes: the polyline built
+        // the way `Pulse::scan` used to build it, and the multiples of 2 pi it straddles.
+        let folded_sheets = |pulse: &Pulse, receiver_phi: f64| {
+            let wrap = |d: f64| d - two_pi * (d / two_pi).round();
+            let n = pulse.rays.len();
+            let mut rel = vec![wrap(pulse.rays[0].phi - receiver_phi)];
+            for i in 1..n {
+                rel.push(rel[i - 1] + wrap(pulse.rays[i].phi - pulse.rays[i - 1].phi));
+            }
+            let closing = rel[n - 1] + wrap(pulse.rays[0].phi - pulse.rays[n - 1].phi);
+            let mut count = 0;
+            for i in 0..n {
+                let (a, b) = (rel[i], if i + 1 < n { rel[i + 1] } else { closing });
+                let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+                count += ((hi / two_pi).floor() as i64 - (lo / two_pi).ceil() as i64 + 1).max(0);
+            }
+            (rel, count)
+        };
+
+        let first = pass(&mut pulse, &mut bob, 0.1, 4.5);
+        let (folded_rel, folded_count) = folded_sheets(&pulse, bob.phi);
+        assert_eq!(
+            first.len(),
+            6,
+            "three turns out and three back: six sheets stand across the receiver's azimuth, \
+             {first:?}"
+        );
+        assert!(pulse.receptions.is_empty(), "the first pass only establishes the sides");
+
+        let second = pass(&mut pulse, &mut bob, 0.2, 5.0);
+        assert_eq!(second.len(), 6, "the same six: {second:?}");
+        assert_eq!(
+            pulse.receptions.len(),
+            1,
+            "the innermost sheet swept out past the receiver and that is an arrival: {:?}",
+            pulse.receptions
+        );
+        let rec = pulse.receptions[0];
+        assert!(rec.t > 0.1 && rec.t < 0.2, "{rec:?}");
+        assert!(rec.ratio.is_finite() && rec.ratio > 0.0, "{rec:?}");
+        println!(
+            "a front wound three turns: {} sheets on the raw polyline, one of them crossing the \
+             receiver at t = {:.4}; the folded polyline is {:?} and straddles {folded_count} \
+             multiples of 2 pi",
+            first.len(),
+            rec.t,
+            folded_rel.iter().map(|x| (x * 1e3).round() / 1e3).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            folded_count, 0,
+            "the folded polyline must find no sheet at all - it reads these four rays as a loop \
+             lying between 0.3 and 1.2 rad, entirely on one side of the receiver's azimuth, so it \
+             would have recorded no arrival on either pass: {folded_rel:?}"
+        );
+    }
+
+    #[test]
+    fn test_the_raw_azimuth_difference_of_a_neighbouring_pair_is_continuous() {
+        // Why the raw difference and not the folded one: it is the physical winding between two
+        // neighbouring rays, and the evidence for that is that it moves continuously.
+        //
+        // Both rays of a pair leave the emission event at the emitter's own azimuth, so their
+        // difference starts at exactly zero, and both integrate phi continuously, so the difference
+        // can only change at the rate the two rays' own dphi/dt allow. It therefore never jumps -
+        // and in particular it passes through pi without anything happening to it, which is exactly
+        // where folding into [-pi, pi] would send it discontinuously to -pi and put that piece of
+        // the front on the other side of the hole.
+        //
+        // A whole light cone is let go at r = 2.0 at a = 0.90 and run for 60 M at the frame step.
+        // The winding comes from the unstable circular photon orbits outside r+ (r = 1.56 prograde
+        // and r = 3.89 retrograde at this spin): a ray on very nearly the critical impact parameter
+        // hangs at one of them for tens of M while the neighbour it was emitted next to has escaped
+        // or fallen in.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let alice =
+            Observer::new_with_phi(&metric, "Alice", 0.0, 2.0, 0.0, 0.0, WorldlineParams::default());
+        let mut field = SignalField::default();
+        field.emit_if_due(&metric, &alice);
+        assert_eq!(field.pulses.len(), 1);
+        let dt = 0.017;
+        let steps = 3530; // 60.01 M of coordinate time
+        let n = field.pulses[0].rays.len();
+
+        // Per ray: azimuth, dphi/dt and whether it is still running, at the previous step.
+        let sample = |field: &SignalField| -> Vec<(f64, f64, bool)> {
+            field.pulses[0].rays.iter().map(|ray| (ray.phi, ray.dphi_dt, ray.alive())).collect()
+        };
+        let mut prev = sample(&field);
+        let mut worst_ratio = 0.0f64;
+        let mut worst = (0.0f64, 0usize, 0.0f64, 0.0f64);
+        let mut t = 0.0;
+        for _ in 0..steps {
+            field.advance(&metric, dt);
+            t += dt;
+            let now = sample(&field);
+            for i in 0..n {
+                let j = (i + 1) % n;
+                // Only a pair that was running at both ends of the step: a ray that reached the
+                // ring or left the field inside it stands still afterwards, and the drawing and
+                // the detection both drop that segment.
+                if !(prev[i].2 && prev[j].2 && now[i].2 && now[j].2) {
+                    continue;
+                }
+                let jump = ((now[j].0 - now[i].0) - (prev[j].0 - prev[i].0)).abs();
+                // The generous bound the brief asks for: six times the step times the largest
+                // |dphi/dt| either ray had at either end of it. The exact bound is the integral of
+                // |dphi/dt_j - dphi/dt_i| over the step, which is at most 2 dt times that maximum;
+                // six leaves room for the rate itself moving inside the step.
+                let rate = prev[i]
+                    .1
+                    .abs()
+                    .max(prev[j].1.abs())
+                    .max(now[i].1.abs())
+                    .max(now[j].1.abs());
+                let bound = 6.0 * dt * rate;
+                assert!(
+                    jump <= bound,
+                    "the raw difference of rays {i} and {j} jumped by {jump} at t = {t}, more \
+                     than the {bound} that 6 dt max|dphi/dt| = 6 x {dt} x {rate} allows: it is \
+                     not a continuous function of time and the raw difference would not be the \
+                     physical one"
+                );
+                if bound > 0.0 && jump / bound > worst_ratio {
+                    worst_ratio = jump / bound;
+                    worst = (t, i, jump, bound);
+                }
+            }
+            prev = now;
+        }
+
+        // And over that run the winding does get past half a turn, which is where the fold and the
+        // raw difference part company.
+        let pulse = &field.pulses[0];
+        let pi = std::f64::consts::PI;
+        let mut wound = 0;
+        let mut live_pairs = 0;
+        let mut largest = 0.0f64;
+        for i in 0..n {
+            let j = (i + 1) % n;
+            if !pulse.rays[i].alive() || !pulse.rays[j].alive() {
+                continue;
+            }
+            live_pairs += 1;
+            let raw = (pulse.rays[j].phi - pulse.rays[i].phi).abs();
+            if raw > pi {
+                wound += 1;
+            }
+            largest = largest.max(raw);
+        }
+        println!(
+            "after {:.2} M a pulse of {n} rays let go at r = 2.0 at a = 0.90 has {live_pairs} live \
+             neighbouring pairs, {wound} of them more than half a turn apart, the largest raw \
+             |d phi| being {largest:.3} rad ({:.2} turns); over the whole run the worst step-to-step \
+             jump in a pair's raw difference was {:.3} of the 6 dt max|dphi/dt| bound ({:.3e} \
+             against {:.3e}, at t = {:.2} on segment {})",
+            (steps as f64) * dt,
+            largest / (2.0 * pi),
+            worst_ratio,
+            worst.2,
+            worst.3,
+            worst.0,
+            worst.1
+        );
+        assert!(
+            wound >= 1,
+            "a ray hung on a circular photon orbit must wind past half a turn away from its \
+             neighbour within 60 M; none of the {live_pairs} live pairs did"
+        );
+        assert!(largest > two_pi_turns(3.0), "and past three turns: {largest}");
+    }
+
+    /// Whole turns of azimuth, in radians: a named number for the winding assertions.
+    fn two_pi_turns(turns: f64) -> f64 {
+        turns * 2.0 * std::f64::consts::PI
     }
 
     /// The app's startup layout, run on a fixed grid: Alice released from r = 4.5M at t = 0 and Bob
