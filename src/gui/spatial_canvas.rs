@@ -332,24 +332,54 @@ impl SpatialCanvas {
             draw_signal_field(&painter, metric, signals.alice, Theme::ALICE_COLOR, 1.0, &to_screen);
         }
 
-        // 6. Draw Alice's Spatial Position and Trail. Her info box is registered at the end of the
-        // frame, after every other interaction on this canvas, so a drag on it does not pan.
-        let mut alice_box: Option<Pos2> = None;
+        // 6. Both worldline trails, drawn together and before anything that sits on them: the
+        // reception ticks below and the observers' own markers.
         if let Some(al) = alice {
             draw_spatial_trail(&painter, metric, al, Theme::ALICE_COLOR, 1.2, &to_screen);
-            if al.is_active {
-                let al_pos = to_screen(al.cartesian_position(metric));
+        }
+        draw_spatial_trail(&painter, metric, bob, Theme::BOB_COLOR, 1.5, &to_screen);
 
-                painter.circle_filled(al_pos, 5.0, Theme::ALICE_COLOR);
-                alice_box = Some(al_pos);
+        // 6b. Every arrival, marked on the *receiver's* trail in the *sender's* colour: amber
+        // triangles where Bob received one of Alice's pulses, mint ones where Alice received one
+        // of Bob's. Each is drawn at the receiver's own event, (r, phi) at the detection pass,
+        // pushed through the same Kerr-Schild embedding as everything else on this canvas, so a
+        // tick sits exactly on the trail it belongs to.
+        //
+        // The pairing is worth stating: the emission dots on a trail say what that observer sent,
+        // the triangles on it say what they heard, and the colour of a triangle names who they
+        // heard it from. Inside r+ the ticks bunch onto the r- circle, and that is the physics:
+        // the frozen family of every pulse waits there, at fixed radius and co-rotating, until the
+        // receiver falls through the stack, so a whole run of arrivals happens at one radius in
+        // the last fraction of an M of the fall. The (t, r) diagram keeps colouring its reception
+        // dots by the measured shift, which is a different question and stays where it can be read.
+        let draw_reception_ticks = |field: &SignalField, sender: Color32| {
+            for reception in field.receptions() {
+                let at = to_screen(metric.cartesian_position(reception.r, reception.phi));
+                if rect.contains(at) {
+                    draw_reception_tick(&painter, at, sender);
+                }
             }
+        };
+        if signals.show_bob {
+            draw_reception_ticks(signals.bob, Theme::BOB_COLOR);
+        }
+        if signals.show_alice {
+            draw_reception_ticks(signals.alice, Theme::ALICE_COLOR);
         }
 
-        // 7. Draw Bob's Spatial Position. His local null cone is not drawn as a fan of stubs any
-        // more: he broadcasts the same pulses Alice does, and a whole light cone integrated as
-        // exact null geodesics says everything the twenty-four stubs said and keeps saying it as
-        // the light travels.
-        draw_spatial_trail(&painter, metric, bob, Theme::BOB_COLOR, 1.5, &to_screen);
+        // 7. The observers themselves. Alice's info box is registered at the end of the frame,
+        // after every other interaction on this canvas, so a drag on it does not pan. Bob's local
+        // null cone is not drawn as a fan of stubs any more: he broadcasts the same pulses Alice
+        // does, and a whole light cone integrated as exact null geodesics says everything the
+        // twenty-four stubs said and keeps saying it as the light travels.
+        let mut alice_box: Option<Pos2> = None;
+        if let Some(al) = alice
+            && al.is_active
+        {
+            let al_pos = to_screen(al.cartesian_position(metric));
+            painter.circle_filled(al_pos, 5.0, Theme::ALICE_COLOR);
+            alice_box = Some(al_pos);
+        }
         let bob_pos = to_screen(bob.cartesian_position(metric));
 
         // The last pulse of Bob's that ever reached Alice, marked at the event on his worldline
@@ -393,6 +423,7 @@ impl SpatialCanvas {
                  River: colour √(1−α²) vs ZAMO (1 at r₊); length √(2M/r) (1 at 2M)\n\
                  Signal: salmon = frozen family (E − Ω₋L < 0, ends on the other branch of r₋)\n\
                  Bob's fronts: same shift colours at half stroke, mint emission dots; mint ring = his last pulse to reach Alice\n\
+                 Receptions: triangle on the receiver's trail in the sender's colour (amber = Alice → Bob, mint = Bob → Alice)\n\
                  🔍 Zoom: {:.0} px/M (Scroll to zoom, drag to pan)",
                 metric.format_physical_distance(1.0),
                 metric.m_solar,
@@ -421,6 +452,7 @@ impl SpatialCanvas {
                  River: colour √(1−α²) vs ZAMO (1 at r₊); length √(2M/r) (1 at 2M)\n\
                  Signal: salmon = frozen family (E − Ω₋L < 0, ends on the other branch of r₋)\n\
                  Bob's fronts: same shift colours at half stroke, mint emission dots; mint ring = his last pulse to reach Alice\n\
+                 Receptions: triangle on the receiver's trail in the sender's colour (amber = Alice → Bob, mint = Bob → Alice)\n\
                  🔍 Zoom: {:.0} px/M (Scroll to zoom, drag to pan)",
                 metric.format_physical_distance(1.0),
                 metric.format_physical_time(1.0),
@@ -581,6 +613,29 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
     }
 }
 
+/// One arrival, as a mark on the receiver's trail: a small filled triangle, apex up, in the
+/// colour of whoever sent the pulse.
+///
+/// The shape is what separates it from the emission dots already on that trail, and the colour is
+/// what says which transmission it belongs to; a hairline white outline keeps it legible where it
+/// lands on top of a shift-coloured front, which near r- is most of the time. The orientation is
+/// fixed rather than aligned with anything: an arrival has a direction on the sky, but not one
+/// this projection could draw honestly.
+const RECEPTION_TICK_RADIUS: f32 = 4.0;
+
+fn draw_reception_tick(painter: &egui::Painter, at: Pos2, colour: Color32) {
+    let (h, w) = (RECEPTION_TICK_RADIUS, RECEPTION_TICK_RADIUS * 0.866);
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            Pos2::new(at.x, at.y - h),
+            Pos2::new(at.x + w, at.y + h * 0.5),
+            Pos2::new(at.x - w, at.y + h * 0.5),
+        ],
+        colour,
+        Stroke::new(0.5, Color32::WHITE),
+    ));
+}
+
 /// Faint spatial trajectory of an observer: the recorded (t, r, phi) trail pushed through the
 /// Kerr-Schild embedding x + i y = (r + i a) e^{i phi}. With E = 1, L = 0 the curve spirals in and,
 /// for a spinning hole, terminates on the ring rho = a rather than at the origin.
@@ -598,7 +653,7 @@ fn draw_spatial_trail<F: Fn((f64, f64)) -> Pos2>(
     let points: Vec<Pos2> = obs
         .trail
         .iter()
-        .map(|&[_t, r, phi]| to_screen(metric.cartesian_position(r, phi)))
+        .map(|point| to_screen(metric.cartesian_position(point.r, point.phi)))
         .collect();
     let faint = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 120);
     painter.add(egui::Shape::line(points, Stroke::new(width, faint)));

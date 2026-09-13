@@ -1003,7 +1003,7 @@ impl SpacetimeCanvas {
                 let points: Vec<Pos2> = al
                     .trail
                     .iter()
-                    .map(|&[t, r, _phi]| Pos2::new(to_screen_x(r), to_screen_y(t)))
+                    .map(|point| Pos2::new(to_screen_x(point.r), to_screen_y(point.t)))
                     .collect();
                 painter.add(PathShape::line(points, Stroke::new(2.0, Theme::ALICE_COLOR)));
             }
@@ -1026,7 +1026,7 @@ impl SpacetimeCanvas {
             let points: Vec<Pos2> = bob
                 .trail
                 .iter()
-                .map(|&[t, r, _phi]| Pos2::new(to_screen_x(r), to_screen_y(t)))
+                .map(|point| Pos2::new(to_screen_x(point.r), to_screen_y(point.t)))
                 .collect();
             painter.add(PathShape::line(points, Stroke::new(2.5, Theme::BOB_COLOR)));
         }

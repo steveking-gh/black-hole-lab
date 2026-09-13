@@ -4,7 +4,7 @@ use crate::gui::spacetime_canvas::SpacetimeCanvas;
 use crate::gui::spatial_canvas::SpatialCanvas;
 use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
-use crate::physics::observer::{Observer, WorldlineParams};
+use crate::physics::observer::{Observer, ObserverPair, WorldlineParams};
 use crate::physics::wavefront::{SignalField, SignalPair};
 use std::time::Instant;
 
@@ -90,10 +90,10 @@ impl SpacetimeApp {
     fn step_forward(&mut self, step: f64) {
         self.current_time += step;
         self.spatial_canvas.river.advance(&self.metric, step);
-        self.bob.step(&self.metric, self.current_time, step);
-        if let Some(ref mut al) = self.alice {
-            al.step(&self.metric, self.current_time, step);
-        }
+        // Both worldlines move as one object, so that this path, the play loop and the panel's
+        // buttons cannot mean different things by a step. See `ObserverPair`.
+        ObserverPair { bob: &mut self.bob, alice: self.alice.as_mut() }
+            .step(&self.metric, self.current_time, step);
         self.advance_signal(step);
     }
 
@@ -101,7 +101,11 @@ impl SpacetimeApp {
     ///
     /// The observers and both transmissions are integrated backwards: `SignalField::step_back`
     /// runs every ray back along the null geodesic it came in on, revives the ones that reached the
-    /// ring inside the interval, and un-sends the pulses emitted inside it.
+    /// ring inside the interval, and un-sends the pulses emitted inside it, while
+    /// `ObserverPair::rewind_to` puts both worldlines back on the clock's new value. The observers
+    /// are given the *target time* rather than the interval, which is what keeps them locked to
+    /// the clock when the two differ - the clock stops at zero, a Distance-mode step can be
+    /// hundreds of M, and a worldline that has already ended has no interval left to undo.
     ///
     /// The river is the exception, and deliberately. Stepping back advances the congruence forward
     /// by the same amount instead of reversing it. The flow is stationary, so its picture is the
@@ -118,10 +122,8 @@ impl SpacetimeApp {
             bob: &mut self.bob_signal,
         }
         .step_back(&self.metric, back);
-        self.bob.step_back(&self.metric, step);
-        if let Some(ref mut al) = self.alice {
-            al.step_back(&self.metric, step);
-        }
+        ObserverPair { bob: &mut self.bob, alice: self.alice.as_mut() }
+            .rewind_to(&self.metric, self.current_time);
     }
 }
 
@@ -153,10 +155,8 @@ impl eframe::App for SpacetimeApp {
             // The river runs on the simulation clock, not the frame clock, so it freezes when
             // paused and speeds up with the playback rate.
             self.spatial_canvas.river.advance(&self.metric, sim_dt);
-            self.bob.step(&self.metric, self.current_time, sim_dt);
-            if let Some(ref mut al) = self.alice {
-                al.step(&self.metric, self.current_time, sim_dt);
-            }
+            ObserverPair { bob: &mut self.bob, alice: self.alice.as_mut() }
+                .step(&self.metric, self.current_time, sim_dt);
             self.advance_signal(sim_dt);
             ctx.request_repaint();
         }
@@ -479,20 +479,169 @@ mod tests {
 
     #[test]
     fn test_arrow_key_stepping() {
+        // The arrow keys through the app's own transport: one step forward and one back has to
+        // land on the event it started from, on the clock and on the worldline alike.
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
-        let initial_r = app.bob.r;
-        let step = app.controls.step_size;
+        let initial = (app.bob.t, app.bob.r, app.bob.phi, app.bob.tau);
+        let step = app.arrow_step();
 
-        // Simulate Right Arrow (Step forward)
-        app.current_time += step;
-        app.bob.step(&app.metric, app.current_time, step);
-        assert!(app.bob.r < initial_r, "Stepping forward should advance inward infall");
+        app.step_forward(step);
+        assert!(app.bob.r < initial.1, "Stepping forward should advance inward infall");
+        assert!((app.bob.t - app.current_time).abs() < 1e-12, "and stay on the clock");
 
-        // Simulate Left Arrow (Step backward)
-        app.current_time = (app.current_time - step).max(0.0);
-        app.bob.step_back(&app.metric, step);
-        assert!((app.bob.r - initial_r).abs() < 1e-4, "Stepping back should return to initial radius");
+        app.step_backward(step);
+        assert!((app.current_time - initial.0).abs() < 1e-12, "the clock comes back: {}", app.current_time);
+        let back = (app.bob.t, app.bob.r, app.bob.phi, app.bob.tau);
+        for (a, b, what) in [
+            (back.0, initial.0, "t"),
+            (back.1, initial.1, "r"),
+            (back.2, initial.2, "phi"),
+            (back.3, initial.3, "tau"),
+        ] {
+            assert!((a - b).abs() < 1e-9, "stepping back must restore {what}: {a} vs {b}");
+        }
+    }
+
+    /// (t, r, phi, tau) of an observer, the four numbers a rewind has to get right.
+    fn observer_state(obs: &Observer) -> (f64, f64, f64, f64) {
+        (obs.t, obs.r, obs.phi, obs.tau)
+    }
+
+    #[test]
+    fn test_observers_rewind_with_the_clock() {
+        // Three scenarios the old step-back got wrong, because it popped one recorded event per
+        // call whatever interval the caller had undone. All three are run through the app's own
+        // transport, `step_forward` / `step_backward`, which is what the arrow keys and the
+        // panel's buttons call.
+
+        // 1. A backstep smaller than the steps that built the trail. The clock moves by 0.1; the
+        //    observers used to move by a whole 0.3 M step, or, for one that had already ended, by
+        //    a jump back to whatever its last recorded event happened to be.
+        let mut app = SpacetimeApp::default();
+        app.controls.is_playing = false;
+        for _ in 0..20 {
+            app.step_forward(0.3);
+        }
+        assert!((app.current_time - 6.0).abs() < 1e-9);
+        let alice_before = observer_state(app.alice.as_ref().unwrap());
+        let bob_before = observer_state(&app.bob);
+        let alice_ended = app.alice.as_ref().unwrap().has_ended();
+        let bob_ended = app.bob.has_ended();
+        app.step_backward(0.1);
+        println!(
+            "back 0.1 from t = 6.0: clock {:.4}; Alice {:?} (ended {alice_ended}) -> {:?}; \
+             Bob {:?} (ended {bob_ended}) -> {:?}",
+            app.current_time,
+            alice_before,
+            observer_state(app.alice.as_ref().unwrap()),
+            bob_before,
+            observer_state(&app.bob)
+        );
+        assert!((app.current_time - 5.9).abs() < 1e-9);
+        // An observer that has ended before the target does not move at all; one that has not is
+        // on the clock, to the last bit.
+        for (obs, before, ended) in [
+            (app.alice.as_ref().unwrap(), alice_before, alice_ended),
+            (&app.bob, bob_before, bob_ended),
+        ] {
+            if ended && before.0 <= app.current_time {
+                assert_eq!(
+                    observer_state(obs),
+                    before,
+                    "{} ended at t = {} and must not be moved by a rewind to t = {}",
+                    obs.name,
+                    before.0,
+                    app.current_time
+                );
+            } else {
+                assert!(
+                    (obs.t - app.current_time).abs() < 1e-12,
+                    "{} is at t = {} with the clock at {}",
+                    obs.name,
+                    obs.t,
+                    app.current_time
+                );
+            }
+        }
+
+        // 2. An observer who reached the ring long before the clock did. A rewind that does not
+        //    reach her death event must leave her on the ring; one that does must put her back on
+        //    her worldline, on the clock.
+        let mut app = SpacetimeApp::default();
+        app.controls.is_playing = false;
+        for _ in 0..100 {
+            app.step_forward(0.1);
+        }
+        assert!((app.current_time - 10.0).abs() < 1e-9);
+        let alice = app.alice.as_ref().unwrap();
+        assert!(alice.has_ended(), "Alice must have reached the ring: r = {}", alice.r);
+        let ended_at = observer_state(alice);
+        assert!(ended_at.0 < 7.0, "and done it well before t = 10: t_end = {}", ended_at.0);
+        app.step_backward(0.1);
+        println!(
+            "Alice ended at t = {:.4}, r = {:.4}; after a backstep to t = {:.2} she is at \
+             t = {:.4}, r = {:.4}",
+            ended_at.0,
+            ended_at.1,
+            app.current_time,
+            app.alice.as_ref().unwrap().t,
+            app.alice.as_ref().unwrap().r
+        );
+        assert_eq!(
+            observer_state(app.alice.as_ref().unwrap()),
+            ended_at,
+            "a rewind to t = {} is still past her end at t = {}: she stays on the ring",
+            app.current_time,
+            ended_at.0
+        );
+        // Now back past the end of her worldline: she comes off the ring, and onto the clock.
+        while app.current_time > ended_at.0 - 0.25 {
+            app.step_backward(0.1);
+        }
+        let alice = app.alice.as_ref().unwrap();
+        assert!(!alice.has_ended(), "below her end she is falling again: r = {}", alice.r);
+        assert!(alice.r > ended_at.1, "and above the ring: r = {}", alice.r);
+        assert!(
+            (alice.t - app.current_time).abs() < 1e-12,
+            "on the clock: {} vs {}",
+            alice.t,
+            app.current_time
+        );
+
+        // 3. One backstep far longer than any step that built the trail, which is what Distance
+        //    mode hands the transport at a supermassive hole. The observers used to move back a
+        //    single recorded event and stay there, which is the "Alice is frozen in place on
+        //    backstep" the user sees.
+        let mut app = SpacetimeApp::default();
+        app.controls.is_playing = false;
+        for _ in 0..20 {
+            app.step_forward(0.3);
+        }
+        app.step_backward(4.0);
+        assert!((app.current_time - 2.0).abs() < 1e-9);
+        let wound = observer_state(app.alice.as_ref().unwrap());
+        assert!((wound.0 - 2.0).abs() < 1e-12, "Alice lands on the clock: {}", wound.0);
+        assert!((app.bob.t - 2.0).abs() < 1e-12, "and so does Bob: {}", app.bob.t);
+
+        // And where it lands is the worldline, not merely the clock: compare with a fresh run to
+        // the same time in different steps. The two differ only by the integrator, which is
+        // stepping the same geodesic over differently cut intervals.
+        let mut fresh = SpacetimeApp::default();
+        fresh.controls.is_playing = false;
+        for _ in 0..40 {
+            fresh.step_forward(0.05);
+        }
+        let straight = observer_state(fresh.alice.as_ref().unwrap());
+        println!(
+            "one 4 M backstep vs a fresh run to t = 2: dr = {:.3e}, dphi = {:.3e}, dtau = {:.3e}",
+            (wound.1 - straight.1).abs(),
+            (wound.2 - straight.2).abs(),
+            (wound.3 - straight.3).abs()
+        );
+        assert!((wound.1 - straight.1).abs() < 1e-9, "r: {} vs {}", wound.1, straight.1);
+        assert!((wound.2 - straight.2).abs() < 1e-9, "phi: {} vs {}", wound.2, straight.2);
+        assert!((wound.3 - straight.3).abs() < 1e-9, "tau: {} vs {}", wound.3, straight.3);
     }
 
     #[test]
@@ -605,6 +754,18 @@ mod tests {
             app.signal.t,
             app.current_time
         );
+        // The observers came back with the clock too. Fifty presses of the left arrow at a
+        // step of 0.01 undo half an M, and each press moves the worldlines by exactly what it
+        // moves the clock by, whatever the steps that built the trail were.
+        for obs in [Some(&app.bob), app.alice.as_ref()].into_iter().flatten() {
+            assert!(
+                obs.has_ended() || (obs.t - app.current_time).abs() < 1e-12,
+                "{} is at t = {} with the clock at {}",
+                obs.name,
+                obs.t,
+                app.current_time
+            );
+        }
         // Nothing survives that had not been emitted by the time stepped back to.
         for pulse in app.signal.pulses.iter() {
             assert!(
@@ -833,9 +994,10 @@ mod tests {
         // frame at the end walks both canvases and the HUD over the state that produced.
         //
         // Then the rewind, which for a hovering emitter has one more thing to undo than for a
-        // falling one: his proper time. `Observer::step_back` unwinds a hover analytically, so the
-        // cadence comes back exactly where it was and running forward again re-sends the same
-        // pulses at the same events - which is the last thing this test measures.
+        // falling one: his proper time. `Observer::rewind_to` puts a hover back on the closed form
+        // sqrt(-g_tt) (t - t_start) that the forward hover accumulates, so the cadence comes back
+        // exactly where it was and running forward again re-sends the same pulses at the same
+        // events - which is the last thing this test measures.
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
         app.controls.step_size = 0.02;
@@ -904,6 +1066,14 @@ mod tests {
             app.current_time
         );
 
+        // Alice is released and falling, so she is on the clock to the last bit as well.
+        let alice = app.alice.as_ref().expect("the dual-observer layout gives us Alice");
+        assert!(
+            (alice.t - app.current_time).abs() < 1e-12,
+            "Alice is at t = {} with the clock at {}",
+            alice.t,
+            app.current_time
+        );
         assert!(
             !app.bob_signal.pulses.is_empty(),
             "stepping back must rewind Bob's signal, not delete it"

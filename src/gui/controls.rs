@@ -1,7 +1,7 @@
 use crate::gui::theme::Theme;
 use crate::physics::geodesic::GeodesicState;
 use crate::physics::kerr_schild::KerrSchild;
-use crate::physics::observer::{Observer, ObserverMode, WorldlineParams};
+use crate::physics::observer::{Observer, ObserverMode, ObserverPair, WorldlineParams};
 use crate::physics::wavefront::{SignalField, SignalPair};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -217,14 +217,12 @@ impl AppControls {
                     *current_time -= back;
                     // The fields are rewound, not dropped: `SignalField::step_back` integrates
                     // every ray back along the null geodesic it came in on, revives the ones that
-                    // died inside the interval, and un-sends the pulses emitted inside it. Both
-                    // transmissions go back together, exactly as `SpacetimeApp::step_backward`
-                    // does it.
+                    // died inside the interval, and un-sends the pulses emitted inside it. The
+                    // observers are then put back on the clock's new value by the same
+                    // `ObserverPair::rewind_to` that `SpacetimeApp::step_backward` calls, so this
+                    // button and the left arrow key cannot mean different things.
                     signals.step_back(metric, back);
-                    bob.step_back(metric, current_step);
-                    if let Some(al) = alice {
-                        al.step_back(metric, current_step);
-                    }
+                    ObserverPair { bob, alice: alice.as_mut() }.rewind_to(metric, *current_time);
                 }
                 if ui
                     .button("Step Fwd →")
@@ -232,10 +230,8 @@ impl AppControls {
                     .clicked()
                 {
                     *current_time += current_step;
-                    bob.step(metric, *current_time, current_step);
-                    if let Some(al) = alice {
-                        al.step(metric, *current_time, current_step);
-                    }
+                    ObserverPair { bob, alice: alice.as_mut() }
+                        .step(metric, *current_time, current_step);
                     // One description of a step forward, shared with the play loop and the arrow
                     // keys: carry both transmissions, let each emitter emit, then let each receiver
                     // listen.

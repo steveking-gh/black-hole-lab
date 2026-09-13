@@ -546,6 +546,10 @@ pub struct Reception {
     pub tau_receiver: f64,
     /// The receiver's radius at reception.
     pub r: f64,
+    /// The receiver's azimuth at reception, taken from their event exactly as `t` and `r` are.
+    /// The (t, r) diagram has no use for it; the equatorial view needs it to put the arrival where
+    /// it happened, which for the frozen family is a point on the r- circle.
+    pub phi: f64,
     /// nu(receiver) / nu(emitter at emission) for the ray that reached them.
     pub ratio: f64,
     /// Whether the receiving ray belongs to the frozen family, E - Omega_- L < 0, which never
@@ -783,6 +787,7 @@ impl Pulse {
                             t: receiver.t,
                             tau_receiver: receiver.tau,
                             r: receiver.r,
+                            phi: receiver.phi,
                             ratio,
                             frozen_family: self.rays[nearer].frozen(metric),
                         });
@@ -961,7 +966,7 @@ impl SignalField {
         }
     }
 
-    /// Carry the whole field back by dt of coordinate time, the way `Observer::step_back` carries a
+    /// Carry the whole field back by dt of coordinate time, the way `Observer::rewind_to` carries a
     /// worldline back, so that stepping the simulation backwards undoes the transmission instead of
     /// deleting it.
     ///
@@ -2012,6 +2017,83 @@ mod tests {
     }
 
     #[test]
+    fn test_a_reception_is_recorded_at_the_receivers_own_event() {
+        // An arrival is stamped with the receiver's (t, r, phi) at the pass that found it, all
+        // three taken from the same event. That is what lets the equatorial view put a tick on the
+        // receiver's trail rather than near it: the tick is drawn at the Kerr-Schild embedding of
+        // exactly these numbers, and the trail is drawn from the same embedding of the same
+        // worldline.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let params = WorldlineParams::default();
+        let mut alice = Observer::new_with_phi(&metric, "Alice", 0.0, 4.5, 0.0, 0.25, params);
+        let mut bob = Observer::new_with_phi(&metric, "Bob", 0.0, 4.5, 8.0, 0.0, params);
+        let mut field = SignalField::default();
+
+        let dt = 0.01;
+        let mut t = 0.0;
+        let mut checked = 0;
+        while t < 16.0 {
+            t += dt;
+            alice.step(&metric, t, dt);
+            bob.step(&metric, t, dt);
+            field.advance(&metric, dt);
+            field.emit_if_due(&metric, &alice);
+            let before = field.received_count();
+            field.detect_receptions(&metric, &bob);
+            for reception in field.receptions().skip(before) {
+                assert_eq!(
+                    (reception.t, reception.r, reception.phi),
+                    (bob.t, bob.r, bob.phi),
+                    "an arrival was stamped somewhere other than the receiver's event"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 5, "the run should record several arrivals: {checked}");
+
+        // The frozen family is received where it waits, on r-, so those ticks land on the r-
+        // circle of the equatorial view rather than being spread along the fall.
+        let rm = metric.inner_horizon();
+        let frozen: Vec<&Reception> = field.receptions().filter(|rec| rec.frozen_family).collect();
+        let worst = frozen.iter().map(|rec| rec.r - rm).fold(0.0f64, f64::max);
+        println!(
+            "{checked} arrivals recorded at the receiver's own event, {} of them from the frozen \
+             family, the furthest out {worst:.3e} M above r- = {rm:.4}",
+            frozen.len()
+        );
+        assert!(!frozen.is_empty(), "he should have met the frozen family by then");
+
+        // Where those ticks land is the other half of the drawing claim. A frozen-family ray can
+        // be met anywhere on its way in - the family is defined by E - Omega_- L < 0, not by where
+        // the ray currently stands - so a fixed step like the one above catches some of them high
+        // up and then jumps Bob across the last thousandths of an M in one go. Resolving the stack
+        // itself needs the refining step of `run_transmission`, and with it the arrivals bunch
+        // into the last tenth of an M above r-, a few thousandths of an M apart: at the default
+        // zoom of the equatorial view that is a handful of pixels, so they draw as a row of
+        // overlapping triangles sitting on the r- circle.
+        let (heard, _) = run_transmission(&metric, 0.25, 8.0);
+        let stack: Vec<&Reception> = heard.iter().filter(|rec| rec.r - rm < 0.1).collect();
+        let closest = stack.iter().map(|rec| rec.r - rm).fold(f64::INFINITY, f64::min);
+        println!(
+            "with the refining step: {} arrivals, {} of them in the last 0.1 M above r- (the \
+             nearest {closest:.3e} M above it), of which {} are frozen-family",
+            heard.len(),
+            stack.len(),
+            stack.iter().filter(|rec| rec.frozen_family).count()
+        );
+        assert!(
+            stack.len() >= 5,
+            "the last tenth of an M above r- should carry a run of arrivals: {} of {}",
+            stack.len(),
+            heard.len()
+        );
+        assert!(
+            closest < 0.02,
+            "and they should reach the horizon: the nearest is {closest} M above it"
+        );
+    }
+
+    #[test]
     fn test_field_step_back_removes_later_pulses_and_receptions() {
         // The whole field is reversible, not just one ray. A transmission run to t = 12 and then
         // wound back 3 M has to become the transmission run to t = 9: the pulses Alice sent in
@@ -2590,7 +2672,7 @@ mod tests {
             "and none of those {after_release} pulses is ever heard"
         );
         // Nothing arrives after her worldline ends, either.
-        let end_t = alice.trail.iter().map(|p| p[0]).fold(0.0f64, f64::max);
+        let end_t = alice.trail.iter().map(|p| p.t).fold(0.0f64, f64::max);
         for reception in field.receptions() {
             assert!(
                 reception.t <= end_t + 1e-9,

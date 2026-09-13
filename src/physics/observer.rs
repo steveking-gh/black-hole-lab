@@ -62,6 +62,40 @@ impl WorldlineParams {
     }
 }
 
+/// One recorded event of a worldline, carrying everything needed to put the observer back on it.
+///
+/// The drawing only wants (t, r, phi). The other two fields are what make a rewind exact rather
+/// than approximate: `tau` is the proper time the integrator actually accumulated, where the old
+/// step-back re-derived it as Delta t / u^t and drifted, and `u` is the integrated 4-velocity,
+/// where the old step-back rebuilt it from the conserved (E, L) at the recorded radius and so
+/// restarted the worldline on a neighbouring one, off by the integration error. With both
+/// recorded, winding back to a recorded event and running forward again reproduces the forward
+/// pass exactly rather than approximately.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TrailPoint {
+    /// Coordinate time of the event.
+    pub t: f64,
+    /// Radius of the event.
+    pub r: f64,
+    /// Azimuth of the event, folded into [0, 2 pi) exactly as `GeodesicState` keeps it.
+    pub phi: f64,
+    /// The observer's own clock at the event.
+    pub tau: f64,
+    /// The integrated 4-velocity u^mu = (u^t, u^r, u^phi) at the event.
+    u: [f64; 3],
+    /// Whether the geodesic had already frozen onto r- (`GeodesicState::stalled`) at the event.
+    /// A frozen worldline goes on climbing in t at fixed (r, phi, tau), so this is the one bit
+    /// that tells the vertical segment apart from the fall that led into it, and it is what stops
+    /// a rewind inside that segment from trying to integrate a worldline that has stopped.
+    stalled: bool,
+}
+
+/// Trail entries kept for a moving worldline, and for a dragged one. Past these the oldest entry
+/// is dropped, which bounds the drawing and, with it, how far back a rewind can reach: the
+/// reversible window is the window the trail keeps, exactly as it is for `SignalField`.
+const TRAIL_MAX_POINTS: usize = 800;
+const TRAIL_MAX_DRAG_POINTS: usize = 500;
+
 #[derive(Debug, Clone)]
 pub struct Observer {
     pub name: String,
@@ -80,9 +114,15 @@ pub struct Observer {
     pub beta_phi: f64,
     /// Geodesic state for automated infall simulation
     pub geodesic: Option<GeodesicState>,
-    /// History of (t, r, phi) events for drawing the worldline trail. The (t, r) diagram uses
-    /// the first two entries; the top-down spatial view needs phi as well.
-    pub trail: Vec<[f64; 3]>,
+    /// The worldline as it has actually been drawn: one entry per step taken, oldest first,
+    /// ending on the observer's current event. The (t, r) diagram reads (t, r) off it, the
+    /// top-down view (r, phi), and `rewind_to` reads all of it.
+    pub trail: Vec<TrailPoint>,
+    /// The event the observer was created at: the hover position, the clock it started on and the
+    /// release seed of its geodesic. It is kept out of the trail because the trail has a cap and
+    /// can drop its own first entry on a long run, while a rewind back into the hover needs this
+    /// event exactly.
+    start: TrailPoint,
     /// Release coordinate time t_release (e.g. 0 for Alice, delta_t for Bob)
     pub release_t: f64,
     /// Is the observer active/released yet?
@@ -124,7 +164,15 @@ impl Observer {
             params.outgoing,
         );
         geodesic.phi = start_phi;
-        let mut obs = Self {
+        let start = TrailPoint {
+            t: start_t,
+            r: start_r,
+            phi: start_phi,
+            tau: 0.0,
+            u: geodesic.u,
+            stalled: false,
+        };
+        Self {
             name: name.to_string(),
             mode: ObserverMode::FreeFall,
             t: start_t,
@@ -134,12 +182,11 @@ impl Observer {
             beta_r: 0.0,
             beta_phi: 0.0,
             geodesic: Some(geodesic),
-            trail: Vec::new(),
+            trail: vec![start],
+            start,
             release_t,
             is_active: start_t >= release_t,
-        };
-        obs.trail.push([start_t, start_r, start_phi]);
-        obs
+        }
     }
 
     /// Reset observer with initial radius, coordinate time, azimuth phi and worldline constants.
@@ -167,9 +214,17 @@ impl Observer {
             params.outgoing,
         );
         geo.phi = start_phi;
+        self.start = TrailPoint {
+            t: start_t,
+            r: start_r,
+            phi: start_phi,
+            tau: 0.0,
+            u: geo.u,
+            stalled: false,
+        };
         self.geodesic = Some(geo);
         self.trail.clear();
-        self.trail.push([start_t, start_r, start_phi]);
+        self.trail.push(self.start);
         self.is_active = self.t >= self.release_t;
     }
 
@@ -179,10 +234,42 @@ impl Observer {
         self.t = t;
         self.r = r.max(0.01);
         self.is_active = true;
-        if self.trail.len() > 500 {
+        self.record(TRAIL_MAX_DRAG_POINTS);
+    }
+
+    /// The observer's current event as a trail entry.
+    fn current_point(&self) -> TrailPoint {
+        let (u, stalled) = match self.geodesic {
+            Some(geo) => (geo.u, geo.stalled),
+            None => ([1.0, 0.0, 0.0], false),
+        };
+        TrailPoint { t: self.t, r: self.r, phi: self.phi, tau: self.tau, u, stalled }
+    }
+
+    /// Record the current event on the trail, dropping the oldest entry once `cap` is passed.
+    fn record(&mut self, cap: usize) {
+        if self.trail.len() > cap {
             self.trail.remove(0);
         }
-        self.trail.push([t, self.r, self.phi]);
+        self.trail.push(self.current_point());
+    }
+
+    /// Put the observer, and the geodesic driving them, back on a recorded event exactly. Nothing
+    /// is re-derived: the proper time and the 4-velocity come off the record, so the worldline
+    /// resumes as the same solution of the same equation rather than as a nearby one.
+    fn restore(&mut self, point: TrailPoint) {
+        self.t = point.t;
+        self.r = point.r;
+        self.phi = point.phi;
+        self.tau = point.tau;
+        if let Some(ref mut geo) = self.geodesic {
+            geo.t = point.t;
+            geo.r = point.r;
+            geo.phi = point.phi;
+            geo.tau = point.tau;
+            geo.u = point.u;
+            geo.stalled = point.stalled;
+        }
     }
 
     /// Let go of a dragged observer: resume the worldline from the new event. The geodesic is
@@ -217,8 +304,9 @@ impl Observer {
             geo.tau = self.tau;
         }
         // Keep the trail as [start point, current hover point]
-        self.trail.truncate(1);
-        self.trail.push([self.t, self.r, self.phi]);
+        self.trail.clear();
+        self.trail.push(self.start);
+        self.trail.push(self.current_point());
     }
 
     /// Has this worldline ended, as far as the simulation is concerned?
@@ -418,14 +506,35 @@ impl Observer {
         self.proper_acceleration_geom(metric) < 1e-6 * curvature_scale
     }
 
-    /// Advance simulation by coordinate time delta dt
+    /// Advance the worldline to the simulation clock's new value `current_sim_time`, which is
+    /// `dt` of coordinate time later than it was.
     pub fn step(&mut self, metric: &KerrSchild, current_sim_time: f64, dt: f64) {
         if current_sim_time < self.release_t {
             self.hover(metric, current_sim_time, dt);
             return;
         }
+        // On the step that crosses the release, a free-faller's worldline starts at t = release_t,
+        // which is where `hover` has been holding its geodesic clock, and not at the simulation
+        // clock's previous value: the release almost never lands on a step boundary, and
+        // integrating a whole dt from release_t would put the worldline that far ahead of the
+        // clock and keep it there for the rest of the run (0.03 M of it at a release of t = 4.03
+        // stepped at 0.1). The other modes have no separate clock to start - they were already
+        // moving in t while they waited - so they cover the full step.
+        let releasing = !self.is_active && self.mode == ObserverMode::FreeFall;
         self.is_active = true;
+        let interval = if releasing { (current_sim_time - self.release_t).max(0.0) } else { dt };
+        self.advance(metric, interval);
+    }
 
+    /// One released step, in whatever mode the observer is in.
+    ///
+    /// It is a separate function because `rewind_to` finishes on it: after dropping the recorded
+    /// events past the target the observer is put back on the last one it kept and then carried
+    /// forward onto the target with *this* code, so the landing integrates the same equation with
+    /// the same integrator and the same guards that got the observer there in the first place.
+    /// Anything the forward step refuses to do - moving a worldline that has reached the ring, for
+    /// one - the landing refuses in the same way, without a second statement of the rule.
+    fn advance(&mut self, metric: &KerrSchild, dt: f64) {
         match self.mode {
             ObserverMode::FreeFall => {
                 if let Some(ref mut geo) = self.geodesic {
@@ -435,21 +544,14 @@ impl Observer {
                         // coordinate clock keeps running and the trail climbs vertically.
                         geo.t += dt;
                         self.t = geo.t;
-                        if self.trail.len() > 800 {
-                            self.trail.remove(0);
-                        }
-                        self.trail.push([self.t, self.r, self.phi]);
+                        self.record(TRAIL_MAX_POINTS);
                     } else if geo.r > R_STOP {
                         geo.step_coord_time(metric, dt);
                         self.t = geo.t;
                         self.r = geo.r;
                         self.phi = geo.phi;
                         self.tau = geo.tau;
-
-                        if self.trail.len() > 800 {
-                            self.trail.remove(0);
-                        }
-                        self.trail.push([self.t, self.r, self.phi]);
+                        self.record(TRAIL_MAX_POINTS);
                     }
                 }
             }
@@ -469,71 +571,116 @@ impl Observer {
         }
     }
 
-    /// Step observer backward in time. Pops from recorded worldline trail if available,
-    /// or integrates backward with negative step.
+    /// Put the worldline back where it stood when the simulation clock read `t_target`.
     ///
-    /// An observer still waiting for release is wound back analytically instead, because their
-    /// worldline is not in the trail: `hover` keeps only [start event, current event] there, so
-    /// popping it would throw the observer back to the start of the run rather than back by dt.
-    /// They hover at fixed (r, phi), so the only two clocks running are t and the static observer's
-    /// proper time, and undoing `hover` is subtracting exactly what it added: dt of coordinate time
-    /// and sqrt(-g_tt) dt of proper time, with g_tt evaluated at the radius neither of them moves
-    /// from. That exactness is what lets a rewind of the simulation put a transmitting hoverer's
-    /// emission cadence back where it was, so that running forward again re-emits the same pulses
-    /// at the same events.
-    pub fn step_back(&mut self, metric: &KerrSchild, dt: f64) {
-        if !self.is_active {
-            let back = dt.abs();
-            self.t = (self.t - back).max(0.0);
-            let g_tt = metric.metric_components(self.r)[0][0];
-            if g_tt < 0.0 {
-                self.tau = (self.tau - (-g_tt).sqrt() * back).max(0.0);
-            }
-            if let Some(ref mut geo) = self.geodesic {
-                geo.tau = self.tau;
-            }
-            self.trail.truncate(1);
-            self.trail.push([self.t, self.r, self.phi]);
+    /// The rewind is stated in *time*, not in steps, and that is the whole point of it. The
+    /// observer used to be wound back by popping one recorded event per call, whatever interval
+    /// the caller had actually undone; since an event is recorded once per forward step and a step
+    /// is anything from a played frame to the hundreds of M a Distance-mode step can be, the
+    /// observers came off the simulation clock the moment anything was stepped back, and an
+    /// observer who had already reached the ring was dragged back off it by a rewind that had not
+    /// reached its death event at all. Everything below is expressed against `t_target` instead,
+    /// so the worldline lands on the clock however the caller got there.
+    ///
+    /// The cases, all exact:
+    ///
+    /// * A worldline that has ended before `t_target` does not move. For one that reached the ring
+    ///   this falls out of the guard below: forward steps leave its clock at the death event, so
+    ///   `t_target` is already at or past `self.t` and there is nothing to undo. For one frozen on
+    ///   r- the coordinate clock does keep running - `advance` climbs it vertically - so the
+    ///   vertical segment is wound back like any other, and the worldline comes off r- only when
+    ///   `t_target` drops below the event it froze at.
+    /// * Below `release_t` the observer is put back to hovering, at the event and on the clock
+    ///   that `hover` would have given it: see `rewind_into_hover`.
+    /// * Otherwise the recorded events after `t_target` are dropped, the observer is restored onto
+    ///   the last one kept, and `advance` carries it the rest of the way.
+    ///
+    /// The fixed-r modes never record anything - `advance` moves them analytically at constant
+    /// u^mu - so they are wound back analytically too, by subtracting exactly what a forward step
+    /// of the same interval adds.
+    pub fn rewind_to(&mut self, metric: &KerrSchild, t_target: f64) {
+        if t_target >= self.t {
             return;
         }
-        if self.trail.len() > 1 {
-            self.trail.pop();
-            if let Some(&[prev_t, prev_r, prev_phi]) = self.trail.last() {
-                self.t = prev_t;
-                self.r = prev_r;
-                self.phi = prev_phi;
-                if let Some(ref mut geo) = self.geodesic {
-                    // Rewind the geodesic clock to the recorded event; tau is re-derived from the
-                    // current dt/dtau = u^t. The trail stores only (t, r, phi), so the 4-velocity
-                    // is rebuilt from the conserved (E, L) at the recorded radius, on whichever
-                    // root the worldline is currently travelling on.
-                    let dt_dtau = geo.u[0].max(1e-6);
-                    geo.tau = (geo.tau - (geo.t - prev_t).abs() / dt_dtau).max(0.0);
-                    geo.t = prev_t;
-                    geo.phi = prev_phi;
-                    geo.stalled = false;
-                    geo.reseed_at(metric, prev_r);
-                    self.tau = geo.tau;
-                }
-                return;
-            }
+        if t_target < self.release_t {
+            self.rewind_into_hover(metric, t_target);
+            return;
         }
-        // Fallback backward step
+        self.is_active = true;
         match self.mode {
             ObserverMode::FreeFall => {
-                if let Some(ref mut geo) = self.geodesic {
-                    let dtau = -(dt.abs() * 0.5).min(0.05);
-                    geo.step(metric, dtau);
-                    self.t = geo.t;
-                    self.r = geo.r;
-                    self.phi = geo.phi;
-                    self.tau = geo.tau;
+                let keep = self
+                    .trail
+                    .iter()
+                    .take_while(|point| point.t <= t_target + 1e-9)
+                    .count()
+                    .max(1);
+                self.trail.truncate(keep);
+                let last = self.trail[keep - 1];
+                self.restore(last);
+                if last.t < self.release_t {
+                    // The kept event is the hover, where the worldline had not started yet. It
+                    // starts at t = release_t, exactly as `step` starts it there, so that is where
+                    // the fall onto the target is integrated from - with the hover's proper time,
+                    // which is what the forward run carried into the release.
+                    self.t = self.release_t;
+                    if let Some(ref mut geo) = self.geodesic {
+                        geo.t = self.release_t;
+                    }
+                }
+                let remaining = t_target - self.t;
+                if remaining > 1e-12 {
+                    self.advance(metric, remaining);
                 }
             }
-            ObserverMode::ManualDrag | ObserverMode::Static | ObserverMode::Zamo => {
-                self.t = (self.t - dt.abs()).max(0.0);
+            ObserverMode::Static | ObserverMode::Zamo => {
+                // The exact inverse of the forward step: at fixed r the 4-velocity is a constant,
+                // so the interval that was added to phi and tau is the interval to take back.
+                let dt = self.t - t_target;
+                let u = self.four_velocity(metric);
+                let ut = u[0].max(1e-9);
+                self.t = t_target;
+                self.phi -= (u[2] / ut) * dt;
+                self.tau -= dt / ut;
             }
+            ObserverMode::ManualDrag => self.t = t_target,
         }
+    }
+
+    /// Wind an observer back to before their release, onto the hovering worldline.
+    ///
+    /// `hover` holds them at the event they were created at and ticks their clock at the static
+    /// observer's rate, so its accumulated proper time is exactly sqrt(-g_tt) (t - t_start) with
+    /// g_tt at the hover radius: that closed form is what is restored here, rather than a
+    /// subtraction, so a rewind that crosses the release event lands on the same clock the forward
+    /// run had at that time whatever route it took. The geodesic goes back to its release seed,
+    /// which is where it stood throughout the wait, and the trail back to [start, now].
+    ///
+    /// Getting the proper time exactly right is not cosmetic: a hovering observer transmits, and
+    /// `SignalField` paces the emissions by their proper time, so a cadence put back even slightly
+    /// wrong re-cuts the whole transmission at different events when time runs forward again.
+    fn rewind_into_hover(&mut self, metric: &KerrSchild, t_target: f64) {
+        self.is_active = false;
+        self.t = t_target;
+        self.r = self.start.r;
+        self.phi = self.start.phi;
+        let g_tt = metric.metric_components(self.r)[0][0];
+        self.tau = if g_tt < 0.0 {
+            (-g_tt).sqrt() * (t_target - self.start.t).max(0.0)
+        } else {
+            self.start.tau
+        };
+        if let Some(ref mut geo) = self.geodesic {
+            geo.t = self.release_t;
+            geo.r = self.start.r;
+            geo.phi = self.start.phi;
+            geo.tau = self.tau;
+            geo.u = self.start.u;
+            geo.stalled = false;
+        }
+        self.trail.clear();
+        self.trail.push(self.start);
+        self.trail.push(self.current_point());
     }
 
     /// Generate polygon coordinates for the light cone at the observer's event on the (t, r)
@@ -651,6 +798,38 @@ impl Observer {
     /// raindrop), not squeezed into a flash.
     pub fn ingoing_frequency_ratio(&self, metric: &KerrSchild) -> f64 {
         metric.ingoing_frequency_ratio(self.r, &self.four_velocity(metric))
+    }
+}
+
+/// The observers the app carries at once: Bob, who is always there, and Alice, who may not be.
+///
+/// It exists for the same reason `SignalPair` does. Every path that moves the simulation - the
+/// play loop, the arrow keys, the panel's transport buttons - has to move both worldlines the same
+/// way, and a step backwards in particular has to hand both of them the same target time as the
+/// clock they are being drawn against. Stating that once here is what keeps the panel's Step Back
+/// button and `SpacetimeApp::step_backward` from drifting apart.
+pub struct ObserverPair<'a> {
+    pub bob: &'a mut Observer,
+    pub alice: Option<&'a mut Observer>,
+}
+
+impl ObserverPair<'_> {
+    /// Carry both worldlines to the simulation clock's new value, `dt` later than its last.
+    pub fn step(&mut self, metric: &KerrSchild, current_sim_time: f64, dt: f64) {
+        self.bob.step(metric, current_sim_time, dt);
+        if let Some(alice) = self.alice.as_deref_mut() {
+            alice.step(metric, current_sim_time, dt);
+        }
+    }
+
+    /// Put both worldlines back where they stood when the clock read `t_target`. See
+    /// `Observer::rewind_to`: the target is a time, not a number of steps, so the observers stay
+    /// on the clock whatever interval the caller undid.
+    pub fn rewind_to(&mut self, metric: &KerrSchild, t_target: f64) {
+        self.bob.rewind_to(metric, t_target);
+        if let Some(alice) = self.alice.as_deref_mut() {
+            alice.rewind_to(metric, t_target);
+        }
     }
 }
 
@@ -1006,8 +1185,12 @@ mod tests {
         assert!((bob.t - t).abs() < 1e-9, "Bob's coordinate time must equal the simulation clock: {} vs {}", bob.t, t);
         assert!(bob.r > alice.r + 0.5, "Bob released later must trail Alice: bob.r={} alice.r={}", bob.r, alice.r);
         // First trail point is the initial hover event, then the release event follows.
-        assert_eq!(bob.trail[0], [0.0, 4.5, 0.0]);
-        assert!((bob.trail[1][0] - 4.0).abs() < 0.06, "trail must show the release event near t=4: {:?}", bob.trail[1]);
+        assert_eq!((bob.trail[0].t, bob.trail[0].r, bob.trail[0].phi), (0.0, 4.5, 0.0));
+        assert!(
+            (bob.trail[1].t - 4.0).abs() < 0.06,
+            "trail must show the release event near t=4: {:?}",
+            bob.trail[1]
+        );
     }
 
     #[test]
@@ -1017,7 +1200,7 @@ mod tests {
         // azimuth needed to redraw that curve.
         let metric = KerrSchild::new(1.0, 0.8);
         let mut bob = Observer::new_with_phi(&metric, "Bob", 0.0, 5.0, 0.0, 0.4, WorldlineParams::default());
-        assert_eq!(bob.trail[0], [0.0, 5.0, 0.4]);
+        assert_eq!((bob.trail[0].t, bob.trail[0].r, bob.trail[0].phi), (0.0, 5.0, 0.4));
 
         let mut t = 0.0;
         while bob.r > 0.021 && t < 400.0 {
@@ -1031,8 +1214,9 @@ mod tests {
             bob.phi
         );
 
-        for &[t, r, phi] in bob.trail.iter() {
-            let (x, y) = metric.cartesian_position(r, phi);
+        for point in bob.trail.iter() {
+            let (t, r) = (point.t, point.r);
+            let (x, y) = metric.cartesian_position(r, point.phi);
             let rho = (x * x + y * y).sqrt();
             assert!(
                 (rho - metric.cartesian_radius(r)).abs() < 1e-12,
@@ -1042,7 +1226,7 @@ mod tests {
         // The last trail entry is the current event, and matches `cartesian_position`.
         let last = *bob.trail.last().unwrap();
         let (x, y) = bob.cartesian_position(&metric);
-        let (ex, ey) = metric.cartesian_position(last[1], last[2]);
+        let (ex, ey) = metric.cartesian_position(last.r, last.phi);
         assert!((x - ex).abs() < 1e-12 && (y - ey).abs() < 1e-12);
         let psi = bob.azimuth(&metric);
         assert!((y.atan2(x) - psi).sin().abs() < 1e-12, "polar angle must be `azimuth`");
@@ -1085,21 +1269,189 @@ mod tests {
     }
 
     #[test]
-    fn test_observer_step_back() {
+    fn test_rewind_lands_on_the_clock_whatever_the_step_was() {
+        // The rewind is stated in time, so the worldline lands on the target however the caller
+        // got there: the observer's own clock equals the target afterwards, and it does so whether
+        // the interval undone is a whole recorded step, a fraction of one, or several at once.
+        // Popping one recorded event per call - what this used to do - gets all three wrong.
         let metric = KerrSchild::new(1.0, 0.6);
-        let mut obs = Observer::new(&metric, "Bob", 0.0, 4.0, 0.0);
-        let initial_r = obs.r;
-
-        // Step forward 5 times
-        for i in 1..=5 {
-            obs.step(&metric, (i as f64) * 0.1, 0.1);
+        for &back in &[0.05, 0.1, 0.37, 1.0] {
+            let mut obs = Observer::new(&metric, "Bob", 0.0, 4.0, 0.0);
+            for i in 1..=20 {
+                obs.step(&metric, (i as f64) * 0.1, 0.1);
+            }
+            let forward_r = obs.r;
+            let target = obs.t - back;
+            obs.rewind_to(&metric, target);
+            assert!(
+                (obs.t - target).abs() < 1e-12,
+                "rewind by {back} left the observer at t = {} instead of {target}",
+                obs.t
+            );
+            assert!(obs.r > forward_r, "and it must be back up the worldline: r = {}", obs.r);
+            assert!(
+                obs.trail.last().is_some_and(|p| (p.t - target).abs() < 1e-12),
+                "the trail must end on the current event: {:?}",
+                obs.trail.last()
+            );
         }
-        assert!(obs.r < initial_r, "Observer should fall inward");
-        let forward_r = obs.r;
+    }
 
-        // Step back
-        obs.step_back(&metric, 0.1);
-        assert!(obs.r > forward_r, "Stepping backward must restore previous outward radius");
+    #[test]
+    fn test_rewind_round_trip_is_exact_for_a_faller_and_for_a_hoverer() {
+        // Forward N, back M, forward M: the second pass has to land on the first, exactly. It does
+        // because the trail records the proper time and the integrated 4-velocity, so a rewind
+        // onto a recorded event restores the state rather than re-deriving it, and the steps that
+        // follow are then the same steps over the same intervals.
+        let metric = KerrSchild::new(1.0, 0.65);
+        let params = WorldlineParams::default();
+        let dt = 0.05;
+        for &release_t in &[0.0, 3.0, 1.07] {
+            let mut obs =
+                Observer::new_with_phi(&metric, "Probe", 0.0, 4.5, release_t, 0.25, params);
+            let mut t = 0.0;
+            for _ in 0..40 {
+                t += dt;
+                obs.step(&metric, t, dt);
+            }
+            let reference = (obs.t, obs.r, obs.phi, obs.tau);
+            let back = 12;
+            obs.rewind_to(&metric, t - (back as f64) * dt);
+            let mid = obs.t;
+            assert!(
+                (mid - (t - (back as f64) * dt)).abs() < 1e-12,
+                "the rewind must land on the target: {mid}"
+            );
+            for _ in 0..back {
+                let step_to = obs.t + dt;
+                obs.step(&metric, step_to, dt);
+            }
+            let again = (obs.t, obs.r, obs.phi, obs.tau);
+            for (a, b, what) in [
+                (again.0, reference.0, "t"),
+                (again.1, reference.1, "r"),
+                (again.2, reference.2, "phi"),
+                (again.3, reference.3, "tau"),
+            ] {
+                assert!(
+                    (a - b).abs() < 1e-9,
+                    "release_t = {release_t}: {what} came back as {a}, not {b}"
+                );
+            }
+            println!(
+                "release_t = {release_t}: round trip residuals dt = {:.2e}, dr = {:.2e}, \
+                 dphi = {:.2e}, dtau = {:.2e}",
+                (again.0 - reference.0).abs(),
+                (again.1 - reference.1).abs(),
+                (again.2 - reference.2).abs(),
+                (again.3 - reference.3).abs()
+            );
+        }
+    }
+
+    #[test]
+    fn test_a_released_worldline_stays_on_the_simulation_clock() {
+        // The fall starts at t = release_t, so an observer released between two steps is on the
+        // clock from the first released step onward. Integrating a whole step from release_t
+        // instead put the worldline permanently ahead of the clock by whatever the release missed
+        // the step boundary by - 0.03 M in the case below - which then showed up as an observer
+        // whose marker sat above their own light cone's apex.
+        let metric = KerrSchild::new(1.0, 0.65);
+        for &(release_t, dt) in &[(4.0, 0.05), (4.03, 0.1), (1.234, 0.25)] {
+            let mut bob = Observer::new(&metric, "Bob", 0.0, 4.5, release_t);
+            let mut t = 0.0;
+            while t < 6.0 {
+                t += dt;
+                bob.step(&metric, t, dt);
+                assert!(
+                    bob.has_ended() || (bob.t - t).abs() < 1e-9,
+                    "release_t = {release_t}, dt = {dt}: at clock {t} the observer is at {}",
+                    bob.t
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_rewind_into_the_hover_restores_the_static_clock() {
+        // A hovering observer's proper time is sqrt(-g_tt) (t - t_start) exactly, with g_tt at the
+        // radius they are standing at, and a rewind that crosses their release has to put them
+        // back on that clock rather than on a subtraction: `SignalField` paces their transmission
+        // by it, so a cadence put back wrong re-cuts the whole transmission somewhere else.
+        let metric = KerrSchild::new(1.0, 0.65);
+        let params = WorldlineParams::default();
+        let mut bob = Observer::new_with_phi(&metric, "Bob", 0.0, 4.5, 4.0, 0.0, params);
+        let dt = 0.05;
+        let mut t = 0.0;
+        while t < 6.0 {
+            t += dt;
+            bob.step(&metric, t, dt);
+        }
+        assert!(bob.is_active && bob.r < 4.5, "he must have been released and fallen");
+
+        let target = 2.5;
+        bob.rewind_to(&metric, target);
+        let g_tt = metric.metric_components(4.5)[0][0];
+        let expected_tau = (-g_tt).sqrt() * target;
+        assert!(!bob.is_active, "below his release he is hovering again");
+        assert!((bob.t - target).abs() < 1e-12, "on the clock: {}", bob.t);
+        assert!((bob.r - 4.5).abs() < 1e-12, "back at his hover radius: {}", bob.r);
+        assert!(
+            (bob.tau - expected_tau).abs() < 1e-12,
+            "hover clock {} vs sqrt(-g_tt)(t - t_start) = {expected_tau}",
+            bob.tau
+        );
+        // And the incremental hover agrees with that closed form to the same accuracy, which is
+        // what makes the rewind an inverse of the forward run and not merely a plausible state.
+        let mut fresh = Observer::new_with_phi(&metric, "Bob", 0.0, 4.5, 4.0, 0.0, params);
+        let mut t = 0.0;
+        while t < target - 1e-12 {
+            t += dt;
+            fresh.step(&metric, t, dt);
+        }
+        assert!(
+            (fresh.tau - bob.tau).abs() < 1e-12,
+            "rewound hover clock {} vs the forward run's {}",
+            bob.tau,
+            fresh.tau
+        );
+    }
+
+    #[test]
+    fn test_a_worldline_that_has_ended_stays_ended_until_the_clock_drops_below_it() {
+        // Alice reaches the ring and her clock stops there while the simulation clock runs on.
+        // A rewind that does not reach her death event must leave her on the ring - the old
+        // step-back pulled her off it, one recorded event per call, however small the interval -
+        // and one that does reach past it must put her back on the worldline.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let mut alice = Observer::new(&metric, "Alice", 0.0, 4.5, 0.0);
+        let dt = 0.1;
+        let mut t = 0.0;
+        while t < 10.0 {
+            t += dt;
+            alice.step(&metric, t, dt);
+        }
+        assert!(alice.has_ended(), "she must have reached the ring: r = {}", alice.r);
+        let end = (alice.t, alice.r, alice.phi, alice.tau);
+        assert!(end.0 < 9.0, "and done it well before the clock stopped: t_end = {}", end.0);
+
+        for &target in &[9.9, 8.0, end.0 + 1e-6] {
+            let mut wound = alice.clone();
+            wound.rewind_to(&metric, target);
+            assert_eq!(
+                (wound.t, wound.r, wound.phi, wound.tau),
+                end,
+                "a rewind to t = {target}, still past her end at t = {}, moved her",
+                end.0
+            );
+            assert!(wound.has_ended());
+        }
+
+        let mut wound = alice.clone();
+        wound.rewind_to(&metric, end.0 - 0.25);
+        assert!((wound.t - (end.0 - 0.25)).abs() < 1e-12, "on the clock: {}", wound.t);
+        assert!(!wound.has_ended(), "a quarter of an M before the ring she is still falling");
+        assert!(wound.r > end.1, "and above it: r = {} vs {}", wound.r, end.1);
     }
 
 

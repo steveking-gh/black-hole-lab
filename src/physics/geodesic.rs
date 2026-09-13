@@ -64,7 +64,8 @@ pub(crate) fn geodesic_accel(metric: &KerrSchild, r: f64, u: &[f64; 3]) -> [f64;
     acc
 }
 
-/// Right-hand side with proper time as the independent variable:
+/// Right-hand side with proper time as the independent variable, the parameterisation
+/// `GeodesicState::step` integrates in:
 ///     dt/dtau = u^t,  dr/dtau = u^r,  dphi/dtau = u^phi,  dtau/dtau = 1,
 ///     du^mu/dtau = -Gamma^mu_{alpha beta} u^alpha u^beta.
 fn rhs_proper_time(metric: &KerrSchild, y: &StateVec) -> StateVec {
@@ -266,15 +267,6 @@ impl GeodesicState {
         [ut, ur, up]
     }
 
-    /// Re-derive the 4-velocity from the conserved (E, L) at radius r, on whichever root matches
-    /// the current sign of u^r. Used when a worldline is rewound to a recorded event, where only
-    /// (t, r, phi) were stored.
-    pub fn reseed_at(&mut self, metric: &KerrSchild, r: f64) {
-        let outgoing = self.u[1] > 0.0;
-        self.r = r.max(R_FLOOR);
-        self.u = self.branch_four_velocity_at(metric, self.r, outgoing);
-    }
-
     fn normalize_phi(&mut self) {
         let two_pi = 2.0 * std::f64::consts::PI;
         self.phi = self.phi.rem_euclid(two_pi);
@@ -306,6 +298,12 @@ impl GeodesicState {
 
     /// Step the geodesic forward by proper time step dtau using 4th-order Runge-Kutta (RK4) on
     /// the second-order system. Negative dtau integrates backward along the same worldline.
+    ///
+    /// The app itself drives every worldline in coordinate time, through `step_coord_time`, so
+    /// that the observers stay on the simulation clock; this is the same geodesic integrated in
+    /// its own affine parameter instead, and the tests use it as the independent check that the
+    /// coordinate-time integrator traces the same curve.
+    #[allow(dead_code)]
     pub fn step(&mut self, metric: &KerrSchild, dtau: f64) {
         if self.stalled || (self.r <= R_STOP && dtau > 0.0) {
             return;
