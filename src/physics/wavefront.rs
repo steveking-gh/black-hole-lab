@@ -460,7 +460,7 @@ impl NullRay {
 
     /// Whether this ray will reach the ring: its radial potential has no zero between the ring
     /// and the radius it now stands at, and it is either falling already or climbing towards a
-    /// turning point above it, from which it comes back down.
+    /// turning point it can actually get to, from which it comes back down.
     ///
     /// Exact. Both halves are statements about the ray as it stands - the sign of dr/dt, and the
     /// closed-form potential of the conserved (E, L) that `turns_between` evaluates - so the fate
@@ -475,24 +475,99 @@ impl NullRay {
     /// radius at which this chart's equation is left alone and the ray retired; see
     /// `NullRay::integrate`. A ray whose outer turning point lies beyond `R_ESCAPE` leaves the
     /// drawn field before it turns, so it is not counted.
+    ///
+    /// *Which* zeros count, and indeed whether any of them is the whole answer, is a question
+    /// about the horizons rather than about the potential alone, and that is what the horizons are
+    /// doing in an otherwise closed-form test. Four facts about this chart bound it:
+    ///
+    /// * nothing between r- and r+ ever moves outward. Delta < 0 there, so
+    ///   R(r) = [E (r^2 + a^2) - a L]^2 - Delta (L - a E)^2 is strictly positive - the trapped
+    ///   region holds no turning point at all - and every null ray in it has dr/dt < 0.
+    /// * a ray inside r- that moves outward asymptotes to r- from below, r- - r ~ exp(-kappa_- t),
+    ///   and never crosses it at finite coordinate time. A zero of its own potential above r- is
+    ///   a turning point it never gets to.
+    /// * nothing inside r+ ever reaches `R_ESCAPE`, which is the same statement at the other
+    ///   horizon: the outward branch of the interior accumulates on r- or on r+ and crosses
+    ///   neither.
+    /// * anything standing outside r- has to cross r- to reach the ring, and only the crossing
+    ///   family does that at finite coordinate time. The frozen family, E - Omega_- L < 0, closes
+    ///   on r- as exp(-kappa_- t) and stops there for good, so no ray of it reaches the ring
+    ///   however clear the potential below r- happens to be. `NullRay::frozen` is that sign, and
+    ///   it is exact and conserved, so it costs one metric and cannot be wrong about a ray it is
+    ///   asked of anywhere.
+    ///
+    /// So a climbing ray is turned back only by a zero on its own side of the horizons: one in
+    /// (r, r-) if it is inside r-, and one in (r, `R_ESCAPE`) if it is outside r+, where a ray
+    /// that turns and falls goes through both horizons and, having no zero below, reaches the
+    /// ring. Between the horizons dr/dt < 0 always, so the second clause is unreachable there;
+    /// the arm below is written so that it cannot be applied, and what decides the fate of a ray
+    /// in the trapped region is the potential below it and the family it belongs to.
+    ///
+    /// The horizon-blind form of this test broke at late times, and visibly. A ray frozen on r-
+    /// from above sits at r - r- ~ exp(-kappa_- t), and at the default a = 0.90 (kappa_- =
+    /// 0.386/M, r- = 0.564) that offset drops below the spacing of f64 near r- at about t = 100 M.
+    /// Every frozen ray then rounds onto r- and some land an ulp below it, where Delta has changed
+    /// sign and the equation hands them a dr/dt of the other sign. Counting a zero out beyond r+ -
+    /// which such a ray can never reach - called them ring-bound, and so did reading the dr/dt of
+    /// one that had not yet crossed as "falling, with nothing below to stop it". Their dead
+    /// neighbours supplied the other half of `Pulse::radial_extent`'s pin, and every wedge on the
+    /// (t, r) diagram snapped back to full width in a band at t ~ 100 M. See
+    /// `test_a_ray_frozen_onto_r_minus_has_no_fate` and `test_late_wedges_never_widen_again`.
     pub fn ring_bound(&self, metric: &KerrSchild) -> bool {
-        self.alive()
-            && !self.turns_between(metric, R_STOP, self.r)
-            && (self.dr_dt < 0.0 || self.turns_between(metric, self.r, R_ESCAPE))
+        if !self.alive() || self.turns_between(metric, R_STOP, self.r) {
+            return false;
+        }
+        // Everything outside r- has to cross r- to reach the ring, and only the crossing family
+        // does that at finite coordinate time: `frozen` is the exact, conserved sign that sorts
+        // the two, and it is the same horizon statement as the three above rather than a new one.
+        if self.r >= metric.inner_horizon() && self.frozen(metric) {
+            return false;
+        }
+        if self.dr_dt < 0.0 {
+            return true;
+        }
+        // Climbing, so it needs somewhere to turn - and the only turning points it can reach are
+        // the ones on its own side of the horizons. The middle arm is the trapped region, where
+        // this line is never reached in exact arithmetic and must not be acted on when round-off
+        // near r- has put a frozen ray's dr/dt on the wrong side of zero.
+        let (rm, rp) = (metric.inner_horizon(), metric.outer_horizon());
+        if self.r < rm {
+            self.turns_between(metric, self.r, rm)
+        } else if self.r > rp {
+            self.turns_between(metric, self.r, R_ESCAPE)
+        } else {
+            false
+        }
     }
 
-    /// The mirror of `ring_bound` at the outer boundary: the ray has no turning point between
-    /// here and `R_ESCAPE`, and is either climbing already or falling towards a turning point
-    /// above the ring from which it climbs back out, so it leaves the drawn field.
+    /// The mirror of `ring_bound` at the outer boundary: the ray stands strictly outside r+, has
+    /// no turning point between there and `R_ESCAPE`, and is either climbing already or falling
+    /// towards a turning point still outside r+ from which it climbs back out, so it leaves the
+    /// drawn field.
     ///
     /// Moving outward is not on its own enough, even well outside r+, which is why the same exact
     /// test is used at both ends. An equatorial null geodesic with enough angular momentum turns
     /// round at the outer root of its own potential - that root is what the photon orbits are made
     /// of - so a ray climbing at r = 2 M can perfectly well fall back without ever reaching 16 M.
+    ///
+    /// Standing outside r+ is not enough either, but standing at or inside it is disqualifying,
+    /// which is the horizon entering the test for the reasons `ring_bound` sets out: nothing
+    /// between r- and r+ ever moves outward, a ray inside r- that climbs asymptotes to r- from
+    /// below without crossing it, and so nothing at or inside r+ ever reaches `R_ESCAPE`, whatever
+    /// its potential does out there. For the same reason the falling arm looks for its turning
+    /// point in (r+, r) rather than all the way down to the ring: a zero inside r+ is a zero the
+    /// ray would have to come back out through, and it does not.
+    ///
+    /// This is the other half of the late-time failure `ring_bound` describes: a frozen ray that
+    /// has rounded onto r- near t = 100 M is handed a dr/dt of the wrong sign there, and the
+    /// horizon-blind test read the outer zeros of its potential as an escape from the deep
+    /// interior, re-pinning the wedge's upper edge to `R_ESCAPE`.
     pub fn escape_bound(&self, metric: &KerrSchild) -> bool {
-        self.alive()
-            && !self.turns_between(metric, self.r, R_ESCAPE)
-            && (self.dr_dt > 0.0 || self.turns_between(metric, R_STOP, self.r))
+        let rp = metric.outer_horizon();
+        if !self.alive() || self.r <= rp || self.turns_between(metric, self.r, R_ESCAPE) {
+            return false;
+        }
+        self.dr_dt > 0.0 || self.turns_between(metric, rp, self.r)
     }
 
     /// Advance the ray by dt of coordinate time along the non-affine geodesic equation of the
@@ -934,13 +1009,13 @@ pub struct Reception {
 
 /// The emission event of a pulse that was received, kept as a record in its own right.
 ///
-/// It is a copy of the four numbers that locate a `Pulse`'s emission event, plus the time of the
-/// arrival that made the pulse a delivery, and it exists because the emission event has to outlive
-/// the pulse. A transmitter running for a whole infall sends more pulses than the `MAX_PULSES` cap
-/// keeps - a hovering emitter alone sends about sixty before release at the app's default delay -
-/// and the pulse that carried the last signal to arrive is one of the oldest, so it is the first
-/// the cap throws away. The event it marks is a fact about the spacetime and does not stop being
-/// true when the drawing of its wavefront is dropped.
+/// It is a copy of the numbers that locate a `Pulse`'s emission event on the emitter's worldline,
+/// plus the time of the arrival that made the pulse a delivery, and it exists because the emission
+/// event has to outlive the pulse. A transmitter running for a whole infall sends more pulses than
+/// the `MAX_PULSES` cap keeps - a hovering emitter alone sends about sixty before release at the
+/// app's default delay - and the pulse that carried the last signal to arrive is one of the
+/// oldest, so it is the first the cap throws away. The event it marks is a fact about the
+/// spacetime and does not stop being true when the drawing of its wavefront is dropped.
 #[derive(Debug, Clone, Copy)]
 pub struct Delivery {
     /// Serial number of the pulse that was received.
@@ -949,10 +1024,10 @@ pub struct Delivery {
     pub emitted_t: f64,
     /// The emitter's proper time at emission.
     pub emitted_tau: f64,
-    /// Radius of the emission event.
+    /// Radius of the emission event. There is no azimuth here: the HUD line this record is for
+    /// names the pulse by when it was sent and how deep the emitter was, and nothing draws the
+    /// event any more.
     pub emitted_r: f64,
-    /// Azimuth of the emission event.
-    pub emitted_phi: f64,
     /// Coordinate time of the earliest arrival of this pulse: the event at which the delivery
     /// became a fact, and so the time a rewind has to reach past before it can retract it.
     pub received_t: f64,
@@ -1103,7 +1178,9 @@ impl Pulse {
     ///
     /// Both halves of the test are exact: which boundary a dead ray died at is recorded by the
     /// integrator (`RayEnd`), and whether a live ray will reach one is settled in closed form from
-    /// its own conserved (E, L) by `turns_between`, with nothing integrated and nothing assumed.
+    /// its own conserved (E, L) and from the horizons it would have to cross to get there, with
+    /// nothing integrated and nothing assumed. The horizons are half of it and not a refinement:
+    /// see `NullRay::ring_bound`, whose doc sets out what goes wrong at late times without them.
     ///
     /// There is a resolution limit, at the far end of the swallowing and only there. The last rays
     /// to be lost are the ones whose L/E sits just below the boundary between the two fates, and
@@ -1832,6 +1909,10 @@ impl SignalField {
     /// sent into a region the receiver has already left, and never arrives. Nothing here predicts
     /// that boundary; it is read off the simulation, which is the only criterion this app trusts.
     ///
+    /// It is reported and not drawn. The HUD names the pulse, the event it was sent from and how
+    /// many later ones never arrive; neither canvas marks that event, because a lone ring on a
+    /// worldline reads as a thing in the spacetime rather than as a fact about the run.
+    ///
     /// It survives the `MAX_PULSES` cap, which matters: an emitter transmitting from t = 0 through
     /// a whole infall sends of order a hundred pulses against a cap of sixty-four, and the last
     /// pulse to be delivered is usually one of the first to have been sent. See `Delivery`.
@@ -1875,7 +1956,6 @@ fn newest_delivery(pulses: &[Pulse]) -> Option<Delivery> {
             emitted_t: p.emitted_t,
             emitted_tau: p.emitted_tau,
             emitted_r: p.emitted_r,
-            emitted_phi: p.emitted_phi,
             received_t: p.receptions.iter().map(|r| r.t).fold(f64::INFINITY, f64::min),
         })
 }
@@ -2520,6 +2600,225 @@ mod tests {
         None
     }
 
+    /// The whole of an emitter's light cone at (t, r, phi) = (0, r0, 0), let go from a raindrop
+    /// frame: the same construction `SignalField::emit_if_due` makes, and the one the fate tests
+    /// need at radii no observer of the app happens to be standing at.
+    fn cone_at(metric: &KerrSchild, r0: f64) -> Vec<NullRay> {
+        let u = raindrop(metric, r0);
+        let tetrad = Tetrad::from_four_velocity(metric, r0, &u);
+        let two_pi = 2.0 * std::f64::consts::PI;
+        (0..RAYS_PER_PULSE)
+            .map(|i| {
+                let alpha = two_pi * (i as f64) / (RAYS_PER_PULSE as f64);
+                NullRay::from_local_direction(metric, 0.0, r0, 0.0, &tetrad, alpha, &u)
+            })
+            .collect()
+    }
+
+    /// dr/dt of the null direction at radius r with the given dphi/dt, on the outgoing branch if
+    /// `outgoing` and on the ingoing one otherwise.
+    ///
+    /// Writing the direction as v = (1, dr/dt, w), the null condition g_{mu nu} v^mu v^nu = 0 is a
+    /// quadratic in dr/dt with coefficients g_rr, 2 (g_tr + g_rphi w) and g_tt + 2 g_tphi w +
+    /// g_phiphi w^2. Solving it is what lets a test put an exact null ray at a radius and a
+    /// direction of its own choosing rather than at one an emitter's tetrad happens to offer.
+    fn null_slope(metric: &KerrSchild, r: f64, dphi_dt: f64, outgoing: bool) -> f64 {
+        let g = metric.metric_components(r);
+        let (w, quad_a) = (dphi_dt, g[1][1]);
+        let quad_b = 2.0 * (g[0][1] + g[1][2] * w);
+        let quad_c = g[0][0] + 2.0 * g[0][2] * w + g[2][2] * w * w;
+        let root = (quad_b * quad_b - 4.0 * quad_a * quad_c).sqrt();
+        assert!(root.is_finite(), "no null direction at r = {r} with dphi/dt = {w}");
+        let (lo, hi) = ((-quad_b - root) / (2.0 * quad_a), (-quad_b + root) / (2.0 * quad_a));
+        if outgoing { lo.max(hi) } else { lo.min(hi) }
+    }
+
+    /// The horizon-blind fate tests this pair replaced, kept here as the thing the new ones are
+    /// measured against: no zero of the potential between the ray and the boundary, and either
+    /// already going that way or a zero somewhere on the other side to turn at - with no question
+    /// asked about whether the ray can get to that zero through the horizons in between.
+    fn horizon_blind_fates(metric: &KerrSchild, ray: &NullRay) -> (bool, bool) {
+        let below = ray.turns_between(metric, R_STOP, ray.r);
+        let above = ray.turns_between(metric, ray.r, R_ESCAPE);
+        (
+            ray.alive() && !below && (ray.dr_dt < 0.0 || above),
+            ray.alive() && !above && (ray.dr_dt > 0.0 || below),
+        )
+    }
+
+    #[test]
+    fn test_a_ray_frozen_onto_r_minus_has_no_fate() {
+        // A ray of the frozen family closes on r- as r - r- ~ exp(-kappa_- t) and never crosses
+        // it, so at no finite coordinate time does it reach either boundary of the drawn field: it
+        // is neither ring-bound nor escape-bound, however long the run goes on. What breaks that
+        // in floating point is that the offset runs out of exponent long before the run runs out
+        // of time. At a = 0.90, kappa_- = 0.386/M and r- = 0.5641, whose ulp is 1.1e-16, so
+        // exp(-kappa_- t) passes under the spacing of f64 near r- at about t = 100 M. Every frozen
+        // ray then rounds onto r-, and the integrator's own round-off carries some of them an ulp
+        // or two past it, into Region III where Delta has changed sign and the equation hands them
+        // a dr/dt of the other sign.
+        //
+        // A whole cone is let go at r = 0.9, which at this spin is between the horizons, and
+        // carried to t = 120 M. What is asserted is that every ray that has settled onto r- -
+        // within 1e-9 of it, on either side - has no fate at all; what is reported is how many of
+        // them the horizon-blind test claimed one for.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let (rm, rp) = (metric.inner_horizon(), metric.outer_horizon());
+        let mut rays = cone_at(&metric, 0.9);
+        let frozen_family: Vec<bool> = rays.iter().map(|ray| ray.frozen(&metric)).collect();
+        for _ in 0..120 {
+            for ray in rays.iter_mut() {
+                ray.step(&metric, 1.0);
+            }
+        }
+
+        let mut settled = 0;
+        let mut from_above = 0;
+        let mut worst_offset = 0.0f64;
+        let (mut blind_ring, mut blind_escape) = (0, 0);
+        for (i, ray) in rays.iter().enumerate() {
+            if !ray.alive() || (ray.r - rm).abs() > 1e-9 {
+                continue;
+            }
+            settled += 1;
+            from_above += usize::from(frozen_family[i]);
+            worst_offset = worst_offset.max((ray.r - rm).abs());
+            let (blind_a, blind_b) = horizon_blind_fates(&metric, ray);
+            blind_ring += usize::from(blind_a);
+            blind_escape += usize::from(blind_b);
+            assert!(
+                !ray.ring_bound(&metric),
+                "ray {i} has settled onto r- at r - r- = {:.3e} (dr/dt = {:.3e}) and cannot reach \
+                 the ring at any finite coordinate time",
+                ray.r - rm,
+                ray.dr_dt
+            );
+            assert!(
+                !ray.escape_bound(&metric),
+                "ray {i} has settled onto r- at r - r- = {:.3e}, well inside r+ = {rp}, so it \
+                 cannot reach R_ESCAPE",
+                ray.r - rm
+            );
+        }
+        assert!(settled > 0, "the run has to produce the case it is about");
+        assert!(from_above > 0, "and some of them have to be the family that froze from above");
+
+        // And the same statement made by hand rather than by round-off: the outgoing principal
+        // null direction one ulp inside r-, which is the direction the frozen family tends to and
+        // the generator of the surface it is standing on.
+        let below = f64::from_bits(rm.to_bits() - 1);
+        let pnd = metric.radial_null_slopes(below);
+        let generator = ray_with_slopes(&metric, below, pnd.dr_dt_outgoing, pnd.dphi_dt_outgoing);
+        assert!(
+            !generator.ring_bound(&metric) && !generator.escape_bound(&metric),
+            "the generator of r- one ulp below it reaches neither boundary: r - r- = {:.3e}, \
+             dr/dt = {:.3e}",
+            generator.r - rm,
+            generator.dr_dt
+        );
+        println!(
+            "a cone from r = 0.9 at a = 0.90, carried to t = 120 M: {settled} of {} rays have \
+             settled onto r- = {rm:.6} (worst offset {worst_offset:.3e} M; {from_above} of them \
+             the family that froze onto it from above), and none of them is ring-bound or \
+             escape-bound. The horizon-blind test called {blind_ring} of them ring-bound and \
+             {blind_escape} escape-bound",
+            rays.len()
+        );
+    }
+
+    #[test]
+    fn test_an_outgoing_ray_inside_r_minus_climbs_to_r_minus_and_is_not_ring_bound() {
+        // Nothing crosses r- outward in this chart: a ray inside it that moves outward asymptotes
+        // to r- from below, ending on the other branch of the Cauchy horizon, which this chart
+        // does not cover. A zero of its potential above r- is therefore a turning point it never
+        // gets to, and reading one as "it will turn there and come back down to the ring" is wrong
+        // twice over - the ray neither turns there nor comes back.
+        //
+        // The ray is built by hand rather than taken from a cone: dphi/dt is chosen and the null
+        // condition solved for the outgoing dr/dt, so it is an exact null direction with an exact
+        // potential. Both halves of the claim are then checked, the classification and the motion
+        // it is a claim about.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let rm = metric.inner_horizon();
+        let r0 = 0.3;
+        let dphi_dt = 1.2;
+        let dr_dt = null_slope(&metric, r0, dphi_dt, true);
+        let mut ray = ray_with_slopes(&metric, r0, dr_dt, dphi_dt);
+        assert!(dr_dt > 0.0, "the ray has to be the outgoing one: dr/dt = {dr_dt}");
+        assert!(
+            !ray.turns_between(&metric, R_STOP, rm),
+            "and it has to be the case with nothing below r- to stop it"
+        );
+        assert!(!ray.ring_bound(&metric), "so it is not ring-bound");
+        assert!(!ray.escape_bound(&metric), "and it is nowhere near escaping");
+
+        // 80 M of coordinate time later it is still alive, still inside r-, and standing on it.
+        let mut highest = ray.r;
+        for _ in 0..800 {
+            ray.step(&metric, 0.1);
+            if ray.alive() {
+                highest = highest.max(ray.r);
+            }
+        }
+        assert!(ray.alive(), "it must not have reached the ring: died at {:?}", ray.death_t);
+        assert!(
+            ray.r < rm && rm - ray.r < 1e-6,
+            "it must be standing on r- = {rm} from below, not at r = {}",
+            ray.r
+        );
+        assert!(highest < rm, "and it must never have crossed r-: highest r = {highest}");
+        println!(
+            "an outgoing null ray at r = {r0} inside r- = {rm:.6} (dphi/dt = {dphi_dt}, \
+             dr/dt = {dr_dt:.4}, L/E = {:.4}): after 80 M it is alive at r - r- = {:.3e}, having \
+             climbed to r- from below and never crossed it",
+            ray.l_over_e(&metric),
+            ray.r - rm
+        );
+    }
+
+    #[test]
+    fn test_nothing_between_the_horizons_can_escape() {
+        // Delta < 0 between the horizons, so R(r) = [E (r^2 + a^2) - a L]^2 - Delta (L - a E)^2 is
+        // strictly positive there - the trapped region holds no turning point at all - and every
+        // null ray in it has dr/dt < 0. Two consequences the fate tests have to carry: nothing in
+        // there is escape-bound, whatever the potential does out beyond r+, and the climbing arm
+        // of `ring_bound` is unreachable, so what is left of that test in the trapped region is
+        // the potential below the ray and the family the ray belongs to.
+        //
+        // A ray of the crossing family goes through r- at finite coordinate time and then has
+        // nothing but its own potential between it and the ring; a ray of the frozen family never
+        // gets through r- at all, and so reaches neither boundary. A whole cone is checked at
+        // emission, every ray of it against both statements.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let (rm, rp) = (metric.inner_horizon(), metric.outer_horizon());
+        let r0 = 0.9;
+        assert!(r0 > rm && r0 < rp, "the cone has to be let go inside the trapped region");
+        let rays = cone_at(&metric, r0);
+        let (mut ring_bound, mut frozen_rays, mut with_zero_below) = (0, 0, 0);
+        for (i, ray) in rays.iter().enumerate() {
+            assert!(ray.dr_dt < 0.0, "ray {i} moves outward at r = {r0} between the horizons");
+            assert!(!ray.escape_bound(&metric), "ray {i} cannot escape from between the horizons");
+            let zero_below = ray.turns_between(&metric, R_STOP, ray.r);
+            let frozen = ray.frozen(&metric);
+            with_zero_below += usize::from(zero_below);
+            frozen_rays += usize::from(frozen);
+            assert_eq!(
+                ray.ring_bound(&metric),
+                !zero_below && !frozen,
+                "ray {i} between the horizons: ring-bound is the potential below it (zero below: \
+                 {zero_below}) and the family it belongs to (frozen: {frozen}), and nothing else"
+            );
+            ring_bound += usize::from(ray.ring_bound(&metric));
+        }
+        println!(
+            "a cone let go at r = {r0}, between r- = {rm:.4} and r+ = {rp:.4}: all {} of its rays \
+             fall and none is escape-bound; {frozen_rays} belong to the frozen family and \
+             {with_zero_below} have a turning point above the ring, leaving {ring_bound} \
+             ring-bound",
+            rays.len()
+        );
+    }
+
     #[test]
     fn test_a_pulse_inside_r_minus_ends_on_the_ring_or_turns() {
         // What becomes of a pulse emitted inside the Cauchy horizon, measured against the exact
@@ -2797,6 +3096,71 @@ mod tests {
             pulse.extent_track.len()
         );
         assert!(step_out > 0.0, "the step out of the ring is the thing being reported: {step_out}");
+    }
+
+    #[test]
+    fn test_late_wedges_never_widen_again() {
+        // The whole of a transmission, carried far past the end of the emitter's own worldline:
+        // Alice released from r = 4.5 M at a = 0.90, her field stepped at the app's own frame of
+        // 1/50 M out to t = 110 M. She reaches the ring in about 6 M, so every one of her pulses
+        // spends more than a hundred M with nothing left of it but the arcs standing on r-.
+        //
+        // A wedge narrows as it is eaten and then stops changing, because what is left of the
+        // pulse is frozen. It must never widen again, and the horizon-blind fate tests made it do
+        // exactly that. A frozen ray's offset from r- decays as exp(-kappa_- t) and passes under
+        // the spacing of f64 near r- at about t = 100 M; the ray rounds onto the surface, some
+        // land an ulp below it with the sign of dr/dt flipped by the change of sign of Delta, and
+        // the horizon-blind test then read the zeros of their potential out beyond r+ - which such
+        // a ray can never reach - as a fate. A dead neighbour supplied the other half of
+        // `Pulse::radial_extent`'s pin and the wedge snapped back to the full width of the drawn
+        // field, in a band of them across the diagram at t ~ 100 M.
+        //
+        // What is asserted is the shape of the thing: for every pulse, the wedge at the last
+        // sample of its track is no wider than it was at t = 60 M, by which time every pulse of
+        // this run has long finished being swallowed.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let field = run_field_to(&metric, 110.0, 0.02);
+        let width_at = |track: &[(f64, f64, f64)], when: f64| {
+            track.iter().rev().find(|(t, ..)| *t <= when).map(|&(t, lo, hi)| (t, hi - lo))
+        };
+
+        let mut checked = 0;
+        let mut worst_widening = f64::NEG_INFINITY;
+        let mut widest_late = 0.0f64;
+        let mut widest_late_pulse = 0;
+        let mut pinned_late = 0;
+        for pulse in field.pulses.iter() {
+            let Some((t60, w60)) = width_at(&pulse.extent_track, 60.0) else {
+                continue;
+            };
+            let &(t_last, lo, hi) = pulse.extent_track.last().expect("a track has its seed");
+            assert!(
+                t_last > 100.0,
+                "pulse {} stopped recording at t = {t_last}, before the band this test is about",
+                pulse.index
+            );
+            checked += 1;
+            let late = hi - lo;
+            if late > widest_late {
+                widest_late = late;
+                widest_late_pulse = pulse.index;
+            }
+            pinned_late += usize::from(lo <= R_STOP);
+            worst_widening = worst_widening.max(late - w60);
+            assert!(
+                late <= w60 + 1e-12,
+                "pulse {} widened from {w60} at t = {t60:.2} to {late} at t = {t_last:.2} \
+                 (r_min = {lo}, r_max = {hi})",
+                pulse.index
+            );
+        }
+        assert!(checked > 20, "the run has to carry a whole transmission: {checked} pulses");
+        println!(
+            "Alice's field at a = 0.90, stepped at 1/50 M to t = 110 M: {checked} pulses, none of \
+             them widening after t = 60 M (worst change {worst_widening:.3e} M). The widest late \
+             wedge is pulse {widest_late_pulse}'s at {widest_late:.3e} M, and {pinned_late} of the \
+             tracks end with their inner edge pinned to R_STOP = {R_STOP}"
+        );
     }
 
     #[test]
@@ -4574,3 +4938,4 @@ mod tests {
         assert!(worst_ratio < 1e-3, "a crossing shift moved {worst_ratio} with the step size");
     }
 }
+

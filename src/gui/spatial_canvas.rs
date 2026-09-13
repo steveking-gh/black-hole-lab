@@ -382,25 +382,6 @@ impl SpatialCanvas {
         }
         let bob_pos = to_screen(bob.cartesian_position(metric));
 
-        // The last pulse of Bob's that ever reached Alice, marked at the event on his worldline
-        // where he sent it. It is drawn only once her worldline has ended, because until then the
-        // question has no answer: the simulation is the criterion, and a pulse still in flight may
-        // yet arrive. After it, the ring is the boundary of the causal past of the end of Alice's
-        // worldline, seen on Bob's: everything he sends beyond it is sent to nobody.
-        //
-        // He transmits while he hovers as well as while he falls, so the event can perfectly well
-        // be one he sent standing still: at the app's default delay it is, and the ring then sits
-        // on his hover radius, which in this projection is a point on the circle he waits on rather
-        // than anywhere along the spiral of his infall.
-        if signals.show_bob
-            && alice.as_ref().is_some_and(|al| al.has_ended())
-            && let Some(pulse) = signals.bob.last_delivered_pulse()
-        {
-            let at = to_screen(metric.cartesian_position(pulse.emitted_r, pulse.emitted_phi));
-            painter.circle_stroke(at, 5.0, Stroke::new(2.0, Theme::BOB_COLOR));
-            painter.circle_stroke(at, 7.0, Stroke::new(1.0, Color32::WHITE));
-        }
-
         // Bob circle marker
         painter.circle_filled(bob_pos, 7.0, Theme::BOB_COLOR);
         painter.circle_stroke(bob_pos, 9.0, Stroke::new(1.5, Color32::WHITE));
@@ -422,7 +403,7 @@ impl SpatialCanvas {
                  Drag: Ω_H = {:.3}/M = {:.3e} rad/s\n\
                  River: colour √(1−α²) vs ZAMO (1 at r₊); length √(2M/r) (1 at 2M)\n\
                  Signal: salmon = frozen family (E − Ω₋L < 0, ends on the other branch of r₋)\n\
-                 Bob's fronts: same shift colours at half stroke, mint emission dots; mint ring = his last pulse to reach Alice\n\
+                 Bob's fronts: same shift colours at half stroke, mint emission dots\n\
                  Receptions: triangle on the receiver's trail in the sender's colour (amber = Alice → Bob, mint = Bob → Alice)\n\
                  🔍 Zoom: {:.0} px/M (Scroll to zoom, drag to pan)",
                 metric.format_physical_distance(1.0),
@@ -451,7 +432,7 @@ impl SpatialCanvas {
                  Drag: Ω_H = {:.3}/M\n\
                  River: colour √(1−α²) vs ZAMO (1 at r₊); length √(2M/r) (1 at 2M)\n\
                  Signal: salmon = frozen family (E − Ω₋L < 0, ends on the other branch of r₋)\n\
-                 Bob's fronts: same shift colours at half stroke, mint emission dots; mint ring = his last pulse to reach Alice\n\
+                 Bob's fronts: same shift colours at half stroke, mint emission dots\n\
                  Receptions: triangle on the receiver's trail in the sender's colour (amber = Alice → Bob, mint = Bob → Alice)\n\
                  🔍 Zoom: {:.0} px/M (Scroll to zoom, drag to pan)",
                 metric.format_physical_distance(1.0),

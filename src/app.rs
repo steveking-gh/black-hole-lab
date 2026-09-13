@@ -1229,8 +1229,8 @@ mod tests {
     fn test_bobs_transmission_ends_when_alices_worldline_does() {
         // The feature's own statement, through the app loop: once Alice has reached the ring there
         // is a last pulse of Bob's that reached her, and everything he sends after it is sent to
-        // nobody. The HUD and both canvases read exactly these two calls, and the frame drawn at
-        // the end is the state that puts the ring on his worldline.
+        // nobody. The HUD line that names that pulse reads exactly these two calls, and the
+        // frame drawn at the end is the state it reads them in.
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
         let mut ended_at = None;

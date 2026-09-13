@@ -972,22 +972,6 @@ impl SpacetimeCanvas {
         }
         if signals.show_bob {
             draw_receptions(signals.bob);
-            // The emission event of the last pulse of Bob's that ever reached Alice, ringed on his
-            // worldline once hers has ended. Beyond that event his light cone no longer contains
-            // any of her worldline, so nothing he sends arrives; the simulation is what decides
-            // that, and the ring appears only once it has. He transmits through his wait as well as
-            // through his fall, so the ring can land on the vertical hover segment of his
-            // worldline, and at the app's default delay it does: everything below the ring on that
-            // segment reached her, everything above it, release and infall included, did not.
-            if alice.as_ref().is_some_and(|al| al.has_ended())
-                && let Some(pulse) = signals.bob.last_delivered_pulse()
-            {
-                let at = Pos2::new(to_screen_x(pulse.emitted_r), to_screen_y(pulse.emitted_t));
-                if rect.contains(at) {
-                    painter.circle_stroke(at, 5.0, Stroke::new(2.0, Theme::BOB_COLOR));
-                    painter.circle_stroke(at, 7.0, Stroke::new(1.0, Color32::WHITE));
-                }
-            }
         }
 
         let bob_pos = Pos2::new(to_screen_x(bob.r), to_screen_y(bob.t));
