@@ -25,6 +25,12 @@ impl Theme {
     /// Outgoing interior null rays on the (t, r) diagram: light salmon (255, 150, 200) at alpha 120, premultiplied here, so a ray hugging the magenta r- line still reads against it.
     pub const OUTGOING_RAY: Color32 = Color32::from_rgba_premultiplied(120, 71, 94, 120);
 
+    /// The frozen family of a wavefront on the equatorial view, E - Omega_- L < 0: the same salmon
+    /// hue as `OUTGOING_RAY`, because it is the same physics seen in the other projection, but at
+    /// alpha 230 rather than 120. The arc collapses to within a fraction of a pixel of the magenta
+    /// r- circle, so it is only legible drawn nearly opaque and drawn last, on top of that circle.
+    pub const FROZEN_FRONT: Color32 = Color32::from_rgba_unmultiplied_const(255, 150, 200, 230);
+
     // Observers
     pub const BOB_COLOR: Color32 = Color32::from_rgb(0, 255, 200); // Bright Mint / Cyan
     pub const ALICE_COLOR: Color32 = Color32::from_rgb(255, 160, 40); // Amber Orange

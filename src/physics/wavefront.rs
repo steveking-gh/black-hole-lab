@@ -248,6 +248,17 @@ impl NullRay {
         e - omega_minus * l
     }
 
+    /// Whether the ray belongs to the frozen family: `inner_horizon_energy` negative, so the ray
+    /// approaches r- from outside as r - r- ~ exp(-kappa_- t), co-rotating at Omega_-, and never
+    /// crosses this branch of the Cauchy horizon at any finite coordinate time.
+    ///
+    /// The sign is the exact criterion at every radius, not only inside r+, so no radial test
+    /// guards it. It is conserved along the ray, but evaluating it costs a metric, so a caller
+    /// drawing a whole field should ask once per ray per frame and keep the answer.
+    pub fn frozen(&self, metric: &KerrSchild) -> bool {
+        self.inner_horizon_energy(metric) < 0.0
+    }
+
     /// L / E = g_{phi mu} v^mu / (-g_{t mu} v^mu), the one scale-free constant of the motion a
     /// direction can carry. Conserved exactly along the ray, which is what the tests check.
     #[allow(dead_code)] // the integration's conservation diagnostic; the tests are its caller
@@ -664,7 +675,7 @@ impl Pulse {
                             tau_bob: bob.tau,
                             r: bob.r,
                             ratio,
-                            frozen_family: self.rays[nearer].inner_horizon_energy(metric) < 0.0,
+                            frozen_family: self.rays[nearer].frozen(metric),
                         });
                     }
                 }
@@ -1392,6 +1403,93 @@ mod tests {
         assert!(
             profile.last().unwrap().1 > 100.0 * profile[0].1,
             "and the profile must span orders of magnitude: {profile:?}"
+        );
+    }
+
+    #[test]
+    fn test_frozen_family_is_the_prograde_arc_and_narrows_inward() {
+        // Which part of a pulse freezes, read straight off the emission event rather than off a
+        // long integration: E - Omega_- L is conserved, so the family a ray belongs to is already
+        // settled the instant Alice lets it go. Four raindrop emissions between r+ and the ring
+        // give the shape of the answer. The frozen arc is always the *prograde* half of the cone,
+        // the rays dragged forward in phi, never the outward radial leg at alpha = 0 and never the
+        // retrograde half; and it shrinks as the emitter falls, because a pulse sent close to r-
+        // has almost no room left in which frame dragging can beat aberration.
+        //
+        // Measured, out of the 72 rays of a pulse: 26 frozen at r = 1.7 (just inside r+ = 1.76,
+        // alpha from 30 to 155 degrees), 21 at r = 1.0 (40 to 140), 12 at r = 0.5 (60 to 115) and 4
+        // at r = 0.3 (75 to 90), against r- = 0.240. So the arc is a little over a third of the
+        // ring high in Region II and a bare sliver by the time Alice is nearly on the Cauchy
+        // horizon.
+        let metric = KerrSchild::new(1.0, 0.65);
+        let rm = metric.inner_horizon();
+        let omega_minus = metric.a / (rm * rm + metric.a * metric.a);
+        let params = WorldlineParams::default();
+        let two_pi = 2.0 * std::f64::consts::PI;
+        let mut counts: Vec<(f64, usize)> = Vec::new();
+        for &r0 in &[1.7f64, 1.0, 0.5, 0.3] {
+            let alice = Observer::new_with_phi(&metric, "Alice", 0.0, r0, 0.0, 0.0, params);
+            let mut field = SignalField::default();
+            field.emit_if_due(&metric, &alice);
+            let pulse = field.pulses.first().expect("a released Alice emits at once");
+            assert_eq!(pulse.rays.len(), RAYS_PER_PULSE);
+
+            let mut frozen = 0usize;
+            for (i, ray) in pulse.rays.iter().enumerate() {
+                if !ray.frozen(&metric) {
+                    continue;
+                }
+                frozen += 1;
+                let alpha = two_pi * (i as f64) / (RAYS_PER_PULSE as f64);
+                assert!(
+                    alpha > 0.0 && alpha < std::f64::consts::PI,
+                    "r0={r0}: a frozen ray must be prograde, not alpha={alpha}"
+                );
+                // The same criterion in the one scale-free constant the ray carries. E and L per
+                // unit k^t are not separately conserved along a ray; their quotient L/E is, so
+                // this is the form of the statement that survives the fall. Frozen means
+                // E - Omega_- L < 0, which divided by E reads L/E > 1/Omega_- where E is positive
+                // and L/E < 1/Omega_- where E is negative. Both branches are populated: inside the
+                // ergoregion the leading edge of the arc has negative energy per unit k^t, which is
+                // why the plain statement "L/E > 0" is not the criterion (measured: at r = 1 the
+                // frozen ray at alpha = 50 degrees has E = -0.045, L = +0.107, L/E = -2.39).
+                let g = metric.metric_components(ray.r);
+                let v = ray.direction();
+                let e_over_kt = -(g[0][0] * v[0] + g[0][1] * v[1] + g[0][2] * v[2]);
+                let l_over_e = ray.l_over_e(&metric);
+                if e_over_kt > 0.0 {
+                    assert!(
+                        l_over_e > 1.0 / omega_minus,
+                        "r0={r0}: a frozen ray of positive energy co-rotates past the generator:                          L/E = {l_over_e} against 1/Omega_- = {} at alpha={alpha}",
+                        1.0 / omega_minus
+                    );
+                } else {
+                    assert!(
+                        l_over_e < 1.0 / omega_minus,
+                        "r0={r0}: a frozen ray of negative energy sits below the generator:                          L/E = {l_over_e} against 1/Omega_- = {} at alpha={alpha}",
+                        1.0 / omega_minus
+                    );
+                }
+            }
+            counts.push((r0, frozen));
+        }
+
+        println!("frozen rays of {RAYS_PER_PULSE} per pulse: {counts:?}");
+        for w in counts.windows(2) {
+            assert!(
+                w[1].1 < w[0].1,
+                "the frozen arc must narrow inward: {:?} then {:?}",
+                w[0],
+                w[1]
+            );
+        }
+        assert!(
+            counts[0].1 >= 20,
+            "just inside r+ the frozen arc is about a third of the ring: {counts:?}"
+        );
+        assert!(
+            counts[counts.len() - 1].1 <= 8,
+            "close to r- it is only a sliver: {counts:?}"
         );
     }
 

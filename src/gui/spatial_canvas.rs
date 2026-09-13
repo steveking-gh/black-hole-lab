@@ -385,6 +385,7 @@ impl SpatialCanvas {
                  Spin a/M: {:.3}\n\
                  Drag: Ω_H = {:.3}/M = {:.3e} rad/s\n\
                  River: colour √(1−α²) vs ZAMO (1 at r₊); length √(2M/r) (1 at 2M)\n\
+                 Signal: salmon = frozen family (E − Ω₋L < 0, ends on the other branch of r₋)\n\
                  🔍 Zoom: {:.0} px/M (Scroll to zoom, drag to pan)",
                 metric.format_physical_distance(1.0),
                 metric.m_solar,
@@ -411,6 +412,7 @@ impl SpatialCanvas {
                  Spin a/M: {:.3}\n\
                  Drag: Ω_H = {:.3}/M\n\
                  River: colour √(1−α²) vs ZAMO (1 at r₊); length √(2M/r) (1 at 2M)\n\
+                 Signal: salmon = frozen family (E − Ω₋L < 0, ends on the other branch of r₋)\n\
                  🔍 Zoom: {:.0} px/M (Scroll to zoom, drag to pan)",
                 metric.format_physical_distance(1.0),
                 metric.format_physical_time(1.0),
@@ -468,6 +470,18 @@ impl SpatialCanvas {
 /// inward. The dot sits on Alice's trail at the radius the pulse left her at, and the loop's outer
 /// edge never gets further from the hole than that dot, which is the statement the drawing exists to
 /// make.
+///
+/// The frozen family is drawn twice over, in salmon, because otherwise it cannot be seen at all.
+/// Every ray whose `NullRay::inner_horizon_energy` is negative approaches r- as r - r- ~
+/// exp(-kappa_- t) while co-rotating at Omega_-, so within a few M of coordinate time the whole arc
+/// has collapsed to a fraction of a pixel of the magenta r- circle, where the ordinary shift ramp
+/// leaves it indistinguishable from the circle underneath. So: a segment with *both* ends frozen is
+/// drawn in `Theme::FROZEN_FRONT` at width 2, and every frozen ray also gets a small filled dot, so
+/// an arc squeezed below a pixel of width still reads as a beaded arc riding the Cauchy horizon. All
+/// of it is drawn after every ordinary segment of every pulse, so no later front paints over it. A
+/// segment with one frozen end and one crossing end keeps the ordinary colouring: that pair is the
+/// tear in the loop, where the front is being pulled apart into its two families, and it belongs to
+/// neither.
 fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
     painter: &egui::Painter,
     metric: &KerrSchild,
@@ -481,10 +495,18 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
     // compete with the wavefront it anchors.
     let alice = Theme::ALICE_COLOR;
     let dot = Color32::from_rgba_unmultiplied(alice.r(), alice.g(), alice.b(), 150);
+    // The frozen family of every pulse, held back and drawn last so that it lies on top of both the
+    // r- circle and the ordinary fronts it is buried in.
+    let mut frozen_segments: Vec<[Pos2; 2]> = Vec::new();
+    let mut frozen_dots: Vec<Pos2> = Vec::new();
     for pulse in signal.pulses.iter() {
         // A spent pulse is kept in the field so that stepping backwards can bring it back, but it
         // has no front left to draw and no dot to anchor.
         if !pulse.rays.iter().any(|ray| ray.alive()) {
+            continue;
+        }
+        let n = pulse.rays.len();
+        if n < 2 {
             continue;
         }
         let ratios: Vec<f64> = pulse
@@ -498,25 +520,44 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
                 ray.frequency_ratio(metric, &[ut, ur, up])
             })
             .collect();
-        let n = pulse.rays.len();
-        if n < 2 {
-            continue;
-        }
+        // One classification and one projection per ray per frame, both of which the segment loop
+        // would otherwise repeat for each of the two segments a ray belongs to.
+        let frozen: Vec<bool> =
+            pulse.rays.iter().map(|ray| ray.alive() && ray.frozen(metric)).collect();
+        let points: Vec<Pos2> = pulse
+            .rays
+            .iter()
+            .map(|ray| to_screen(metric.cartesian_position(ray.r, ray.phi)))
+            .collect();
+
         // n segments rather than n - 1: the closing one runs from the last ray back to the first.
         for i in 0..n {
             let j = (i + 1) % n;
-            let (a, b) = (&pulse.rays[i], &pulse.rays[j]);
-            if !a.alive() || !b.alive() {
+            if !pulse.rays[i].alive() || !pulse.rays[j].alive() {
                 continue;
             }
-            let p0 = to_screen(metric.cartesian_position(a.r, a.phi));
-            let p1 = to_screen(metric.cartesian_position(b.r, b.phi));
+            if frozen[i] && frozen[j] {
+                frozen_segments.push([points[i], points[j]]);
+                continue;
+            }
             let colour = Theme::shift_colour(0.5 * (ratios[i] + ratios[j]), Theme::SHIFT_ALPHA);
-            painter.line_segment([p0, p1], Stroke::new(1.2, colour));
+            painter.line_segment([points[i], points[j]], Stroke::new(1.2, colour));
+        }
+        for (i, point) in points.iter().enumerate() {
+            if frozen[i] {
+                frozen_dots.push(*point);
+            }
         }
         // The anchor: where on Alice's trail this loop was let go of.
         let emitted = to_screen(metric.cartesian_position(pulse.emitted_r, pulse.emitted_phi));
         painter.circle_filled(emitted, 2.0, dot);
+    }
+
+    for segment in frozen_segments {
+        painter.line_segment(segment, Stroke::new(2.0, Theme::FROZEN_FRONT));
+    }
+    for point in frozen_dots {
+        painter.circle_filled(point, 1.6, Theme::FROZEN_FRONT);
     }
 }
 
