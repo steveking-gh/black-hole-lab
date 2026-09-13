@@ -1,0 +1,53 @@
+src/physics/observer.rs
+  s_5e464e0dde83ec::t_4c16a7fc2de697 516-523,525-526,621-630,1309,1349-1350,1352-1371
+  s_5e464e0dde83ec::t_bec86c8a286265 804-835,1188-1193,1203,1217-1219,1229,1272-1276,1278-1308,1310-1348,1372-1447,1450-1454
+  s_5e464e0dde83ec::t_0f97b42e298f74 509-510,527,529-537,547,554,574,576-602,605-607,609,612-620,631-633,636-644,646-679,681-683
+  s_5e464e0dde83ec::t_3a8af28c98fe89 65-98,117-125,167-175,185-186,189,217-224,227,237-251,254-272,307-309
+src/physics/wavefront.rs
+  s_5e464e0dde83ec::t_459bbf524f7779 2675
+  s_5e464e0dde83ec::t_ae5b15e70ff649 549-552,790
+  s_5e464e0dde83ec::t_fcb01194487468 2070-2073
+  s_5e464e0dde83ec::t_48d502566ac9e2 2035
+  s_5e464e0dde83ec::t_750a4c9d4b2a9d 2075-2076,2085-2086,2089-2092
+  s_5e464e0dde83ec::t_890282a6d04ab6 2078-2079
+  s_5e464e0dde83ec::t_00f6da5132346b 2058-2060,2062-2063,2084,2093
+  s_5e464e0dde83ec::t_08be57f1ae615d 2061,2064-2069,2074,2077,2080-2083,2087-2088
+  s_5e464e0dde83ec::t_0c205e9e9d00d3 969
+  s_5e464e0dde83ec::t_bc3abe69126ce0 2020-2034,2036-2057,2094-2095
+  s_5e464e0dde83ec::t_ccb714c5e111fd 2019
+src/gui/controls.rs
+  s_5e464e0dde83ec::t_459bbf524f7779 4,220-223,225,233-234
+src/gui/spacetime_canvas.rs
+  s_5e464e0dde83ec::t_459bbf524f7779 1006,1029
+src/gui/spatial_canvas.rs
+  s_5e464e0dde83ec::t_b5acc209ebe8d6 376-381
+  s_5e464e0dde83ec::t_459bbf524f7779 656
+  s_5e464e0dde83ec::t_ae5b15e70ff649 335-336,339-340,342-360,362-367,370-375,382,426,455,616-636
+  s_5e464e0dde83ec::t_51e21c4b6021c6 637-638
+src/app.rs
+  s_5e464e0dde83ec::t_39092f9133732f 93-94,96,125-126,158-159
+  s_5e464e0dde83ec::t_459bbf524f7779 7,95,104-108
+  s_5e464e0dde83ec::t_34d9919ad01f48 482-483,486-487,489-503
+  s_5e464e0dde83ec::t_82e8939a7c6734 642-644
+  s_5e464e0dde83ec::t_420f2608d78720 504,506-641
+  s_5e464e0dde83ec::t_a38cc1b210067a 757-768,1069-1076
+  s_5e464e0dde83ec::t_2a0aaae2b60602 997-1000
+src/physics/geodesic.rs
+  s_5e464e0dde83ec::t_56d1a0f0f66223 67-68,301-306
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "6818fac96674bdf4230d8c6a648c9273ee03ff36",
+  "prompts": {},
+  "sessions": {
+    "s_5e464e0dde83ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc7a846d-d13c-4554-b9bf-dc2dee2f30eb",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
