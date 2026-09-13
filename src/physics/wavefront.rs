@@ -114,10 +114,10 @@ use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::Observer;
 use crate::physics::tetrad::Tetrad;
 
-/// Directions per pulse: the whole of the emitter's local light cone at five-degree spacing, with
+/// Directions per pulse: the whole of the emitter's local light cone at two-and-a-half-degree spacing, with
 /// the count chosen so that alpha = 0, their own outward radial leg, lands on a ray rather than in
 /// a gap between two.
-pub const RAYS_PER_PULSE: usize = 72;
+pub const RAYS_PER_PULSE: usize = 144;
 
 /// Pulses kept at once. The oldest is dropped past this, which bounds both the drawing and the
 /// integration cost of a long run.
@@ -458,28 +458,41 @@ impl NullRay {
         lowest <= 0.0
     }
 
-    /// Whether this ray is on its way into the ring: it is moving inward, and its radial potential
-    /// has no zero between the ring and the radius it now stands at, so nothing turns it round
-    /// before it gets there.
+    /// Whether this ray will reach the ring: its radial potential has no zero between the ring
+    /// and the radius it now stands at, and it is either falling already or climbing towards a
+    /// turning point above it, from which it comes back down.
     ///
     /// Exact. Both halves are statements about the ray as it stands - the sign of dr/dt, and the
     /// closed-form potential of the conserved (E, L) that `turns_between` evaluates - so the fate
-    /// is settled without integrating anything, and it cannot change: (E, L) are constants, and a
-    /// ray with no turning point below it never reverses. "The ring" here is R_STOP, the radius at
-    /// which this chart's equation is left alone and the ray retired; see `NullRay::integrate`.
+    /// is settled without integrating anything, and it cannot change: (E, L) are constants, a ray
+    /// with no turning point below it never reverses on the way in, and a ray with one above it
+    /// always does on the way out. The second clause is not a corner case. Inside r- a pulse's
+    /// rays with |L| just above a|E| are sent outward, climb a few hundredths of an M to the outer
+    /// zero of their potential over more than a full M of coordinate time, and then fall to the
+    /// ring; with the cone sampled at 2.5 degrees one such ray sits next to the last ray that fell
+    /// straight in, and reading it as "not ring-bound" while it climbed dropped the drawn front's
+    /// inner edge off the ring in the middle of the swallowing. "The ring" here is R_STOP, the
+    /// radius at which this chart's equation is left alone and the ray retired; see
+    /// `NullRay::integrate`. A ray whose outer turning point lies beyond `R_ESCAPE` leaves the
+    /// drawn field before it turns, so it is not counted.
     pub fn ring_bound(&self, metric: &KerrSchild) -> bool {
-        self.alive() && self.dr_dt < 0.0 && !self.turns_between(metric, R_STOP, self.r)
+        self.alive()
+            && !self.turns_between(metric, R_STOP, self.r)
+            && (self.dr_dt < 0.0 || self.turns_between(metric, self.r, R_ESCAPE))
     }
 
-    /// The mirror of `ring_bound` at the outer boundary: the ray is moving outward and has no
-    /// turning point between here and `R_ESCAPE`, so it leaves the drawn field.
+    /// The mirror of `ring_bound` at the outer boundary: the ray has no turning point between
+    /// here and `R_ESCAPE`, and is either climbing already or falling towards a turning point
+    /// above the ring from which it climbs back out, so it leaves the drawn field.
     ///
     /// Moving outward is not on its own enough, even well outside r+, which is why the same exact
     /// test is used at both ends. An equatorial null geodesic with enough angular momentum turns
     /// round at the outer root of its own potential - that root is what the photon orbits are made
     /// of - so a ray climbing at r = 2 M can perfectly well fall back without ever reaching 16 M.
     pub fn escape_bound(&self, metric: &KerrSchild) -> bool {
-        self.alive() && self.dr_dt > 0.0 && !self.turns_between(metric, self.r, R_ESCAPE)
+        self.alive()
+            && !self.turns_between(metric, self.r, R_ESCAPE)
+            && (self.dr_dt > 0.0 || self.turns_between(metric, R_STOP, self.r))
     }
 
     /// Advance the ray by dt of coordinate time along the non-affine geodesic equation of the
@@ -988,8 +1001,8 @@ pub struct Pulse {
     /// it is passing through, and the comparison theorem carries that pointwise statement into a
     /// statement about the curves.
     ///
-    /// Two things hold r_min off the envelope: the five-degree discretisation of the cone, which
-    /// leaves the most ingoing of the `RAYS_PER_PULSE` rays up to 2.5 degrees off the extremal
+    /// Two things hold r_min off the envelope: the 2.5-degree discretisation of the cone, which
+    /// leaves the most ingoing of the `RAYS_PER_PULSE` rays up to 1.25 degrees off the extremal
     /// direction, and, once the pulse has finished being swallowed, the loss of every ray that
     /// reached the ring, after which the minimum is taken over whatever is still alive and lifts
     /// away from the bound for good. Before that the gap is at most 8e-4 M, measured in
@@ -1065,7 +1078,7 @@ impl Pulse {
     /// conserved L/E of each (see the module header: from r = 0.45 at a = 0.90, sixty of the
     /// seventy-two reach the ring). Take the minimum over the survivors and the inner edge sits on
     /// the innermost sampled ray, which jumps outward to the next one every time one dies and then
-    /// dives again - a sawtooth, and an artefact of sampling the cone at five degrees. The
+    /// dives again - a sawtooth, and an artefact of sampling the cone at 2.5 degrees. The
     /// continuum front has no such thing in it. The time at which a ray arrives at the ring depends
     /// continuously on its emission angle, and its descent is bounded away from a standstill there
     /// (the potential tends to 2 M (L - aE)^2 r, positive for every ray but the one with L = aE),
@@ -1081,7 +1094,7 @@ impl Pulse {
     ///
     /// Otherwise the plain extremum over the live rays stands. Neighbouring is the point. The two
     /// ends of the argument have to bracket a stretch of the continuum that is all going the same
-    /// way, and adjacent emission angles are five degrees apart, whereas taking them from anywhere
+    /// way, and adjacent emission angles are 2.5 degrees apart, whereas taking them from anywhere
     /// in the cone would assume the whole arc between them shares one fate - true of every pulse
     /// measured here, since the fate is fixed by L/E and L/E runs monotonically round each half of
     /// the cone, but not a theorem. Where the ring-bound rays do form one arc the two readings
@@ -2401,7 +2414,7 @@ mod tests {
         // the whole light cone, is emitted in Region II and left to settle for 8M of coordinate
         // time, by which point its frozen family is strung out along r- with the rays that froze
         // earliest sitting deepest. At r = 1.2 the frozen arc runs from alpha = 35 to 150 degrees,
-        // so a little under a third of the 72 rays end up on the surface. Reading the
+        // so a little under a third of the rays end up on the surface. Reading the
         // shift each of them carries for a raindrop crossing at that ray's own radius gives the
         // profile an infaller sees as they fall through: deeper is later light, and later light has
         // spent longer on the exponential, so the blueshift climbs monotonically inward.
@@ -2435,14 +2448,27 @@ mod tests {
             "the frozen family should be the whole prograde arc: {profile:?}"
         );
         profile.sort_by(|a, b| b.0.total_cmp(&a.0));
-        for w in profile.windows(2) {
-            assert!(
-                w[1].1 > w[0].1,
-                "deeper in the stack must be bluer: {:?} then {:?}",
-                w[0],
-                w[1]
-            );
-        }
+        // The ordering holds across the settled part of the arc. Its outer edge is the ray with
+        // E - Omega_- L closest to zero from below, which freezes the slowest of all and after 8 M
+        // is still on its way in, so it can sit a hair outside a neighbour that froze earlier and
+        // carries less shift. With the cone sampled at 2.5 degrees that edge ray is caught
+        // (at five degrees it fell in the gap), and it is the only inversion allowed: it must be
+        // the shallowest pair, and everything deeper must be strictly bluer.
+        let inversions: Vec<usize> = profile
+            .windows(2)
+            .enumerate()
+            .filter(|(_, w)| w[1].1 <= w[0].1)
+            .map(|(k, _)| k)
+            .collect();
+        assert!(
+            inversions.is_empty() || inversions == [0],
+            "deeper in the stack must be bluer, except at the arc's unsettled outer edge:              inversions at {inversions:?} of {profile:?}"
+        );
+        let (shallowest, deepest) = (profile[0], profile[profile.len() - 1]);
+        assert!(
+            deepest.1 > 100.0 * shallowest.1,
+            "the deep end of the stack must be far bluer than the shallow end: {shallowest:?}              against {deepest:?}"
+        );
         assert!(
             profile.last().unwrap().1 > 100.0 * profile[0].1,
             "and the profile must span orders of magnitude: {profile:?}"
@@ -2619,7 +2645,7 @@ mod tests {
         // A pulse let go inside r- loses most of its rays to the ring, one at a time and in an
         // order fixed by the conserved L/E of each. Drawn as the minimum over the surviving
         // samples, the inner edge jumped outward to the next ray at every death and then dived
-        // again: a sawtooth, entirely an artefact of sampling the cone at five degrees, and made
+        // again: a sawtooth, entirely an artefact of sampling the cone at 2.5 degrees, and made
         // worse by a track stored only every 0.2 M, which joined several deaths with one long
         // diagonal chord. The continuum front does nothing of the kind - between a ray that has
         // already reached the ring and a ray that is still on its way there is a ray arriving
@@ -2844,8 +2870,8 @@ mod tests {
         // retrograde half; and it shrinks as the emitter falls, because a pulse sent close to r-
         // has almost no room left in which frame dragging can beat aberration.
         //
-        // Measured, out of the 72 rays of a pulse: 26 frozen at r = 1.7 (just inside r+ = 1.76,
-        // alpha from 30 to 155 degrees), 21 at r = 1.0 (40 to 140), 12 at r = 0.5 (60 to 115) and 4
+        // Measured, out of the 144 rays of a pulse: 53 frozen at r = 1.7 (just inside r+ = 1.76,
+        // alpha from 30 to 155 degrees), 42 at r = 1.0 (40 to 140), 23 at r = 0.5 (60 to 115) and 8
         // at r = 0.3 (75 to 90), against r- = 0.240. So the arc is a little over a third of the
         // ring high in Region II and a bare sliver by the time Alice is nearly on the Cauchy
         // horizon.
@@ -3092,8 +3118,8 @@ mod tests {
         // envelope and to the 45-degree line, so the difference is on the record rather than
         // assumed.
         //
-        // The bound is not attained, for two reasons. The cone is sampled at five degrees, so the
-        // most ingoing of the `RAYS_PER_PULSE` rays sits up to 2.5 degrees off the extremal
+        // The bound is not attained, for two reasons. The cone is sampled at 2.5 degrees, so the
+        // most ingoing of the `RAYS_PER_PULSE` rays sits up to 1.25 degrees off the extremal
         // direction. And once that ray reaches the ring it leaves the extent, after which the
         // minimum is taken over rays that are still falling and the gap opens for good; the close
         // tracking is asserted while the innermost ray is still outside r+, where nothing has died
@@ -3158,7 +3184,7 @@ mod tests {
         );
         assert!(
             worst_outside > 1e-5,
-            "and it is a five-degree sampling of the cone, not the edge itself: gap {worst_outside}"
+            "and it is a 2.5-degree sampling of the cone, not the edge itself: gap {worst_outside}"
         );
         // The 45-degree line is not a bound at a = 0.65: the ingoing edge of the cone is steeper
         // than -1 wherever the hole spins, so the drawn lower edge dips below it.
