@@ -202,7 +202,7 @@ fn telemetry_lines(
 
     // A Static or ZAMO selection at a radius where that worldline does not exist is not quietly
     // shown as free fall: it *is* free fall - `Observer::effective_mode` steps the observer along
-    // it - and the line says which selection was refused and why, in the Bob panel's own words.
+    // it - and the line says which selection was refused and why, in the observer card's own words.
     // Every other line of the box is already the free-faller's, because they are all read off the
     // one 4-velocity the worldline is being drawn from.
     let a_str = if let Some(note) = impossible_mode_note(obs, metric) {
@@ -321,7 +321,7 @@ impl SpacetimeCanvas {
         &mut self,
         ui: &mut egui::Ui,
         metric: &KerrSchild,
-        bob: &mut Observer,
+        bob: Option<&mut Observer>,
         alice: &Option<Observer>,
         current_time: f64,
         canvas_height: f32,
@@ -361,17 +361,34 @@ impl SpacetimeCanvas {
             }
         }
 
+        // The rest-frame views need one observer to be the frame and take the other, if there is
+        // one, as a guest. Either may be missing, so the frame the user asked for falls back to
+        // whoever is left, and with nobody left there is no rest frame to draw at all.
+        let mut bob = bob;
         match frame_of_ref {
-            ReferenceFrame::Bob => {
+            ReferenceFrame::Bob | ReferenceFrame::Alice => {
                 painter.rect_filled(rect, 4.0, Theme::CANVAS_BG);
-                self.render_observer_frame(ui, &painter, rect, metric, bob, alice.as_ref(), use_km, font_scale);
-            }
-            ReferenceFrame::Alice => {
-                painter.rect_filled(rect, 4.0, Theme::CANVAS_BG);
-                if let Some(al) = alice {
-                    self.render_observer_frame(ui, &painter, rect, metric, al, Some(bob), use_km, font_scale);
-                } else {
-                    self.render_observer_frame(ui, &painter, rect, metric, bob, None, use_km, font_scale);
+                let (asked, other) = match frame_of_ref {
+                    ReferenceFrame::Alice => (alice.as_ref(), bob.as_deref()),
+                    _ => (bob.as_deref(), alice.as_ref()),
+                };
+                match (asked, other) {
+                    (Some(focus), other) => self.render_observer_frame(
+                        ui, &painter, rect, metric, focus, other, use_km, font_scale,
+                    ),
+                    (None, Some(focus)) => self.render_observer_frame(
+                        ui, &painter, rect, metric, focus, None, use_km, font_scale,
+                    ),
+                    (None, None) => {
+                        painter.text(
+                            rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "No observer in the simulation
+Tick Enable Observer on Alice's or Bob's card",
+                            egui::FontId::proportional(13.0 * font_scale),
+                            Theme::TEXT_MUTED,
+                        );
+                    }
                 }
             }
             ReferenceFrame::DistantObserver => {
@@ -381,7 +398,7 @@ impl SpacetimeCanvas {
                     &response,
                     rect,
                     metric,
-                    bob,
+                    bob.as_deref_mut(),
                     alice,
                     current_time,
                     use_km,
@@ -496,7 +513,7 @@ impl SpacetimeCanvas {
         }
 
         // Draw Bob on Track
-        if bob.is_active {
+        if let Some(bob) = bob.as_deref().filter(|b| b.is_active) {
             let bob_x = track_to_x(bob.r);
             t_painter.circle_filled(Pos2::new(bob_x, center_y), 6.5, Theme::BOB_COLOR);
             t_painter.circle_stroke(Pos2::new(bob_x, center_y), 8.5, Stroke::new(1.0, Color32::WHITE));
@@ -504,7 +521,7 @@ impl SpacetimeCanvas {
         }
 
         // Radial separation between Alice and Bob, if both are present
-        if let Some(al) = alice {
+        if let (Some(al), Some(bob)) = (alice, bob.as_deref()) {
             if al.is_active && bob.is_active {
                 let diff = (bob.r - al.r).abs();
                 let al_x = track_to_x(al.r);
@@ -538,7 +555,7 @@ impl SpacetimeCanvas {
         response: &egui::Response,
         rect: Rect,
         metric: &KerrSchild,
-        bob: &mut Observer,
+        bob: Option<&mut Observer>,
         alice: &Option<Observer>,
         current_time: f64,
         use_km: bool,
@@ -914,12 +931,8 @@ impl SpacetimeCanvas {
                 }
             }
         };
-        if signals.show_bob {
-            draw_wedges(signals.bob, Theme::BOB_COLOR);
-        }
-        if signals.show_alice {
-            draw_wedges(signals.alice, Theme::ALICE_COLOR);
-        }
+        draw_wedges(signals.bob, Theme::BOB_COLOR);
+        draw_wedges(signals.alice, Theme::ALICE_COLOR);
 
         // Alice Worldline & Marker. The info boxes are registered last, below, so that a drag on
         // a box beats the canvas's own pan/drag response instead of panning time or moving Bob.
@@ -948,7 +961,7 @@ impl SpacetimeCanvas {
         }
 
         // Bob Worldline & Dragging
-        if bob.trail.len() >= 2 {
+        if let Some(bob) = bob.as_deref().filter(|b| b.trail.len() >= 2) {
             let points: Vec<Pos2> = bob
                 .trail
                 .iter()
@@ -974,12 +987,30 @@ impl SpacetimeCanvas {
                 }
             }
         };
-        if signals.show_alice {
+        // An arrival is a mark on the *receiver's* worldline, so each transmission's marks are
+        // drawn only while the observer who heard it is in the simulation: with the receiver gone
+        // there is no worldline under the dots for them to sit on.
+        if bob.is_some() {
             draw_receptions(signals.alice);
         }
-        if signals.show_bob {
+        if alice.is_some() {
             draw_receptions(signals.bob);
         }
+
+        // Everything left on this canvas is Bob's: his worldline, the drag that moves him, his
+        // light cone, his marker and the two boxes read off him. With no Bob in the simulation
+        // there is none of it, and no drag of his to be in the middle of either.
+        let Some(bob) = bob else {
+            self.is_dragging_bob = false;
+            self.bob_mode_before_drag = None;
+            if let (Some(al), Some(alice_pos)) = (alice.as_ref(), alice_box) {
+                self.telemetry.show(
+                    ui, painter, "spacetime", rect, alice_pos, "Alice", Theme::ALICE_COLOR, al,
+                    metric, use_km, font_scale,
+                );
+            }
+            return;
+        };
 
         let bob_pos = Pos2::new(to_screen_x(bob.r), to_screen_y(bob.t));
         let bob_radius = 8.0;

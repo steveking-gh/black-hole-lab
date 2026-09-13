@@ -131,6 +131,12 @@ pub struct Observer {
 
 impl Observer {
     /// A raindrop observer (E = 1, L = 0, ingoing) at phi = 0.
+    ///
+    /// Nothing in the app builds an observer this way any more: every drop comes off an observer
+    /// card, which always has an E, an L and an azimuth to say, so the app's own path is
+    /// `new_with_phi`. It is kept for the tests, which are full of plain raindrops and have no use
+    /// for the other four arguments.
+    #[cfg(test)]
     pub fn new(metric: &KerrSchild, name: &str, start_t: f64, start_r: f64, release_t: f64) -> Self {
         Self::new_with_phi(
             metric,
@@ -190,6 +196,11 @@ impl Observer {
     }
 
     /// Reset observer with initial radius, coordinate time, azimuth phi and worldline constants.
+    ///
+    /// Also test-only now. Restarting a run used to move the existing observers with this; it
+    /// builds them afresh from their cards instead (`AppControls::drop_observers`), because a card
+    /// carries a release delay and this cannot set one.
+    #[cfg(test)]
     pub fn reset_with_phi(
         &mut self,
         metric: &KerrSchild,
@@ -906,7 +917,9 @@ impl Observer {
     }
 }
 
-/// The observers the app carries at once: Bob, who is always there, and Alice, who may not be.
+/// The observers the app carries at once, either of whom may not be there: an observer whose
+/// "Enable Observer" box is unticked is not in the simulation at all, and the two are optional in
+/// the same way because they are the same idea run twice.
 ///
 /// It exists for the same reason `SignalPair` does. Every path that moves the simulation - the
 /// play loop, the arrow keys, the panel's transport buttons - has to move both worldlines the same
@@ -914,16 +927,18 @@ impl Observer {
 /// clock they are being drawn against. Stating that once here is what keeps the panel's Step Back
 /// button and `SpacetimeApp::step_backward` from drifting apart.
 pub struct ObserverPair<'a> {
-    pub bob: &'a mut Observer,
+    pub bob: Option<&'a mut Observer>,
     pub alice: Option<&'a mut Observer>,
 }
 
 impl ObserverPair<'_> {
     /// Carry both worldlines to the simulation clock's new value, `dt` later than its last.
     pub fn step(&mut self, metric: &KerrSchild, current_sim_time: f64, dt: f64) {
-        self.bob.step(metric, current_sim_time, dt);
-        if let Some(alice) = self.alice.as_deref_mut() {
-            alice.step(metric, current_sim_time, dt);
+        for obs in [self.bob.as_deref_mut(), self.alice.as_deref_mut()]
+            .into_iter()
+            .flatten()
+        {
+            obs.step(metric, current_sim_time, dt);
         }
     }
 
@@ -931,9 +946,11 @@ impl ObserverPair<'_> {
     /// `Observer::rewind_to`: the target is a time, not a number of steps, so the observers stay
     /// on the clock whatever interval the caller undid.
     pub fn rewind_to(&mut self, metric: &KerrSchild, t_target: f64) {
-        self.bob.rewind_to(metric, t_target);
-        if let Some(alice) = self.alice.as_deref_mut() {
-            alice.rewind_to(metric, t_target);
+        for obs in [self.bob.as_deref_mut(), self.alice.as_deref_mut()]
+            .into_iter()
+            .flatten()
+        {
+            obs.rewind_to(metric, t_target);
         }
     }
 }

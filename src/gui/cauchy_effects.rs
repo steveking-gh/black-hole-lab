@@ -32,15 +32,20 @@ fn fmt_shift(ratio: f64) -> String {
 impl CauchyEffects {
     /// Render the dedicated relativistic telemetry HUD panel: proper clocks, radial separation and
     /// the shift each observer measures for ingoing light.
+    ///
+    /// Either observer may be absent - the "Enable Observer" box on their card unticked - and every
+    /// line here is a statement about somebody, so each one is drawn only where the observers it
+    /// names are in the simulation. `release_gap` is the coordinate time between the two releases,
+    /// which is the Delta t the blueshift scale exp(kappa_- Delta t) is quoted against.
     #[allow(clippy::too_many_arguments)]
     pub fn render_hud(
         ui: &mut egui::Ui,
         metric: &KerrSchild,
-        bob: &Observer,
+        bob: &Option<Observer>,
         alice: &Option<Observer>,
         signal: &SignalField,
         bob_signal: &SignalField,
-        delta_t: f64,
+        release_gap: f64,
         current_time: f64,
         use_km: bool,
     ) {
@@ -55,7 +60,7 @@ impl CauchyEffects {
 
                     // Radial separation readout aligned to the right
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if let Some(al) = alice {
+                        if let (Some(al), Some(bob)) = (alice, bob) {
                             if al.is_active && bob.is_active {
                                 let diff = (bob.r - al.r).abs();
                                 let sep_str = if use_km {
@@ -89,22 +94,24 @@ impl CauchyEffects {
                         ui.separator();
                     }
 
-                    let bob_r_str = if use_km {
-                        metric.format_km(metric.r_to_km(bob.r))
-                    } else {
-                        format!("{:.2}M", bob.r)
-                    };
-                    let bob_tau_str = if use_km {
-                        metric.format_physical_time(bob.tau)
-                    } else {
-                        format!("{:.2}M ({})", bob.tau, metric.format_physical_time(bob.tau))
-                    };
-                    ui.label(egui::RichText::new(format!("Bob τ: {} [r={}]", bob_tau_str, bob_r_str)).color(Theme::BOB_COLOR));
-                    ui.label(
-                        egui::RichText::new(format!("ν_in/ν_∞ = {}", fmt_nu(bob.ingoing_frequency_ratio(metric))))
-                            .color(Theme::BOB_COLOR),
-                    );
-                    ui.separator();
+                    if let Some(bob) = bob {
+                        let bob_r_str = if use_km {
+                            metric.format_km(metric.r_to_km(bob.r))
+                        } else {
+                            format!("{:.2}M", bob.r)
+                        };
+                        let bob_tau_str = if use_km {
+                            metric.format_physical_time(bob.tau)
+                        } else {
+                            format!("{:.2}M ({})", bob.tau, metric.format_physical_time(bob.tau))
+                        };
+                        ui.label(egui::RichText::new(format!("Bob τ: {} [r={}]", bob_tau_str, bob_r_str)).color(Theme::BOB_COLOR));
+                        ui.label(
+                            egui::RichText::new(format!("ν_in/ν_∞ = {}", fmt_nu(bob.ingoing_frequency_ratio(metric))))
+                                .color(Theme::BOB_COLOR),
+                        );
+                        ui.separator();
+                    }
 
                     let ext_t_str = if use_km {
                         metric.format_physical_time(current_time)
@@ -112,7 +119,7 @@ impl CauchyEffects {
                         format!("{:.2}M ({})", current_time, metric.format_physical_time(current_time))
                     };
                     ui.label(format!("Exterior Time t: {}", ext_t_str));
-                    if bob.release_t > 0.0 {
+                    if let Some(bob) = bob.as_ref().filter(|b| b.release_t > 0.0) {
                         let delay_str = if use_km {
                             metric.format_physical_time(bob.release_t)
                         } else {
@@ -125,10 +132,10 @@ impl CauchyEffects {
 
                 // Alice's signal: how much of it Bob has caught, and the exponential scale
                 // exp(kappa_- Delta t) that the crossing of the stack on r- is measured against.
-                if alice.is_some() {
+                if alice.is_some() && bob.is_some() {
                     ui.horizontal(|ui| {
                         let received = signal.received_count();
-                        let scale = fmt_shift(limiting_blueshift(metric, delta_t));
+                        let scale = fmt_shift(limiting_blueshift(metric, release_gap));
                         match (signal.last_reception(), signal.max_ratio()) {
                             (Some(r), Some(max)) => {
                                 ui.label(format!("Alice → Bob: {} receptions, last ν_B/ν_A = ", received));
@@ -143,11 +150,11 @@ impl CauchyEffects {
                                         .strong()
                                         .color(Theme::shift_colour(max, 255)),
                                 );
-                                ui.label(format!(", scale e^(κ₋Δt) = {}", scale));
+                                ui.label(format!(", scale e^(κ₋Δt_release) = {}", scale));
                             }
                             _ => {
                                 ui.label(format!(
-                                    "Alice → Bob: no pulse received yet, scale e^(κ₋Δt) = {}",
+                                    "Alice → Bob: no pulse received yet, scale e^(κ₋Δt_release) = {}",
                                     scale
                                 ));
                             }
@@ -158,15 +165,15 @@ impl CauchyEffects {
                     // first as the static observer he is while he hovers - his proper time runs
                     // there at sqrt(-g_tt) dt, which is a perfectly good clock to pace a
                     // transmission by - and then in free fall once he is released. Where he trails
-                    // her, which is the layout Drop Observers builds, his pulses have to chase her
-                    // inward and
+                    // her, which is the layout the app opens on and that Reset and Drop Observers
+                    // rebuild, his pulses have to chase her inward and
                     // the only rays that catch her are the ingoing ones, whose shift is finite on
                     // the branch of r₋ she crosses; the rays of his that pile onto r₋ settle there
                     // behind her, after she has already crossed, so she never meets a stack and
-                    // there is no e^(κ₋Δt) scale to quote on this line. Where he is the deeper of the
-                    // two, which is how the app starts, his light climbs to her instead and the
-                    // shift starts as a small blueshift and turns over into a redshift as he falls
-                    // away below her. Either way the transmission has an end: once her worldline
+                    // there is no e^(κ₋Δt) scale to quote on this line. Give him the shorter delay
+                    // of the two and he is the deeper one instead, his light climbing to her, and
+                    // the shift starts as a small blueshift and turns over into a redshift as he
+                    // falls away below her. Either way the transmission has an end: once her worldline
                     // has finished - on the ring, or frozen on r₋ - the last pulse of his that
                     // arrived marks the event on *his* worldline past which nothing he sends can
                     // ever reach her.

@@ -35,7 +35,7 @@ impl SpatialCanvas {
         &mut self,
         ui: &mut egui::Ui,
         metric: &KerrSchild,
-        bob: &Observer,
+        bob: &Option<Observer>,
         alice: &Option<Observer>,
         show_river: bool,
         show_streamlines: bool,
@@ -81,13 +81,15 @@ impl SpatialCanvas {
         // x + i y = (r + i a) e^{i phi}, never by (r cos psi, r sin psi).
         // Screen y grows downward; Cartesian y grows upward (matching the +Y tick labels), so flip it.
         let to_offset = |(x, y): (f64, f64)| Vec2::new(x as f32 * self.zoom, -(y as f32) * self.zoom);
-        let frame_tracking_offset = match frame_of_ref {
-            ReferenceFrame::Bob => to_offset(bob.cartesian_position(metric)),
-            ReferenceFrame::Alice => alice
-                .as_ref()
-                .map_or(Vec2::ZERO, |al| to_offset(al.cartesian_position(metric))),
-            ReferenceFrame::DistantObserver => Vec2::ZERO,
+        // Following an observer who is not in the simulation is following nobody, so the view
+        // stays on the hole rather than jumping to a remembered position.
+        let followed = match frame_of_ref {
+            ReferenceFrame::Bob => bob.as_ref(),
+            ReferenceFrame::Alice => alice.as_ref(),
+            ReferenceFrame::DistantObserver => None,
         };
+        let frame_tracking_offset =
+            followed.map_or(Vec2::ZERO, |obs| to_offset(obs.cartesian_position(metric)));
         let center = rect.center() + self.pan_offset - frame_tracking_offset;
 
         // Background
@@ -318,26 +320,24 @@ impl SpatialCanvas {
         // so the fronts read as something moving through the field rather than as part of the
         // observers' own trajectories. Bob's goes down first and Alice's over it, so where the two
         // overlap it is the heavier, primary field that stays legible.
-        if signals.show_bob {
-            draw_signal_field(
-                &painter,
-                metric,
-                signals.bob,
-                Theme::BOB_COLOR,
-                Theme::SECONDARY_FRONT_WIDTH,
-                &to_screen,
-            );
-        }
-        if signals.show_alice {
-            draw_signal_field(&painter, metric, signals.alice, Theme::ALICE_COLOR, 1.0, &to_screen);
-        }
+        draw_signal_field(
+            &painter,
+            metric,
+            signals.bob,
+            Theme::BOB_COLOR,
+            Theme::SECONDARY_FRONT_WIDTH,
+            &to_screen,
+        );
+        draw_signal_field(&painter, metric, signals.alice, Theme::ALICE_COLOR, 1.0, &to_screen);
 
         // 6. Both worldline trails, drawn together and before anything that sits on them: the
         // reception ticks below and the observers' own markers.
         if let Some(al) = alice {
             draw_spatial_trail(&painter, metric, al, Theme::ALICE_COLOR, 1.2, &to_screen);
         }
-        draw_spatial_trail(&painter, metric, bob, Theme::BOB_COLOR, 1.5, &to_screen);
+        if let Some(b) = bob {
+            draw_spatial_trail(&painter, metric, b, Theme::BOB_COLOR, 1.5, &to_screen);
+        }
 
         // 6b. Every arrival, marked on the *receiver's* trail in the *sender's* colour: amber
         // triangles where Bob received one of Alice's pulses, mint ones where Alice received one
@@ -360,10 +360,12 @@ impl SpatialCanvas {
                 }
             }
         };
-        if signals.show_bob {
+        // Each tick sits on the receiver's trail, so it is drawn only while that receiver is in
+        // the simulation: Bob's transmission is received by Alice, and hers by him.
+        if alice.is_some() {
             draw_reception_ticks(signals.bob, Theme::BOB_COLOR);
         }
-        if signals.show_alice {
+        if bob.is_some() {
             draw_reception_ticks(signals.alice, Theme::ALICE_COLOR);
         }
 
@@ -380,11 +382,13 @@ impl SpatialCanvas {
             painter.circle_filled(al_pos, 5.0, Theme::ALICE_COLOR);
             alice_box = Some(al_pos);
         }
-        let bob_pos = to_screen(bob.cartesian_position(metric));
-
-        // Bob circle marker
-        painter.circle_filled(bob_pos, 7.0, Theme::BOB_COLOR);
-        painter.circle_stroke(bob_pos, 9.0, Stroke::new(1.5, Color32::WHITE));
+        let bob_box = bob.as_ref().map(|b| {
+            let bob_pos = to_screen(b.cartesian_position(metric));
+            // Bob circle marker
+            painter.circle_filled(bob_pos, 7.0, Theme::BOB_COLOR);
+            painter.circle_stroke(bob_pos, 9.0, Stroke::new(1.5, Color32::WHITE));
+            bob_pos
+        });
 
         // 8. Title and Legend Overlay
         // Horizon angular velocity Ω_H = a / (2 M r₊) is a rate per unit coordinate time, so in
@@ -465,9 +469,12 @@ impl SpatialCanvas {
                 font_scale,
             );
         }
-        self.telemetry.show(
-            ui, &painter, "spatial", rect, bob_pos, "Bob", Theme::BOB_COLOR, bob, metric, use_km, font_scale,
-        );
+        if let (Some(b), Some(bob_pos)) = (bob.as_ref(), bob_box) {
+            self.telemetry.show(
+                ui, &painter, "spatial", rect, bob_pos, "Bob", Theme::BOB_COLOR, b, metric, use_km,
+                font_scale,
+            );
+        }
     }
 }
 

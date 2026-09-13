@@ -4,13 +4,16 @@ use crate::gui::spacetime_canvas::SpacetimeCanvas;
 use crate::gui::spatial_canvas::SpatialCanvas;
 use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
-use crate::physics::observer::{Observer, ObserverPair, WorldlineParams};
-use crate::physics::wavefront::{SignalField, SignalPair};
+use crate::physics::observer::{Observer, ObserverPair};
+use crate::physics::wavefront::{Endpoint, SignalField, SignalPair};
 use std::time::Instant;
 
 pub struct SpacetimeApp {
     metric: KerrSchild,
-    bob: Observer,
+    /// The two observers, either of whom may be out of the simulation: the "Enable Observer" box
+    /// on a card unticked means there is no worldline at all rather than a hidden one, and the two
+    /// are optional in the same way because the cards are the same card twice.
+    bob: Option<Observer>,
     alice: Option<Observer>,
     spacetime_canvas: SpacetimeCanvas,
     spatial_canvas: SpatialCanvas,
@@ -33,17 +36,26 @@ impl Default for SpacetimeApp {
         // off the metric (`active_preset`). At this spin r+ = 1.436M and r- = 0.564M, so the
         // trapped region is narrow and the Cauchy horizon is well clear of the ring.
         let metric = KerrSchild::with_solar_mass(1.0, 0.90, 4.15e6);
-        // Both start as raindrops: E = 1, L = 0, ingoing.
-        let bob = Observer::new(&metric, "Bob", 0.0, 3.8, 0.0);
-        let alice = Some(Observer::new_with_phi(
+
+        // The layout the app opens on is built by the same call the transport's Reset and Drop
+        // Observers buttons make, from the same two cards, so the three cannot disagree about
+        // where a run starts: both observers dropped from r = 4.5M as raindrops (E = 1, L = 0,
+        // ingoing), Alice released at once and Bob hovering there until t = 8.
+        let mut controls = AppControls::default();
+        let (mut alice, mut bob) = (None, None);
+        let mut signal = SignalField::default();
+        let mut bob_signal = SignalField::default();
+        let mut current_time = 0.0;
+        controls.drop_observers(
             &metric,
-            "Alice",
-            0.0,
-            4.5,
-            0.0,
-            0.25,
-            WorldlineParams::default(),
-        ));
+            &mut alice,
+            &mut bob,
+            &mut SignalPair { alice: &mut signal, bob: &mut bob_signal },
+            &mut current_time,
+        );
+        // A view that has never been panned has nothing to put back; the request a drop raises is
+        // for the buttons, which are pressed part-way through a run.
+        controls.view_reset_requested = false;
 
         Self {
             metric,
@@ -51,10 +63,10 @@ impl Default for SpacetimeApp {
             alice,
             spacetime_canvas: SpacetimeCanvas::default(),
             spatial_canvas: SpatialCanvas::default(),
-            signal: SignalField::default(),
-            bob_signal: SignalField::default(),
-            controls: AppControls::default(),
-            current_time: 0.0,
+            signal,
+            bob_signal,
+            controls,
+            current_time,
             last_update: Instant::now(),
         }
     }
@@ -69,7 +81,18 @@ impl SpacetimeApp {
             alice: &mut self.signal,
             bob: &mut self.bob_signal,
         }
-        .advance(&self.metric, dt, self.alice.as_ref(), &self.bob);
+        .advance(
+            &self.metric,
+            dt,
+            Endpoint {
+                observer: self.alice.as_ref(),
+                transmitting: self.controls.alice.transmit,
+            },
+            Endpoint {
+                observer: self.bob.as_ref(),
+                transmitting: self.controls.bob.transmit,
+            },
+        );
     }
 
     /// What one press of an arrow key is worth in coordinate time: the Δt slider in Time mode, and
@@ -86,7 +109,7 @@ impl SpacetimeApp {
             StepMode::Time => self.controls.step_size,
             StepMode::Distance => {
                 self.controls
-                    .distance_step(&self.metric, &self.bob, self.alice.as_ref())
+                    .distance_step(&self.metric, self.bob.as_ref(), self.alice.as_ref())
             }
         }
     }
@@ -97,7 +120,7 @@ impl SpacetimeApp {
         self.spatial_canvas.river.advance(&self.metric, step);
         // Both worldlines move as one object, so that this path, the play loop and the panel's
         // buttons cannot mean different things by a step. See `ObserverPair`.
-        ObserverPair { bob: &mut self.bob, alice: self.alice.as_mut() }
+        ObserverPair { bob: self.bob.as_mut(), alice: self.alice.as_mut() }
             .step(&self.metric, self.current_time, step);
         self.advance_signal(step);
     }
@@ -128,13 +151,13 @@ impl SpacetimeApp {
         let back = step.min(self.current_time);
         self.current_time -= back;
         self.spatial_canvas.river.advance(&self.metric, step);
-        ObserverPair { bob: &mut self.bob, alice: self.alice.as_mut() }
+        ObserverPair { bob: self.bob.as_mut(), alice: self.alice.as_mut() }
             .rewind_to(&self.metric, self.current_time);
         SignalPair {
             alice: &mut self.signal,
             bob: &mut self.bob_signal,
         }
-        .step_back(&self.metric, back, self.alice.as_ref(), &self.bob);
+        .step_back(&self.metric, back, self.alice.as_ref(), self.bob.as_ref());
     }
 }
 
@@ -155,9 +178,11 @@ impl eframe::App for SpacetimeApp {
             let sim_dt = match self.controls.step_mode {
                 StepMode::Time => dt * self.controls.play_speed,
                 StepMode::Distance => {
-                    let base_step =
-                        self.controls
-                            .distance_step(&self.metric, &self.bob, self.alice.as_ref());
+                    let base_step = self.controls.distance_step(
+                        &self.metric,
+                        self.bob.as_ref(),
+                        self.alice.as_ref(),
+                    );
                     (dt / 0.01667).clamp(0.2, 3.0) * base_step
                 }
             };
@@ -166,7 +191,7 @@ impl eframe::App for SpacetimeApp {
             // The river runs on the simulation clock, not the frame clock, so it freezes when
             // paused and speeds up with the playback rate.
             self.spatial_canvas.river.advance(&self.metric, sim_dt);
-            ObserverPair { bob: &mut self.bob, alice: self.alice.as_mut() }
+            ObserverPair { bob: self.bob.as_mut(), alice: self.alice.as_mut() }
                 .step(&self.metric, self.current_time, sim_dt);
             self.advance_signal(sim_dt);
             ctx.request_repaint();
@@ -197,7 +222,7 @@ impl eframe::App for SpacetimeApp {
         // 1. Top Panel
         egui::Panel::top("top_bar").show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("🌌 ANTIGRAVITY // RELATIVISTIC SPACETIME LAB").heading().strong().color(Theme::HORIZON_OUTER));
+                ui.label(egui::RichText::new("SPACETIME LAB").heading().strong().color(Theme::HORIZON_OUTER));
                 ui.separator();
                 ui.label(
                     egui::RichText::new(format!(
@@ -223,12 +248,16 @@ impl eframe::App for SpacetimeApp {
                         self.spatial_canvas.zoom = 400.0;
                         self.spatial_canvas.pan_offset = egui::Vec2::new(- (rm as f32) * 400.0, 0.0);
                     }
-                    if ui.button("🎯 Focus Bob").on_hover_text("Zoom and focus directly on Bob's current radius").clicked() {
-                        self.spacetime_canvas.focus_bob(self.bob.r);
+                    // Nothing to focus on when Bob is not in the simulation, so the button goes
+                    // with him rather than aiming both views at a remembered radius.
+                    if let Some(bob) = self.bob.as_ref()
+                        && ui.button("🎯 Focus Bob").on_hover_text("Zoom and focus directly on Bob's current radius").clicked()
+                    {
+                        self.spacetime_canvas.focus_bob(bob.r);
                         self.spatial_canvas.zoom = 400.0;
                         // Bob's screen position is the Kerr-Schild embedding of (r, phi); the canvas
                         // draws Cartesian y upward (screen y is flipped), so the centring pan is (-x, +y).
-                        let (bx, by) = self.bob.cartesian_position(&self.metric);
+                        let (bx, by) = bob.cartesian_position(&self.metric);
                         self.spatial_canvas.pan_offset =
                             egui::Vec2::new(-(bx as f32) * 400.0, (by as f32) * 400.0);
                     }
@@ -267,7 +296,7 @@ impl eframe::App for SpacetimeApp {
                 &self.alice,
                 &self.signal,
                 &self.bob_signal,
-                self.controls.delta_t_delay,
+                self.controls.release_gap(),
                 self.current_time,
                 self.controls.use_km,
             );
@@ -279,8 +308,8 @@ impl eframe::App for SpacetimeApp {
                 self.controls.render_panel(
                     ui,
                     &mut self.metric,
-                    &mut self.bob,
                     &mut self.alice,
+                    &mut self.bob,
                     SignalPair {
                         alice: &mut self.signal,
                         bob: &mut self.bob_signal,
@@ -332,19 +361,14 @@ impl eframe::App for SpacetimeApp {
                         self.spacetime_canvas.render(
                             ui,
                             &self.metric,
-                            &mut self.bob,
+                            self.bob.as_mut(),
                             &self.alice,
                             self.current_time,
                             canvas_height,
                             self.controls.use_km,
                             self.controls.frame_of_ref,
                             self.controls.font_scale,
-                            SignalViews {
-                                alice: &self.signal,
-                                show_alice: self.controls.show_signal,
-                                bob: &self.bob_signal,
-                                show_bob: self.controls.show_bob_signal,
-                            },
+                            SignalViews { alice: &self.signal, bob: &self.bob_signal },
                         );
                     },
                 );
@@ -369,12 +393,7 @@ impl eframe::App for SpacetimeApp {
                             &self.alice,
                             self.controls.show_river,
                             self.controls.show_streamlines,
-                            SignalViews {
-                                alice: &self.signal,
-                                show_alice: self.controls.show_signal,
-                                bob: &self.bob_signal,
-                                show_bob: self.controls.show_bob_signal,
-                            },
+                            SignalViews { alice: &self.signal, bob: &self.bob_signal },
                             canvas_height,
                             self.controls.use_km,
                             self.controls.frame_of_ref,
@@ -447,9 +466,102 @@ mod tests {
     use super::*;
     use crate::gui::controls::active_preset;
     use crate::physics::geodesic::GeodesicState;
-    use crate::physics::observer::ObserverMode;
+    use crate::physics::observer::{ObserverMode, WorldlineParams};
     use crate::physics::wavefront::Pulse;
     use eframe::App;
+
+    /// Bob, in a test that has him in the simulation. Either observer's card can be unticked now,
+    /// which takes them out of the run entirely, so the tests say once - here - that they expect
+    /// him to be there instead of unwrapping the Option on every line.
+    fn bob_of(app: &SpacetimeApp) -> &Observer {
+        app.bob.as_ref().expect("Bob's card is ticked in this test")
+    }
+
+    /// Alice, the same way.
+    fn alice_of(app: &SpacetimeApp) -> &Observer {
+        app.alice.as_ref().expect("Alice's card is ticked in this test")
+    }
+
+    /// Rebuild the run from the two cards, which is what ⏮ Reset, Drop Observers and the app's own
+    /// startup all do. A test that wants a layout other than the default one sets the cards and
+    /// calls this, rather than assembling observers by hand behind the panel's back.
+    fn drop_observers(app: &mut SpacetimeApp) {
+        let SpacetimeApp { metric, alice, bob, signal, bob_signal, controls, current_time, .. } =
+            app;
+        controls.drop_observers(
+            metric,
+            alice,
+            bob,
+            &mut SignalPair { alice: signal, bob: bob_signal },
+            current_time,
+        );
+    }
+
+    /// Every word the app paints in one frame, in the order it is painted.
+    ///
+    /// `egui::__run_test_ui` throws the frame's shapes away, and what a control or a telemetry box
+    /// *says* is exactly what a test of "this observer is not in the picture" has to read. This is
+    /// that helper with the output kept: one real frame of the whole app - top bar, HUD, panel and
+    /// both canvases - with the text of every painted galley collected. Fonts are left empty, as
+    /// `__run_test_ui` leaves them, because a galley carries its string whether or not there are
+    /// glyphs to draw it with.
+    fn painted_text(app: &mut SpacetimeApp) -> String {
+        fn collect(shape: &egui::Shape, out: &mut String) {
+            match shape {
+                egui::Shape::Text(text) => {
+                    out.push_str(text.galley.text());
+                    out.push('\n');
+                }
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let output = ctx.run_ui(Default::default(), |ui| {
+            let mut frame = eframe::Frame::_new_kittest();
+            app.ui(ui, &mut frame);
+        });
+        let mut text = String::new();
+        for clipped in output.shapes.iter() {
+            collect(&clipped.shape, &mut text);
+        }
+        output.drop_without_applying_deltas();
+        text
+    }
+
+    /// One observer's place in a layout: their name, the event they stand at (t, r, phi), their
+    /// own clock, the release they are waiting for and whether it has happened, and then the pulse
+    /// count and clock of the transmission that belongs to them.
+    type LayoutRow = (String, f64, f64, f64, f64, f64, bool, usize, f64);
+
+    /// The layout the app opens on, as one row per observer: what "startup, Reset and Drop
+    /// Observers agree" is measured on.
+    fn layout(app: &SpacetimeApp) -> Vec<LayoutRow> {
+        [app.alice.as_ref(), app.bob.as_ref()]
+            .into_iter()
+            .flatten()
+            .zip([&app.signal, &app.bob_signal])
+            .map(|(obs, field)| {
+                (
+                    obs.name.clone(),
+                    obs.t,
+                    obs.r,
+                    obs.phi,
+                    obs.tau,
+                    obs.release_t,
+                    obs.is_active,
+                    field.pulses.len(),
+                    field.t,
+                )
+            })
+            .collect()
+    }
 
     #[test]
     fn test_canvas_layout_sizing() {
@@ -480,13 +592,7 @@ mod tests {
         app.spacetime_canvas.max_r = 0.05;
 
         // The Reset button's own action, through the panel rather than around it.
-        app.controls.reset_run(
-            &app.metric,
-            &mut app.bob,
-            &mut app.alice,
-            &mut SignalPair { alice: &mut app.signal, bob: &mut app.bob_signal },
-            &mut app.current_time,
-        );
+        drop_observers(&mut app);
         assert_eq!(app.current_time, 0.0, "the reset puts the clock back");
         assert!(app.controls.view_reset_requested, "and asks for the view to go back with it");
         assert_eq!(
@@ -561,18 +667,29 @@ mod tests {
     fn test_arrow_key_stepping() {
         // The arrow keys through the app's own transport: one step forward and one back has to
         // land on the event it started from, on the clock and on the worldline alike.
+        //
+        // Measured on Alice, because she is the one moving. In the layout the app opens on Bob
+        // hovers at r = 4.5M until t = 8, so a step of 0.1 M moves him in t and in nothing else,
+        // which would prove nothing about the integrator; his hover is checked separately below.
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
-        let initial = (app.bob.t, app.bob.r, app.bob.phi, app.bob.tau);
+        let al = alice_of(&app);
+        let initial = (al.t, al.r, al.phi, al.tau);
         let step = app.arrow_step();
 
         app.step_forward(step);
-        assert!(app.bob.r < initial.1, "Stepping forward should advance inward infall");
-        assert!((app.bob.t - app.current_time).abs() < 1e-12, "and stay on the clock");
+        assert!(alice_of(&app).r < initial.1, "Stepping forward should advance inward infall");
+        assert!((alice_of(&app).t - app.current_time).abs() < 1e-12, "and stay on the clock");
+        assert!(
+            !bob_of(&app).is_active && (bob_of(&app).r - 4.5).abs() < 1e-12,
+            "Bob is still hovering at r = {}",
+            bob_of(&app).r
+        );
 
         app.step_backward(step);
         assert!((app.current_time - initial.0).abs() < 1e-12, "the clock comes back: {}", app.current_time);
-        let back = (app.bob.t, app.bob.r, app.bob.phi, app.bob.tau);
+        let al = alice_of(&app);
+        let back = (al.t, al.r, al.phi, al.tau);
         for (a, b, what) in [
             (back.0, initial.0, "t"),
             (back.1, initial.1, "r"),
@@ -604,26 +721,26 @@ mod tests {
             app.step_forward(0.3);
         }
         assert!((app.current_time - 6.0).abs() < 1e-9);
-        let alice_before = observer_state(app.alice.as_ref().unwrap());
-        let bob_before = observer_state(&app.bob);
-        let alice_ended = app.alice.as_ref().unwrap().has_ended();
-        let bob_ended = app.bob.has_ended();
+        let alice_before = observer_state(alice_of(&app));
+        let bob_before = observer_state(bob_of(&app));
+        let alice_ended = alice_of(&app).has_ended();
+        let bob_ended = bob_of(&app).has_ended();
         app.step_backward(0.1);
         println!(
             "back 0.1 from t = 6.0: clock {:.4}; Alice {:?} (ended {alice_ended}) -> {:?}; \
              Bob {:?} (ended {bob_ended}) -> {:?}",
             app.current_time,
             alice_before,
-            observer_state(app.alice.as_ref().unwrap()),
+            observer_state(alice_of(&app)),
             bob_before,
-            observer_state(&app.bob)
+            observer_state(bob_of(&app))
         );
         assert!((app.current_time - 5.9).abs() < 1e-9);
         // An observer that has ended before the target does not move at all; one that has not is
         // on the clock, to the last bit.
         for (obs, before, ended) in [
-            (app.alice.as_ref().unwrap(), alice_before, alice_ended),
-            (&app.bob, bob_before, bob_ended),
+            (alice_of(&app), alice_before, alice_ended),
+            (bob_of(&app), bob_before, bob_ended),
         ] {
             if ended && before.0 <= app.current_time {
                 assert_eq!(
@@ -654,7 +771,7 @@ mod tests {
             app.step_forward(0.1);
         }
         assert!((app.current_time - 10.0).abs() < 1e-9);
-        let alice = app.alice.as_ref().unwrap();
+        let alice = alice_of(&app);
         assert!(alice.has_ended(), "Alice must have reached the ring: r = {}", alice.r);
         let ended_at = observer_state(alice);
         assert!(ended_at.0 < 7.0, "and done it well before t = 10: t_end = {}", ended_at.0);
@@ -665,11 +782,11 @@ mod tests {
             ended_at.0,
             ended_at.1,
             app.current_time,
-            app.alice.as_ref().unwrap().t,
-            app.alice.as_ref().unwrap().r
+            alice_of(&app).t,
+            alice_of(&app).r
         );
         assert_eq!(
-            observer_state(app.alice.as_ref().unwrap()),
+            observer_state(alice_of(&app)),
             ended_at,
             "a rewind to t = {} is still past her end at t = {}: she stays on the ring",
             app.current_time,
@@ -679,7 +796,7 @@ mod tests {
         while app.current_time > ended_at.0 - 0.25 {
             app.step_backward(0.1);
         }
-        let alice = app.alice.as_ref().unwrap();
+        let alice = alice_of(&app);
         assert!(!alice.has_ended(), "below her end she is falling again: r = {}", alice.r);
         assert!(alice.r > ended_at.1, "and above the ring: r = {}", alice.r);
         assert!(
@@ -700,9 +817,13 @@ mod tests {
         }
         app.step_backward(4.0);
         assert!((app.current_time - 2.0).abs() < 1e-9);
-        let wound = observer_state(app.alice.as_ref().unwrap());
+        let wound = observer_state(alice_of(&app));
         assert!((wound.0 - 2.0).abs() < 1e-12, "Alice lands on the clock: {}", wound.0);
-        assert!((app.bob.t - 2.0).abs() < 1e-12, "and so does Bob: {}", app.bob.t);
+        assert!(
+            (bob_of(&app).t - 2.0).abs() < 1e-12,
+            "and so does Bob, hovering: {}",
+            bob_of(&app).t
+        );
 
         // And where it lands is the worldline, not merely the clock: compare with a fresh run to
         // the same time in different steps. The two differ only by the integrator, which is
@@ -712,7 +833,7 @@ mod tests {
         for _ in 0..40 {
             fresh.step_forward(0.05);
         }
-        let straight = observer_state(fresh.alice.as_ref().unwrap());
+        let straight = observer_state(alice_of(&fresh));
         println!(
             "one 4 M backstep vs a fresh run to t = 2: dr = {:.3e}, dphi = {:.3e}, dtau = {:.3e}",
             (wound.1 - straight.1).abs(),
@@ -731,11 +852,11 @@ mod tests {
             let mut frame = eframe::Frame::_new_kittest();
             for frame_idx in 0..1500 {
                 app.ui(ui, &mut frame);
-                let al = app.alice.as_ref().unwrap();
-                if frame_idx % 50 == 0 || (app.bob.r - al.r).abs() < 0.05 || app.bob.r < 1.0 {
-                    println!("Frame {}: Bob r={:.6} t={:.4}, Alice r={:.6} t={:.4}, diff_r={:.6}", frame_idx, app.bob.r, app.bob.t, al.r, al.t, (app.bob.r - al.r).abs());
+                let (b, al) = (bob_of(&app), alice_of(&app));
+                if frame_idx % 50 == 0 || (b.r - al.r).abs() < 0.05 || b.r < 1.0 {
+                    println!("Frame {}: Bob r={:.6} t={:.4}, Alice r={:.6} t={:.4}, diff_r={:.6}", frame_idx, b.r, b.t, al.r, al.t, (b.r - al.r).abs());
                 }
-                if app.bob.r <= 0.03 && al.r <= 0.03 {
+                if b.r <= 0.03 && al.r <= 0.03 {
                     println!("Both hit singularity at frame {}", frame_idx);
                     break;
                 }
@@ -745,7 +866,7 @@ mod tests {
 
     #[test]
     fn test_alice_signal_is_received_through_the_app_loop() {
-        // The dual-observer layout the Drop Observers button builds: Alice released from r = 4.5M
+        // The layout Drop Observers builds, at a shorter delay: Alice released from r = 4.5M
         // at t = 0 and Bob held at the same radius until t = Delta t, so his worldline trails hers
         // and her signal climbs to him. This walks the app's own wiring rather than the physics
         // module: the field is advanced on the simulation clock, Alice emits on her proper
@@ -757,13 +878,8 @@ mod tests {
         // receiver never sees is the outward arc, which falls no faster than the raindrop
         // congruence itself.
         let mut app = SpacetimeApp::default();
-        let params = WorldlineParams::default();
-        app.alice = Some(Observer::new_with_phi(&app.metric, "Alice", 0.0, 4.5, 0.0, 0.25, params));
-        app.bob = Observer::new_with_phi(&app.metric, "Bob", 0.0, 4.5, 4.0, 0.0, params);
-        app.controls.delta_t_delay = 4.0;
-        app.current_time = 0.0;
-        app.signal.clear();
-        app.bob_signal.clear();
+        app.controls.bob.delta_t_delay = 4.0;
+        drop_observers(&mut app);
         // Test frames arrive as fast as the harness can render them, so the frame clock sits at its
         // floor of 1/240 s; the playback rate is what buys enough simulation time to reach Bob's
         // crossing without running thousands of frames.
@@ -837,7 +953,7 @@ mod tests {
         // The observers came back with the clock too. Fifty presses of the left arrow at a
         // step of 0.01 undo half an M, and each press moves the worldlines by exactly what it
         // moves the clock by, whatever the steps that built the trail were.
-        for obs in [Some(&app.bob), app.alice.as_ref()].into_iter().flatten() {
+        for obs in [app.bob.as_ref(), app.alice.as_ref()].into_iter().flatten() {
             assert!(
                 obs.has_ended() || (obs.t - app.current_time).abs() < 1e-12,
                 "{} is at t = {} with the clock at {}",
@@ -865,24 +981,21 @@ mod tests {
         // walks a frame at a = 0 with both overlays on and again with both off.
         let schwarzschild = KerrSchild::with_solar_mass(1.0, 0.0, 10.0);
         assert!(!schwarzschild.inner_surface_gravity().is_finite());
-        let mut app = SpacetimeApp::default();
         // The presets re-drop the observers when the geometry changes, because a 4-velocity
         // integrated in one metric is not a unit timelike vector in another; do the same here.
-        let params = WorldlineParams::default();
-        app.metric = schwarzschild;
-        app.bob.reset_with_phi(&app.metric, 0.0, 3.8, 0.0, params);
-        if let Some(al) = &mut app.alice {
-            al.reset_with_phi(&app.metric, 0.0, 4.5, 0.25, params);
-        }
-        app.signal.clear();
-        app.bob_signal.clear();
+        let mut app = SpacetimeApp { metric: schwarzschild, ..SpacetimeApp::default() };
+        drop_observers(&mut app);
         egui::__run_test_ui(|ui| {
             let mut frame = eframe::Frame::_new_kittest();
             app.ui(ui, &mut frame);
-            app.controls.show_signal = false;
-            app.controls.show_bob_signal = false;
+            // And again with neither of them transmitting, which is now what empties the two
+            // fields: there is no separate "draw the pulses" flag to turn off, because a field
+            // nobody is filling has nothing in it to draw.
+            app.controls.alice.transmit = false;
+            app.controls.bob.transmit = false;
             app.ui(ui, &mut frame);
         });
+        assert!(app.signal.pulses.is_empty() && app.bob_signal.pulses.is_empty());
     }
 
     #[test]
@@ -909,35 +1022,70 @@ mod tests {
     }
 
     #[test]
-    fn test_dual_observer_energy_and_angular_momentum_controls() {
-        // The E / L sliders drive the dropped worldlines, and the panel renders both muted
-        // hints: the energy-floor clamp and the outgoing-start caveat.
+    fn test_each_observer_gets_their_own_energy_and_angular_momentum() {
+        // E and L are per observer now, one pair of sliders on each card, and a drop has to put
+        // each of them on their own geodesic rather than on a shared one. Alice is given E = 1.2
+        // and Bob L = 1.0, and each worldline is asked what constants it is actually carrying.
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
-        app.controls.energy = 0.92;
-        app.controls.l_ang = 3.5;
-        app.controls.outgoing_start = true;
+        app.controls.alice.energy = 1.2;
+        app.controls.bob.l_ang = 1.0;
+        drop_observers(&mut app);
 
-        let floor = GeodesicState::energy_floor(&app.metric, 4.5, app.controls.l_ang);
-        assert!(floor > app.controls.energy, "the test needs a clamped case: floor = {floor}");
+        let al = alice_of(&app).geodesic.expect("free-fall observers carry a geodesic state");
+        let b = bob_of(&app).geodesic.expect("free-fall observers carry a geodesic state");
+        assert!((al.energy - 1.2).abs() < 1e-12, "Alice's E = {}", al.energy);
+        assert!(al.l_ang.abs() < 1e-12, "and her L is still her own: {}", al.l_ang);
+        assert!((b.energy - 1.0).abs() < 1e-12, "Bob's E = {}", b.energy);
+        assert!((b.l_ang - 1.0).abs() < 1e-12, "and his L = {}", b.l_ang);
+        for obs in [alice_of(&app), bob_of(&app)] {
+            assert!(
+                (app.metric.norm(obs.r, &obs.four_velocity(&app.metric)) + 1.0).abs() < 1e-9,
+                "{}'s 4-velocity must stay a unit timelike vector",
+                obs.name
+            );
+        }
 
+        // The two worldlines are genuinely different: run them and they separate.
+        for _ in 0..50 {
+            app.step_forward(0.05);
+        }
+        println!(
+            "after 2.5 M: Alice (E = 1.2) at r = {:.4}, Bob (L = 1, hovering until t = 8) at r = {:.4}",
+            alice_of(&app).r,
+            bob_of(&app).r
+        );
+        assert!(
+            alice_of(&app).r < 4.0,
+            "the higher-energy Alice is falling faster than the raindrop: r = {}",
+            alice_of(&app).r
+        );
+
+        // And the panel renders both muted hints: the energy-floor clamp and the outgoing-start
+        // caveat. Below the effective potential there is no timelike geodesic through r = 4.5M at
+        // all, and the drop raises E to the floor rather than refusing.
+        app.controls.bob.energy = 0.92;
+        app.controls.bob.l_ang = 3.5;
+        app.controls.bob.outgoing_start = true;
+        let floor = GeodesicState::energy_floor(&app.metric, 4.5, app.controls.bob.l_ang);
+        assert!(floor > app.controls.bob.energy, "the test needs a clamped case: floor = {floor}");
+        drop_observers(&mut app);
         egui::__run_test_ui(|ui| {
             let mut frame = eframe::Frame::_new_kittest();
             app.ui(ui, &mut frame);
         });
-
-        // Building an observer from those settings clamps E up to the floor and leaves the
-        // observer on a legal (turning-point) worldline.
-        let params = WorldlineParams::new(app.controls.energy, app.controls.l_ang, app.controls.outgoing_start);
-        app.bob.reset_with_phi(&app.metric, 0.0, 4.5, 0.0, params);
-        let geo = app.bob.geodesic.expect("free-fall observers carry a geodesic state");
+        let geo = bob_of(&app).geodesic.expect("free-fall observers carry a geodesic state");
         assert!((geo.energy - floor).abs() < 1e-12, "E = {} vs floor {floor}", geo.energy);
         assert!((geo.l_ang - 3.5).abs() < 1e-12);
-        assert!((app.metric.norm(4.5, &app.bob.four_velocity(&app.metric)) + 1.0).abs() < 1e-9);
 
-        // Defaults stay the raindrop.
+        // Defaults stay the raindrop on both cards, with Alice released at once and Bob 8 M later.
         let d = AppControls::default();
-        assert_eq!((d.energy, d.l_ang, d.outgoing_start), (1.0, 0.0, false));
+        for card in [d.alice, d.bob] {
+            assert_eq!((card.energy, card.l_ang, card.outgoing_start), (1.0, 0.0, false));
+            assert!(card.enabled && card.transmit);
+        }
+        assert_eq!((d.alice.delta_t_delay, d.bob.delta_t_delay), (0.0, 8.0));
+        assert_eq!(d.release_gap(), 8.0);
     }
 
     #[test]
@@ -949,6 +1097,9 @@ mod tests {
         assert!(d.is_playing);
         assert_eq!(d.play_speed, 1.0);
         assert_eq!(d.step_size, 0.1);
+        // Both observers are in the run and both are transmitting out of the box.
+        assert!(d.alice.enabled && d.alice.transmit);
+        assert!(d.bob.enabled && d.bob.transmit);
     }
 
     #[test]
@@ -960,7 +1111,7 @@ mod tests {
         app.controls.is_playing = false;
         app.controls.use_km = true;
         app.controls.frame_of_ref = ReferenceFrame::DistantObserver;
-        assert!(app.alice.is_some(), "the dual-observer default gives us Alice");
+        assert!(app.alice.is_some(), "both cards are ticked out of the box");
 
         egui::__run_test_ui(|ui| {
             let mut frame = eframe::Frame::_new_kittest();
@@ -969,7 +1120,7 @@ mod tests {
                 app.ui(ui, &mut frame);
             }
             // A ManualDrag observer is the non-geodesic case, which prints a_thrust and no E / L.
-            app.bob.mode = crate::physics::observer::ObserverMode::ManualDrag;
+            app.bob.as_mut().expect("Bob is enabled").mode = ObserverMode::ManualDrag;
             app.ui(ui, &mut frame);
         });
 
@@ -985,11 +1136,19 @@ mod tests {
         app.controls.step_mode = StepMode::Distance;
         app.controls.step_distance_km = 1000.0;
 
+        // The step is quoted for whoever is moving in r, and in the layout the app opens on that
+        // is Alice: Bob hovers at r = 4.5M until t = 8, so he has no coordinate speed to divide by
+        // and the chain falls through to her (see `test_a_distance_step_needs_somebody_who_is_
+        // moving_in_r`). So it is her the distance is honoured for.
         let sim_dt = app.arrow_step();
 
-        let initial_r = app.bob.r;
-        app.bob.step(&app.metric, app.current_time + sim_dt, sim_dt);
-        let actual_dr = (initial_r - app.bob.r).abs();
+        let initial_r = alice_of(&app).r;
+        app.alice.as_mut().expect("Alice is enabled").step(
+            &app.metric,
+            app.current_time + sim_dt,
+            sim_dt,
+        );
+        let actual_dr = (initial_r - alice_of(&app).r).abs();
         let actual_dr_km = app.metric.r_to_km(actual_dr);
 
         // Verify that stepping by distance moves Bob by approximately 1000 km (within numerical integration tolerance)
@@ -1012,18 +1171,27 @@ mod tests {
         app.controls.step_mode = StepMode::Distance;
         app.controls.step_distance_km = 1000.0;
 
-        // 1. Both falling: Bob's own speed, as before.
+        // 1. Both falling: Bob's own speed, as before. It takes a card with no release delay to
+        //    get him falling at t = 0, since the layout the app opens on has him hovering.
+        app.controls.bob.delta_t_delay = 0.0;
+        drop_observers(&mut app);
+        app.step_forward(0.05);
         let falling = app.arrow_step();
-        assert!(app.bob.velocity_c(&app.metric) < 0.0);
+        assert!(bob_of(&app).velocity_c(&app.metric) < 0.0);
         assert!(falling > 1e-8 && falling < 500.0, "a real step: {falling}");
 
         // 2. Bob hovering, Alice falling: Alice's speed, and a step of the same order rather than
-        //    the 500 M the old 0.01c floor clamped a stationary Bob to.
-        app.bob = Observer::new(&app.metric, "Bob", 0.0, 3.8, 8.0);
-        app.bob.step(&app.metric, 0.5, 0.5);
-        assert!(!app.bob.is_active && app.bob.velocity_c(&app.metric) == 0.0, "he is hovering");
+        //    the 500 M the old 0.01c floor clamped a stationary Bob to. This is the layout the app
+        //    opens on, so it is the default card that produces it.
+        app.controls.bob.delta_t_delay = 8.0;
+        drop_observers(&mut app);
+        app.step_forward(0.5);
+        assert!(
+            !bob_of(&app).is_active && bob_of(&app).velocity_c(&app.metric) == 0.0,
+            "he is hovering"
+        );
         let alice_paced = app.arrow_step();
-        let alice_speed = app.alice.as_ref().unwrap().velocity_c(&app.metric).abs();
+        let alice_speed = alice_of(&app).velocity_c(&app.metric).abs();
         let expected = app.metric.km_to_r(1000.0) / alice_speed.max(0.01);
         assert!(
             (alice_paced - expected).abs() < 1e-12,
@@ -1031,23 +1199,29 @@ mod tests {
         );
         assert!(alice_paced < 1.0, "and not by the 500 M clamp: {alice_paced}");
 
-        // 3. Nobody moving in r: the fixed fallback, which claims nothing about a distance.
+        // 3. Nobody moving in r: the fixed fallback, which claims nothing about a distance. An
+        //    Alice who is not in the simulation at all leaves the chain the same way a hovering
+        //    one does, and so does a Bob.
         app.alice = None;
+        assert!((app.arrow_step() - 0.1).abs() < 1e-12, "step = {}", app.arrow_step());
+        app.bob = None;
         assert!((app.arrow_step() - 0.1).abs() < 1e-12, "step = {}", app.arrow_step());
 
         // 4. A Static Bob outside the static limit holds his radius by choice, and is treated the
         //    same way: there is no time in which he covers Δr either.
-        app.bob = Observer::new(&app.metric, "Bob", 0.0, 5.0, 0.0);
-        app.bob.mode = ObserverMode::Static;
-        assert!(app.bob.mode_admissible(&app.metric) && app.bob.velocity_c(&app.metric) == 0.0);
+        let mut bob = Observer::new(&app.metric, "Bob", 0.0, 5.0, 0.0);
+        bob.mode = ObserverMode::Static;
+        assert!(bob.mode_admissible(&app.metric) && bob.velocity_c(&app.metric) == 0.0);
+        app.bob = Some(bob);
         assert!((app.arrow_step() - 0.1).abs() < 1e-12);
 
         // 5. ...but a Static selection at a radius where it is impossible is falling, so it paces
         //    the step like any other faller.
-        app.bob = Observer::new(&app.metric, "Bob", 0.0, 1.9, 0.0);
-        app.bob.mode = ObserverMode::Static;
-        assert!(!app.bob.mode_admissible(&app.metric));
-        assert!(app.bob.velocity_c(&app.metric) < 0.0, "he is falling, and the step follows him");
+        let mut bob = Observer::new(&app.metric, "Bob", 0.0, 1.9, 0.0);
+        bob.mode = ObserverMode::Static;
+        assert!(!bob.mode_admissible(&app.metric));
+        assert!(bob.velocity_c(&app.metric) < 0.0, "he is falling, and the step follows him");
+        app.bob = Some(bob);
         assert!(app.arrow_step() < 0.1);
     }
 
@@ -1191,21 +1365,45 @@ mod tests {
             ] {
                 app.controls.frame_of_ref = frame_of_ref;
                 for &r in radii.iter() {
-                    app.bob.reset_with_phi(&app.metric, 0.0, r, 0.0, WorldlineParams::default());
+                    app.bob.as_mut().expect("enabled").reset_with_phi(
+                        &app.metric,
+                        0.0,
+                        r,
+                        0.0,
+                        WorldlineParams::default(),
+                    );
                     if let Some(ref mut al) = app.alice {
                         al.reset_with_phi(&app.metric, 0.0, r * 1.08, 0.35, WorldlineParams::default());
                     }
                     app.ui(ui, &mut frame);
-                    assert!(app.bob.r > 0.0);
+                    assert!(bob_of(&app).r > 0.0);
                 }
             }
 
+            // Alice's frame with no Alice in it falls back to Bob, and Bob's frame with no Bob in
+            // it falls back to Alice; with neither of them there the rest-frame view has no frame
+            // to be and says so instead of drawing one.
             app.controls.frame_of_ref = ReferenceFrame::Alice;
-            app.alice = None;
+            app.controls.alice.enabled = false;
             for &r in radii.iter() {
-                app.bob.reset_with_phi(&app.metric, 0.0, r, 0.0, WorldlineParams::default());
+                app.bob.as_mut().expect("enabled").reset_with_phi(
+                    &app.metric,
+                    0.0,
+                    r,
+                    0.0,
+                    WorldlineParams::default(),
+                );
                 app.ui(ui, &mut frame);
             }
+            app.controls.alice.enabled = true;
+            app.controls.bob.enabled = false;
+            app.controls.frame_of_ref = ReferenceFrame::Bob;
+            app.ui(ui, &mut frame);
+            app.controls.alice.enabled = false;
+            app.ui(ui, &mut frame);
+            app.controls.frame_of_ref = ReferenceFrame::Alice;
+            app.ui(ui, &mut frame);
+            assert!(app.alice.is_none() && app.bob.is_none());
         });
     }
 
@@ -1232,13 +1430,7 @@ mod tests {
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
         app.controls.step_size = 0.02;
-        app.controls.delta_t_delay = 8.0;
-        let params = WorldlineParams::default();
-        app.alice = Some(Observer::new_with_phi(&app.metric, "Alice", 0.0, 4.5, 0.0, 0.25, params));
-        app.bob = Observer::new_with_phi(&app.metric, "Bob", 0.0, 4.5, 8.0, 0.0, params);
-        app.current_time = 0.0;
-        app.signal.clear();
-        app.bob_signal.clear();
+        assert_eq!(app.controls.bob.delta_t_delay, 8.0, "the layout the app opens on");
 
         let step = 0.02;
         for _ in 0..150 {
@@ -1249,8 +1441,8 @@ mod tests {
             app.ui(ui, &mut frame);
         });
 
-        assert!(!app.bob.is_active, "Bob is still hovering at t = {}", app.current_time);
-        assert!((app.bob.r - 4.5).abs() < 1e-12, "and has not moved: r = {}", app.bob.r);
+        assert!(!bob_of(&app).is_active, "Bob is still hovering at t = {}", app.current_time);
+        assert!((bob_of(&app).r - 4.5).abs() < 1e-12, "and has not moved: r = {}", bob_of(&app).r);
         let heard = app.bob_signal.received_count();
         let emitted: Vec<(usize, f64, f64)> = app
             .bob_signal
@@ -1289,16 +1481,19 @@ mod tests {
             "the rewind must go back past the arrival at t = {last_arrival}: now t = {}",
             app.current_time
         );
-        assert!(!app.bob.is_active && (app.bob.r - 4.5).abs() < 1e-12, "he is still hovering");
         assert!(
-            (app.bob.t - app.current_time).abs() < 1e-9,
+            !bob_of(&app).is_active && (bob_of(&app).r - 4.5).abs() < 1e-12,
+            "he is still hovering"
+        );
+        assert!(
+            (bob_of(&app).t - app.current_time).abs() < 1e-9,
             "and his own clock came back with the simulation's: {} vs {}",
-            app.bob.t,
+            bob_of(&app).t,
             app.current_time
         );
 
         // Alice is released and falling, so she is on the clock to the last bit as well.
-        let alice = app.alice.as_ref().expect("the dual-observer layout gives us Alice");
+        let alice = alice_of(&app);
         assert!(
             (alice.t - app.current_time).abs() < 1e-12,
             "Alice is at t = {} with the clock at {}",
@@ -1404,18 +1599,44 @@ mod tests {
             app.ui(ui, &mut frame);
         });
 
-        let alice = app.alice.as_ref().expect("the dual-observer default gives us Alice");
+        let alice = alice_of(&app);
         assert!(alice.has_ended(), "the run must reach the end of Alice's worldline: r = {}", alice.r);
         let last = app
             .bob_signal
             .last_delivered_pulse()
-            .expect("Bob starts below her and his light climbs to her from t = 0");
+            .expect("he transmits from t = 0 while he hovers, and the ingoing part of each cone catches her");
         let never = app.bob_signal.pulses_after(last.pulse_index);
         println!(
-            "app loop: Alice ends at t = {:?}; last delivered #{} at t = {:.3}, r = {:.4},              Bob's tau = {:.3}; {never} later pulses never arrive",
-            ended_at, last.pulse_index, last.emitted_t, last.emitted_r, last.emitted_tau
+            "app loop: Alice ends at t = {:?}; last delivered #{} sent at t = {:.3}, r = {:.4},              Bob's tau = {:.3}, reaching her at t = {:.3}; {never} later pulses never arrive",
+            ended_at,
+            last.pulse_index,
+            last.emitted_t,
+            last.emitted_r,
+            last.emitted_tau,
+            last.received_t
         );
-        assert!(never >= 1, "Bob goes on transmitting after the last delivery: {never}");
+        // The numbers of the layout the app opens on, which are the ones the hover text on Bob's
+        // Transmit Signal box quotes: the boundary pulse is one he sends while still hovering at
+        // r = 4.5M, well before his own release at t = 8, and everything after it is sent to
+        // nobody. Re-measured for this layout - the app used to open with him at r = 3.8M released
+        // at t = 0, where the boundary was pulse #25, sent at t = 3.84 from r = 1.23, with 3
+        // pulses after it.
+        assert!(
+            (last.emitted_t - 1.84).abs() < 0.02,
+            "the boundary pulse is the one of t = 1.84: {}",
+            last.emitted_t
+        );
+        assert!(
+            (last.emitted_r - 4.5).abs() < 1e-9,
+            "sent from the hover radius, before his release: r = {}",
+            last.emitted_r
+        );
+        assert!(
+            (last.received_t - 5.20).abs() < 0.02,
+            "and reaching her at t = 5.20, most of an M before her worldline ends: {}",
+            last.received_t
+        );
+        assert!(never >= 40, "Bob goes on transmitting after the last delivery: {never}");
         assert!(
             last.emitted_t < app.current_time,
             "the boundary event is in the past of the current frame"
@@ -1510,12 +1731,16 @@ mod tests {
             bob_then.len()
         );
 
-        // Just under half an M back, one arrow press at a time. The count is chosen so that the
+        // Two thirds of an M back, one arrow press at a time. The count is chosen so that the
         // rewind reaches past several arrivals in each field *and* leaves one of Alice's crossings
         // strictly inside the first step forward, which is the step that used to lose it: a field
         // whose sides have been dropped and not re-primed spends that step working out which side
-        // of each sheet the receiver is on, and sees no crossing at all.
-        let back = 24;
+        // of each sheet the receiver is on, and sees no crossing at all. In the layout the app
+        // opens on, Bob hears her at t = 1.774, 2.001, 2.243, 2.499, 2.770, 3.057, 3.358 and 3.673
+        // - every one of them at r = 4.5M, since he is hovering there - and 33 steps back from
+        // t = 4 lands on t = 3.34, which puts the arrival at t = 3.358 inside the first step
+        // forward and leaves two arrivals in each field to be retracted and re-recorded.
+        let back = 33;
         for _ in 0..back {
             app.step_backward(step);
         }
@@ -1701,6 +1926,233 @@ mod tests {
                 strictly_before.len(),
                 step * step
             );
+        }
+    }
+
+    /// Two layouts are the same run: the same observers, at the same events, on the same clocks,
+    /// with the same two transmissions behind them.
+    fn assert_same_layout(label: &str, now: &[LayoutRow], then: &[LayoutRow]) {
+        assert_eq!(now.len(), then.len(), "{label}: a different set of observers");
+        for (a, b) in now.iter().zip(then.iter()) {
+            assert_eq!(a.0, b.0, "{label}: {a:?} vs {b:?}");
+            assert_eq!((a.6, a.7), (b.6, b.7), "{label}: {a:?} vs {b:?}");
+            for (x, y, what) in [
+                (a.1, b.1, "t"),
+                (a.2, b.2, "r"),
+                (a.3, b.3, "phi"),
+                (a.4, b.4, "tau"),
+                (a.5, b.5, "release_t"),
+                (a.8, b.8, "field clock"),
+            ] {
+                assert!(
+                    (x - y).abs() <= 1e-12,
+                    "{label}: {}'s {what} is {x} where it was {y}",
+                    a.0
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_startup_reset_and_drop_observers_all_build_the_same_layout() {
+        // Three ways into the same run. Reset used to put Bob at r = 3.8M released at t = 0 while
+        // Drop Observers put him at 4.5M with a delay, so the app opened on one layout, one button
+        // rebuilt it and the other built a different one; with a card per observer that is simply
+        // confusing. All three now go through `AppControls::drop_observers`, and this is what pins
+        // that: the two buttons are one call, and the call agrees with `SpacetimeApp::default`.
+        let opening = layout(&SpacetimeApp::default());
+        assert_eq!(opening.len(), 2, "both cards are ticked out of the box");
+        assert_eq!(opening[0].0, "Alice");
+        assert!((opening[0].2 - 4.5).abs() < 1e-12, "Alice drops from r = 4.5M");
+        assert!(opening[0].5 == 0.0 && opening[0].6, "released at once");
+        assert!((opening[1].2 - 4.5).abs() < 1e-12, "and Bob from the same radius");
+        assert!(opening[1].5 == 8.0 && !opening[1].6, "hovering there until t = 8");
+
+        // Part-way through a run, with light in flight and both worldlines well below the drop.
+        let mut app = SpacetimeApp::default();
+        app.controls.is_playing = false;
+        for _ in 0..120 {
+            app.step_forward(0.05);
+        }
+        assert!(alice_of(&app).r < 2.0 && !app.signal.pulses.is_empty(), "a run in progress");
+
+        // The action behind ⏮ Reset, and behind Drop Observers, and behind the preset row.
+        drop_observers(&mut app);
+        assert_eq!(app.current_time, 0.0, "the clock goes back with it");
+        assert_same_layout("Reset vs startup", &layout(&app), &opening);
+
+        // And again from the rebuilt state, which is what pressing the other button does.
+        for _ in 0..30 {
+            app.step_forward(0.05);
+        }
+        drop_observers(&mut app);
+        assert_same_layout("Drop Observers vs startup", &layout(&app), &opening);
+    }
+
+    #[test]
+    fn test_an_unticked_observer_is_not_in_the_simulation_at_all() {
+        // Bob's card unticked: no worldline to step, nothing of him in either view, no telemetry
+        // box, no HUD line, nothing transmitted and nothing received. Alice's transmission goes on
+        // - light already sent does not care whether anyone is left to hear it - but records not
+        // one arrival, because an arrival is a crossing of a receiver's worldline and there is no
+        // receiver.
+        let mut app = SpacetimeApp::default();
+        app.controls.is_playing = false;
+        app.controls.bob.enabled = false;
+        // The panel is what applies a card, so one frame has to run before he goes.
+        let opening = painted_text(&mut app);
+        assert!(app.bob.is_none(), "the unticked card takes him out of the run");
+        assert!(opening.contains("OBSERVER BOB"), "his card is still there to tick back on");
+
+        for _ in 0..150 {
+            app.step_forward(0.02);
+        }
+        let painted = painted_text(&mut app);
+        println!(
+            "3 M with Bob's card unticked: Alice at r = {:.4} with {} pulses in flight; Bob's \
+             field holds {} pulses and {} arrivals, hers {} arrivals",
+            alice_of(&app).r,
+            app.signal.pulses.len(),
+            app.bob_signal.pulses.len(),
+            app.bob_signal.received_count(),
+            app.signal.received_count()
+        );
+
+        assert!(app.bob.is_none(), "and keeps him out of it");
+        assert!(app.bob_signal.pulses.is_empty(), "he transmits nothing");
+        assert_eq!(app.bob_signal.received_count(), 0, "and there is nothing of his to hear");
+        assert_eq!(app.signal.received_count(), 0, "nobody is there to hear Alice either");
+        assert!(!app.signal.pulses.is_empty(), "though she goes on transmitting");
+        assert!(alice_of(&app).r < 4.0, "and goes on falling: r = {}", alice_of(&app).r);
+
+        // What the frame says. "Alice [Reg II (Trapped)]" is the title line of a telemetry box and
+        // "Bob τ:" the HUD's clock; the word "Bob" by itself is no test at all, because his card is
+        // on the panel whether he is in the run or not.
+        assert!(painted.contains("Alice ["), "her telemetry box is drawn: {painted}");
+        assert!(!painted.contains("Bob ["), "his is not");
+        assert!(!painted.contains("Bob τ"), "nor his HUD clock");
+        // The colon is the HUD's line; the equatorial view's legend says "amber = Alice → Bob"
+        // whatever is on the canvas, because it is naming a colour rather than a reception.
+        assert!(!painted.contains("Alice → Bob:"), "nor the line about what he has heard");
+
+        // Ticking the card back on drops him afresh from it, on the clock the run has reached
+        // rather than behind it, and hovering until his own delay has passed from there.
+        app.controls.bob.enabled = true;
+        let painted = painted_text(&mut app);
+        let bob = bob_of(&app);
+        assert!((bob.t - app.current_time).abs() < 1e-12, "he starts on the clock: {}", bob.t);
+        assert!((bob.r - 4.5).abs() < 1e-12, "at the drop radius: {}", bob.r);
+        assert!(
+            (bob.release_t - (app.current_time + 8.0)).abs() < 1e-12,
+            "released his own delay later: {} with the clock at {}",
+            bob.release_t,
+            app.current_time
+        );
+        assert!(painted.contains("Bob ["), "and he is back in the telemetry: {painted}");
+    }
+
+    #[test]
+    fn test_an_untransmitting_observer_empties_their_field_and_is_never_heard() {
+        // The Transmit Signal box unticked: the field is dropped and stays empty, so there is
+        // nothing of theirs to draw and the other observer records nothing from them. The observer
+        // themselves is untouched - still falling, still listening - which is the difference
+        // between this box and the one above it.
+        let mut app = SpacetimeApp::default();
+        app.controls.is_playing = false;
+        for _ in 0..100 {
+            app.step_forward(0.02);
+        }
+        let heard = app.signal.received_count();
+        assert!(heard > 0 && !app.signal.pulses.is_empty(), "Bob has been hearing her: {heard}");
+
+        app.controls.alice.transmit = false;
+        for _ in 0..100 {
+            app.step_forward(0.02);
+        }
+        println!(
+            "2 M after Alice's transmission was switched off: her field holds {} pulses and {} \
+             arrivals (it held {heard}), his {} pulses and {} arrivals",
+            app.signal.pulses.len(),
+            app.signal.received_count(),
+            app.bob_signal.pulses.len(),
+            app.bob_signal.received_count()
+        );
+        assert!(app.signal.pulses.is_empty(), "her field is dropped and stays empty");
+        assert_eq!(app.signal.received_count(), 0, "and the arrivals go with the light");
+        assert!(
+            (app.signal.t - app.current_time).abs() < 1e-9,
+            "a silent field still rides the simulation clock: {} vs {}",
+            app.signal.t,
+            app.current_time
+        );
+
+        // She is otherwise exactly where she would have been, and still hearing him.
+        assert!(alice_of(&app).r < 4.0 && !alice_of(&app).has_ended());
+        assert!(!app.bob_signal.pulses.is_empty(), "he is still transmitting");
+        assert!(app.bob_signal.received_count() > 0, "and she is still hearing him");
+
+        // Nothing of hers is left to draw, and the frame still renders.
+        let painted = painted_text(&mut app);
+        assert!(painted.contains("Alice ["), "she is still on the canvas: {painted}");
+
+        // Ticked back on, she starts sending again from where she now is.
+        app.controls.alice.transmit = true;
+        for _ in 0..20 {
+            app.step_forward(0.02);
+        }
+        assert!(!app.signal.pulses.is_empty(), "the transmission resumes");
+        for pulse in app.signal.pulses.iter() {
+            assert!(
+                pulse.emitted_t > 4.0 - 1e-9,
+                "and everything in the field was sent after the silence, not before it: {}",
+                pulse.emitted_t
+            );
+        }
+    }
+
+    #[test]
+    fn test_the_panel_renders_with_every_combination_of_the_two_cards() {
+        // Four runs of the panel, one per combination of the two Enable boxes, each in all three
+        // reference frames and with the Drag / Manual sub-controls laid out for whoever is there.
+        // The rest-frame views in particular have to cope with the observer whose frame was asked
+        // for being absent, and with both of them being absent.
+        for alice_on in [true, false] {
+            for bob_on in [true, false] {
+                let mut app = SpacetimeApp::default();
+                app.controls.is_playing = false;
+                app.controls.alice.enabled = alice_on;
+                app.controls.bob.enabled = bob_on;
+
+                for &frame_of_ref in &[
+                    ReferenceFrame::DistantObserver,
+                    ReferenceFrame::Bob,
+                    ReferenceFrame::Alice,
+                ] {
+                    app.controls.frame_of_ref = frame_of_ref;
+                    for use_km in [true, false] {
+                        app.controls.use_km = use_km;
+                        let painted = painted_text(&mut app);
+                        assert_eq!(app.alice.is_some(), alice_on, "Alice's card is the authority");
+                        assert_eq!(app.bob.is_some(), bob_on, "and Bob's is his");
+                        assert!(
+                            painted.contains("OBSERVER ALICE") && painted.contains("OBSERVER BOB"),
+                            "both cards are always on the panel: {painted}"
+                        );
+                        // Drag / Manual, so the radial slider, the two boost sliders and the
+                        // thruster reset are laid out too - for either observer, which is new.
+                        for obs in [app.alice.as_mut(), app.bob.as_mut()].into_iter().flatten() {
+                            obs.mode = ObserverMode::ManualDrag;
+                        }
+                        painted_text(&mut app);
+                    }
+                }
+
+                // And with the run moving, which is where an absent observer would be stepped.
+                for _ in 0..20 {
+                    app.step_forward(0.05);
+                }
+                painted_text(&mut app);
+            }
         }
     }
 }

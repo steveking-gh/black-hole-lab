@@ -4,6 +4,9 @@ pub struct Theme;
 
 #[allow(dead_code)] // the palette is declared in full; not every colour is on screen yet
 impl Theme {
+    // UI FONT COLORS
+    pub const UI_HEADING: Color32 = Color32::from_rgb(255, 100, 100);
+
     // Backgrounds
     pub const BG_VOID: Color32 = Color32::from_rgb(10, 12, 18);
     pub const CANVAS_BG: Color32 = Color32::from_rgb(14, 16, 24);

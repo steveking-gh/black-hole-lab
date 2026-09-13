@@ -1936,6 +1936,24 @@ impl SignalField {
         self.heard.clear();
         self.budget_exhausted = 0;
     }
+
+    /// Drop everything this transmission has built but leave the field's own clock where it stands.
+    ///
+    /// This is what an emitter who is not transmitting leaves behind - the "Transmit Signal" box
+    /// unticked, or the observer out of the simulation altogether. It differs from `clear` in the
+    /// clock alone, and that is the whole reason it exists: `clear` is the reset that starts a run
+    /// over, so it puts the field back to t = 0, while a silent field is still riding the same
+    /// simulation clock as everything else and has to go on doing so, or the first thing sent when
+    /// the box is ticked again would be dated from a clock that had never left the start.
+    ///
+    /// It is stated as a condition rather than as an edge: `SignalPair::advance` calls it on every
+    /// step for every endpoint that is not sending, so a silent field is empty at every moment
+    /// rather than only just after the click that silenced it.
+    pub fn silence(&mut self) {
+        let t = self.t;
+        self.clear();
+        self.t = t;
+    }
 }
 
 /// The delivery of the newest pulse among these that has been received, or None if none has.
@@ -1967,6 +1985,26 @@ pub struct SignalPair<'a> {
     pub bob: &'a mut SignalField,
 }
 
+/// One end of the two-way transmission: the observer, when they are in the simulation at all, and
+/// whether they are broadcasting.
+///
+/// The two questions are separate and both belong here. An observer who is not in the simulation
+/// neither sends nor receives; one who is there with "Transmit Signal" unticked receives normally
+/// and sends nothing, and their field is dropped rather than frozen, because light nobody emitted
+/// is not light standing still.
+#[derive(Clone, Copy)]
+pub struct Endpoint<'a> {
+    pub observer: Option<&'a Observer>,
+    pub transmitting: bool,
+}
+
+impl<'a> Endpoint<'a> {
+    /// The emitter at this end, or None when there is nothing being sent from it.
+    fn sender(&self) -> Option<&'a Observer> {
+        self.observer.filter(|_| self.transmitting)
+    }
+}
+
 impl SignalPair<'_> {
     /// Carry both transmissions forward by dt of the simulation clock.
     ///
@@ -1975,24 +2013,40 @@ impl SignalPair<'_> {
     /// last means a pulse emitted this frame already has a recorded side for its receiver before
     /// the next frame can move it.
     ///
-    /// With no Alice there is nobody to emit her transmission and nobody for Bob's to reach, so
-    /// only Bob's field is carried, and it is carried rather than dropped: the light he has already
-    /// sent is still in flight whether or not anyone is left to hear it.
+    /// An endpoint that is not sending - the observer out of the simulation, or there with
+    /// "Transmit Signal" unticked - has its field silenced first and then carried on empty, so it
+    /// stays on the simulation clock while it holds nothing. The *other* field is not touched by
+    /// that: the light an emitter has already sent is still in flight whether or not anyone is left
+    /// to hear it, and it goes on being carried and drawn. What does stop is the record. A
+    /// reception is a crossing of a receiver's worldline, so with no receiver there is nothing to
+    /// detect and nothing is written down.
     pub fn advance(
         &mut self,
         metric: &KerrSchild,
         dt: f64,
-        alice: Option<&Observer>,
-        bob: &Observer,
+        alice: Endpoint<'_>,
+        bob: Endpoint<'_>,
     ) {
+        if alice.sender().is_none() {
+            self.alice.silence();
+        }
+        if bob.sender().is_none() {
+            self.bob.silence();
+        }
         self.alice.advance(metric, dt);
         self.bob.advance(metric, dt);
-        if let Some(al) = alice {
+        if let Some(al) = alice.sender() {
             self.alice.emit_if_due(metric, al);
+        }
+        if let Some(al) = alice.observer {
             self.bob.detect_receptions(metric, al);
         }
-        self.bob.emit_if_due(metric, bob);
-        self.alice.detect_receptions(metric, bob);
+        if let Some(b) = bob.sender() {
+            self.bob.emit_if_due(metric, b);
+        }
+        if let Some(b) = bob.observer {
+            self.alice.detect_receptions(metric, b);
+        }
     }
 
     /// Carry both transmissions back by dt of coordinate time, undoing `advance` rather than
@@ -2014,15 +2068,19 @@ impl SignalPair<'_> {
         metric: &KerrSchild,
         dt: f64,
         alice: Option<&Observer>,
-        bob: &Observer,
+        bob: Option<&Observer>,
     ) {
         self.alice.step_back(metric, dt);
         self.bob.step_back(metric, dt);
         // Each field is primed against its own receiver: Alice's transmission is received by Bob,
         // and Bob's by Alice. A field's own clock is the time its rewind landed on, which is the
-        // target the priming pass reconciles the reception record against.
+        // target the priming pass reconciles the reception record against. A field with no receiver
+        // has no sides to re-establish and nothing to reconcile, so it is left as the rewind left
+        // it.
         let (alice_target, bob_target) = (self.alice.t, self.bob.t);
-        self.alice.prime(metric, bob, alice_target);
+        if let Some(b) = bob {
+            self.alice.prime(metric, b, alice_target);
+        }
         if let Some(al) = alice {
             self.bob.prime(metric, al, bob_target);
         }
