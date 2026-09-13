@@ -3,7 +3,7 @@ use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::local_frame::{LocalFrame, SurfaceCharacter};
 use crate::physics::observer::{Observer, ObserverMode};
-use crate::physics::wavefront::{SignalField, outgoing_ray_track};
+use crate::physics::wavefront::SignalField;
 use egui::{epaint::PathShape, Color32, Pos2, Rect, Stroke, Vec2};
 use std::collections::HashMap;
 
@@ -26,28 +26,6 @@ Tidal — gravitational acceleration difference across one metre, in g per metre
 E, L — conserved energy and angular momentum per unit mass along the geodesic. E = 1, L = 0 means a drop from rest at infinity.
 
 Region tag — location relative to the horizons: outside r₊, between r₊ and r₋, or inside r₋, plus the ergosphere.";
-
-/// The master outgoing null ray of the interior together with the (M, a) it belongs to: the curve
-/// is recomputed only when the hole changes underneath it.
-type CachedOutgoingRay = (f64, f64, Vec<(f64, f64)>);
-
-/// Coordinate-time spacing between consecutive members of the drawn outgoing null congruence
-/// inside r+, in units of M. The geometry is stationary, so the congruence is one curve repeated at
-/// this interval; the spacing is a drawing choice and nothing else depends on it.
-///
-/// It has to be small against the time a ray spends visibly off r-, which is 1/kappa_-: 0.63M at
-/// a = 0.65, and 2.59M at the app's default a = 0.90, whose inner horizon is slacker
-/// (kappa_- = 0.386/M). The fast case is the binding one - there a ray is inside one pixel of the
-/// r- line within a couple of M of arriving - and at the 4M spacing this started with, at most one
-/// ray was ever mid-swing and the bunching that is the whole point of the picture could not be
-/// seen. At 1M several rays are in flight at once at either spin, and the exponential crowding onto
-/// r- is drawn rather than asserted.
-const OUTGOING_RAY_SPACING: f64 = 1.0;
-
-/// Cap on how many members of that congruence are drawn in one frame, so that a very wide time
-/// window cannot turn a faint background hatch into thousands of polylines. At the spacing above
-/// this covers 400M of coordinate time, more than any window the canvas offers.
-const MAX_DRAWN_OUTGOING_RAYS: i64 = 400;
 
 /// The drag offsets of the hovering telemetry boxes on one canvas, keyed by canvas tag and
 /// observer name so that the same observer can have a different box position in each diagram.
@@ -296,10 +274,6 @@ pub struct SpacetimeCanvas {
     bob_mode_before_drag: Option<ObserverMode>,
     /// Where the user has dragged each info box on this canvas, per diagram and per observer.
     pub telemetry: TelemetryBoxes,
-    /// The master outgoing principal null ray of the interior, cached against the (M, a) it was
-    /// integrated for. The geometry is stationary, so every other member of that congruence is this
-    /// one curve translated in t, and the integration is repeated only when the hole changes.
-    outgoing_rays: Option<CachedOutgoingRay>,
 }
 
 impl Default for SpacetimeCanvas {
@@ -312,7 +286,6 @@ impl Default for SpacetimeCanvas {
             is_dragging_bob: false,
             bob_mode_before_drag: None,
             telemetry: TelemetryBoxes::default(),
-            outgoing_rays: None,
         }
     }
 }
@@ -328,21 +301,6 @@ impl SpacetimeCanvas {
     pub fn focus_horizon(&mut self, rm: f64) {
         self.max_r = 0.05;
         self.r_offset = (rm - 0.025).max(0.0);
-    }
-
-    /// Recompute the cached master outgoing null ray when the hole has changed.
-    ///
-    /// The curve depends on nothing but (M, a): it is the solution of dr/dt = Delta / (r^2 + a^2 +
-    /// 2Mr) started just inside r+, and the geometry is stationary, so translating it in t sweeps
-    /// out the whole outgoing congruence of the interior. See `wavefront::outgoing_ray_track`.
-    fn ensure_outgoing_rays(&mut self, metric: &KerrSchild) {
-        let stale = match &self.outgoing_rays {
-            Some((m, a, _)) => *m != metric.m || *a != metric.a,
-            None => true,
-        };
-        if stale {
-            self.outgoing_rays = Some((metric.m, metric.a, outgoing_ray_track(metric)));
-        }
     }
 
     pub fn focus_bob(&mut self, bob_r: f64) {
@@ -364,7 +322,6 @@ impl SpacetimeCanvas {
         frame_of_ref: ReferenceFrame,
         font_scale: f32,
         signals: SignalViews<'_>,
-        show_outgoing_rays: bool,
     ) {
         let total_size = egui::Vec2::new(ui.available_width(), canvas_height);
         let track_height = (60.0 * font_scale.sqrt()).max(50.0);
@@ -423,7 +380,6 @@ impl SpacetimeCanvas {
                     use_km,
                     font_scale,
                     signals,
-                    show_outgoing_rays,
                 );
             }
         }
@@ -581,13 +537,7 @@ impl SpacetimeCanvas {
         use_km: bool,
         font_scale: f32,
         signals: SignalViews<'_>,
-        show_outgoing_rays: bool,
     ) {
-        // Done before the screen-mapping closures below take their borrow of self.
-        if show_outgoing_rays {
-            self.ensure_outgoing_rays(metric);
-        }
-
         let t_min = current_time + self.time_offset - self.time_window * 0.7;
         let t_max = current_time + self.time_offset + self.time_window * 0.3;
 
@@ -892,41 +842,6 @@ impl SpacetimeCanvas {
             );
         }
 
-        // Outgoing light trapped inside r+: the congruence of outgoing principal null rays.
-        //
-        // Each of these lines peels off r+, falls inward because Region II is trapped, and then
-        // asymptotes to r- from above without ever crossing it. They are one master curve
-        // translated in t, `wavefront::outgoing_ray_track`, which starts at r+(1 - 1e-3) rather
-        // than on r+ itself: the vertical run along the horizon is implicit, and drawing it would
-        // only lay a second line on top of the r+ line. The offset r - r- decays like
-        // exp(-kappa_- t), so the lines crowd exponentially onto r- and the last stretch of every
-        // one of them is inside a pixel of it; they carry their own colour for that reason, so the
-        // pile-up stays legible against the r- line itself. The Cauchy horizon in this chart is
-        // therefore the accumulation surface of the interior's outgoing null congruence, and an
-        // infalling worldline, which crosses r- at finite proper time, cuts through the whole stack
-        // on its way. That is the geometry behind Bob's reception of Alice's entire transmission in
-        // one moment. A hole with r- at the origin (no spin, or so little that r- is numerically
-        // indistinguishable from the ring) has no such surface, and nothing is drawn.
-        if show_outgoing_rays
-            && rm >= 1e-3
-            && let Some((_, _, track)) = self.outgoing_rays.as_ref()
-            && let Some(&(track_end, _)) = track.last()
-        {
-            let k_lo = ((t_min - track_end) / OUTGOING_RAY_SPACING).ceil() as i64;
-            let k_hi = (t_max / OUTGOING_RAY_SPACING).floor() as i64;
-            for k in k_lo..=k_hi.min(k_lo + MAX_DRAWN_OUTGOING_RAYS) {
-                let t0 = (k as f64) * OUTGOING_RAY_SPACING;
-                let points: Vec<Pos2> = track
-                    .iter()
-                    .filter(|(t, _)| t + t0 >= t_min && t + t0 <= t_max)
-                    .map(|&(t, r)| Pos2::new(to_screen_x(r), to_screen_y(t + t0)))
-                    .collect();
-                if points.len() >= 2 {
-                    painter.add(PathShape::line(points, Stroke::new(1.0, Theme::OUTGOING_RAY)));
-                }
-            }
-        }
-
         // The two transmissions. A wavefront is a closed curve in (r, phi) and this diagram has
         // no azimuth to draw it on, so what is drawn is the one thing the projection does define:
         // the pulse's radial extent, [min r, max r] over its live rays, swept up in t. That is the
@@ -942,8 +857,9 @@ impl SpacetimeCanvas {
         // Each field is drawn in its emitter's colour: the interior in `Theme::WEDGE_FILL_ALPHA`,
         // faint enough that the forty-odd wedges of a whole infall stack up without flattening into
         // a block, and the two edges as thin lines at `Theme::WEDGE_EDGE_ALPHA`. Inside r+ every
-        // upper edge freezes on r-, so those edges pile onto the Cauchy horizon exactly as the pink
-        // congruence does, and that pile is what a later infaller cuts through.
+        // upper edge freezes on r-, so those edges pile onto the Cauchy horizon, which in this
+        // chart is where the outgoing light of the whole interior accumulates, and that pile is
+        // what a later infaller cuts through.
         //
         // The fill is laid down as a strip of quads between consecutive track points rather than as
         // one polygon: the wedge is not convex in general - the upper edge bends back onto r- while

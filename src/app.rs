@@ -107,6 +107,12 @@ impl SpacetimeApp {
     /// the clock when the two differ - the clock stops at zero, a Distance-mode step can be
     /// hundreds of M, and a worldline that has already ended has no interval left to undo.
     ///
+    /// The worldlines go first and the fields second. A worldline needs nothing from a field to be
+    /// wound back, and a field needs its receiver at the rewound state to re-establish which side
+    /// of each wavefront they stand on - `SignalPair::step_back` does that priming, without which
+    /// a crossing that happens inside the next step forward is never seen. The panel's Step Back
+    /// button runs the same two calls in the same order.
+    ///
     /// The river is the exception, and deliberately. Stepping back advances the congruence forward
     /// by the same amount instead of reversing it. The flow is stationary, so its picture is the
     /// same at every t and "backwards" carries no information about it; running the advection in
@@ -117,13 +123,13 @@ impl SpacetimeApp {
         let back = step.min(self.current_time);
         self.current_time -= back;
         self.spatial_canvas.river.advance(&self.metric, step);
+        ObserverPair { bob: &mut self.bob, alice: self.alice.as_mut() }
+            .rewind_to(&self.metric, self.current_time);
         SignalPair {
             alice: &mut self.signal,
             bob: &mut self.bob_signal,
         }
-        .step_back(&self.metric, back);
-        ObserverPair { bob: &mut self.bob, alice: self.alice.as_mut() }
-            .rewind_to(&self.metric, self.current_time);
+        .step_back(&self.metric, back, self.alice.as_ref(), &self.bob);
     }
 }
 
@@ -321,7 +327,6 @@ impl eframe::App for SpacetimeApp {
                                 bob: &self.bob_signal,
                                 show_bob: self.controls.show_bob_signal,
                             },
-                            self.controls.show_outgoing_rays,
                         );
                     },
                 );
@@ -801,7 +806,6 @@ mod tests {
             app.ui(ui, &mut frame);
             app.controls.show_signal = false;
             app.controls.show_bob_signal = false;
-            app.controls.show_outgoing_rays = false;
             app.ui(ui, &mut frame);
         });
     }
@@ -1191,6 +1195,270 @@ mod tests {
         );
         for pulse in app.bob_signal.pulses.iter().filter(|p| p.index > last.pulse_index) {
             assert!(pulse.receptions.is_empty(), "pulse {} cannot have arrived", pulse.index);
+        }
+    }
+
+    /// Every arrival a transmission has recorded, ordered by its own crossing time: the pulse it
+    /// belongs to, when and where it crossed the receiver, and the shift it carried. This is the
+    /// whole reception record of a field, and it is what a rewind followed by the same steps
+    /// forward has to reproduce.
+    fn reception_list(field: &SignalField) -> Vec<(usize, f64, f64, f64)> {
+        let mut out: Vec<(usize, f64, f64, f64)> = field
+            .receptions()
+            .map(|rec| (rec.pulse_index, rec.t, rec.r, rec.ratio))
+            .collect();
+        out.sort_by(|a, b| a.1.total_cmp(&b.1));
+        out
+    }
+
+    /// Assert that two reception records are the same events: the same pulses in the same order, at
+    /// the same crossing times to `t_tol` and with the same shifts to a relative `ratio_tol`.
+    fn assert_same_receptions(
+        label: &str,
+        now: &[(usize, f64, f64, f64)],
+        then: &[(usize, f64, f64, f64)],
+        t_tol: f64,
+        ratio_tol: f64,
+    ) -> (f64, f64) {
+        assert_eq!(
+            now.len(),
+            then.len(),
+            "{label}: the run recorded {} arrivals where it had recorded {}:\n\
+             {now:?}\nvs\n{then:?}",
+            now.len(),
+            then.len()
+        );
+        let mut worst_t = 0.0f64;
+        let mut worst_ratio = 0.0f64;
+        for (a, b) in now.iter().zip(then.iter()) {
+            assert_eq!(a.0, b.0, "{label}: a different pulse: {a:?} vs {b:?}");
+            worst_t = worst_t.max((a.1 - b.1).abs());
+            worst_ratio = worst_ratio.max((a.3 - b.3).abs() / b.3);
+            assert!(
+                (a.1 - b.1).abs() < t_tol,
+                "{label}: the crossing moved by {}: {a:?} vs {b:?}",
+                (a.1 - b.1).abs()
+            );
+            assert!(
+                (a.3 - b.3).abs() < ratio_tol * b.3,
+                "{label}: the shift moved by {}: {a:?} vs {b:?}",
+                (a.3 - b.3).abs()
+            );
+        }
+        (worst_t, worst_ratio)
+    }
+
+    #[test]
+    fn test_receptions_come_back_unchanged_after_a_rewind() {
+        // Stepping back and forward over the same interval has to leave the same arrivals on the
+        // record. Two separate defects used to stop that happening, and both are through this
+        // path - the app's own transport, which is what the arrow keys and the panel's buttons
+        // call.
+        //
+        // The first was the sides. `SignalField::step_back` drops the per-sheet record of which
+        // side of each wavefront the receiver stands on, because a side is a statement about two
+        // events and cannot be wound back; but with nothing re-establishing them, the first step
+        // forward was spent finding out which side he was on, and any crossing inside that step was
+        // never seen. `SignalPair::step_back` now primes both fields at the rewound state, which is
+        // why the observers are rewound before the fields.
+        //
+        // The second was the stamp. An arrival used to carry the time of the pass that noticed it
+        // rather than the time of the crossing, and a rewind drops the arrivals later than its
+        // target: a crossing that happened just before the target but was noticed just after it was
+        // dropped and then never re-detected, because the side re-established on the way forward
+        // was already the far one. The stamp is now the interpolated crossing event.
+        let mut app = SpacetimeApp::default();
+        app.controls.is_playing = false;
+        let step = 0.02;
+        for _ in 0..200 {
+            app.step_forward(step);
+        }
+        let forward_time = app.current_time;
+        let alice_then = reception_list(&app.signal);
+        let bob_then = reception_list(&app.bob_signal);
+        assert!(
+            alice_then.len() >= 8 && bob_then.len() >= 8,
+            "both transmissions must have been heard by t = {forward_time}: {} and {}",
+            alice_then.len(),
+            bob_then.len()
+        );
+
+        // Just under half an M back, one arrow press at a time. The count is chosen so that the
+        // rewind reaches past several arrivals in each field *and* leaves one of Alice's crossings
+        // strictly inside the first step forward, which is the step that used to lose it: a field
+        // whose sides have been dropped and not re-primed spends that step working out which side
+        // of each sheet the receiver is on, and sees no crossing at all.
+        let back = 24;
+        for _ in 0..back {
+            app.step_backward(step);
+        }
+        let in_the_first_step = alice_then
+            .iter()
+            .filter(|rec| rec.1 > app.current_time && rec.1 < app.current_time + step)
+            .count();
+        assert!(
+            in_the_first_step >= 1,
+            "the rewind must leave a crossing inside the first step forward from t = {}: \
+             {alice_then:?}",
+            app.current_time
+        );
+        let retracted_alice = alice_then.len() - app.signal.received_count();
+        let retracted_bob = bob_then.len() - app.bob_signal.received_count();
+        assert!(
+            retracted_alice >= 2 && retracted_bob >= 2,
+            "the rewind must reach past several arrivals: {retracted_alice} and {retracted_bob}"
+        );
+        for (field, then) in [(&app.signal, &alice_then), (&app.bob_signal, &bob_then)] {
+            for rec in field.receptions() {
+                assert!(
+                    rec.t <= app.current_time + 1e-12,
+                    "an arrival at t = {} survived a rewind to t = {}",
+                    rec.t,
+                    app.current_time
+                );
+            }
+            let kept = reception_list(field);
+            assert_same_receptions("kept by the rewind", &kept, &then[..kept.len()], 1e-12, 1e-12);
+        }
+
+        // Forward over the same interval again: the same arrivals, at the same events.
+        for _ in 0..back {
+            app.step_forward(step);
+        }
+        assert!(
+            (app.current_time - forward_time).abs() < 1e-9,
+            "back on the same clock: {} vs {forward_time}",
+            app.current_time
+        );
+        let (alice_t, alice_ratio) = assert_same_receptions(
+            "Alice -> Bob",
+            &reception_list(&app.signal),
+            &alice_then,
+            1e-9,
+            1e-6,
+        );
+        let (bob_t, bob_ratio) = assert_same_receptions(
+            "Bob -> Alice",
+            &reception_list(&app.bob_signal),
+            &bob_then,
+            1e-9,
+            1e-6,
+        );
+        println!(
+            "{} + {} arrivals over {back} steps of {step} rewound and re-run: worst crossing-time \
+             difference {:.3e} M, worst relative shift difference {:.3e} ({retracted_alice} and \
+             {retracted_bob} arrivals were retracted by the rewind and re-recorded, \
+             {in_the_first_step} of them inside the first step forward)",
+            alice_then.len(),
+            bob_then.len(),
+            alice_t.max(bob_t),
+            alice_ratio.max(bob_ratio)
+        );
+    }
+
+    #[test]
+    fn test_a_rewind_that_lands_exactly_on_an_arrival_neither_drops_it_nor_repeats_it() {
+        // The boundary case of the retraction rule. A rewind keeps the arrivals with t <= target
+        // and drops the rest, so an arrival stamped exactly at the target is on the edge of it: it
+        // must survive as one arrival, not vanish and not be recorded twice when the same interval
+        // is stepped forward again.
+        //
+        // Both outcomes are safe now, and for the same reason. If the arrival is kept, the priming
+        // pass puts the receiver on the far side of that sheet, where the crossing has already
+        // happened, and nothing later calls it a crossing again. If round-off puts it a bit past
+        // the target and it is dropped, the priming pass finds the receiver a hair short of the
+        // sheet and the next step re-records the crossing at the same event, because the stamp is
+        // the interpolated crossing rather than the pass. Either way there is exactly one arrival
+        // there, at the time it always had.
+        //
+        // What does move is everything *after* the target, and legitimately: the rewind lands
+        // between two of the pass times the first run used, so the arrivals inside that interval
+        // are re-interpolated over a different pair of passes. Those come back to O(dt^2), which is
+        // what the last assertion allows and the printout measures.
+        let mut app = SpacetimeApp::default();
+        app.controls.is_playing = false;
+        let step = 0.02;
+        for _ in 0..200 {
+            app.step_forward(step);
+        }
+        let forward_time = app.current_time;
+        let alice_then = reception_list(&app.signal);
+        let bob_then = reception_list(&app.bob_signal);
+
+        // The last arrival of Alice's transmission that is far enough back for the rewind to be a
+        // rewind of several steps, and its exact crossing time is the target.
+        //
+        // Deliberately the last one. Landing further back moves the whole pass grid of everything
+        // that follows, and a sheet is keyed by the index of the polyline segment carrying it, so a
+        // front winding fast enough can hand the crossing to a different segment between two passes
+        // and have neither of them see it. That dropout is a property of the sheet key at a given
+        // step size, not of the rewind, and it is measured where it belongs, in
+        // `wavefront::tests::test_one_pulse_crossings_are_the_same_at_a_quarter_of_the_step`.
+        let target = alice_then
+            .iter()
+            .map(|rec| rec.1)
+            .filter(|t| *t < forward_time - 0.05)
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert!(target.is_finite(), "the run must have an arrival to land on: {alice_then:?}");
+        let interval = forward_time - target;
+        app.step_backward(interval);
+        assert!(
+            (app.current_time - target).abs() < 1e-12,
+            "the clock must land on the arrival: {} vs {target}",
+            app.current_time
+        );
+        let on_the_boundary = app
+            .signal
+            .receptions()
+            .filter(|rec| (rec.t - target).abs() < 1e-9)
+            .count();
+        println!(
+            "rewound {interval:.5} M onto the arrival at t = {target}: it is {} the rewind",
+            if on_the_boundary == 1 { "kept by" } else { "dropped by" }
+        );
+        assert!(on_the_boundary <= 1, "an arrival cannot be kept twice: {on_the_boundary}");
+
+        // Forward again on the same step size, not in one jump: a detection pass half an M long
+        // would sweep whole sheets past the receiver between two looks and see none of them, which
+        // is a statement about the pass cadence rather than about the rewind. The grid is now
+        // offset from the first run's by the fraction of a step the target sat at, which is what
+        // makes the arrivals after it a genuine re-interpolation.
+        while app.current_time < forward_time - 1e-12 {
+            app.step_forward(step.min(forward_time - app.current_time));
+        }
+        assert!(
+            (app.current_time - forward_time).abs() < 1e-9,
+            "back on the same clock: {} vs {forward_time}",
+            app.current_time
+        );
+        let alice_now = reception_list(&app.signal);
+        let bob_now = reception_list(&app.bob_signal);
+        assert_eq!(
+            alice_now.iter().filter(|rec| (rec.1 - target).abs() < 1e-6).count(),
+            1,
+            "the arrival on the boundary must be there exactly once: {alice_now:?}"
+        );
+
+        // Everything up to the target is untouched; everything after it was re-interpolated over a
+        // different pair of passes and comes back to O(dt^2).
+        for (label, now, then) in [
+            ("Alice -> Bob", &alice_now, &alice_then),
+            ("Bob -> Alice", &bob_now, &bob_then),
+        ] {
+            let before: Vec<_> = now.iter().copied().filter(|rec| rec.1 <= target).collect();
+            let then_before: Vec<_> = then.iter().copied().filter(|rec| rec.1 <= target).collect();
+            assert_same_receptions(label, &before, &then_before, 1e-9, 1e-9);
+            let (worst_t, worst_ratio) = assert_same_receptions(label, now, then, 1e-3, 1e-3);
+            println!(
+                "{label}: {} arrivals, {} of them at or before the target and unchanged to 1e-9; \
+                 the {} after it, re-interpolated over a pass grid the rewind has shifted, move \
+                 at most {worst_t:.3e} M in time and {worst_ratio:.3e} relative in shift, against \
+                 dt^2 = {:.1e}",
+                now.len(),
+                before.len(),
+                now.len() - before.len(),
+                step * step
+            );
         }
     }
 }
