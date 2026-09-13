@@ -114,9 +114,15 @@ use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::Observer;
 use crate::physics::tetrad::Tetrad;
 
-/// Directions per pulse: the whole of the emitter's local light cone at two-and-a-half-degree spacing, with
-/// the count chosen so that alpha = 0, their own outward radial leg, lands on a ray rather than in
-/// a gap between two.
+/// Directions per pulse the app starts on, and the default of `SignalField::rays_per_pulse`, which
+/// is the count an emission actually reads: the whole of the emitter's local light cone sampled at
+/// 360/n degrees, which at this n is two and a half.
+///
+/// The angles are alpha = 2 pi i / n for i in 0..n whatever n is, so alpha = 0, the emitter's own
+/// outward radial leg, is ray zero of every pulse at every count, and an even count puts the
+/// ingoing radial leg alpha = pi on a ray as well. Nothing downstream reads this constant: a pulse
+/// is scanned, measured and drawn by its own `rays.len()`, so pulses of different counts can be in
+/// flight together. The tests use it as the count a field emits at unless they say otherwise.
 pub const RAYS_PER_PULSE: usize = 144;
 
 /// Pulses kept at once. The oldest is dropped past this, which bounds both the drawing and the
@@ -469,7 +475,7 @@ impl NullRay {
     /// always does on the way out. The second clause is not a corner case. Inside r- a pulse's
     /// rays with |L| just above a|E| are sent outward, climb a few hundredths of an M to the outer
     /// zero of their potential over more than a full M of coordinate time, and then fall to the
-    /// ring; with the cone sampled at 2.5 degrees one such ray sits next to the last ray that fell
+    /// ring; with the cone sampled at 2.5 degrees, the default count's spacing, one such ray sits next to the last ray that fell
     /// straight in, and reading it as "not ring-bound" while it climbed dropped the drawn front's
     /// inner edge off the ring in the middle of the swallowing. "The ring" here is R_STOP, the
     /// radius at which this chart's equation is left alone and the ray retired; see
@@ -1048,10 +1054,15 @@ pub struct Pulse {
     pub emitted_r: f64,
     /// Azimuth of the emission event.
     pub emitted_phi: f64,
-    /// The whole of the emitter's light cone at emission, `RAYS_PER_PULSE` exact null geodesics
-    /// ordered by their emission angle alpha, from alpha = 0, their own outward radial leg, round
-    /// to alpha = 2 pi - 2 pi / `RAYS_PER_PULSE`. The emitter broadcasts in every direction, so the
-    /// polyline these rays form is closed: the last ray joins back to the first.
+    /// The whole of the emitter's light cone at emission: n exact null geodesics ordered by their
+    /// emission angle alpha, from alpha = 0, their own outward radial leg, round to
+    /// alpha = 2 pi - 2 pi / n. The emitter broadcasts in every direction, so the polyline these
+    /// rays form is closed: the last ray joins back to the first.
+    ///
+    /// n is `SignalField::rays_per_pulse` as it stood at this emission - `RAYS_PER_PULSE` unless
+    /// the panel's "Wavefront points" slider has been moved - and it belongs to this pulse rather
+    /// than to the field: everything that reads a wavefront reads `rays.len()`, so a field can
+    /// carry pulses of several counts at once and each keeps its own for life.
     pub rays: Vec<NullRay>,
     /// The pulse's *radial extent*, as (t, r_min, r_max) over the rays that were still alive at
     /// that time: what the pulse is on the (t, r) diagram, where the fan of azimuths cannot be
@@ -1076,9 +1087,9 @@ pub struct Pulse {
     /// it is passing through, and the comparison theorem carries that pointwise statement into a
     /// statement about the curves.
     ///
-    /// Two things hold r_min off the envelope: the 2.5-degree discretisation of the cone, which
-    /// leaves the most ingoing of the `RAYS_PER_PULSE` rays up to 1.25 degrees off the extremal
-    /// direction, and, once the pulse has finished being swallowed, the loss of every ray that
+    /// Two things hold r_min off the envelope: the discretisation of the cone, which leaves the
+    /// most ingoing ray up to half the 360/n spacing - 1.25 degrees at the default count - off the
+    /// extremal direction, and, once the pulse has finished being swallowed, the loss of every ray that
     /// reached the ring, after which the minimum is taken over whatever is still alive and lifts
     /// away from the bound for good. Before that the gap is at most 8e-4 M, measured in
     /// `test_extent_track_lower_edge_hugs_the_steepest_ingoing_ray`, so the drawn lower edge is
@@ -1153,7 +1164,8 @@ impl Pulse {
     /// conserved L/E of each (see the module header: from r = 0.45 at a = 0.90, sixty of the
     /// seventy-two reach the ring). Take the minimum over the survivors and the inner edge sits on
     /// the innermost sampled ray, which jumps outward to the next one every time one dies and then
-    /// dives again - a sawtooth, and an artefact of sampling the cone at 2.5 degrees. The
+    /// dives again - a sawtooth, and an artefact of sampling the cone at all (2.5 degrees at the
+    /// default count). The
     /// continuum front has no such thing in it. The time at which a ray arrives at the ring depends
     /// continuously on its emission angle, and its descent is bounded away from a standstill there
     /// (the potential tends to 2 M (L - aE)^2 r, positive for every ray but the one with L = aE),
@@ -1169,7 +1181,8 @@ impl Pulse {
     ///
     /// Otherwise the plain extremum over the live rays stands. Neighbouring is the point. The two
     /// ends of the argument have to bracket a stretch of the continuum that is all going the same
-    /// way, and adjacent emission angles are 2.5 degrees apart, whereas taking them from anywhere
+    /// way, and adjacent emission angles are 360/n degrees apart - 2.5 at the default count -
+    /// whereas taking them from anywhere
     /// in the cone would assume the whole arc between them shares one fate - true of every pulse
     /// measured here, since the fate is fixed by L/E and L/E runs monotonically round each half of
     /// the cone, but not a theorem. Where the ring-bound rays do form one arc the two readings
@@ -1594,6 +1607,21 @@ pub struct SignalField {
     last_emit_tau: Option<f64>,
     /// The emitter's proper-time interval between pulses.
     pub interval_tau: f64,
+    /// How many rays the *next* pulse will carry: the sampling of the emitter's light cone, set
+    /// from the panel's "Wavefront points" slider and starting at `RAYS_PER_PULSE`.
+    ///
+    /// `emit_if_due` is the only reader. A pulse already in flight keeps the count it went out
+    /// with, because its rays are the null geodesics that were launched and there is nowhere to get
+    /// more of them from without emitting a different pulse; moving the slider therefore changes
+    /// the pulses sent from then on and leaves the standing ones exactly as they are, and a field
+    /// can hold several counts at once. Nothing downstream needs to be told which: the closed
+    /// polyline the equatorial view draws, the loop coordinate of `Pulse::scan` (taken mod n), the
+    /// neighbouring pairs of `Pulse::radial_extent` and the width of `Pulse::sheet_window` all read
+    /// the pulse's own `rays.len()`.
+    ///
+    /// Whatever n is, the emission angles are alpha = 2 pi i / n, so alpha = 0 - the emitter's own
+    /// outward radial leg - is ray zero of every pulse and the spacing is 360/n degrees.
+    pub rays_per_pulse: usize,
     /// The newest delivery this transmission has made, remembered separately from the pulses so
     /// that the `MAX_PULSES` cap cannot erase the causal boundary it marks. Maintained by
     /// `detect_receptions` and wound back by `step_back`; read through `last_delivered_pulse`.
@@ -1617,6 +1645,7 @@ impl Default for SignalField {
             next_index: 0,
             last_emit_tau: None,
             interval_tau: EMISSION_INTERVAL_TAU,
+            rays_per_pulse: RAYS_PER_PULSE,
             last_delivered: None,
             heard: Vec::new(),
             budget_exhausted: 0,
@@ -1660,12 +1689,15 @@ impl SignalField {
         let u = signalling_four_velocity(metric, emitter);
         let tetrad = Tetrad::from_four_velocity(metric, emitter.r, &u);
         let two_pi = 2.0 * std::f64::consts::PI;
-        let rays = (0..RAYS_PER_PULSE)
+        // The count is read here and nowhere else, so this pulse is fixed at whatever the slider
+        // said when it was sent and the pulses already in flight are untouched.
+        let n = self.rays_per_pulse;
+        let rays = (0..n)
             .map(|i| {
                 // alpha = 0 is the emitter's outward radial leg and the ray count divides the
                 // turn exactly, so the last ray stops one step short of alpha = 2 pi and the front
-                // closes.
-                let alpha = two_pi * (i as f64) / (RAYS_PER_PULSE as f64);
+                // closes. That holds for every n: the angles are 2 pi i / n, spaced 360/n degrees.
+                let alpha = two_pi * (i as f64) / (n as f64);
                 NullRay::from_local_direction(
                     metric, emitter.t, emitter.r, emitter.phi, &tetrad, alpha, &u,
                 )
@@ -2084,6 +2116,19 @@ impl SignalPair<'_> {
         if let Some(al) = alice {
             self.bob.prime(metric, al, bob_target);
         }
+    }
+
+    /// Set how many rays the next pulse of *either* transmission will carry.
+    ///
+    /// The two fields are one control: a pulse of Alice's and a pulse of Bob's sampled at different
+    /// densities would make the two pictures incomparable, and the panel offers one slider. This is
+    /// the only way the app writes `SignalField::rays_per_pulse`, so the two cannot fall out of
+    /// step, and it is called on the stepping paths, just before the step, rather than at the
+    /// moment of the click: the count is a standing request about the next emission, like every
+    /// other setting the transport reads as it goes.
+    pub fn set_rays_per_pulse(&mut self, rays: usize) {
+        self.alice.rays_per_pulse = rays;
+        self.bob.rays_per_pulse = rays;
     }
 
     /// Drop both transmissions and put both clocks back to zero: the reset that re-dropping the
@@ -4302,6 +4347,80 @@ mod tests {
         alice.step(&metric, t + dt, dt);
         field.emit_if_due(&metric, &alice);
         assert_eq!(field.pulses.len(), 1);
+    }
+
+    #[test]
+    fn test_the_ray_count_is_read_at_emission_and_a_pulse_keeps_its_own() {
+        // The "Wavefront points" slider sets how finely the *next* pulse samples the emitter's
+        // cone. A pulse already in flight cannot be resampled - its rays are the null geodesics
+        // that were launched - so the count belongs to the pulse and not to the field, and a field
+        // that has been turned up carries both densities at once.
+        let metric = KerrSchild::new(1.0, 0.65);
+        let params = WorldlineParams::default();
+        let alice = Observer::new_with_phi(&metric, "Alice", 0.0, 4.5, 0.0, 0.25, params);
+        let mut field = SignalField::default();
+        assert_eq!(field.rays_per_pulse, RAYS_PER_PULSE, "the default is the named constant");
+
+        field.rays_per_pulse = 64;
+        field.emit_if_due(&metric, &alice);
+        assert_eq!(field.pulses[0].rays.len(), 64);
+
+        // Turned up between emissions, with a step in between so that the cadence lets the second
+        // pulse out at all.
+        field.rays_per_pulse = 1024;
+        let mut alice = alice;
+        let mut t = 0.0;
+        while field.pulses.len() < 2 && t < 1.0 {
+            t += 0.05;
+            alice.step(&metric, t, 0.05);
+            field.advance(&metric, 0.05);
+            field.emit_if_due(&metric, &alice);
+        }
+        assert_eq!(field.pulses.len(), 2, "the cadence let a second pulse out by t = {t}");
+        assert_eq!(field.pulses[1].rays.len(), 1024, "the new pulse takes the new count");
+        assert_eq!(field.pulses[0].rays.len(), 64, "and the old one keeps the count it went out at");
+    }
+
+    #[test]
+    fn test_alpha_zero_is_the_outward_radial_leg_at_every_count() {
+        // The angle convention, pinned. The emission angles are alpha = 2 pi i / n whatever n is,
+        // so ray zero of a 64-point pulse and ray zero of a 1024-point one from the same event are
+        // the *same* null geodesic - the emitter's own outward radial leg - and every ray of the
+        // coarse pulse is a ray of the fine one, at sixteen times the index. Nothing about the
+        // sampling density may leak into the physics of a ray.
+        let metric = KerrSchild::new(1.0, 0.65);
+        let params = WorldlineParams::default();
+        let alice = Observer::new_with_phi(&metric, "Alice", 0.0, 4.5, 0.0, 0.25, params);
+
+        let emit = |n: usize| {
+            let mut field = SignalField { rays_per_pulse: n, ..Default::default() };
+            field.emit_if_due(&metric, &alice);
+            field.pulses.into_iter().next().expect("a released Alice emits at once")
+        };
+        let (coarse, fine) = (emit(64), emit(1024));
+        assert_eq!((coarse.rays.len(), fine.rays.len()), (64, 1024));
+
+        let same = |a: &NullRay, b: &NullRay, what: &str| {
+            for (x, y, name) in [
+                (a.r, b.r, "r"),
+                (a.phi, b.phi, "phi"),
+                (a.dr_dt, b.dr_dt, "dr/dt"),
+                (a.dphi_dt, b.dphi_dt, "dphi/dt"),
+                (a.f_emit, b.f_emit, "f_emit"),
+            ] {
+                assert!((x - y).abs() <= 1e-12, "{what}: {name} {x} against {y}");
+            }
+        };
+        // alpha = 0 is radially outward in the emitter's frame: dphi/dt is the frame dragging of
+        // the event and nothing else, and dr/dt is the outgoing edge of her own light cone.
+        let leg = &coarse.rays[0];
+        assert!(leg.dr_dt > 0.0, "alpha = 0 leaves outward: dr/dt = {}", leg.dr_dt);
+        same(leg, &fine.rays[0], "the outward radial leg");
+        // And the whole of the coarse cone is a sub-sampling of the fine one: 1024 = 16 * 64, and
+        // 2 pi i / 64 is 2 pi (16 i) / 1024 exactly.
+        for i in 0..coarse.rays.len() {
+            same(&coarse.rays[i], &fine.rays[16 * i], &format!("ray {i} against ray {}", 16 * i));
+        }
     }
 
     /// The two radial branches k_r of a null ray of conserved (E, L) at radius r, straight from the

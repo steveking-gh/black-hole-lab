@@ -2,7 +2,7 @@ use crate::gui::theme::Theme;
 use crate::physics::geodesic::GeodesicState;
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::{Observer, ObserverMode, ObserverPair, WorldlineParams};
-use crate::physics::wavefront::{Endpoint, SignalField, SignalPair};
+use crate::physics::wavefront::{Endpoint, RAYS_PER_PULSE, SignalField, SignalPair};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReferenceFrame {
@@ -119,6 +119,14 @@ pub struct AppControls {
     /// Playback rate while playing: coordinate time (units of M) per wall-clock second.
     pub play_speed: f64,
     pub step_distance_km: f64,
+    /// How many rays a newly emitted pulse carries: the sampling of the emitter's light cone, at
+    /// alpha = 2 pi i / n, and so the resolution of every wavefront sent from now on.
+    ///
+    /// It is a standing request, like the worldline constants on an observer card: pushed into both
+    /// transmissions on every step through `SignalPair::set_rays_per_pulse`, read by
+    /// `SignalField::emit_if_due` and by nothing else. Pulses already in flight keep the count they
+    /// were emitted with, because their rays are the null geodesics that were launched.
+    pub rays_per_pulse: usize,
     /// Draw the animated raindrop flow (the Painlevé-Gullstrand / Doran river) on the
     /// equatorial view.
     pub show_river: bool,
@@ -155,6 +163,7 @@ impl Default for AppControls {
             step_size: 0.1,
             play_speed: 1.0,
             step_distance_km: 1000.0,
+            rays_per_pulse: RAYS_PER_PULSE,
             show_river: true,
             show_streamlines: true,
             // Alice leads and Bob trails her by 8 M. Everything else in the app is written around
@@ -214,6 +223,9 @@ const FREE_FALL_TIP: &str = "A timelike geodesic: the observer falls with no thr
 const MANUAL_DRAG_TIP: &str = "The observer's position is yours: set their radius on the slider below — and Bob's marker can be dragged straight across either canvas as well — and they stay exactly where you put them while the clock runs. What the two boost sliders set is their velocity — β_r radially and β_ϕ azimuthally, as fractions of c — relative to the local raindrop, the observer dropped from rest at infinity passing through that same point, which is the one reference frame that exists at every radius, between the horizons included. Their four-velocity is that raindrop frame boosted by (β_r, β_ϕ), so the telemetry, the rest-frame view and the pulses they transmit are all drawn for an observer moving at that velocity through the point you are holding them at, while the point itself does not drift. Those two statements are not one worldline, and here that is deliberate: the position is an input rather than an integration, so the drawn marker and the reported velocity are answering different questions, and this is the only mode in which they are allowed to. β = 0 reproduces the free-fall frame exactly; anything else is a rocket, and the thrust that holding it would cost is what the telemetry quotes as a_thrust. Let go of the marker and free fall resumes from the new event with their conserved E and L unchanged, rather than from wherever they were before you picked them up.";
 const STATIC_TIP: &str = "The observer hovers: fixed r and fixed ϕ, station-keeping against the distant stars, with a four-velocity along the time-translation Killing vector ∂/∂t normalised to unit length. The thrust that costs is real, it is what the telemetry reports as a_prop, and it grows without bound as they near the static limit. That worldline exists only where ∂/∂t is timelike, g_tt < 0, which on the equator means r > 2M — outside the ergosphere, not merely outside the horizon. Inside the ergosphere the frame dragging is total: holding ϕ fixed is a spacelike motion there and no rocket, however powerful, can do it. The selection is kept rather than refused, because it is a standing request and resumes by itself the moment they are somewhere it can exist again, but what they actually do in the meantime is fall freely — in position as much as in velocity — and this panel and their telemetry box both read “Static impossible here (r ≤ 2M): falling freely” while that lasts. It is the mode for the exterior: gravitational blueshift, the redshift of an infaller's signal and the weight of the hole are all statements about what a static observer measures.";
 const ZAMO_TIP: &str = "The zero-angular-momentum observer, the frame in which a spinning hole looks as unrotating as it can. They hold their radius like the static observer but do not fight the frame dragging: they are swept around at the local dragging rate ω = −g_tϕ/g_ϕϕ, exactly fast enough that their own angular momentum L = u_ϕ vanishes, and their four-velocity is γ(1, 0, ω). Light leaves them with no built-in swirl, which is why the River of Space quotes its flow speed past them, β = √(1 − α²), reaching c at the outer horizon, and why they are the observer the lapse α belongs to. A fixed-r worldline is timelike only outside the outer horizon r₊, so unlike the static observer they survive the whole ergosphere — going along with the dragging is precisely what the static observer cannot afford to stop doing. At r₊ and inside it the radial direction is timelike and nothing can hold a radius at all; the selection is kept, they fall freely instead, and this panel and their telemetry box both read “ZAMO impossible inside r₊: falling freely” until they are back outside. Use it to read the ergosphere, where it is the only hovering observer there is.";
+
+/// The hover tip on the Wavefront points slider.
+const WAVEFRONT_POINTS_TIP: &str = "How finely a pulse samples the emitter's light cone: n directions at α = 2πi/n, spaced 360/n degrees apart — 2.5° at the default of 144 — with α = 0, the emitter's own outward radial leg, always the first of them whatever n is. Each direction is one exact null geodesic, so this is the resolution of the whole picture the light draws: more points give finer tongues where the front is being swallowed at the ring, more beads along the frozen arcs stacked on r₋, shorter segments around the loop on the equatorial view, and rarer handovers from one sheet of a front to the next in the reception test, since neighbouring rays are then closer together in azimuth. They are not free. Integrating the rays, testing them against the receiver's worldline and drawing them all scale linearly in the count: about 1.1 ms of frame time for each extra 72 rays a pulse with forty pulses in flight, of which the integration and the reception test are 0.3 ms, so 1024 points is about seven times the work of 144 and the play loop is the first thing to feel it. It applies to pulses sent from now on. Light already in flight is the geodesics that were launched, and each pulse keeps the count it went out with, so the slider changes the transmission rather than redrawing it.";
 
 /// The hover tip on the Enable Observer checkbox, the same on both cards.
 const ENABLE_TIP: &str = "Whether this observer is in the simulation at all. Unticked, they are not merely hidden: there is no worldline to step, nothing of them in either view, no telemetry box, no light going out and no arrival coming in, and their transmission is dropped. The other observer's transmission goes on exactly as before — the light already in flight does not care whether anybody is left to hear it — but records no reception, because there is nobody there to make one. Ticking the box back on drops this observer afresh from this card, at r = 4.5M on the clock's current reading, hovering there until their own Release Delay has passed; the rest of the run is left alone, so the other observer is not restarted.";
@@ -675,6 +687,9 @@ impl AppControls {
                     // keys: carry both transmissions, let each emitter emit, then let each receiver
                     // listen.
                     let (a, b) = self.endpoints(alice.as_ref(), bob.as_ref());
+                    // The panel's own step is a step like any other, so the wavefront count goes in
+                    // the same way it does on the played frame: see `SignalPair::set_rays_per_pulse`.
+                    signals.set_rays_per_pulse(self.rays_per_pulse);
                     signals.advance(metric, current_step, a, b);
                 }
             });
@@ -724,6 +739,13 @@ impl AppControls {
                     });
                 }
             }
+            ui.add(
+                egui::Slider::new(&mut self.rays_per_pulse, 64..=1024)
+                    .integer()
+                    .text("Wavefront points"),
+            )
+            .on_hover_text(WAVEFRONT_POINTS_TIP);
+
             ui.checkbox(&mut self.show_river, "River of Space (raindrop flow)")
                 .on_hover_text(
                     "Each drop is an element of the E = 1, L = 0 raindrop flow of the Painlevé-Gullstrand / Doran river model, drawn at proper size and entering the field at r = 12M as a circle of proper diameter 0.1 M. The flow alone deforms that circle after that: length along the flow grows as √(12M/r), the ratio of Doran river speeds, and width across the flow shrinks as neighbouring flow lines converge, √g_φφ δφ. The drawn aspect ratio is therefore the tidal stretching of the fluid element, reaching about 16 at r₊ for a = 0.65. Colour is the flow speed past a local ZAMO, β = √(1 − α²), reaching c at r₊.",

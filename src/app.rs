@@ -77,11 +77,18 @@ impl SpacetimeApp {
     /// the order - carry the light, then emit, then listen - and the panel's Step Fwd button goes
     /// through the same call, so the two paths cannot drift apart.
     fn advance_signal(&mut self, dt: f64) {
-        SignalPair {
+        let mut signals = SignalPair {
             alice: &mut self.signal,
             bob: &mut self.bob_signal,
-        }
-        .advance(
+        };
+        // The panel's Wavefront points slider is a standing request about the next emission, so it
+        // is pushed into both fields here, on the way into the step, rather than at the click that
+        // moved it: that way a played frame, an arrow key and a test that steps the app by hand all
+        // emit at the count the panel is currently showing, and the two transmissions cannot end up
+        // sampled differently. It reaches the emission and nothing else - pulses already in flight
+        // keep their own count.
+        signals.set_rays_per_pulse(self.controls.rays_per_pulse);
+        signals.advance(
             &self.metric,
             dt,
             Endpoint {
@@ -2153,6 +2160,66 @@ mod tests {
                 }
                 painted_text(&mut app);
             }
+        }
+    }
+
+    #[test]
+    fn test_the_wavefront_slider_reaches_the_next_pulse_of_both_transmissions() {
+        // The panel's "Wavefront points" is a standing request read on the way into a step, so a
+        // test that steps the app by hand sees exactly what a played frame sees. Both transmissions
+        // take it - one slider, one sampling, or the two pictures would not be comparable - and
+        // both leave the light already in flight alone.
+        let mut app = SpacetimeApp::default();
+        app.controls.is_playing = false;
+        app.controls.rays_per_pulse = 64;
+        app.step_forward(0.05);
+        let first: Vec<usize> =
+            [&app.signal, &app.bob_signal].iter().map(|f| f.pulses.len()).collect();
+        assert_eq!(first, vec![1, 1], "Alice falling and Bob hovering both transmit at once");
+        assert_eq!(app.signal.pulses[0].rays.len(), 64);
+        assert_eq!(app.bob_signal.pulses[0].rays.len(), 64);
+
+        // Turned up part-way through the run. Bob is still hovering, so his clock runs slower than
+        // Alice's and his second pulse is a little later than hers; stepping until both fields hold
+        // two pulses is what "the next pulse of each" means.
+        app.controls.rays_per_pulse = 256;
+        for _ in 0..40 {
+            if app.signal.pulses.len() > 1 && app.bob_signal.pulses.len() > 1 {
+                break;
+            }
+            app.step_forward(0.05);
+        }
+        for (who, field) in [("Alice", &app.signal), ("Bob", &app.bob_signal)] {
+            assert!(field.pulses.len() > 1, "{who} sent a second pulse by t = {}", app.current_time);
+            assert_eq!(
+                field.pulses.last().unwrap().rays.len(),
+                256,
+                "{who}'s newest pulse carries the count the slider now shows"
+            );
+            assert_eq!(
+                field.pulses[0].rays.len(),
+                64,
+                "{who}'s first pulse keeps the count it was emitted with"
+            );
+            assert_eq!(field.rays_per_pulse, 256, "and both fields agree on what comes next");
+        }
+    }
+
+    #[test]
+    fn test_the_panel_renders_at_both_ends_of_the_wavefront_slider() {
+        // The slider's own range, laid out and stepped through. 1024 rays a pulse is the expensive
+        // end and the one a layout mistake would show up at first.
+        for rays in [64usize, 1024] {
+            let mut app = SpacetimeApp::default();
+            app.controls.is_playing = false;
+            app.controls.rays_per_pulse = rays;
+            let painted = painted_text(&mut app);
+            assert!(painted.contains("Wavefront points"), "the slider is on the panel: {painted}");
+            app.step_forward(0.05);
+            assert_eq!(app.signal.pulses[0].rays.len(), rays);
+            assert_eq!(app.bob_signal.pulses[0].rays.len(), rays);
+            // And a frame with that pulse standing in both fields, which is the drawing path.
+            painted_text(&mut app);
         }
     }
 }
