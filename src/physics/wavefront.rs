@@ -5605,3 +5605,83 @@ mod tests {
     }
 }
 
+
+#[cfg(test)]
+mod late_survivors_on_r_minus {
+    //! Where the survivors of a pulse sent inside r+ sit at late times, and on which side of r-.
+    use super::*;
+    use crate::physics::observer::{Observer, WorldlineParams};
+
+    /// Both families of survivors hug r-, from opposite sides, and both close on it at the rate
+    /// kappa_-.
+    ///
+    /// The frozen family, E - Omega_- L < 0, never reaches r-: it approaches from *above* as
+    /// r - r- ~ exp(-kappa_- t), which is the stack a later infaller cuts through. The crossing
+    /// family, E - Omega_- L > 0, crosses r- inward at finite t. Those of its rays whose radial
+    /// potential has a root above the ring turn there, in Region III, and climb back out - and an
+    /// outgoing ray cannot cross r- outward in this chart any more than one can cross r+ outward,
+    /// so they approach r- from *below*, as r- - r ~ exp(-kappa_- t), with dr/dt > 0 all the way.
+    /// Seen from the equatorial view at high zoom that is a second set of arcs riding r- from the
+    /// inside, thinner than the frozen ones and lagging them by their own turning time, and they
+    /// are physical: the outgoing light of Region III accumulating on the future boundary of that
+    /// region, which this chart pins to t = infinity at r = r- just as it does the outgoing light of
+    /// Region II.
+    ///
+    /// Measured at a = 0.90 for a pulse let go at r = 1.0 (kappa_- = 0.386 / M): at t = 20 the 16
+    /// rays inside stand at most 1.3e-4 M below r- and the 23 outside at most 9.8e-4 M above; by
+    /// t = 60 those have shrunk to 2.5e-11 and 1.9e-10, both a factor exp(15.45) in 40 M against
+    /// the exp(15.44) that kappa_- predicts; by t = 150 every survivor is on r- to 1e-12 in f64,
+    /// which is the precision floor and not physics.
+    #[test]
+    fn test_survivors_close_on_r_minus_from_both_sides_at_the_rate_kappa_minus() {
+        let metric = KerrSchild::new(1.0, 0.90);
+        let rm = metric.inner_horizon();
+        let kappa = metric.inner_surface_gravity();
+        let mut alice =
+            Observer::new_with_phi(&metric, "A", 0.0, 1.0, 0.0, 0.0, WorldlineParams::default());
+        let mut field = SignalField::default();
+        field.emit_if_due(&metric, &alice);
+        let dt = 0.02;
+        let mut t = 0.0;
+        // The largest offset from r- on each side, over the live rays, at the two sample times.
+        let mut run_to = |target: f64, field: &mut SignalField| -> (f64, f64, usize, usize) {
+            while t < target - 1e-9 {
+                alice.step(&metric, t, dt);
+                field.advance(&metric, dt);
+                t += dt;
+            }
+            let (mut above, mut below) = (0.0f64, 0.0f64);
+            let (mut n_above, mut n_below) = (0, 0);
+            for ray in field.pulses[0].rays.iter().filter(|r| r.alive()) {
+                let d = ray.r - rm;
+                if d > 0.0 {
+                    n_above += 1;
+                    above = above.max(d);
+                    assert!(ray.frozen(&metric), "every survivor above r- is of the frozen family");
+                } else {
+                    n_below += 1;
+                    below = below.max(-d);
+                    assert!(!ray.frozen(&metric), "no survivor below r- is of the frozen family");
+                    assert!(ray.dr_dt > 0.0, "a survivor below r- is climbing back toward it");
+                }
+            }
+            (above, below, n_above, n_below)
+        };
+        let (a20, b20, na, nb) = run_to(20.0, &mut field);
+        let (a60, b60, na60, nb60) = run_to(60.0, &mut field);
+        println!(
+            "t = 20: {na} survivors above r- within {a20:.2e}, {nb} below within {b20:.2e};              t = 60: {na60} above within {a60:.2e}, {nb60} below within {b60:.2e};              predicted collapse over 40 M: exp(-{:.2})",
+            40.0 * kappa
+        );
+        assert!(na >= 10 && nb >= 10, "both populations are well represented: {na} / {nb}");
+        assert_eq!((na, nb), (na60, nb60), "and nobody changes side or dies between 20 and 60 M");
+        for (early, late, side) in [(a20, a60, "above"), (b20, b60, "below")] {
+            let measured = (early / late).ln();
+            assert!(
+                (measured - 40.0 * kappa).abs() < 0.05 * 40.0 * kappa,
+                "{side}: closed on r- by exp({measured:.2}) over 40 M against kappa_- t = {:.2}",
+                40.0 * kappa
+            );
+        }
+    }
+}
