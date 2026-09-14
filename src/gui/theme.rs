@@ -247,6 +247,43 @@ impl Theme {
     /// the weight it is drawn at, which is a legibility measure and says nothing about the physics.
     pub const FRONT_FROZEN_ALPHA: u8 = 230;
 
+    /// How many decades of signal strength the wavefront alpha spans: full strength at 1, and
+    /// nothing left to draw at ten to the minus this.
+    ///
+    /// Four, which reaches a luminosity distance of a hundred M. The drawn field ends at
+    /// `wavefront::R_ESCAPE` = 16 M, so a pulse crossing the whole picture fades by a little over
+    /// two decades of it and stays visible the whole way; what the last two decades are for is the
+    /// light that has gone round the hole, or out and back, and is genuinely too faint to be worth
+    /// a line. Changing it changes only how much of the fade is spent on screen.
+    pub const STRENGTH_FADE_DECADES: f64 = 4.0;
+
+    /// The alpha a piece of wavefront is drawn at, given the signal strength there
+    /// (`Pulse::segment_strength`) and the alpha its field uses at full strength.
+    ///
+    /// Linear in the logarithm of the strength, because the strength runs over decades: a pulse
+    /// crossing the drawn field loses two of them to the inverse square law alone. Full alpha at
+    /// or above the reference strength - which is the strength `STRENGTH_REFERENCE_M` away from
+    /// the emitter in flat space, so a fresh pulse leaves opaque - and zero at
+    /// `STRENGTH_FADE_DECADES` below it, which is the cut: the caller draws nothing at all where
+    /// this returns zero, so the threshold and the fade are the same statement rather than a fade
+    /// with a separate cut-off bolted beside it.
+    ///
+    /// Alpha rather than colour, because colour on these fronts already means something else: it
+    /// is the shift the light has picked up, and a measurement each should keep a channel to
+    /// itself. A caustic makes the strength diverge; the clamp at full alpha is what that looks
+    /// like, and it is the only place the ramp is not one-to-one.
+    pub fn strength_alpha(strength: f64, full: u8) -> u8 {
+        // The negation is deliberate: a strength that has come out NaN has to take this branch
+        // too, and `strength <= 0.0` would let it through into the logarithm.
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
+        if !(strength > 0.0) {
+            return 0;
+        }
+        let decades = strength.log10();
+        let fraction = (1.0 + decades / Self::STRENGTH_FADE_DECADES).clamp(0.0, 1.0);
+        (f64::from(full) * fraction).round() as u8
+    }
+
     /// The colour of a wavefront gain nu(infaller here) / nu(infaller at the emission event), at
     /// opacity `alpha`: deep red at 1, where every front is born, darkening to maroon at a tenfold
     /// loss and running deep red - orange - yellow - white - blue - violet up to a hundred
