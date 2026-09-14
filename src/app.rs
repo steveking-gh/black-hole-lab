@@ -337,6 +337,10 @@ impl eframe::App for SpacetimeApp {
         // clock; Reset Zoom in the header is what puts those back.
         if self.controls.take_view_reset() {
             self.spacetime_canvas.time_offset = 0.0;
+            // The observers under the pointer have just been replaced by fresh ones, so a drag of
+            // the old worldline is not carried into the new run: both markers are pickable again
+            // from the moment the reset lands.
+            self.spacetime_canvas.end_drag();
         }
 
         // 4. Central Panel: Split View between Spacetime (t, r) and Spatial (x, y)
@@ -369,7 +373,7 @@ impl eframe::App for SpacetimeApp {
                             ui,
                             &self.metric,
                             self.bob.as_mut(),
-                            &self.alice,
+                            self.alice.as_mut(),
                             self.current_time,
                             canvas_height,
                             self.controls.use_km,
@@ -400,7 +404,6 @@ impl eframe::App for SpacetimeApp {
                             &self.bob,
                             &self.alice,
                             self.controls.show_river,
-                            self.controls.show_streamlines,
                             SignalViews { alice: &self.signal, bob: &self.bob_signal },
                             canvas_height,
                             self.controls.use_km,
@@ -508,6 +511,33 @@ mod tests {
             &mut SignalPair { alice: signal, bob: bob_signal },
             current_time,
         );
+    }
+
+    /// The layout most of these tests were written against: both observers dropped as raindrops,
+    /// Alice released at once and Bob 8 M of coordinate time later, so he trails her down the same
+    /// infall and hovers while he waits.
+    ///
+    /// It is no longer what the app opens on - Alice holds the ZAMO circle at the drop radius and
+    /// Bob falls at once - so a test that needs somebody falling in r, or needs the trailing hover,
+    /// asks for it here rather than inheriting it from the defaults. The tests that are *about* the
+    /// defaults do not call this: `test_control_defaults` and
+    /// `test_startup_reset_and_drop_observers_all_build_the_same_layout` state them directly.
+    fn trailing_raindrops(app: &mut SpacetimeApp) {
+        app.controls.bob.delta_t_delay = 8.0;
+        drop_observers(app);
+        set_free_fall(app);
+    }
+
+    /// Put both observers on their geodesics, the way the Motion radio on their cards does.
+    ///
+    /// It has to be done to the observers rather than to the cards: Motion is the one thing a
+    /// re-drop takes from the observer it replaces instead of reading off the card, so that a
+    /// Reset never answers a question about how somebody moves that the user has not asked (see
+    /// `ObserverCard::redropped`). A card's `mode` is only what a *fresh* observer starts on.
+    fn set_free_fall(app: &mut SpacetimeApp) {
+        for obs in [app.alice.as_mut(), app.bob.as_mut()].into_iter().flatten() {
+            obs.mode = ObserverMode::FreeFall;
+        }
     }
 
     /// Every word the app paints in one frame, in the order it is painted.
@@ -686,6 +716,7 @@ mod tests {
         // which would prove nothing about the integrator; his hover is checked separately below.
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
+        trailing_raindrops(&mut app);
         let al = alice_of(&app);
         let initial = (al.t, al.r, al.phi, al.tau);
         let step = app.arrow_step();
@@ -780,6 +811,7 @@ mod tests {
         //    her worldline, on the clock.
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
+        trailing_raindrops(&mut app);
         for _ in 0..100 {
             app.step_forward(0.1);
         }
@@ -1041,8 +1073,10 @@ mod tests {
         // and Bob L = 1.0, and each worldline is asked what constants it is actually carrying.
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
+        trailing_raindrops(&mut app);
         app.controls.alice.energy = 1.2;
         app.controls.bob.l_ang = 1.0;
+        app.controls.bob.delta_t_delay = 8.0;
         drop_observers(&mut app);
 
         let al = alice_of(&app).geodesic.expect("free-fall observers carry a geodesic state");
@@ -1091,14 +1125,17 @@ mod tests {
         assert!((geo.energy - floor).abs() < 1e-12, "E = {} vs floor {floor}", geo.energy);
         assert!((geo.l_ang - 3.5).abs() < 1e-12);
 
-        // Defaults stay the raindrop on both cards, with Alice released at once and Bob 8 M later.
+        // Defaults stay the raindrop constants on both cards, both let go at once, and the
+        // difference between them is the Motion: Alice holds the ZAMO circle, Bob falls.
         let d = AppControls::default();
         for card in [d.alice, d.bob] {
             assert_eq!((card.energy, card.l_ang, card.outgoing_start), (1.0, 0.0, false));
             assert!(card.enabled && card.transmit);
+            assert_eq!(card.delta_t_delay, 0.0);
         }
-        assert_eq!((d.alice.delta_t_delay, d.bob.delta_t_delay), (0.0, 8.0));
-        assert_eq!(d.release_gap(), 8.0);
+        assert_eq!(d.alice.mode, ObserverMode::Zamo);
+        assert_eq!(d.bob.mode, ObserverMode::FreeFall);
+        assert_eq!(d.release_gap(), 0.0, "no trailing delay, so no stack for anyone to cut");
     }
 
     #[test]
@@ -1146,10 +1183,11 @@ mod tests {
         // (1.63e-4 M); no metric override is needed any more.
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
+        trailing_raindrops(&mut app);
         app.controls.step_mode = StepMode::Distance;
         app.controls.step_distance_km = 1000.0;
 
-        // The step is quoted for whoever is moving in r, and in the layout the app opens on that
+        // The step is quoted for whoever is moving in r, and in the trailing-raindrop layout that
         // is Alice: Bob hovers at r = 4.5M until t = 8, so he has no coordinate speed to divide by
         // and the chain falls through to her (see `test_a_distance_step_needs_somebody_who_is_
         // moving_in_r`). So it is her the distance is honoured for.
@@ -1184,18 +1222,17 @@ mod tests {
         app.controls.step_mode = StepMode::Distance;
         app.controls.step_distance_km = 1000.0;
 
-        // 1. Both falling: Bob's own speed, as before. It takes a card with no release delay to
-        //    get him falling at t = 0, since the layout the app opens on has him hovering.
-        app.controls.bob.delta_t_delay = 0.0;
-        drop_observers(&mut app);
+        // 1. Both falling: Bob's own speed, as before. That is the layout the app opens on for
+        //    him - no release delay - but not for Alice, who holds the ZAMO circle until she is
+        //    put on a geodesic here.
+        set_free_fall(&mut app);
         app.step_forward(0.05);
         let falling = app.arrow_step();
         assert!(bob_of(&app).velocity_c(&app.metric) < 0.0);
         assert!(falling > 1e-8 && falling < 500.0, "a real step: {falling}");
 
         // 2. Bob hovering, Alice falling: Alice's speed, and a step of the same order rather than
-        //    the 500 M the old 0.01c floor clamped a stationary Bob to. This is the layout the app
-        //    opens on, so it is the default card that produces it.
+        //    the 500 M the old 0.01c floor clamped a stationary Bob to.
         app.controls.bob.delta_t_delay = 8.0;
         drop_observers(&mut app);
         app.step_forward(0.5);
@@ -1442,8 +1479,9 @@ mod tests {
         // events - which is the last thing this test measures.
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
+        trailing_raindrops(&mut app);
         app.controls.step_size = 0.02;
-        assert_eq!(app.controls.bob.delta_t_delay, 8.0, "the layout the app opens on");
+        assert_eq!(app.controls.bob.delta_t_delay, 8.0, "a hovering emitter to rewind");
 
         let step = 0.02;
         for _ in 0..150 {
@@ -1600,6 +1638,7 @@ mod tests {
         // frame drawn at the end is the state it reads them in.
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
+        trailing_raindrops(&mut app);
         let mut ended_at = None;
         for _ in 0..400 {
             app.step_forward(0.02);
@@ -1973,21 +2012,26 @@ mod tests {
         // rebuilt it and the other built a different one; with a card per observer that is simply
         // confusing. All three now go through `AppControls::drop_observers`, and this is what pins
         // that: the two buttons are one call, and the call agrees with `SpacetimeApp::default`.
-        let opening = layout(&SpacetimeApp::default());
+        let app = SpacetimeApp::default();
+        let opening = layout(&app);
         assert_eq!(opening.len(), 2, "both cards are ticked out of the box");
         assert_eq!(opening[0].0, "Alice");
         assert!((opening[0].2 - 4.5).abs() < 1e-12, "Alice drops from r = 4.5M");
         assert!(opening[0].5 == 0.0 && opening[0].6, "released at once");
         assert!((opening[1].2 - 4.5).abs() < 1e-12, "and Bob from the same radius");
-        assert!(opening[1].5 == 8.0 && !opening[1].6, "hovering there until t = 8");
+        assert!(opening[1].5 == 0.0 && opening[1].6, "and at the same moment");
+        // The difference between them is the Motion each is dropped on, which is the one thing a
+        // re-drop inherits from the observer it replaces rather than reading off the card.
+        assert_eq!(alice_of(&app).mode, ObserverMode::Zamo, "Alice holds the ZAMO circle");
+        assert_eq!(bob_of(&app).mode, ObserverMode::FreeFall, "Bob falls");
 
-        // Part-way through a run, with light in flight and both worldlines well below the drop.
+        // Part-way through a run, with light in flight and Bob's worldline well below the drop.
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
         for _ in 0..120 {
             app.step_forward(0.05);
         }
-        assert!(alice_of(&app).r < 2.0 && !app.signal.pulses.is_empty(), "a run in progress");
+        assert!(bob_of(&app).r < 2.0 && !app.signal.pulses.is_empty(), "a run in progress");
 
         // The action behind ⏮ Reset, and behind Drop Observers, and behind the preset row.
         drop_observers(&mut app);
@@ -2011,6 +2055,7 @@ mod tests {
         // receiver.
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
+        trailing_raindrops(&mut app);
         app.controls.bob.enabled = false;
         // The panel is what applies a card, so one frame has to run before he goes.
         let opening = painted_text(&mut app);
@@ -2072,6 +2117,7 @@ mod tests {
         // between this box and the one above it.
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
+        trailing_raindrops(&mut app);
         for _ in 0..100 {
             app.step_forward(0.02);
         }

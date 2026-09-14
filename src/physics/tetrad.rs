@@ -170,6 +170,9 @@ impl Tetrad {
         let mut w = [u_low[2], 0.0, -u_low[0]];
         let mut w2 = inner(metric, r, &w, &w);
         let scale = 1.0 + u_low[0] * u_low[0] + u_low[2] * u_low[2];
+        // The negation is the point rather than a way of writing <=: a w2 that has come out NaN
+        // has to take this branch too, and `w2 <= 1e-12 * scale` would let it through.
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
         if !(w2 > 1e-12 * scale) {
             // u_t and u_phi both vanish: any direction in span(d_t, d_phi) is orthogonal to u, and
             // the rest-space projection of d_phi is the one that matches the limit.

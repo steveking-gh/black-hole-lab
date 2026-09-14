@@ -68,6 +68,15 @@ pub struct ObserverSettings {
     pub l_ang: f64,
     /// Start on the outgoing root of r^4 (dr/dtau)^2 = R(r).
     pub outgoing_start: bool,
+    /// The Motion a *fresh* drop of this observer starts on.
+    ///
+    /// It is the only field here that the observer does not simply keep: Motion lives on the
+    /// observer because a drag on the canvas sets it too, and `ObserverCard::redropped` hands a
+    /// re-dropped observer the mode the one they replace was on, so a Reset never answers a
+    /// question about how they move that the user has not asked. This is what an observer with
+    /// nobody to inherit from starts as: the app's first build, and a card that has just been
+    /// ticked back on.
+    pub mode: ObserverMode,
 }
 
 impl ObserverSettings {
@@ -80,7 +89,16 @@ impl ObserverSettings {
             energy: 1.0,
             l_ang: 0.0,
             outgoing_start: false,
+            mode: ObserverMode::FreeFall,
         }
+    }
+
+    /// A zero-angular-momentum observer: held on the circle r = const, carried round at the
+    /// frame-dragging rate omega = -g_tphi/g_phiphi, which is the worldline with u_phi = 0. The
+    /// geodesic constants are still carried, because they are what a release puts them on: switch
+    /// the Motion to Free Fall, or drag them, and they fall on the E and L their card is showing.
+    fn zamo(delta_t_delay: f64) -> Self {
+        Self { mode: ObserverMode::Zamo, ..Self::raindrop(delta_t_delay) }
     }
 
     /// The constants of motion this card is asking for.
@@ -98,7 +116,7 @@ impl ObserverSettings {
         start_t: f64,
     ) -> Option<Observer> {
         self.enabled.then(|| {
-            Observer::new_with_phi(
+            let mut obs = Observer::new_with_phi(
                 metric,
                 name,
                 start_t,
@@ -106,7 +124,9 @@ impl ObserverSettings {
                 start_t + self.delta_t_delay,
                 start_phi,
                 self.worldline_params(),
-            )
+            );
+            obs.mode = self.mode;
+            obs
         })
     }
 }
@@ -154,8 +174,11 @@ pub struct AppControls {
     pub show_spatial_details: bool,
     /// Draw the animated raindrop flow (the Painlevé-Gullstrand / Doran river) on the
     /// equatorial view.
+    ///
+    /// Default off. It is a second thing moving on the same canvas as the wavefronts, and the
+    /// fronts are what the app is for; the flow is there to be switched on when the question is
+    /// about the river model rather than about the light.
     pub show_river: bool,
-    pub show_streamlines: bool,
     /// Alice's card: whether she is in the simulation, whether she transmits, and the worldline
     /// the next drop puts her on.
     pub alice: ObserverSettings,
@@ -200,14 +223,15 @@ impl Default for AppControls {
             draw_front_arcs: true,
             hide_wound_segments: true,
             show_spatial_details: true,
-            show_river: true,
-            show_streamlines: true,
-            // Alice leads and Bob trails her by 8 M. Everything else in the app is written around
-            // that order - the HUD's "Alice → Bob" line, the mode tips, the Theory Guide's account
-            // of the stack on r₋ that Bob cuts through - so the defaults are the layout those
-            // texts describe rather than the mirror image of it.
-            alice: ObserverSettings::raindrop(0.0),
-            bob: ObserverSettings::raindrop(8.0),
+            show_river: false,
+            // Both are let go the moment the run starts, and the difference between them is the
+            // worldline rather than the wait: Alice holds her radius on the ZAMO circle while Bob
+            // falls through it. A trailing delay is still what builds the stack on r₋ that the
+            // HUD's "Alice → Bob" line and the Theory Guide describe - put a delay on Bob's card
+            // and he cuts through her pulses exactly as those texts say - but it is a
+            // configuration to reach for rather than the layout the app opens on.
+            alice: ObserverSettings::zamo(0.0),
+            bob: ObserverSettings::raindrop(0.0),
             show_theory_modal: false,
             use_km: true,
             frame_of_ref: ReferenceFrame::DistantObserver,
@@ -281,7 +305,7 @@ const ALICE_SIGNAL_TIP: &str = "Alice broadcasts a pulse into the whole of her o
 
 /// The hover tip on the Transmit Signal checkbox of Bob's card. The return path, which is not the
 /// mirror image of Alice's: it has an end.
-const BOB_SIGNAL_TIP: &str = "Bob broadcasts exactly as Alice does, a whole light cone of exact null geodesics every 0.1 M of his own proper time, and he starts at t = 0, before he is released: while he waits he is the static observer at his hover radius, with a clock ticking at √(−g_tt) of coordinate time and an orthonormal frame to broadcast into, and nothing in the geometry stops him transmitting from it. His pulses come every 0.134 M of coordinate time while he hovers at r = 4.5M and every 0.1 M of his own once he falls. The colours mean the same thing as Alice's: on the equatorial view, the gain between two raindrops along each ray since it left him, so his fronts are born the same uniform deep red hers are and climb the same ramp. His fronts are drawn at half stroke width and his emission dots in his own mint, so the two transmissions can be told apart without touching the colouring, which is a measurement. What is not the same is the physics of the return path. In the layout the app opens on, and that ⏮ Reset and Drop Observers rebuild, Bob is behind Alice on the same infall, so his pulses chase her inward, and the only part of each one that ever catches her is the ingoing part of his cone: it runs at up to dr/dt = −1 in this chart, which no timelike worldline can match. That is the light whose shift is finite on the branch of r₋ she actually crosses, so unlike Alice → Bob there is no stack for her to cut through. His frozen family, E − Ω₋L < 0, does pile onto r₋ from outside, but it settles there behind her, after she has already gone through, so she never meets it. (Give him the shorter delay of the two and he is the deeper one instead, and his light climbs to her: the shift then starts as a small blueshift, because the fall toward the light beats the recession, and turns over into a redshift as he drops away below her.) And because her worldline ends — on the ring, or frozen on r₋ — his transmission stops arriving: there is a last pulse of his that reached her, and its emission event is the boundary, on his own worldline, of the causal past of the end of hers. Neither view marks that event; the HUD names it once her worldline has finished, giving the pulse, when and where he sent it, and how many later ones never arrive. At the app's default hole and delay it is one he sends while still hovering: the pulse of t = 1.84, which reaches her at t = 5.19, most of an M before her worldline ends at t = 6.06. He is released long after that, so nothing of his release or of his own fall ever reaches her: everything he sends past that event never arrives, however long he goes on sending, and by the end of her worldline that is 44 pulses. On the (t, r) diagram his pulses are drawn exactly as hers are, each as the wedge of its own radial extent but in his mint: lower edge the most ingoing ray, upper edge the outermost, a worldline inside the wedge in range of the pulse rather than receiving it, and the dots the actual arrivals.";
+const BOB_SIGNAL_TIP: &str = "Bob broadcasts exactly as Alice does, a whole light cone of exact null geodesics every 0.1 M of his own proper time, and he starts at t = 0, before he is released: while he waits he is the static observer at his hover radius, with a clock ticking at √(−g_tt) of coordinate time and an orthonormal frame to broadcast into, and nothing in the geometry stops him transmitting from it. His pulses come every 0.134 M of coordinate time while he hovers at r = 4.5M and every 0.1 M of his own once he falls. The colours mean the same thing as Alice's: on the equatorial view, the gain between two raindrops along each ray since it left him, so his fronts are born the same uniform deep red hers are and climb the same ramp. His fronts are drawn at half stroke width and his emission dots in his own mint, so the two transmissions can be told apart without touching the colouring, which is a measurement. What is not the same is the physics of the return path, and which way it runs depends on which of them is deeper. In the layout the app opens on, Alice holds her radius on the ZAMO circle while Bob falls past her, so it is his light that has to climb: the shift she measures on it starts as a small blueshift, because his fall toward the light beats his recession from her, and turns over into a redshift as he drops away below her. The climb has a limit. The last pulse of his that can reach her at all is one he sends just outside r₊; the outgoing edge of a pulse sent exactly on the horizon stays on the horizon for ever, and every ray of one sent inside it falls, so from his crossing onward everything he transmits is sent to nobody. Put a Release Delay on his card instead and he trails her down the same infall: his pulses then chase her inward, and the only part of each one that ever catches her is the ingoing part of his cone, which runs at up to dr/dt = −1 in this chart, a rate no timelike worldline can match. That is the light whose shift is finite on the branch of r₋ she actually crosses, so unlike Alice → Bob there is no stack for her to cut through. His frozen family, E − Ω₋L < 0, does pile onto r₋ from outside, but it settles there behind her, after she has already gone through, so she never meets it. Where her worldline ends — on the ring, or frozen on r₋ — his transmission stops arriving for that reason instead: there is a last pulse of his that reached her, and its emission event is the boundary, on his own worldline, of the causal past of the end of hers. Neither view marks that event; the HUD names it once her worldline has finished, giving the pulse, when and where he sent it, and how many later ones never arrive. On the (t, r) diagram his pulses are drawn exactly as hers are, each as the wedge of its own radial extent but in his mint: lower edge the most ingoing ray, upper edge the outermost, a worldline inside the wedge in range of the pulse rather than receiving it, and the dots the actual arrivals.";
 
 /// What to say about an observer whose selected mode cannot exist where they are, or None when the
 /// selection is fine.
@@ -801,7 +825,6 @@ impl AppControls {
                 .on_hover_text(
                     "Each drop is an element of the E = 1, L = 0 raindrop flow of the Painlevé-Gullstrand / Doran river model, drawn at proper size and entering the field at r = 12M as a circle of proper diameter 0.1 M. The flow alone deforms that circle after that: length along the flow grows as √(12M/r), the ratio of Doran river speeds, and width across the flow shrinks as neighbouring flow lines converge, √g_φφ δφ. The drawn aspect ratio is therefore the tidal stretching of the fluid element, reaching about 16 at r₊ for a = 0.65. Colour is the flow speed past a local ZAMO, β = √(1 − α²), reaching c at r₊.",
                 );
-            ui.checkbox(&mut self.show_streamlines, "Frame-Dragging Streamlines");
 
             ui.add_space(2.0);
             ui.horizontal(|ui| {
@@ -823,7 +846,7 @@ impl AppControls {
             ui.separator();
             ui.label(
                 egui::RichText::new(
-                    "Drop Observers rebuilds every ticked observer from their card: Alice from r = 4.5M at ϕ = 0.25 and Bob from r = 4.5M at ϕ = 0, each hovering there until their own Release Delay, on the worldline their own E and L pick out. Both transmissions are dropped and the clock goes back to zero. ⏮ Reset builds the same layout, and it is the one the app opens on.",
+                    "Drop Observers rebuilds every ticked observer from their card: Alice from r = 4.5M at ϕ = 0.25 and Bob from r = 4.5M at ϕ = 0, each hovering there until their own Release Delay, on the worldline their own E and L pick out. Motion is the one thing it does not read off the card: an observer being replaced hands their own Motion to the one replacing them, so a rebuild never puts a Static or ZAMO observer back on the free-fall worldline. A card that has just been ticked on has nobody to inherit from and starts as it does out of the box, Alice on the ZAMO circle and Bob in free fall. Both transmissions are dropped and the clock goes back to zero. ⏮ Reset builds the same layout, and it is the one the app opens on.",
                 )
                 .small()
                 .color(Theme::TEXT_MUTED),
@@ -895,11 +918,13 @@ impl AppControls {
 
         ui.add_space(4.0);
 
-        // 3. The two observer cards, Alice first because she is the one released first. They are
-        // the same code twice: see `ObserverCard`.
-        ALICE_CARD.show(ui, metric, &mut self.alice, alice, signals.alice, *current_time, self.use_km);
-        ui.add_space(4.0);
+        // 3. The two observer cards, Bob's first: he is the infaller the interior picture is drawn
+        // for - the light cones, the rest-frame view and the stack on r₋ are all his - so his card
+        // is the one reached for most often and it sits at the top of the pair. They are the same
+        // code twice: see `ObserverCard`.
         BOB_CARD.show(ui, metric, &mut self.bob, bob, signals.bob, *current_time, self.use_km);
+        ui.add_space(4.0);
+        ALICE_CARD.show(ui, metric, &mut self.alice, alice, signals.alice, *current_time, self.use_km);
 
         ui.add_space(6.0);
 

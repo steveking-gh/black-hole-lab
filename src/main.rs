@@ -1,3 +1,10 @@
+// Tensor expressions are written with their indices, because the index is the physics: a line
+// like `sum += g[mu][nu] * u[mu] * u[nu]` is the formula it implements, and the iterator form
+// clippy asks for hides which slot of the metric is being contracted with which component of the
+// 4-velocity. Every one of these loops runs over the same fixed range 0..3, the equatorial
+// (t, r, phi) chart, so there is no bounds-checking argument for the rewrite either.
+#![allow(clippy::needless_range_loop)]
+
 mod app;
 mod gui;
 mod physics;

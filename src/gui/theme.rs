@@ -18,6 +18,9 @@ impl Theme {
     pub const REGION_II_FILL: Color32 = Color32::from_rgba_premultiplied(45, 15, 55, 60);
     pub const REGION_III_FILL: Color32 = Color32::from_rgba_premultiplied(10, 50, 45, 60);
     pub const SINGULARITY_FILL: Color32 = Color32::from_rgba_premultiplied(80, 10, 20, 180);
+    /// The spin arrow drawn inside the ring: `SINGULARITY_FILL` with its colour at 55% and the
+    /// same alpha, so it reads as a shade of the disc it is drawn on rather than as a new colour.
+    pub const SINGULARITY_SPIN: Color32 = Color32::from_rgba_premultiplied(44, 6, 11, 180);
 
     // Boundaries & Horizons
     pub const HORIZON_OUTER: Color32 = Color32::from_rgb(0, 230, 255); // Cyan

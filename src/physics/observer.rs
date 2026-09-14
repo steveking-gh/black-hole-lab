@@ -434,10 +434,9 @@ impl Observer {
             }
         } else if self.effective_mode(metric) == ObserverMode::FreeFall
             && self.geodesic_stands_on_current_event()
+            && let Some(geo) = self.geodesic
         {
-            if let Some(geo) = self.geodesic {
-                return geo.u;
-            }
+            return geo.u;
         }
         self.four_velocity_at(metric, self.r)
     }

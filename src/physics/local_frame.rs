@@ -118,7 +118,7 @@ impl LocalFrame {
     }
 
     /// Local coordinates xi^a = e^a_mu Delta x^mu of a coordinate displacement (dt, dr, dphi).
-    pub fn to_local(&self, dx: &[f64; 3]) -> [f64; 3] {
+    pub fn to_local(self, dx: &[f64; 3]) -> [f64; 3] {
         let mut xi = [0.0f64; 3];
         for a in 0..3 {
             for mu in 0..3 {

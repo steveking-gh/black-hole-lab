@@ -3397,7 +3397,7 @@ mod tests {
             worst_gap = worst_gap.max(pair[1].0 - pair[0].0);
         }
         println!(
-            "250 M at {TRACK_MIN_DT} M: {} points spaced {} M apart at most, the cap being \
+            "250 M at {TRACK_MIN_DT} M: {} points spaced {:.3} M apart at most, the cap being \
              {TRACK_MAX_POINTS}",
             pulse.extent_track.len(),
             format!("{worst_gap:.3}")

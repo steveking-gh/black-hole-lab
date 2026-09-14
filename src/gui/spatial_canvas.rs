@@ -58,7 +58,6 @@ impl SpatialCanvas {
         bob: &Option<Observer>,
         alice: &Option<Observer>,
         show_river: bool,
-        show_streamlines: bool,
         signals: SignalViews<'_>,
         canvas_height: f32,
         use_km: bool,
@@ -132,7 +131,6 @@ impl SpatialCanvas {
         let to_screen =
             |(x, y): (f64, f64)| center + Vec2::new(x as f32 * self.zoom, -(y as f32) * self.zoom);
         // Direction vectors (velocities, tangents) need the same y flip as positions.
-        let to_screen_dir = |(vx, vy): (f64, f64)| Vec2::new(vx as f32, -(vy as f32));
 
         // 0. Spatial Coordinate Axes (X and Y)
         let axis_stroke = Stroke::new(1.0, Color32::from_rgba_premultiplied(55, 65, 88, 120));
@@ -278,7 +276,9 @@ impl SpatialCanvas {
         // Inner Cauchy Horizon r-
         painter.circle_stroke(center, r_to_px(rho_m), Stroke::new(2.0, Theme::HORIZON_CAUCHY));
 
-        // Ring singularity r = 0: the circle of Cartesian radius exactly a.
+        // Ring singularity r = 0: the circle of Cartesian radius exactly a, and inside it the
+        // arrow that says which way the hole turns.
+        draw_ring_spin_arrow(&painter, center, ring_px, metric.a);
         painter.circle_stroke(center, ring_px.max(2.0), Stroke::new(2.0, Theme::SINGULARITY_LINE));
         if ring_px >= 6.0 {
             painter.text(
@@ -296,49 +296,7 @@ impl SpatialCanvas {
             self.river.draw(&painter, metric, &to_screen, self.zoom);
         }
 
-        // 4. Frame Dragging Swirl Vector Field
-        if show_streamlines && metric.a.abs() > 0.01 {
-            let radii = [0.4 * rm, rm, 0.5 * (rm + rp), rp, 0.5 * (rp + re), re, 3.0 * metric.m, 4.5 * metric.m];
-            for &r in &radii {
-                if r <= 0.05 {
-                    continue;
-                }
-                let omega = metric.frame_dragging_omega(r);
-                let num_arrows = 8;
-                for i in 0..num_arrows {
-                    // Step around the *chart* angle phi; the embedding then places the arrow on the
-                    // circle of Cartesian radius sqrt(r^2 + a^2) by itself.
-                    let phi = (i as f64) * 2.0 * std::f64::consts::PI / (num_arrows as f64);
-                    let p_start = to_screen(metric.cartesian_position(r, phi));
-
-                    // Tangential arrow length scaled by omega. The direction is the Cartesian image
-                    // of the frame-dragging coordinate velocity (dr/dt, dphi/dt) = (0, omega),
-                    // which carries the right handedness for either sign of the spin.
-                    let arrow_len = (omega.abs() * 40.0).clamp(3.0, 22.0) as f32;
-                    let drag = metric.cartesian_velocity(r, phi, 0.0, omega);
-                    let tangent = to_screen_dir(drag).normalized() * arrow_len;
-                    let p_end = p_start + tangent;
-
-                    let color = if r < rp {
-                        Theme::HORIZON_CAUCHY
-                    } else if r < re {
-                        Theme::ERGOSPHERE_LINE
-                    } else {
-                        Color32::from_rgba_premultiplied(0, 180, 255, 120)
-                    };
-
-                    painter.line_segment([p_start, p_end], Stroke::new(1.2, color));
-
-                    // Arrow tip
-                    let tip_side1 = p_end - tangent * 0.25 + Vec2::new(tangent.y, -tangent.x) * 0.18;
-                    let tip_side2 = p_end - tangent * 0.25 - Vec2::new(tangent.y, -tangent.x) * 0.18;
-                    painter.line_segment([p_end, tip_side1], Stroke::new(1.0, color));
-                    painter.line_segment([p_end, tip_side2], Stroke::new(1.0, color));
-                }
-            }
-        }
-
-        // 5. The two transmissions, drawn over the flow but under the worldlines and the markers,
+        // 4. The two transmissions, drawn over the flow but under the worldlines and the markers,
         // so the fronts read as something moving through the field rather than as part of the
         // observers' own trajectories. Bob's goes down first and Alice's over it, so where the two
         // overlap it is the heavier, primary field that stays legible.
@@ -361,7 +319,7 @@ impl SpatialCanvas {
             &to_screen,
         );
 
-        // 6. Both worldline trails, drawn together and before anything that sits on them: the
+        // 5. Both worldline trails, drawn together and before anything that sits on them: the
         // reception ticks below and the observers' own markers.
         if let Some(al) = alice {
             draw_spatial_trail(&painter, metric, al, Theme::ALICE_COLOR, 1.2, &to_screen);
@@ -400,7 +358,7 @@ impl SpatialCanvas {
             draw_reception_ticks(signals.alice, Theme::ALICE_COLOR);
         }
 
-        // 7. The observers themselves. Alice's info box is registered at the end of the frame,
+        // 6. The observers themselves. Alice's info box is registered at the end of the frame,
         // after every other interaction on this canvas, so a drag on it does not pan. Bob's local
         // null cone is not drawn as a fan of stubs any more: he broadcasts the same pulses Alice
         // does, and a whole light cone integrated as exact null geodesics says everything the
@@ -421,7 +379,7 @@ impl SpatialCanvas {
             bob_pos
         });
 
-        // 8. Title and Legend Overlay
+        // 7. Title and Legend Overlay
         // Horizon angular velocity Ω_H = a / (2 M r₊) is a rate per unit coordinate time, so in
         // geometric units it is a number per M; only dividing by t_g = GM/c³ makes it rad/s.
         let omega_h = metric.a / (2.0 * metric.m * rp);
@@ -535,7 +493,7 @@ impl SpatialCanvas {
             Theme::TEXT_BRIGHT,
         );
 
-        // 9. Draggable info boxes, registered last so they take the drag instead of the canvas.
+        // 8. Draggable info boxes, registered last so they take the drag instead of the canvas.
         if let (Some(al), Some(al_pos)) = (alice.as_ref(), alice_box) {
             self.telemetry.show(
                 ui, &painter, "spatial", rect, al_pos, "Alice", Theme::ALICE_COLOR, al, metric, use_km,
@@ -549,6 +507,56 @@ impl SpatialCanvas {
             );
         }
     }
+}
+
+/// Three quarters of a turn of arrow inside the ring, pointing the way the hole rotates.
+///
+/// The disc rho < a is not part of this sheet of the equatorial plane at all - it is the hole of
+/// the ring, which a worldline reaching r = 0 off the ring passes through into the r < 0 sheet -
+/// so there is nothing to draw in there that would compete with it, and the one fact worth putting
+/// in that space is the sense of the spin. Everything else on this canvas shows the rotation only
+/// through what it does to something else: the ergosphere's bulge, the winding of a front, the
+/// prograde arc that freezes on r_-. The arrow says it outright.
+///
+/// The direction is read off the sign of the spin parameter and from nothing else. Prograde is
+/// increasing phi, and the embedding x + iy = (r + ia)e^{i phi} maps that to a counter-clockwise
+/// turn in the drawn plane, so the arc is swept with phi and the y flip of `to_screen` is applied
+/// here in the same way, by negating the sine. A hole with a = 0 has no ring and no sense of
+/// rotation to draw, and one drawn too small to hold an arrowhead gets nothing rather than a blob.
+fn draw_ring_spin_arrow(painter: &egui::Painter, center: Pos2, ring_px: f32, spin: f64) {
+    const SWEEP: f64 = 1.5 * std::f64::consts::PI;
+    const START: f64 = -0.75 * std::f64::consts::PI;
+    const STEPS: usize = 96;
+    if ring_px < RING_ARROW_MIN_PX || spin == 0.0 {
+        return;
+    }
+    let radius = 0.60 * ring_px;
+    let width = (0.10 * ring_px).clamp(1.5, 4.0);
+    let sense = spin.signum();
+    let at = |theta: f64| -> Pos2 {
+        center + Vec2::new((radius as f64 * theta.cos()) as f32, -(radius as f64 * theta.sin()) as f32)
+    };
+    let points: Vec<Pos2> = (0..=STEPS)
+        .map(|i| at(START + sense * SWEEP * (i as f64) / (STEPS as f64)))
+        .collect();
+    let end_theta = START + sense * SWEEP;
+    let tip_end = *points.last().expect("the arc has STEPS + 1 points");
+    painter.add(egui::Shape::line(points, Stroke::new(width, Theme::SINGULARITY_SPIN)));
+
+    // The arrowhead, on the tangent at the end of the sweep: d/dtheta of the drawn point is
+    // (-sin theta, -cos theta) once the y flip is in, and the sense of travel multiplies it.
+    let tangent = Vec2::new(-(end_theta.sin()) as f32, -(end_theta.cos()) as f32) * sense as f32;
+    let normal = Vec2::new(-tangent.y, tangent.x);
+    let head = (0.34 * ring_px).clamp(4.0, 14.0);
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            tip_end + tangent * head,
+            tip_end - tangent * head * 0.35 + normal * head * 0.45,
+            tip_end - tangent * head * 0.35 - normal * head * 0.45,
+        ],
+        Theme::SINGULARITY_SPIN,
+        Stroke::NONE,
+    ));
 }
 
 /// Draw every live wavefront of one transmission in the equatorial embedding.
@@ -749,6 +757,11 @@ fn segment_arc<F: Fn((f64, f64)) -> Pos2>(
 /// A ray already drawn as a dot - every live ray in points-only mode, and the frozen family's
 /// heavier beads - is not drawn twice for it.
 const FRONT_POINT_RADIUS: f32 = 1.6;
+
+/// Below this drawn radius the ring is a dot on the screen and the spin arrow is not drawn: it
+/// would be a smear over the ring's own stroke rather than an arrow. A hole of a = 0.90 at the
+/// default zoom is well above it; zooming out far enough takes the arrow away and leaves the ring.
+const RING_ARROW_MIN_PX: f32 = 14.0;
 
 /// How much of the gain ramp one flat-coloured band of a segment may cover, in decades of gain.
 ///
@@ -1035,6 +1048,94 @@ mod tests {
     /// so a curve of constant r is a circle in the drawing and this is its radius.
     fn embedded_radius(point: Pos2) -> f64 {
         ((point.x as f64).powi(2) + (point.y as f64).powi(2)).sqrt()
+    }
+
+    /// The arc of the spin arrow as `draw_ring_spin_arrow` puts it on a painter: the polyline in
+    /// `Theme::SINGULARITY_SPIN`, in the order it is drawn, taken relative to the ring's centre.
+    fn spin_arrow_arc(spin: f64, ring_px: f32) -> Vec<(f64, f64)> {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let centre = Pos2::new(200.0, 200.0);
+        let output = ctx.run_ui(Default::default(), |ui| {
+            let (_, painter) =
+                ui.allocate_painter(egui::Vec2::new(400.0, 400.0), egui::Sense::hover());
+            draw_ring_spin_arrow(&painter, centre, ring_px, spin);
+        });
+        let mut arc = Vec::new();
+        fn walk(shape: &egui::Shape, centre: Pos2, arc: &mut Vec<(f64, f64)>) {
+            match shape {
+                egui::Shape::Path(path) => {
+                    let solid = matches!(
+                        path.stroke.color,
+                        egui::epaint::ColorMode::Solid(c) if c == Theme::SINGULARITY_SPIN
+                    );
+                    if solid {
+                        arc.extend(path.points.iter().map(|p| {
+                            ((p.x - centre.x) as f64, (p.y - centre.y) as f64)
+                        }));
+                    }
+                }
+                egui::Shape::Vec(inner) => {
+                    for shape in inner {
+                        walk(shape, centre, arc);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for clipped in output.shapes.iter() {
+            walk(&clipped.shape, centre, &mut arc);
+        }
+        output.drop_without_applying_deltas();
+        arc
+    }
+
+    #[test]
+    fn test_the_ring_carries_an_arrow_three_quarters_round_in_the_sense_of_the_spin() {
+        // What the arrow inside the ring has to say, measured off the painter rather than off the
+        // helper's arithmetic. It has to be *inside* the ring, since the disc rho < a is the space
+        // it is drawn in and an arc spilling over the ring's own circle would read as something
+        // crossing it. It has to go three quarters of the way round, because that is what says
+        // "turning" rather than "a mark at an angle". And it has to turn the way the hole turns:
+        // prograde is increasing phi, which the embedding x + iy = (r + ia)e^{i phi} draws
+        // counter-clockwise, so on a screen whose y runs downward consecutive points must cross
+        // *negatively*, and a hole spun the other way must reverse every one of those crossings.
+        // A ring too small to hold an arrowhead gets no arrow at all.
+        let ring_px = 60.0_f32;
+        for &(spin, name, want_sign) in
+            &[(0.90_f64, "prograde", -1.0_f64), (-0.90, "retrograde", 1.0)]
+        {
+            let arc = spin_arrow_arc(spin, ring_px);
+            assert!(arc.len() > 32, "{name}: the arc is a polyline, got {} points", arc.len());
+            let mut swept = 0.0;
+            for pair in arc.windows(2) {
+                let (a, b) = (pair[0], pair[1]);
+                let cross = a.0 * b.1 - a.1 * b.0;
+                let dot = a.0 * b.0 + a.1 * b.1;
+                assert!(
+                    cross * want_sign > 0.0,
+                    "{name}: the arc must turn one way only, got a crossing of {cross}"
+                );
+                swept += cross.atan2(dot).abs();
+            }
+            let turn = swept / std::f64::consts::TAU;
+            assert!(
+                (turn - 0.75).abs() < 1e-6,
+                "{name}: the arrow sweeps {turn} of a turn, and must sweep three quarters"
+            );
+            let radii: Vec<f64> = arc.iter().map(|(x, y)| (x * x + y * y).sqrt()).collect();
+            let widest = radii.iter().fold(0.0_f64, |m, r| m.max(*r));
+            assert!(
+                widest < ring_px as f64,
+                "{name}: the arc reaches {widest} px, outside the ring at {ring_px}"
+            );
+            println!("{name} spin: {} points, {turn:.3} of a turn at up to {widest:.1} px inside a ring of {ring_px} px", arc.len());
+        }
+        assert!(
+            spin_arrow_arc(0.90, RING_ARROW_MIN_PX - 0.1).is_empty(),
+            "a ring too small for an arrowhead is left alone"
+        );
+        assert!(spin_arrow_arc(0.0, ring_px).is_empty(), "and a hole with no spin has no arrow");
     }
 
     #[test]

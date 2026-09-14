@@ -11,7 +11,7 @@ pub struct CauchyEffects;
 /// r-, where `geodesic::U_T_STALL` follows the worldline out to u^t = 1e10, and a plain decimal
 /// would be an unreadable run of ten digits in a line a few characters wide.
 fn fmt_nu(ratio: f64) -> String {
-    if ratio < 0.01 || ratio >= 1e4 {
+    if !(0.01..1e4).contains(&ratio) {
         format!("{:.2e}", ratio)
     } else {
         format!("{:.2}", ratio)
@@ -63,16 +63,17 @@ impl CauchyEffects {
 
                     // Radial separation readout aligned to the right
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if let (Some(al), Some(bob)) = (alice, bob) {
-                            if al.is_active && bob.is_active {
-                                let diff = (bob.r - al.r).abs();
-                                let sep_str = if use_km {
-                                    metric.format_km(metric.r_to_km(diff))
-                                } else {
-                                    format!("{:.3}M", diff)
-                                };
-                                ui.label(format!("Radial Separation: Δr = {}", sep_str));
-                            }
+                        if let (Some(al), Some(bob)) = (alice, bob)
+                            && al.is_active
+                            && bob.is_active
+                        {
+                            let diff = (bob.r - al.r).abs();
+                            let sep_str = if use_km {
+                                metric.format_km(metric.r_to_km(diff))
+                            } else {
+                                format!("{:.3}M", diff)
+                            };
+                            ui.label(format!("Radial Separation: Δr = {}", sep_str));
                         }
                     });
                 });
@@ -168,8 +169,8 @@ impl CauchyEffects {
                     // first as the static observer he is while he hovers - his proper time runs
                     // there at sqrt(-g_tt) dt, which is a perfectly good clock to pace a
                     // transmission by - and then in free fall once he is released. Where he trails
-                    // her, which is the layout the app opens on and that Reset and Drop Observers
-                    // rebuild, his pulses have to chase her inward and
+                    // her - a Release Delay on his card, rather than the layout the app opens on,
+                    // where he falls past a ZAMO Alice - his pulses have to chase her inward and
                     // the only rays that catch her are the ingoing ones, whose shift is finite on
                     // the branch of r₋ she crosses; the rays of his that pile onto r₋ settle there
                     // behind her, after she has already crossed, so she never meets a stack and
