@@ -1,0 +1,25 @@
+src/gui/controls.rs
+  s_5e464e0dde83ec::t_8ce4ad9468fef6 71-79,101,119,133,167,178,204,281-283,302,305,308,515,526-533,535-537,541-542,662-690,799
+  s_5e464e0dde83ec::t_58f05be64a26c8 623-627,630-632,639-641
+src/app.rs
+  s_5e464e0dde83ec::t_28abfcf439e976 1152-1206
+  s_5e464e0dde83ec::t_58f05be64a26c8 510,629-630,922,1530-1531,2077-2082,2104,2109,2114
+  s_5e464e0dde83ec::t_8ce4ad9468fef6 328,423-430
+  s_5e464e0dde83ec::t_6c5028d32bef32 431
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "7b413c50a74a6edd28d24d8e1e9e2aae5a534d1a",
+  "prompts": {},
+  "sessions": {
+    "s_5e464e0dde83ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc7a846d-d13c-4554-b9bf-dc2dee2f30eb",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
