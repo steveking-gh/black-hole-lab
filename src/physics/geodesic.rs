@@ -35,14 +35,48 @@ pub struct GeodesicState {
 pub const R_STOP: f64 = 0.02;
 const R_FLOOR: f64 = 0.01;
 
-/// u^t past which the worldline is declared frozen. An outgoing worldline approaching r- from
-/// below has t -> infinity at finite proper time, so u^t = dt/dtau diverges there: the ingoing
-/// Kerr-Schild chart simply does not cover the outward crossing.
-const U_T_STALL: f64 = 1e6;
+/// u^t past which the worldline is declared frozen: a hundredfold below the largest u^t at which
+/// the integration was *measured* to still be faithful.
+///
+/// Why there is a ceiling at all. A worldline heading for the far branch of the Cauchy horizon -
+/// an outgoing approach to r- from below, or an ingoing one with E - Omega_- L < 0 - has
+/// t -> infinity at finite proper time, so u^t = dt/dtau diverges: the ingoing Kerr-Schild chart
+/// does not cover that crossing, and the integrator has to be told where to stop following it.
+///
+/// Why *this* ceiling, and not a larger or a smaller one. The geometry is not what fails.
+/// `KerrSchild::metric_components` and `christoffel` are regular at r- - nothing in either divides
+/// by Delta - and `velocity_step_cap` holds the fractional change of u per substep at
+/// `U_STEP_FRACTION` however large u^t has grown, so the substep settles at a fixed size in t
+/// (0.0045 M here, set by the radius cap) and the cost per M of coordinate time stays constant.
+/// What fails is the *representation of the radius*. On this approach r - r- shrinks like 1/u^t -
+/// about 6.93/u^t for the E = 1, L = 2.2 worldline at a = 0.90 - so one substep moves r by only
+/// ~1.2e-2/u^t, while the ulp of r at r- = 0.564 M is 1.25e-16 M. By u^t ~ 1e14 a whole substep
+/// no longer changes the last bit of r and the trajectory stops being a curve; the floor is set by
+/// double precision on r, not by the metric, the integrator or the geodesic equation.
+///
+/// The number is measured, not assumed.
+/// `test_the_far_branch_of_r_minus_is_integrated_faithfully_up_to_the_stall` walks exactly that
+/// worldline in steps of dt = 0.1 M and prints, at every decade of u^t, four measures: |g(u,u) + 1|,
+/// the drift of E = -u_t and of L = u_phi, and the local log-slope d ln(r - r-)/dt against
+/// -kappa_- = -`KerrSchild::inner_surface_gravity`. The first three are sums of terms of size
+/// (u^t)^2 and u^t, so their double-precision floor is ~1e-16 (u^t)^2 and ~1e-16 u^t; all three sit
+/// on that floor for the whole walk and never measure anything but the arithmetic. The log-slope
+/// is the one that sees the granularity of r, and it holds to 6.6e-4 of -kappa_- through
+/// u^t = 1e12, is off by 9.9e-3 at 1e13 and by 5.1e-2 at 1e14, where the gap has stopped moving
+/// altogether. The largest decade at which all four pass is therefore 1e12, and a safety margin of
+/// 100 puts the stall two decades below it.
+///
+/// At 1e10 the observer has reached t = 72.6 M (against t = 46 M at the old cap of 1e6) and stands
+/// 6.8e-10 M above r-, some 5e6 ulps of r, with every measure still at its floor. The test asserts
+/// all four bounds at every step up to the stall, that the bounds still hold at 100 x the stall -
+/// which is what makes the margin a margin - and that they have failed by 1e4 x it, which is what
+/// stops the number from being arbitrary.
+const U_T_STALL: f64 = 1e10;
 
 /// Fractional change of the 4-velocity allowed per coordinate-time substep. Together with the
 /// fixed and radius-proportional caps this is what holds E, L and g(u, u) to better than 1e-8
-/// over a whole infall (see the tests).
+/// over a whole infall, and to their double-precision floor of ~1e-16 |u| and ~1e-16 |u|^2 on the
+/// freeze onto r-, where |u| runs out to `U_T_STALL` (see the tests).
 const U_STEP_FRACTION: f64 = 0.004;
 
 /// Integration state vector y = (t, r, phi, tau, u^t, u^r, u^phi).
@@ -327,6 +361,17 @@ impl GeodesicState {
             return;
         }
         let mut remaining = dt;
+        // A hard ceiling on substeps per call, so that a state the caps cannot get through - the
+        // last hundredth of an M above the ring, where `velocity_step_cap` collapses and the
+        // 1e-7 floor below takes over - costs one bounded call rather than hanging the frame. If
+        // it ever binds, the call simply returns having advanced less than the whole dt: the
+        // worldline is left self-consistent at its own (t, r, phi, tau, u), the observer's clock
+        // is set from `geo.t` rather than from the simulation clock (see `Observer::advance`), so
+        // it lags the clock by the shortfall instead of teleporting, and the next call carries on
+        // from there. It does not bind on the way to the far branch of r-: there the substep
+        // settles at 0.008 r ~ 0.0045 M, which is 23 substeps for the app's dt = 0.1 M and would
+        // need a single call of 45 M of coordinate time to reach 10_000 (the test asserts that
+        // every 0.1 M call completes in full, all the way to the stall).
         let mut guard = 0;
         while remaining > 1e-12 && guard < 10_000 {
             guard += 1;
@@ -588,15 +633,29 @@ mod tests {
                     break;
                 }
                 let (n, ee, ll) = invariants(&metric, geo.r, &geo.u);
-                assert!((ee - e).abs() < 1e-8, "E = {ee} vs {e} at r={} (a={a})", geo.r);
-                assert!((ll - l).abs() < 1e-8, "L = {ll} vs {l} at r={} (a={a})", geo.r);
-                // g(u,u) is a difference of terms of size |u|^2, so double precision alone can
-                // only deliver 1e-16 |u|^2; that floor matters solely on the freeze, where u^t
-                // climbs through six decades.
+                // E = -u_t and L = u_phi are sums of terms of size |u|, and g(u,u) a difference
+                // of terms of size |u|^2, so double precision alone can only deliver them to
+                // 1e-16 |u| and 1e-16 |u|^2 however exact the curve is. Those floors matter
+                // solely on the freeze, where u^t climbs through ten decades to `U_T_STALL`; the
+                // 1e-8 is the integration error everywhere else, and it is what the first three
+                // worldlines, which end on the ring with |u| of order 1, are actually held to.
                 let scale = geo.u.iter().fold(1.0f64, |m, v| m.max(v.abs()));
-                let tol = 1e-8 + 1e-14 * scale * scale;
+                let drift_tol = 1e-8 + 1e-14 * scale;
+                let norm_tol = 1e-8 + 1e-14 * scale * scale;
                 assert!(
-                    (n + 1.0).abs() < tol,
+                    (ee - e).abs() < drift_tol,
+                    "E = {ee} vs {e} at r={} u^t={} (a={a})",
+                    geo.r,
+                    geo.u[0]
+                );
+                assert!(
+                    (ll - l).abs() < drift_tol,
+                    "L = {ll} vs {l} at r={} u^t={} (a={a})",
+                    geo.r,
+                    geo.u[0]
+                );
+                assert!(
+                    (n + 1.0).abs() < norm_tol,
                     "u.u = {n} at r={} u^t={} (a={a}, E={e}, L={l})",
                     geo.r,
                     geo.u[0]
@@ -760,6 +819,9 @@ mod tests {
         assert!(geo.u[1] > 0.0, "must start outgoing: {:?}", geo.u);
         assert!((metric.norm(start_r, &geo.u) + 1.0).abs() < 1e-10, "outgoing seed must be unit");
 
+        // u^t grows like exp(kappa_- t) on this approach, and kappa_- = 0.386 at a = 0.90, so
+        // reaching `U_T_STALL` = 1e10 takes ln(1e10)/kappa_- = 60 M of coordinate time from a
+        // u^t of order 1. 200 M leaves room for the run-up through region III as well.
         let mut prev_r = geo.r;
         let mut t = 0.0;
         while t < 200.0 && !geo.stalled {
@@ -770,12 +832,203 @@ mod tests {
             assert!(geo.r < rm + 1e-9, "the outward crossing of r- is not in this chart: {}", geo.r);
             prev_r = geo.r;
         }
-        assert!(geo.stalled, "u^t must run away at r-, got u^t = {}", geo.u[0]);
-        assert!(geo.u[0] > 1e5, "u^t = {}", geo.u[0]);
-        assert!(geo.r > start_r && (rm - geo.r) < 1e-3, "frozen at r = {} (r- = {rm})", geo.r);
+        assert!(geo.stalled, "u^t must run away at r-, got u^t = {} by t = {t}", geo.u[0]);
+        assert!(geo.u[0] >= U_T_STALL, "it must be the cap that stops it: u^t = {}", geo.u[0]);
+        assert!(geo.r > start_r && (rm - geo.r) < 1e-8, "frozen at r = {} (r- = {rm})", geo.r);
 
         // On a horizon the outgoing forms are singular, so the outgoing start is refused.
         let refused = GeodesicState::new_with_direction(&metric, 0.0, rm, 1.0, 0.0, true);
         assert!(refused.u[1] < 0.0, "an outgoing start at r- must fall back to ingoing: {:?}", refused.u);
+    }
+
+    /// One decade of the walk onto the far branch of r-, kept so that the choice of `U_T_STALL`
+    /// can be read off the table at the end rather than asserted a step at a time.
+    struct Decade {
+        u_t: f64,
+        /// |g(u, u) + 1|, whose double-precision floor is ~1e-16 (u^t)^2.
+        norm_err: f64,
+        /// |dE/E| and |dL/L|, whose floor is ~1e-16 u^t.
+        e_err: f64,
+        l_err: f64,
+        /// d ln(r - r-)/dt + kappa_-: zero for the exact asymptotic approach.
+        slope_err: f64,
+    }
+
+    #[test]
+    fn test_the_far_branch_of_r_minus_is_integrated_faithfully_up_to_the_stall() {
+        // E = 1, L = 2.2 at a = 0.90 has E - Omega_- L < 0, so this infaller never crosses r-: he
+        // asymptotes to it from outside, with t -> infinity, u^t growing like exp(kappa_- t),
+        // r - r- shrinking like 1/u^t and his own proper time converging. That is the worldline
+        // `U_T_STALL` exists for, so it is the worldline the cap is measured on.
+        //
+        // Four measures are taken at every step. Three of them - the normalisation and the drift
+        // of the two constants of the motion - are sums of terms of size (u^t)^2 and of size u^t,
+        // so no double-precision evaluation of them can do better than ~1e-16 (u^t)^2 and
+        // ~1e-16 u^t however exact the curve is; their bounds carry that factor, or they would be
+        // reporting the arithmetic of the diagnostic instead of the quality of the integration.
+        // The fourth, the local log-slope of the gap against -kappa_-, carries no such factor and
+        // is the one that sees the real floor: the ulp of r, which is what this approach
+        // eventually runs out of. The printed column (r - r-) u^t, which tends to a constant on
+        // the exact approach, says the same thing with no finite difference in it.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let rm = metric.inner_horizon();
+        let kappa = metric.inner_surface_gravity();
+        let dt = 0.1;
+
+        let mut geo = GeodesicState::new_infall(&metric, 0.0, 4.5, 1.0, 2.2);
+        assert_eq!(geo.energy, 1.0, "r = 4.5 M is allowed to this (E, L): nothing may be clamped");
+        let (n0, e0, l0) = invariants(&metric, geo.r, &geo.u);
+        assert!((n0 + 1.0).abs() < 1e-12 && (e0 - 1.0).abs() < 1e-12 && (l0 - 2.2).abs() < 1e-12);
+
+        let mut decades: Vec<Decade> = Vec::new();
+        let mut next_decade = 2i32;
+        let mut prev: Option<(f64, f64)> = None;
+        let mut stall: Option<(f64, f64, f64)> = None;
+
+        println!(
+            "{:>7} {:>11} {:>13} {:>11} {:>11} {:>11} {:>11} {:>12}",
+            "t", "u^t", "r - r-", "(r-r-)u^t", "|g(u,u)+1|", "|dE/E|", "|dL/L|", "slope+kappa"
+        );
+        while geo.t < 120.0 {
+            // Advance by dt of coordinate time, lifting the freeze once it has been recorded:
+            // past it the same integrator goes on stepping the same state with the same substeps,
+            // and the only difference is that the test declines to stop. Before the freeze the
+            // call always covers the whole dt in one go, which is also the check that the
+            // substep guard in `step_coord_time` never bites at the rate the app steps at.
+            let target = geo.t + dt;
+            let mut calls = 0;
+            while geo.t < target - 1e-9 && calls < 1_000 {
+                calls += 1;
+                geo.step_coord_time(&metric, target - geo.t);
+                if geo.stalled {
+                    if stall.is_none() {
+                        stall = Some((geo.u[0], geo.r - rm, geo.r));
+                        println!(
+                            "--- froze at t = {:.2}, u^t = {:.4e}, r - r- = {:.4e} ({:.2e} ulps of r)",
+                            geo.t,
+                            geo.u[0],
+                            geo.r - rm,
+                            (geo.r - rm) / (f64::EPSILON * geo.r)
+                        );
+                    }
+                    geo.stalled = false;
+                }
+            }
+            let ut = geo.u[0];
+            let gap = geo.r - rm;
+            let (n, e, l) = invariants(&metric, geo.r, &geo.u);
+            let norm_err = (n + 1.0).abs();
+            let e_err = ((e - e0) / e0).abs();
+            let l_err = ((l - l0) / l0).abs();
+            // One-sided log-slope over the step just taken. Its own resolution is set by how many
+            // ulps of r the gap moved during that step, which is exactly the quantity running out.
+            let slope_err =
+                prev.map(|(pt, pg): (f64, f64)| (gap.ln() - pg.ln()) / (geo.t - pt) + kappa);
+            prev = Some((geo.t, gap));
+
+            if stall.is_none() {
+                assert_eq!(
+                    calls, 1,
+                    "a dt = {dt} step must complete in one call, guard and all, at t = {}",
+                    geo.t
+                );
+                assert!(gap > 0.0, "the far branch is approached from outside: r - r- = {gap}");
+                assert!(
+                    norm_err < 1e-9 * (1.0 + ut * ut),
+                    "|g(u,u) + 1| = {norm_err} at u^t = {ut}, t = {}",
+                    geo.t
+                );
+                assert!(
+                    e_err < 1e-9 * (1.0 + ut) && l_err < 1e-9 * (1.0 + ut),
+                    "(dE/E, dL/L) = ({e_err}, {l_err}) at u^t = {ut}, t = {}",
+                    geo.t
+                );
+                // Below u^t = 1e4 the gap is still wide enough for the subleading terms of the
+                // approach to show up in the slope: at u^t = 1e2 it is 5.5e-2 away from -kappa_-,
+                // and that is physics (r - r- = 6.3e-2 M there), not integration error.
+                if ut > 1e4 {
+                    let s = slope_err.expect("a slope is available after the first step");
+                    assert!(
+                        s.abs() < 1e-3,
+                        "d ln(r - r-)/dt = {} against -kappa_- = {} at u^t = {ut}, t = {}",
+                        s - kappa,
+                        -kappa,
+                        geo.t
+                    );
+                }
+            }
+
+            if ut >= 10f64.powi(next_decade) {
+                println!(
+                    "{:7.2} {:11.3e} {:13.5e} {:11.5} {:11.3e} {:11.3e} {:11.3e} {:12.3e}{}",
+                    geo.t,
+                    ut,
+                    gap,
+                    gap * ut,
+                    norm_err,
+                    e_err,
+                    l_err,
+                    slope_err.unwrap_or(f64::NAN),
+                    if stall.is_some() { "   (past the stall)" } else { "" }
+                );
+                decades.push(Decade {
+                    u_t: ut,
+                    norm_err,
+                    e_err,
+                    l_err,
+                    slope_err: slope_err.unwrap_or(f64::NAN),
+                });
+                next_decade += 1;
+            }
+
+        }
+
+        let (stall_ut, stall_gap, stall_r) = stall.expect("the worldline must freeze on r-");
+        assert!(stall_ut >= U_T_STALL, "froze at u^t = {stall_ut}, below the cap {U_T_STALL}");
+        assert!(
+            stall_ut < 2.0 * U_T_STALL,
+            "the freeze must happen on the step that crosses the cap, not far above it: {stall_ut}"
+        );
+        // The freeze is nowhere near the resolution of r: the gap is still millions of ulps wide,
+        // so the worldline is stopped by a stated policy and not by double precision giving out.
+        assert!(
+            stall_gap > 1e3 * f64::EPSILON * stall_r,
+            "r - r- = {stall_gap} at the freeze is only {} ulps of r = {stall_r}",
+            stall_gap / (f64::EPSILON * stall_r)
+        );
+
+        let at = |u_t: f64| -> &Decade {
+            decades
+                .iter()
+                .find(|d| d.u_t >= u_t)
+                .unwrap_or_else(|| panic!("the walk never reached u^t = {u_t}"))
+        };
+
+        // The margin, measured: a hundredfold above the stall every measure is still at its floor.
+        let margin = at(100.0 * U_T_STALL);
+        assert!(
+            margin.norm_err < 1e-9 * (1.0 + margin.u_t * margin.u_t)
+                && margin.e_err < 1e-9 * (1.0 + margin.u_t)
+                && margin.l_err < 1e-9 * (1.0 + margin.u_t)
+                && margin.slope_err.abs() < 1e-3,
+            "the 100x margin is not clear at u^t = {}: (|g+1|, dE/E, dL/L, slope) = ({}, {}, {}, {})",
+            margin.u_t,
+            margin.norm_err,
+            margin.e_err,
+            margin.l_err,
+            margin.slope_err
+        );
+
+        // Nor is it an arbitrary margin: ten thousandfold above the stall one substep moves r by
+        // about one ulp, the gap stops shrinking smoothly, and the exponential law that the whole
+        // approach consists of is no longer being traced.
+        let broken = at(1e4 * U_T_STALL);
+        assert!(
+            broken.slope_err.abs() > 1e-3,
+            "u^t = {} was expected to be past the resolution of r, but the slope is still within \
+             {} of -kappa_-: the cap could be raised",
+            broken.u_t,
+            broken.slope_err.abs()
+        );
     }
 }

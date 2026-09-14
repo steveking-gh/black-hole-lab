@@ -48,31 +48,64 @@ impl Tetrad {
     /// turn spacelike (g^rr < 0). No horizon-dependent special case is needed. (The coordinate
     /// direction d_r itself stays spacelike in this chart, g_rr = 1 + 2M/r; it is the covector dr
     /// whose character changes.) v1 can never vanish, since that would need d_r parallel to u.
+    ///
+    /// Both steps are taken in the closed forms worked out below rather than by evaluating the
+    /// formulae above term by term. They are the same vectors to a rounding for an observer whose
+    /// u^mu is of order 1, and they are the difference between a frame and a NaN for one whose
+    /// u^t has run away: a worldline settling onto the far branch of r- is carried out to
+    /// `geodesic::U_T_STALL` = 1e10, and written literally this construction loses every digit of
+    /// g(v1, v1) by u^t ~ 1e8 (v1's components are of size u_r u^t while g(v1, v1) is only u_r^2,
+    /// a cancellation of sixteen orders) and every digit of the *direction* of v2 at the same
+    /// place (its two large terms are each of size u_phi u^t and cancel down to order 1). The
+    /// closed forms have no such cancellation in them, so the frame stays good wherever the
+    /// worldline does.
     pub fn from_four_velocity(metric: &KerrSchild, r: f64, u: &[f64; 3]) -> Self {
         let r = r.max(1e-4);
+        // g(u, u) is a sum of terms of size |u|^2, so double precision alone can only deliver it
+        // to ~1e-16 |u|^2 however exact the 4-velocity is. The check has to carry that factor or
+        // it fires on a perfectly good worldline whose u^t has run away, which is what happens on
+        // the approach to the far branch of r-: `geodesic::U_T_STALL` follows u^t out to 1e10
+        // there, where (u^t)^2 is 1e20 and the rounding floor of this very expression is 1e4. The
+        // 1e-6 is what it is checking everywhere else, where |u| is of order 1.
         debug_assert!(
-            (inner(metric, r, u, u) + 1.0).abs() < 1e-6,
+            (inner(metric, r, u, u) + 1.0).abs()
+                < 1e-6 + 1e-14 * u.iter().fold(1.0f64, |m, v| m.max(v.abs())).powi(2),
             "tetrad needs a unit timelike 4-velocity; got u.u = {} at r = {r}",
             inner(metric, r, u, u)
         );
 
         let e0 = *u;
+        let g = metric.metric_components(r);
         let d_r = [0.0, 1.0, 0.0];
         let d_phi = [0.0, 0.0, 1.0];
-
+        // The two covariant components of u that the whole construction is built from.
         let u_r = inner(metric, r, &d_r, &e0);
+        let u_phi = inner(metric, r, &d_phi, &e0);
+
         let mut v1 = [0.0f64; 3];
         for mu in 0..3 {
             v1[mu] = d_r[mu] + u_r * e0[mu];
         }
-        let n1 = inner(metric, r, &v1, &v1).max(1e-300).sqrt();
+        // g(v1, v1) = g_rr + 2 u_r g(d_r, e0) + u_r^2 g(e0, e0) = g_rr + u_r^2, since
+        // g(d_r, e0) = u_r and g(e0, e0) = -1. A sum of two positive terms: exact to a rounding,
+        // positive at any boost, and free of the cancellation that evaluating g on v1 itself runs
+        // into once |v1| ~ u_r u^t dwarfs the answer.
+        let n1_sq = g[1][1] + u_r * u_r;
+        let n1 = n1_sq.max(1e-300).sqrt();
         let e1 = [v1[0] / n1, v1[1] / n1, v1[2] / n1];
 
-        let u_phi = inner(metric, r, &d_phi, &e0);
-        let p_phi = inner(metric, r, &d_phi, &e1);
+        // Substituting e1 = (d_r + u_r e0) / n1 and g(d_phi, e1) = (g_rphi + u_r u_phi) / n1 into
+        // v2 = d_phi + u_phi e0 - g(d_phi, e1) e1 and collecting the coordinate directions,
+        //     v2 = d_phi - [(g_rphi + u_r u_phi) / n1^2] d_r
+        //               + [(u_phi g_rr - u_r g_rphi) / n1^2] e0.
+        // The coefficient of e0 falls off like 1/u^t while e0 grows like u^t, which is why the
+        // literal form has two terms of size u_phi u^t cancelling down to a v2 of order 1: here
+        // that cancellation has been done once, algebraically, and what is left has none.
+        let a_r = -(g[1][2] + u_r * u_phi) / n1_sq;
+        let a_0 = (u_phi * g[1][1] - u_r * g[1][2]) / n1_sq;
         let mut v2 = [0.0f64; 3];
         for mu in 0..3 {
-            v2[mu] = d_phi[mu] + u_phi * e0[mu] - p_phi * e1[mu];
+            v2[mu] = d_phi[mu] + a_r * d_r[mu] + a_0 * e0[mu];
         }
         let n2 = inner(metric, r, &v2, &v2).max(1e-300).sqrt();
         let e2 = [v2[0] / n2, v2[1] / n2, v2[2] / n2];
@@ -111,8 +144,15 @@ impl Tetrad {
     /// since u_phi -> 0 there.
     pub fn from_four_velocity_axial(metric: &KerrSchild, r: f64, u: &[f64; 3]) -> Self {
         let r = r.max(1e-4);
+        // g(u, u) is a sum of terms of size |u|^2, so double precision alone can only deliver it
+        // to ~1e-16 |u|^2 however exact the 4-velocity is. The check has to carry that factor or
+        // it fires on a perfectly good worldline whose u^t has run away, which is what happens on
+        // the approach to the far branch of r-: `geodesic::U_T_STALL` follows u^t out to 1e10
+        // there, where (u^t)^2 is 1e20 and the rounding floor of this very expression is 1e4. The
+        // 1e-6 is what it is checking everywhere else, where |u| is of order 1.
         debug_assert!(
-            (inner(metric, r, u, u) + 1.0).abs() < 1e-6,
+            (inner(metric, r, u, u) + 1.0).abs()
+                < 1e-6 + 1e-14 * u.iter().fold(1.0f64, |m, v| m.max(v.abs())).powi(2),
             "tetrad needs a unit timelike 4-velocity; got u.u = {} at r = {r}",
             inner(metric, r, u, u)
         );
@@ -162,6 +202,22 @@ impl Tetrad {
         // it is continuous along every worldline because the determinant of an orthonormal frame
         // in a fixed coordinate basis never vanishes. So e1 points outward wherever outward has a
         // meaning, and keeps pointing the same way through the places where it does not.
+        //
+        // The minus sign below is that handedness, and it is a constant rather than something to
+        // be decided event by event. Contracting the dual with e1 gives
+        //     omega_alpha e1^alpha = g^{alpha beta} omega_alpha omega_beta = g(e1, e1) = 1,
+        // and the same contraction written out through eps is -sqrt|g| det[e0, e1, e2], so
+        //     det[e0, e1, e2] = -1 / sqrt|g|
+        // for *every* timelike u at every radius: the dual as ordered here is always left-handed
+        // and always has to be reversed. That used to be settled by computing det[e0, e1, e2] and
+        // flipping when it came out negative, which is the same answer wherever the determinant
+        // can be computed - but it is a cancellation of products of components of size |u|^2 down
+        // to a number of order 1, so its rounding floor is ~1e-16 |u|^2, and past u^t ~ 1e8 the
+        // sign it returns is noise. With `geodesic::U_T_STALL` carrying a worldline onto the far
+        // branch of r- out to u^t = 1e10, that noise reversed e1 end for end between one step and
+        // the next and mirrored every surface in the observer's frame view - precisely the failure
+        // the dual was introduced to remove, arriving by another route. Taking the sign from the
+        // identity instead costs nothing and cannot be reversed by rounding.
         let ginv = metric.inverse_metric(r);
         let det_g = det3(&g);
         debug_assert!(
@@ -177,12 +233,21 @@ impl Tetrad {
         let mut e1 = [0.0f64; 3];
         for mu in 0..3 {
             for alpha in 0..3 {
-                e1[mu] += ginv[mu][alpha] * omega[alpha];
+                e1[mu] -= ginv[mu][alpha] * omega[alpha];
             }
         }
-        if det3(&[e0, e1, e2]) < 0.0 {
-            e1 = [-e1[0], -e1[1], -e1[2]];
-        }
+        // The identity, checked wherever double precision can still see it. The determinant's own
+        // rounding floor is ~1e-16 |u|^2, so for a frame boosted past u^t ~ 1e8 there is nothing
+        // left to check and the assertion stands aside rather than firing on noise.
+        debug_assert!(
+            {
+                let scale = e0.iter().chain(e1.iter()).fold(1.0f64, |m, v| m.max(v.abs()));
+                let noise = 16.0 * f64::EPSILON * scale * scale * sqrt_abs_g;
+                noise > 0.5 || (det3(&[e0, e1, e2]) * sqrt_abs_g - 1.0).abs() < 0.5
+            },
+            "the dual must be right-handed after the sign: det = {} at r = {r}, u = {u:?}",
+            det3(&[e0, e1, e2]) * sqrt_abs_g
+        );
 
         Self { e0, e1, e2 }
     }
@@ -519,5 +584,71 @@ mod tests {
             proj_pos && proj_neg,
             "g(e1, d_r) must change sign along this worldline, or the flip was never in reach"
         );
+    }
+
+    #[test]
+    fn test_both_tetrads_survive_the_whole_approach_to_the_far_branch_of_r_minus() {
+        // The observer whose u^t runs away. E = 1, L = 2.2 at a = 0.90 has E - Omega_- L < 0, so
+        // he never crosses r-: he asymptotes to it with u^t growing like exp(kappa_- t) until the
+        // integrator sets him down at `geodesic::U_T_STALL` = 1e10. Every frame he is drawn in -
+        // the telemetry, the rest-frame view, the direction his light goes out in - is one of
+        // these two tetrads, so both have to survive the whole approach, and this is the test that
+        // walks them there. Run in a debug build it is also what exercises the `debug_assert!`s
+        // inside both constructors at a u^t they would once have fired on.
+        //
+        // Two things are checked, and neither of them used to hold. g(e_a, e_b) must stay eta to
+        // the only accuracy double precision can offer: the legs have components of size |u|, so
+        // the products have a rounding floor of ~1e-16 |u|^2, and the bound carries that factor
+        // rather than pretending to an absolute one. And e1 must not reverse - a reversal mirrors
+        // every surface drawn in the observer's frame from one step to the next - for which its
+        // own t-component is witness enough here, being of size u^t and nowhere near zero.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let mut geo = GeodesicState::new_infall(&metric, 0.0, 4.5, 1.0, 2.2);
+        let mut previous_sign = [0.0f64; 2];
+        let mut steps = 0;
+        while !geo.stalled && geo.t < 200.0 {
+            geo.step_coord_time(&metric, 0.1);
+            steps += 1;
+            let u = geo.u;
+            let tol = 1e-11 * (1.0 + u[0] * u[0]);
+            let frames = [
+                ("Gram-Schmidt", Tetrad::from_four_velocity(&metric, geo.r, &u)),
+                ("axial", Tetrad::from_four_velocity_axial(&metric, geo.r, &u)),
+            ];
+            for (which, (name, frame)) in frames.iter().enumerate() {
+                let legs = [frame.e0, frame.e1, frame.e2];
+                for i in 0..3 {
+                    for j in 0..3 {
+                        let expected = if i != j { 0.0 } else if i == 0 { -1.0 } else { 1.0 };
+                        let got = inner(&metric, geo.r, &legs[i], &legs[j]);
+                        assert!(
+                            (got - expected).abs() < tol,
+                            "{name}: g(e{i}, e{j}) = {got} (want {expected}) at u^t = {}, r = {}",
+                            u[0],
+                            geo.r
+                        );
+                    }
+                }
+                let sign = frame.e1[0].signum();
+                if frame.e1[0].abs() > 1.0 {
+                    assert!(
+                        previous_sign[which] == 0.0 || sign == previous_sign[which],
+                        "{name}: e1 reversed at u^t = {}, r = {}: e1 = {:?}",
+                        u[0],
+                        geo.r,
+                        frame.e1
+                    );
+                    previous_sign[which] = sign;
+                }
+            }
+        }
+        println!(
+            "both tetrads built at every one of {steps} steps, down to r - r- = {:.3e} with u^t = {:.3e}, at t = {:.2}",
+            geo.r - metric.inner_horizon(),
+            geo.u[0],
+            geo.t
+        );
+        assert!(geo.stalled, "the walk must reach the stall, got u^t = {}", geo.u[0]);
+        assert!(geo.u[0] > 1e9, "and it must be the runaway that stopped it: {}", geo.u[0]);
     }
 }

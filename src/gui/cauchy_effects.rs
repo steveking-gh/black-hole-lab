@@ -6,9 +6,12 @@ use crate::physics::wavefront::{SignalField, limiting_blueshift};
 pub struct CauchyEffects;
 
 /// Format the measured shift of ingoing principal null light, nu_obs / nu_inf = -k.u.
-/// Two decimals, dropping to scientific notation only where the ratio gets very small.
+/// Two decimals while the ratio is a number a reader can hold in their head, scientific notation
+/// at either end of that: the shift is proportional to u^t on the approach to the far branch of
+/// r-, where `geodesic::U_T_STALL` follows the worldline out to u^t = 1e10, and a plain decimal
+/// would be an unreadable run of ten digits in a line a few characters wide.
 fn fmt_nu(ratio: f64) -> String {
-    if ratio < 0.01 {
+    if ratio < 0.01 || ratio >= 1e4 {
         format!("{:.2e}", ratio)
     } else {
         format!("{:.2}", ratio)

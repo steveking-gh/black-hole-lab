@@ -462,7 +462,11 @@ fn telemetry_lines(
     };
 
     let shift_tag = if nu_ratio > 1.0 { "blueshift" } else { "redshift" };
-    let nu_str = if nu_ratio < 0.01 {
+    // Scientific notation at both ends of the scale. The ratio is proportional to u^t near the
+    // far branch of r- - exactly u^t r-^2/(r-^2 + a^2) in the limit - and `geodesic::U_T_STALL`
+    // follows the worldline out to u^t = 1e10, so a plain decimal would run to ten digits in a
+    // box laid out for four.
+    let nu_str = if nu_ratio < 0.01 || nu_ratio >= 1e4 {
         format!("ν_in/ν_∞ = {:.2e} ({})", nu_ratio, shift_tag)
     } else {
         format!("ν_in/ν_∞ = {:.2} ({})", nu_ratio, shift_tag)
