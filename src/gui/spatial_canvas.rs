@@ -515,9 +515,6 @@ impl SpatialCanvas {
                  measured as it left: red ×1 (every front is born red), orange ×3, yellow ×10,\n\
                  green ×30, blue ×1000, violet ×100000, grey below ×1. One lightness throughout,\n\
                  so the colour carries the shift and nothing else\n\
-                 Front opacity: signal strength, the fluence that infaller measures ÷ the fluence\n\
-                 the same flash delivers 1M away in flat space. Solid at ×1, gone at ×1e-2;\n\
-                 both transmissions are taken to carry the same energy per pulse\n\
                  Beaded arcs on r₋: the frozen family (E − Ω₋L < 0, never crosses this branch)\n\
                  {}\
                  Bob's fronts: same gain colours at half stroke, mint emission dots\n\
@@ -555,9 +552,6 @@ impl SpatialCanvas {
                  measured as it left: red ×1 (every front is born red), orange ×3, yellow ×10,\n\
                  green ×30, blue ×1000, violet ×100000, grey below ×1. One lightness throughout,\n\
                  so the colour carries the shift and nothing else\n\
-                 Front opacity: signal strength, the fluence that infaller measures ÷ the fluence\n\
-                 the same flash delivers 1M away in flat space. Solid at ×1, gone at ×1e-2;\n\
-                 both transmissions are taken to carry the same energy per pulse\n\
                  Beaded arcs on r₋: the frozen family (E − Ω₋L < 0, never crosses this branch)\n\
                  {}\
                  Bob's fronts: same gain colours at half stroke, mint emission dots\n\
@@ -1037,37 +1031,6 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
             .map(|ray| to_screen(metric.cartesian_position(ray.r, ray.phi)))
             .collect();
 
-        // How strong the signal is on each piece of front, and so how opaque it is drawn: the
-        // fluence a receiver riding the local raindrop measures there, against what the same flash
-        // delivers `STRENGTH_REFERENCE_M` away in flat space. One value per segment, and a ray's
-        // own is the mean of the two segments it belongs to, since a drawn point stands for the
-        // front on both sides of it. Dead rays bound no piece of front and are left at zero.
-        //
-        // A pair wound past `MAX_RESOLVED_WINDING` is left at zero with the dead ones. The two
-        // rays are most of a turn apart and the piece of front between them is not resolved, so
-        // the separation that would be measured there is the width of something the sampling
-        // cannot see rather than the width of the bundle; the ends of such a segment take their
-        // opacity from their other side, where the front is still resolved.
-        let strengths: Vec<f64> = (0..n)
-            .map(|i| {
-                let j = (i + 1) % n;
-                let resolved = (pulse.rays[j].phi - pulse.rays[i].phi).abs() <= MAX_RESOLVED_WINDING;
-                if pulse.rays[i].alive() && pulse.rays[j].alive() && resolved {
-                    pulse.segment_strength(metric, i, j)
-                } else {
-                    0.0
-                }
-            })
-            .collect();
-        let point_strength = |i: usize| -> f64 {
-            let before = strengths[(i + n - 1) % n];
-            match (before > 0.0, strengths[i] > 0.0) {
-                (true, true) => 0.5 * (before + strengths[i]),
-                (true, false) => before,
-                _ => strengths[i],
-            }
-        };
-
         // The two ends of every segment dropped for winding: each is a live calculated point whose
         // segment has been withdrawn, and each is drawn as its own dot below so that the cut reads
         // as a gap with marked ends rather than as a silent hole in the front.
@@ -1101,24 +1064,7 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
             // band of at most `FRONT_BAND_DECADES`, and a single band over the whole arc in the
             // common case where the two rays carry the same gain.
             let frozen_pair = frozen[i] && frozen[j];
-            let full = if frozen_pair { Theme::FRONT_FROZEN_ALPHA } else { Theme::SHIFT_ALPHA };
-            // A pair left unresolved above still gets drawn if the user has turned the winding cut
-            // off, and then its strength is not zero but unknown: what is drawn there is the
-            // interpolation's own guess at the front, so it is given the strength of the two rays
-            // bounding it, each taken from the side where the front is resolved. Anything else
-            // would either hide a curve the user has asked to see or claim a measurement of it.
-            let strength = if strengths[i] > 0.0 {
-                strengths[i]
-            } else {
-                0.5 * (point_strength(i) + point_strength(j))
-            };
-            let alpha = Theme::strength_alpha(strength, full);
-            if alpha == 0 {
-                // Fainter than the ramp's floor: there is nothing here strong enough to draw.
-                // The two ends are not marked, because nothing has been withheld that the eye
-                // would otherwise expect - this is the front fading out, not a cut in it.
-                continue;
-            }
+            let alpha = if frozen_pair { Theme::FRONT_FROZEN_ALPHA } else { Theme::SHIFT_ALPHA };
             for (band, gain) in banded_segment(arc, gains[i], gains[j]) {
                 if frozen_pair {
                     frozen_segments.push((band, Theme::front_colour(gain, alpha)));
@@ -1134,11 +1080,7 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
             if !pulse.rays[i].alive() {
                 continue;
             }
-            let full = if frozen[i] { Theme::FRONT_FROZEN_ALPHA } else { Theme::SHIFT_ALPHA };
-            let alpha = Theme::strength_alpha(point_strength(i), full);
-            if alpha == 0 {
-                continue;
-            }
+            let alpha = if frozen[i] { Theme::FRONT_FROZEN_ALPHA } else { Theme::SHIFT_ALPHA };
             if frozen[i] {
                 // A frozen ray already carries a bead, which is this same dot drawn heavier, so it
                 // is not drawn a second time for being the end of a cut segment.
@@ -1499,102 +1441,6 @@ mod tests {
         }
     }
 
-    /// Every stroke alpha `draw_signal_field` put on the canvas for one field, in the order drawn.
-    fn front_alphas(metric: &KerrSchild, field: &SignalField) -> Vec<u8> {
-        let ctx = egui::Context::default();
-        ctx.set_fonts(egui::FontDefinitions::empty());
-        let output = ctx.run_ui(Default::default(), |ui| {
-            let (_, painter) =
-                ui.allocate_painter(egui::Vec2::new(400.0, 400.0), egui::Sense::hover());
-            let to_screen =
-                |(x, y): (f64, f64)| Pos2::new(200.0 + 20.0 * x as f32, 200.0 - 20.0 * y as f32);
-            draw_signal_field(
-                &painter,
-                metric,
-                field,
-                Theme::ALICE_COLOR,
-                1.0,
-                FrontStyle { arcs: true, hide_wound: true },
-                &to_screen,
-            );
-        });
-        let mut alphas = Vec::new();
-        fn walk(shape: &egui::Shape, out: &mut Vec<u8>) {
-            match shape {
-                egui::Shape::Path(path) => {
-                    if let egui::epaint::ColorMode::Solid(c) = path.stroke.color {
-                        out.push(c.a());
-                    }
-                }
-                egui::Shape::Vec(inner) => {
-                    for shape in inner {
-                        walk(shape, out);
-                    }
-                }
-                _ => {}
-            }
-        }
-        for clipped in output.shapes.iter() {
-            walk(&clipped.shape, &mut alphas);
-        }
-        output.drop_without_applying_deltas();
-        alphas
-    }
-
-    #[test]
-    fn test_a_front_is_drawn_fainter_the_further_it_has_spread_and_stops_when_it_is_too_faint() {
-        // The alpha channel carries the signal strength, and this is that statement at the one
-        // place it reaches the user: the strokes `draw_signal_field` actually puts on the canvas.
-        // A pulse is opaque as it leaves - the strength is calibrated to 1 at
-        // `STRENGTH_REFERENCE_M` from the emitter in flat space, which a fresh front is well
-        // inside - and every piece of it is drawn fainter as it spreads, because the same photons
-        // are landing on a larger bundle. Far enough out and there is nothing left worth a line.
-        use crate::physics::observer::{ObserverMode, WorldlineParams};
-        let metric = KerrSchild::new(1.0, 0.0);
-        let pulse_at = |t_end: f64| -> SignalField {
-            let mut emitter = Observer::new_with_phi(
-                &metric, "Alice", 0.0, 12.0, 1e9, 0.0, WorldlineParams::default(),
-            );
-            emitter.mode = ObserverMode::Static;
-            let mut field = SignalField::default();
-            field.emit_if_due(&metric, &emitter);
-            let mut t = 0.0;
-            while t < t_end - 1e-12 {
-                let step = 0.05f64.min(t_end - t);
-                field.advance(&metric, step);
-                t += step;
-            }
-            field
-        };
-        let brightest = |field: &SignalField| front_alphas(&metric, field).into_iter().max();
-
-        let fresh = brightest(&pulse_at(0.2)).expect("a fresh front is drawn");
-        let spread = brightest(&pulse_at(3.0)).expect("and so is one that has spread");
-        println!(
-            "a static emitter at r = 12: the front is drawn at alpha {fresh} after 0.2 M and \
-             {spread} after 3 M, against a full-strength alpha of {}",
-            Theme::SHIFT_ALPHA
-        );
-        assert_eq!(fresh, Theme::SHIFT_ALPHA, "a fresh pulse is drawn at full strength");
-        assert!(spread < fresh, "and a spread one fainter: {spread} against {fresh}");
-
-        // The ramp itself, which is what turns a strength into that alpha.
-        assert_eq!(Theme::strength_alpha(1.0, 200), 200, "full strength is full alpha");
-        assert_eq!(Theme::strength_alpha(50.0, 200), 200, "and a caustic cannot go past it");
-        assert_eq!(Theme::strength_alpha(0.0, 200), 0, "no signal, no line");
-        let floor = 10f64.powf(-Theme::STRENGTH_FADE_DECADES);
-        assert_eq!(Theme::strength_alpha(floor, 200), 0, "the fade ends exactly at the cut");
-        assert!(Theme::strength_alpha(floor * 1.2, 200) > 0, "and not before it");
-        let half = 10f64.powf(-Theme::STRENGTH_FADE_DECADES / 2.0);
-        assert_eq!(Theme::strength_alpha(half, 200), 100, "half the decades is half the alpha");
-        let mut previous = 0;
-        for decade in 0..=40 {
-            let alpha = Theme::strength_alpha(10f64.powf(-(decade as f64) / 10.0), 200);
-            assert!(alpha <= 200 && (decade == 0 || alpha <= previous), "the ramp only falls");
-            previous = alpha;
-        }
-    }
-
     #[test]
     fn test_the_front_ramp_starts_red_and_ends_violet() {
         // The three statements the wavefront colouring makes to the eye. A front is born at gain 1
@@ -1606,8 +1452,8 @@ mod tests {
         // spectrum rather than run further along it.
         //
         // What is *not* asserted here any more is that a loss looks darker. It cannot: every stop
-        // of this ramp is one lightness, because the brightness belongs to the signal strength on
-        // the alpha channel. `theme::tests` measures that; this measures the three landmarks.
+        // of this ramp is struck at one lightness, so that the colour carries the shift and the eye
+        // has no brightness to misread. `theme::tests` measures that; this measures the landmarks.
         let red = Theme::front_colour(1.0, 255);
         assert_eq!(
             (red.r(), red.g(), red.b()),

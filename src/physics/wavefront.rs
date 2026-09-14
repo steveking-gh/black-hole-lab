@@ -112,10 +112,10 @@
 //! pulse; whether the pulse reaches it is a question about azimuth, which the projection has thrown
 //! away and only the per-sheet crossing test of `Pulse::scan` answers.
 
-use crate::physics::geodesic::{GeodesicState, R_STOP, geodesic_accel};
+use crate::physics::geodesic::{R_STOP, geodesic_accel};
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::Observer;
-use crate::physics::tetrad::{Tetrad, inner};
+use crate::physics::tetrad::Tetrad;
 
 /// Directions per pulse the app starts on, and the default of `SignalField::rays_per_pulse`, which
 /// is the count an emission actually reads: the whole of the emitter's local light cone sampled at
@@ -213,27 +213,7 @@ const TRACK_MIN_DT: f64 = 0.02;
 const TRACK_MAX_POINTS: usize = 4000;
 
 /// State vector of a ray in coordinate time: y = (r, phi, v^r, v^phi).
-/// The integrator's state along one ray: (r, phi, v^r, v^phi, s).
-///
-/// The first four are the ray itself. The fifth is the quadrature
-///
-///     s = integral of dlambda / r^2
-///
-/// along the ray from its emission event, in the affine normalisation E = 1 (E = -k_t, conserved).
-/// It is carried here rather than accumulated outside the loop so that it is integrated by the
-/// same Dormand-Prince scheme, to the same order, as the geodesic it belongs to; it feeds nothing
-/// back into the other four, and the substep control ignores it, so a ray's path is bit-for-bit
-/// what it was before the quadrature was added.
-///
-/// Its use is `NullRay::out_of_plane_spread`, which needs it because the out-of-plane Jacobi field
-/// of an equatorial ray is a harmonic function of exactly this variable. With v^t = 1 the app's
-/// direction v is k / k^t, so dlambda = dt / k^t = (-v_t) dt at E = 1, and
-///
-///     ds/dt = (-v_t) / r^2 = (-g_{t mu} v^mu) / r^2,
-///
-/// which is a function of the state alone. The numerator is the same E-per-k^t that
-/// `NullRay::constants` returns.
-type RayState = [f64; 5];
+type RayState = [f64; 4];
 
 /// The bilinear form -g_{mu nu} a^mu b^nu at radius r.
 fn minus_inner(metric: &KerrSchild, r: f64, a: &[f64; 3], b: &[f64; 3]) -> f64 {
@@ -280,10 +260,6 @@ pub struct NullRay {
     /// `f_factor` evaluated at the emission event against the emitter's 4-velocity. The frequency
     /// ratio anywhere later on the ray is the current factor divided by this one.
     pub f_emit: f64,
-    /// The quadrature s = integral of dlambda / r^2 from the emission event, at E = 1: see
-    /// `RayState`, which carries it, and `out_of_plane_spread`, which is what it is for. Zero at
-    /// emission, increasing along the ray, and wound back exactly by a step backwards.
-    pub spread_s: f64,
     /// The ray's direction v^mu = (1, dr/dt, dphi/dt) at the *emission* event, kept as it was let
     /// go rather than recomputed from the current state.
     ///
@@ -368,7 +344,6 @@ impl NullRay {
             dr_dt,
             dphi_dt,
             f_emit: f_factor(metric, r, &v, u_emitter),
-            spread_s: 0.0,
             v_emit: v,
             death_t: None,
             death_end: None,
@@ -442,61 +417,6 @@ impl NullRay {
             return 1.0;
         }
         f_factor(metric, self.r, &self.direction(), u_now_observer) / f_there
-    }
-
-    /// The out-of-plane transverse size of the ray bundle around this ray, per unit angle
-    /// subtended at the emitter, in units of M.
-    ///
-    /// A pulse leaves its emitter as a point and opens into a bundle, and how strong the signal is
-    /// anywhere later is how far that bundle has spread. Spreading has two transverse directions.
-    /// In the equatorial plane the app can measure it from the rays themselves, since neighbouring
-    /// rays are exactly the bundle's edges there (`Pulse::in_plane_spread`). Out of the plane there
-    /// is nothing integrated, because every ray drawn by this app stays in the equatorial plane -
-    /// and the two directions do not spread alike, so the missing one cannot be guessed from the
-    /// other. It has a closed form instead.
-    ///
-    /// Take a neighbouring ray with the same E and L and a small Carter constant Q. Near the
-    /// equator, with delta = pi/2 - theta, the Carter potential is
-    ///
-    ///     Theta = Q - cos^2(theta) [L^2/sin^2(theta) - a^2 E^2]  ~  Q - delta^2 (L^2 - a^2 E^2),
-    ///
-    /// and rho^2 d(theta)/d(lambda) = sqrt(Theta) becomes, in the variable s of `RayState`,
-    ///
-    ///     (d delta / ds)^2 = Q - omega^2 delta^2,      omega^2 = L^2 - a^2 E^2,
-    ///
-    /// a harmonic oscillator. So delta oscillates in s at the rate omega, and the proper size out
-    /// of the plane is rho delta = r delta at the equator:
-    ///
-    ///     y_out = r f_emit r_emit sin(omega s) / omega.
-    ///
-    /// The prefactor is the normalisation: the Jacobi field is fixed by opening at unit rate per
-    /// unit proper distance in the *emitter's* frame, which is what makes the bundle's area the
-    /// area per unit solid angle at the source. Affine parameter scales inversely with E, and the
-    /// emitter's frame is the normalisation -k.u_emit = 1, i.e. E = 1/`f_emit`, so the affine
-    /// parameter in that frame is `f_emit` times the one at E = 1 that s is quoted in. Meanwhile
-    /// omega and s are each quoted at E = 1, and their product is normalisation-free, as it must
-    /// be: it is an angle.
-    ///
-    /// Three things worth naming. Where omega^2 < 0 - an impact parameter inside the spin, |b| < a,
-    /// which only the most nearly radial rays of a fast hole have - the sine becomes a sinh and the
-    /// bundle simply keeps opening. Where omega s reaches pi the size passes through zero: that is
-    /// a real caustic, the bundle refocusing on the far side of the hole, and the strength there
-    /// genuinely diverges, so a display has to cap it rather than pretend. And with no spin the
-    /// identity omega s = |delta phi| holds exactly, because d(phi)/d(lambda) = L/r^2 then, so the
-    /// caustic sits where the ray has swept half a turn: the antipode of the source, which is the
-    /// textbook focusing of a point source by a Schwarzschild lens.
-    ///
-    /// `r_emit` belongs to the pulse rather than to the ray, exactly as in `gain_between`.
-    pub fn out_of_plane_spread(&self, metric: &KerrSchild, r_emit: f64) -> f64 {
-        let (e, l) = self.constants(metric);
-        if e.abs() < 1e-300 {
-            return 0.0;
-        }
-        // omega^2 = L^2 - a^2 E^2 at E = 1, which is E^2 (b^2 - a^2) with b = L/E the impact
-        // parameter, so the ray's own scale drops out of the shape below.
-        let b = l / e;
-        let omega_sq = b * b - metric.a * metric.a;
-        self.r * r_emit * self.f_emit * sin_over_root(omega_sq, self.spread_s)
     }
 
     /// The ray's energy relative to the null generator of the inner horizon, per unit k^t:
@@ -824,7 +744,7 @@ impl NullRay {
         let forward = dt > 0.0;
         let sign = if forward { 1.0 } else { -1.0 };
         let end_t = self.t + dt;
-        let mut y: RayState = [self.r, self.phi, self.dr_dt, self.dphi_dt, self.spread_s];
+        let mut y: RayState = [self.r, self.phi, self.dr_dt, self.dphi_dt];
         let mut k = ray_rhs(metric, &y);
         let mut remaining = dt.abs();
         // The first proposal is the whole interval; the caps cut it down on the first substep, and
@@ -911,39 +831,6 @@ impl NullRay {
         self.phi = y[1];
         self.dr_dt = y[2];
         self.dphi_dt = y[3];
-        self.spread_s = y[4];
-    }
-}
-
-/// The E = 1, L = 0 raindrop congruence: free fall from rest at infinity, the one family of
-/// observers that exists at every radius, inside both horizons included.
-///
-/// One state serves every radius - `GeodesicState::derivatives` evaluates the closed-form
-/// 4-velocity at whatever r it is handed - so this is a constructor rather than a lookup, and the
-/// radius it is built at does not enter the answer.
-fn raindrop_congruence(metric: &KerrSchild) -> GeodesicState {
-    GeodesicState::new_infall(metric, 0.0, 12.0, 1.0, 0.0)
-}
-
-/// sin(sqrt(w) x) / sqrt(w), continued through w = 0 and on to sinh for w < 0.
-///
-/// The solution of y'' = -w y with y(0) = 0 and y'(0) = 1, which is the Jacobi field of
-/// `NullRay::out_of_plane_spread`. Written as one function because the three cases are one
-/// analytic function of w and the display must not step between them: the series is used near
-/// zero, where the quotient of two small numbers would lose the answer.
-fn sin_over_root(w: f64, x: f64) -> f64 {
-    let scale = w.abs() * x * x;
-    if scale < 1e-8 {
-        // sin(u)/u = 1 - u^2/6 + ..., with u^2 = w x^2, and the same series with the sign of w
-        // flipped is the sinh case, so one expression covers both.
-        return x * (1.0 - scale.copysign(w) / 6.0);
-    }
-    if w > 0.0 {
-        let root = w.sqrt();
-        (root * x).sin() / root
-    } else {
-        let root = (-w).sqrt();
-        (root * x).sinh() / root
     }
 }
 
@@ -962,17 +849,7 @@ fn ray_rhs(metric: &KerrSchild, y: &RayState) -> RayState {
     debug_assert!(y[0] >= R_STOP, "ray_rhs evaluated below the ring at r = {}", y[0]);
     let v = [1.0, y[2], y[3]];
     let acc = geodesic_accel(metric, y[0], &v);
-    // ds/dt = (-v_t)/r^2: see `RayState`. -v_t is E per k^t, positive for every future-directed
-    // ray at every radius, so s increases along the ray and decreases along a step backwards.
-    let g = metric.metric_components(y[0]);
-    let minus_v_t = -(g[0][0] + g[0][1] * y[2] + g[0][2] * y[3]);
-    [
-        y[2],
-        y[3],
-        acc[1] - y[2] * acc[0],
-        acc[2] - y[3] * acc[0],
-        minus_v_t / (y[0] * y[0]),
-    ]
+    [y[2], y[3], acc[1] - y[2] * acc[0], acc[2] - y[3] * acc[0]]
 }
 
 /// One Dormand-Prince 5(4) step of `ray_rhs`, reusing the slope k1 already evaluated at y.
@@ -1046,9 +923,7 @@ fn ray_dopri5(
         next = arg;
     }
 
-    // Four components rather than five: the quadrature `RayState` carries has no say in how the
-    // ray is substepped, and the control below reads only the first two of these anyway.
-    let mut error = [0.0; 5];
+    let mut error = [0.0; 4];
     for (i, e) in error.iter_mut().enumerate() {
         let mut sum = 0.0;
         for (j, w) in E.iter().enumerate() {
@@ -1218,19 +1093,6 @@ pub struct Delivery {
     /// became a fact, and so the time a rewind has to reach past before it can retract it.
     pub received_t: f64,
 }
-
-/// The proper distance from the emitter at which a pulse is called full strength: the fluence a
-/// receiver measures is quoted against what the same flash would deliver this far away in flat
-/// space, so `Pulse::segment_strength` is 1 there and falls off as one over the square of the
-/// luminosity distance from then on.
-///
-/// One M, because M is the unit every other length on these canvases is quoted in, and because it
-/// puts the reference inside the emitter's immediate neighbourhood where the geometry has not yet
-/// done anything to the bundle. It is not the first drawn wavefront: where that ring has got to
-/// depends on the step size and on how much proper distance a step covers at that radius, so
-/// calibrating against it would make the picture a function of the frame rate and would set the
-/// reference at a different distance for a pulse sent near r+ than for one sent far out.
-pub const STRENGTH_REFERENCE_M: f64 = 1.0;
 
 /// One emission event of the emitter's, and the wavefront it launched.
 #[allow(dead_code)] // the emission event is recorded in full: the drawing needs the rays and the
@@ -1810,117 +1672,6 @@ fn signalling_four_velocity(metric: &KerrSchild, observer: &Observer) -> [f64; 3
     observer.four_velocity(metric)
 }
 
-impl Pulse {
-    /// The in-plane transverse size of the bundle between neighbouring rays `i` and `j`, per unit
-    /// angle subtended at the emitter, in units of M.
-    ///
-    /// The other half of `NullRay::out_of_plane_spread`, and the half this app can measure
-    /// directly: two neighbouring rays *are* the edges of the bundle in the plane, so the size is
-    /// how far apart they have got. What is wanted is the separation across the direction of
-    /// travel, in a local frame, so the construction is:
-    ///
-    /// * take the two events at the same coordinate time, which is a spacelike slice in this chart
-    ///   (dt is timelike everywhere, g^tt = -(1 + 2M/r) < 0), so the vector joining them is
-    ///   spacelike and has a proper length;
-    /// * measure it in the rest space of the local raindrop, the same congruence the gain colouring
-    ///   is quoted against, by taking its components on that observer's tetrad;
-    /// * drop the part along the direction of propagation, keeping the part across it. The plane
-    ///   orthogonal to a ray and to an observer is the *screen*, and a bundle's cross-section on
-    ///   it is the same for every observer, so this is not a choice of frame dressed up as a
-    ///   measurement: boosting along the ray leaves the answer alone.
-    ///
-    /// The divisor is the chord 2 sin(pi/n) rather than the angle 2 pi / n, because two rays n
-    /// apart on a circle of unit radius are that far apart in a straight line, not that far apart
-    /// along the arc. With the chord the flat-space answer is exact at every ray count rather than
-    /// out by the sagitta, which is 8e-5 at 144 rays but grows as the count is lowered.
-    ///
-    /// The approximation is the finite difference itself: two rays 2.5 degrees apart stand in for
-    /// the derivative of the front across the bundle. It is good wherever the front is smooth and
-    /// bad exactly where the front is not, which is at the critical angles either side of a photon
-    /// orbit, where the app already refuses to draw (see `MAX_RESOLVED_WINDING`).
-    fn in_plane_spread(
-        &self,
-        metric: &KerrSchild,
-        raindrops: &GeodesicState,
-        i: usize,
-        j: usize,
-    ) -> f64 {
-        let (a, b) = (&self.rays[i], &self.rays[j]);
-        let r_mid = 0.5 * (a.r + b.r);
-        // Deliberate negation: a non-finite radius has to take this branch as well.
-        #[allow(clippy::neg_cmp_op_on_partial_ord)]
-        if !(r_mid > 0.0) {
-            return 0.0;
-        }
-        let (ut, ur, up) = raindrops.derivatives(metric, r_mid);
-        let frame = Tetrad::from_four_velocity(metric, r_mid, &[ut, ur, up]);
-        // The connecting vector, and the mean direction of travel across it. Both are taken on
-        // the tetrad's two spatial legs, which is the observer's rest space.
-        let joining = [0.0, b.r - a.r, b.phi - a.phi];
-        let travel = [1.0, 0.5 * (a.dr_dt + b.dr_dt), 0.5 * (a.dphi_dt + b.dphi_dt)];
-        let on = |x: &[f64; 3], leg: &[f64; 3]| inner(metric, r_mid, x, leg);
-        let (x1, x2) = (on(&joining, &frame.e1), on(&joining, &frame.e2));
-        let (n1, n2) = (on(&travel, &frame.e1), on(&travel, &frame.e2));
-        let along = (n1 * n1 + n2 * n2).sqrt();
-        // Deliberate negation, as above: NaN is not a direction to project onto.
-        #[allow(clippy::neg_cmp_op_on_partial_ord)]
-        if !(along > 0.0) {
-            return 0.0;
-        }
-        let across = (x1 * n2 - x2 * n1).abs() / along;
-        let chord = 2.0 * (std::f64::consts::PI / self.rays.len() as f64).sin();
-        if chord <= 0.0 { 0.0 } else { across / chord }
-    }
-
-    /// How strong the signal is on the piece of front between neighbouring rays `i` and `j`: the
-    /// fluence a receiver riding the local raindrop measures there, as a multiple of the fluence
-    /// the same flash delivers `STRENGTH_REFERENCE_M` away in flat space.
-    ///
-    /// A flash carries a fixed number of photons. Each one's energy is scaled by the shift g it
-    /// has picked up since it was let go, and they arrive spread over the cross-section A of the
-    /// bundle they travel in, so the energy per unit area of the pulse - its fluence, which is what
-    /// "how strong is this signal" asks - is
-    ///
-    ///     fluence  =  g / A,      A = y_in y_out per unit solid angle at the source,
-    ///
-    /// and the quantity returned is that over its own value at the reference distance in flat
-    /// space, where g = 1 and y_in = y_out = d: `STRENGTH_REFERENCE_M` squared times g over the two
-    /// spreads. Every piece of it is measured rather than chosen. g is `NullRay::frequency_ratio`
-    /// against the local raindrop, the emitter's own frame at one end because that is the frame the
-    /// bundle's opening angle is quoted in and the raindrop at the other because that is the
-    /// receiver the whole picture is drawn for. The two spreads are `in_plane_spread` and
-    /// `NullRay::out_of_plane_spread`. Nothing here is fitted, and the only convention is where the
-    /// number is called 1.
-    ///
-    /// It diverges at a caustic, where `out_of_plane_spread` passes through zero and the bundle
-    /// really does refocus to a line. That is physical, and it is left to say so: the caller is
-    /// what decides how bright is bright enough to draw.
-    pub fn segment_strength(&self, metric: &KerrSchild, i: usize, j: usize) -> f64 {
-        let (a, b) = (&self.rays[i], &self.rays[j]);
-        // One congruence for the whole measurement: `GeodesicState::derivatives` is the closed
-        // form evaluated at whatever radius it is handed, so the same state serves both rays and
-        // the midpoint between them, and building it once keeps this cheap enough to run over
-        // every segment of every pulse on every frame.
-        let raindrops = raindrop_congruence(metric);
-        let y_in = self.in_plane_spread(metric, &raindrops, i, j);
-        let out = |ray: &NullRay| ray.out_of_plane_spread(metric, self.emitted_r).abs();
-        let y_out = 0.5 * (out(a) + out(b));
-        let area = y_in * y_out;
-        // Deliberate negation: a bundle that has collapsed to nothing and one whose size has
-        // gone non-finite are both "no area to spread over", and the caller caps what comes back.
-        #[allow(clippy::neg_cmp_op_on_partial_ord)]
-        if !(area > 0.0) {
-            return f64::INFINITY;
-        }
-        let shift = |ray: &NullRay| {
-            let (ut, ur, up) = raindrops.derivatives(metric, ray.r);
-            ray.frequency_ratio(metric, &[ut, ur, up])
-        };
-        let g = 0.5 * (shift(a) + shift(b));
-        g * STRENGTH_REFERENCE_M * STRENGTH_REFERENCE_M / area
-    }
-}
-
 /// Every pulse one emitter currently has in flight.
 ///
 /// The field is agnostic about who is at each end of it: `emit_if_due` takes the emitter and
@@ -2495,7 +2246,6 @@ mod tests {
             dr_dt,
             dphi_dt,
             f_emit: f_factor(metric, r, &v, &u),
-            spread_s: 0.0,
             v_emit: v,
             death_t: None,
             death_end: None,
@@ -5284,7 +5034,6 @@ mod tests {
             dr_dt: -1.0,
             dphi_dt: 0.0,
             f_emit: f_factor(&metric, r_emit, &[1.0, -1.0, 0.0], &u_emit),
-            spread_s: 0.0,
             v_emit: [1.0, -1.0, 0.0],
             death_t: None,
             death_end: None,
@@ -5856,366 +5605,6 @@ mod tests {
     }
 }
 
-
-/// The three statements the signal-strength measurement makes, each checked against something
-/// known independently of the code that computes it: flat space, where the answer is one over the
-/// distance squared; Schwarzschild, where the out-of-plane bundle has to refocus exactly where the
-/// ray has swept half a turn; and the caustic that follows from it.
-#[cfg(test)]
-mod signal_strength {
-    use super::*;
-    use crate::physics::observer::{Observer, WorldlineParams};
-
-    /// A pulse of `rays` rays sent by a static observer at `r_emit` in the given geometry, carried
-    /// forward to `t_end` in steps of `dt`.
-    fn static_pulse(
-        metric: &KerrSchild,
-        r_emit: f64,
-        rays: usize,
-        dt: f64,
-        t_end: f64,
-    ) -> Pulse {
-        let mut emitter =
-            Observer::new_with_phi(metric, "Source", 0.0, r_emit, 1e9, 0.0, WorldlineParams::default());
-        emitter.mode = crate::physics::observer::ObserverMode::Static;
-        let mut field = SignalField { rays_per_pulse: rays, ..Default::default() };
-        field.emit_if_due(metric, &emitter);
-        let mut t = 0.0;
-        while t < t_end - 1e-12 {
-            let step = dt.min(t_end - t);
-            field.advance(metric, step);
-            t += step;
-        }
-        field.pulses.into_iter().next().expect("the emitter sent one pulse")
-    }
-
-    #[test]
-    fn test_the_two_transverse_spreads_agree_and_give_one_over_the_distance_squared_in_weak_field() {
-        // The calibration, against the one geometry where the answer is known by hand. Take the
-        // hole as light as the app will build one - `KerrSchild::with_solar_mass` floors M at 0.01,
-        // so "no hole" is the best available approximation to flat space - and a flash from a
-        // static source spreads over a sphere: after coordinate time d every piece of the front is
-        // d away and carries a fluence of 1/d^2 of what it had at the reference distance.
-        //
-        // The sharpest statement here does not involve d at all. In flat space the bundle is
-        // isotropic, so the two transverse sizes must be *equal*, and they are computed by
-        // completely different routes: the out-of-plane one from the closed-form Jacobi field of a
-        // neighbouring ray with a small Carter constant, the in-plane one as a finite difference
-        // between two integrated rays projected onto the screen. Neither knows the other exists.
-        //
-        // The receiver is the local raindrop, as it is for the gain colouring, and a raindrop is
-        // not at rest: it falls at sqrt(2M/r), which is 0.1c at r = 2 even for a hole this light.
-        // Its Doppler factor is a real part of what a receiver there measures, so it is checked
-        // where it belongs, in the assembly of the strength, rather than assumed away.
-        let metric = KerrSchild::new(0.0, 0.0);
-        let d = 3.0;
-        let pulse = static_pulse(&metric, 5.0, 144, 0.05, d);
-        let n = pulse.rays.len();
-        let (mut worst_isotropy, mut worst_distance, mut worst_assembly) = (0.0f64, 0.0f64, 0.0f64);
-        for i in 0..n {
-            let j = (i + 1) % n;
-            assert!(pulse.rays[i].alive(), "every ray is still running at d = {d}");
-            let y_out = pulse.rays[i].out_of_plane_spread(&metric, pulse.emitted_r);
-            let y_in = pulse.in_plane_spread(&metric, &raindrop_congruence(&metric), i, j);
-            worst_isotropy = worst_isotropy.max((y_in - y_out).abs() / y_out);
-            worst_distance = worst_distance.max((y_out - d).abs() / d);
-
-            // The strength is the shift the raindrop measures over the area of the bundle, and
-            // nothing else: with the shift divided back out, what is left is 1/d^2.
-            let shift = |ray: &NullRay| {
-                let (ut, ur, up) = raindrop_congruence(&metric).derivatives(&metric, ray.r);
-                ray.frequency_ratio(&metric, &[ut, ur, up])
-            };
-            let g = 0.5 * (shift(&pulse.rays[i]) + shift(&pulse.rays[j]));
-            let bare = pulse.segment_strength(&metric, i, j) * d * d / g;
-            worst_assembly = worst_assembly.max((bare - 1.0).abs());
-        }
-        println!(
-            "M = {:.3} at d = {d} over {n} rays: the two spreads differ by {worst_isotropy:.2e}, \
-             each is {worst_distance:.2e} off the distance travelled, and the strength with the \
-             raindrop's own shift divided out is {worst_assembly:.2e} off 1/d^2",
-            metric.m
-        );
-        assert!(
-            worst_isotropy < 2e-3,
-            "the closed form and the finite difference must agree: {worst_isotropy}"
-        );
-        assert!(worst_distance < 0.01, "and both must be the distance travelled: {worst_distance}");
-        assert!(worst_assembly < 0.02, "leaving 1/d^2: {worst_assembly}");
-
-        // What is left of the agreement is the geometry rather than the arithmetic, and it says so
-        // by scaling with the mass: four times the hole, four times the departure from flat space.
-        let heavier = KerrSchild::new(0.04, 0.0);
-        // Both residuals at once: how far the spread is from the distance travelled, and how far
-        // the two spreads are from each other.
-        let off_flat = |metric: &KerrSchild| {
-            let pulse = static_pulse(metric, 5.0, 144, 0.05, d);
-            let n = pulse.rays.len();
-            let (mut distance, mut isotropy) = (0.0f64, 0.0f64);
-            for i in 0..n {
-                let y_out = pulse.rays[i].out_of_plane_spread(metric, pulse.emitted_r);
-                let y_in = pulse.in_plane_spread(metric, &raindrop_congruence(metric), i, (i + 1) % n);
-                distance = distance.max((y_out - d).abs() / d);
-                isotropy = isotropy.max((y_in - y_out).abs() / y_out);
-            }
-            (distance, isotropy)
-        };
-        let (light, heavy) = (off_flat(&metric), off_flat(&heavier));
-        println!(
-            "off flat space at M = {:.2}: {:.3e} in distance and {:.3e} in isotropy; at M = 0.04:              {:.3e} and {:.3e}",
-            metric.m, light.0, light.1, heavy.0, heavy.1
-        );
-        for (name, light, heavy) in
-            [("distance", light.0, heavy.0), ("isotropy", light.1, heavy.1)]
-        {
-            assert!(
-                (heavy / light / 4.0 - 1.0).abs() < 0.15,
-                "the {name} residual is the hole, not the arithmetic: {light} against {heavy}"
-            );
-        }
-
-        // And the fall-off really is a fall-off, not a constant that happens to match once. The
-        // raindrop receiving at the two radii is falling at different speeds, so its own shift is
-        // divided out here as it was above, leaving the inverse square law by itself.
-        let bare_strength = |travel: f64| {
-            let pulse = static_pulse(&metric, 5.0, 144, 0.05, travel);
-            let (a, b) = (&pulse.rays[0], &pulse.rays[1]);
-            let shift = |ray: &NullRay| {
-                let (ut, ur, up) = raindrop_congruence(&metric).derivatives(&metric, ray.r);
-                ray.frequency_ratio(&metric, &[ut, ur, up])
-            };
-            pulse.segment_strength(&metric, 0, 1) / (0.5 * (shift(a) + shift(b)))
-        };
-        let ratio = bare_strength(1.0) / bare_strength(6.0);
-        println!("one M out against six M out: {ratio:.4} times as strong, against 36");
-        assert!((ratio / 36.0 - 1.0).abs() < 0.02, "six times as far is 36 times fainter: {ratio}");
-    }
-
-    #[test]
-    fn test_with_no_spin_the_bundle_refocuses_where_the_ray_has_swept_half_a_turn() {
-        // The out-of-plane size is r f_emit r_emit sin(omega s)/omega, and with no spin omega s is
-        // exactly the azimuth the ray has swept: d(phi)/d(lambda) = L/r^2 there, and s is the
-        // integral of d(lambda)/r^2, so omega s = |L| s = |delta phi|. That identity is the sharp
-        // test of the quadrature the integrator carries, of the constants read off the ray, and of
-        // the formula that uses them, and it holds ray by ray at every step of a real pulse.
-        //
-        // What follows from it is the caustic: the size passes through zero when the ray has gone
-        // half a turn round the hole, which is the point source refocusing at its own antipode.
-        let metric = KerrSchild::new(1.0, 0.0);
-        let mut emitter = Observer::new_with_phi(
-            &metric, "Source", 0.0, 8.0, 1e9, 0.0, WorldlineParams::default(),
-        );
-        emitter.mode = crate::physics::observer::ObserverMode::Static;
-        let mut field = SignalField { rays_per_pulse: 144, ..Default::default() };
-        field.emit_if_due(&metric, &emitter);
-        let mut worst = 0.0f64;
-        let mut swept_past_pi = 0;
-        let mut checked = 0usize;
-        // (distance from half a turn, swept, r, out-of-plane size, in-plane size) at the closest
-        // approach to the caustic any ray of this pulse makes.
-        let mut nearest = (f64::INFINITY, 0.0, 0.0, 0.0, 0.0);
-        for _ in 0..600 {
-            field.advance(&metric, 0.1);
-            let pulse = &field.pulses[0];
-            let n = pulse.rays.len();
-            for (i, ray) in pulse.rays.iter().enumerate() {
-                if !ray.alive() {
-                    continue;
-                }
-                let (e, l) = ray.constants(&metric);
-                let omega_s = (l / e).abs() * ray.spread_s;
-                let swept = (ray.phi - pulse.emitted_phi).abs();
-                worst = worst.max((omega_s - swept).abs() / (1.0 + swept));
-                checked += 1;
-                if swept > std::f64::consts::PI {
-                    swept_past_pi += 1;
-                }
-                let from_caustic = (swept - std::f64::consts::PI).abs();
-                if from_caustic < nearest.0 {
-                    nearest = (
-                        from_caustic,
-                        swept,
-                        ray.r,
-                        ray.out_of_plane_spread(&metric, pulse.emitted_r).abs(),
-                        pulse.in_plane_spread(&metric, &raindrop_congruence(&metric), i, (i + 1) % n),
-                    );
-                }
-            }
-        }
-        println!(
-            "Schwarzschild: |omega s - delta phi| within {worst:.2e} over {checked} ray-steps, \
-             {swept_past_pi} of them past half a turn"
-        );
-        assert!(worst < 1e-6, "omega s must be the swept azimuth with no spin: off by {worst}");
-        assert!(swept_past_pi > 0, "some rays must go round far enough to reach the caustic");
-
-        // The caustic itself, watched as it happens rather than looked for at the end, by which
-        // time every ray of the pulse has left the field: the closest any ray came to half a turn,
-        // and how much out-of-plane extent its bundle had left at that moment.
-        println!(
-            "the ray that came nearest half a turn had swept {:.5} rad, r = {:.3}, and an \
-             out-of-plane size of {:.3e} M against {:.3} M for its in-plane neighbour",
-            nearest.1, nearest.2, nearest.3, nearest.4
-        );
-        assert!(nearest.0 < 0.02, "some ray passes within 0.02 rad of half a turn: {nearest:?}");
-        assert!(
-            nearest.3 < 0.3,
-            "and its bundle has refocused to almost nothing there: {nearest:?}"
-        );
-    }
-
-    #[test]
-    fn test_the_quadrature_is_wound_back_exactly_by_a_step_backwards() {
-        // The strength is a function of the state, and one piece of that state is the quadrature
-        // the integrator now carries. A rewind has to put it back where it was, or a run stepped
-        // back and forward again would come out at a different brightness from the one it had -
-        // and the frozen arcs, whose whole story is what happens over long stretches of t, would
-        // drift a little every time the user scrubbed.
-        let metric = KerrSchild::new(1.0, 0.90);
-        let pulse = static_pulse(&metric, 5.0, 48, 0.1, 2.0);
-        let before: Vec<f64> = pulse.rays.iter().map(|ray| ray.spread_s).collect();
-        let mut worst_return = 0.0f64;
-        let mut worst_travel = 0.0f64;
-        for (ray, s0) in pulse.rays.iter().zip(before.iter()) {
-            let mut probe = *ray;
-            probe.step(&metric, 1.5);
-            worst_travel = worst_travel.max((probe.spread_s - s0).abs());
-            probe.step_back(&metric, 1.5);
-            worst_return = worst_return.max((probe.spread_s - s0).abs() / (1.0 + s0.abs()));
-        }
-        println!(
-            "48 rays out 1.5 M and back: the quadrature moves by up to {worst_travel:.3e} and \
-             returns to within {worst_return:.2e}"
-        );
-        assert!(worst_travel > 1e-6, "the quadrature does advance along the ray");
-        assert!(worst_return < 1e-9, "and a rewind restores it: off by {worst_return}");
-    }
-
-    /// The same, but sent by an observer in free fall: inside r+ there is no static worldline to
-    /// hover on, so an emitter down there is falling and `emit_if_due` keeps a would-be hoverer
-    /// silent.
-    fn falling_pulse(metric: &KerrSchild, r_emit: f64, rays: usize, dt: f64, t_end: f64) -> Pulse {
-        let emitter = Observer::new_with_phi(
-            metric, "Source", 0.0, r_emit, 0.0, 0.0, WorldlineParams::default(),
-        );
-        let mut field = SignalField { rays_per_pulse: rays, ..Default::default() };
-        field.emit_if_due(metric, &emitter);
-        let mut t = 0.0;
-        while t < t_end - 1e-12 {
-            let step = dt.min(t_end - t);
-            field.advance(metric, step);
-            t += step;
-        }
-        field.pulses.into_iter().next().expect("the emitter sent one pulse")
-    }
-
-    #[test]
-    fn test_the_frozen_family_brightens_on_the_inner_horizon_at_the_rate_kappa_minus() {
-        // The one part of the picture where the signal gets *stronger*, and the part a display
-        // must not quietly fade out. The frozen family, E - Omega_- L < 0, never crosses this
-        // branch of r-: it settles onto the surface, co-rotating at Omega_-, while raindrops go on
-        // falling through it, so the shift those receivers measure grows like exp(kappa_- t)
-        // without bound.
-        //
-        // What happens to the bundle decides whether that reaches the fluence, and the answer is
-        // that it stops happening. Both transverse sizes converge: the rays of the family settle
-        // together rather than fanning out, and the quadrature s runs out of affine parameter to
-        // accumulate because dlambda/dt goes to zero on a ray that is freezing. So the area stops
-        // growing, the shift does not, and the fluence grows at the same exponential rate the
-        // shift does. The arcs on r- are the brightest thing in the picture rather than the
-        // faintest, which is the pile-up on the Cauchy horizon told in brightness.
-        //
-        // It is checked at late times on purpose. Early on the same segment is still on its way
-        // in, spreading like any other, and its strength falls: the growth is what it settles to,
-        // not what it does from the start.
-        let metric = KerrSchild::new(1.0, 0.90);
-        let kappa = metric.inner_surface_gravity();
-        let frozen_segment = |t_end: f64| -> (f64, f64, f64, f64) {
-            let pulse = falling_pulse(&metric, 1.2, 144, 0.1, t_end);
-            let n = pulse.rays.len();
-            let i = (0..n)
-                .find(|&i| {
-                    let j = (i + 1) % n;
-                    pulse.rays[i].frozen(&metric)
-                        && pulse.rays[j].frozen(&metric)
-                        && pulse.rays[i].alive()
-                })
-                .expect("a pulse let go inside r+ has a frozen family");
-            let j = (i + 1) % n;
-            let raindrops = raindrop_congruence(&metric);
-            (
-                pulse.segment_strength(&metric, i, j),
-                pulse.in_plane_spread(&metric, &raindrops, i, j),
-                pulse.rays[i].out_of_plane_spread(&metric, pulse.emitted_r).abs(),
-                pulse.rays[i].r - metric.inner_horizon(),
-            )
-        };
-
-        let settled = frozen_segment(45.0);
-        let later = frozen_segment(60.0);
-        println!(
-            "a frozen segment at t = 45 stands {:.2e} M above r- with strength {:.3e}, spreads \
-             {:.4} and {:.4} M; at t = 60, {:.2e} M, strength {:.3e}, spreads {:.4} and {:.4} M",
-            settled.3, settled.0, settled.1, settled.2, later.3, later.0, later.1, later.2
-        );
-
-        // The bundle has stopped spreading.
-        for (name, early, late) in
-            [("in plane", settled.1, later.1), ("out of plane", settled.2, later.2)]
-        {
-            assert!(
-                (late / early - 1.0).abs() < 0.01,
-                "the {name} size has converged: {early} then {late}"
-            );
-        }
-        // And the strength grows at exactly the rate the shift does.
-        let growth = later.0 / settled.0;
-        let predicted = (kappa * 15.0).exp();
-        println!(
-            "over those 15 M it strengthened by {growth:.1}, against exp(15 kappa_-) = \
-             {predicted:.1} at kappa_- = {kappa:.4}"
-        );
-        assert!(
-            (growth / predicted - 1.0).abs() < 0.05,
-            "the fluence grows like exp(kappa_- t): {growth} against {predicted}"
-        );
-        assert!(later.0 >= 1.0, "so it is drawn at full opacity rather than faded out: {}", later.0);
-
-        // Early on it is doing the ordinary thing instead, which is why the test looks late.
-        let young = frozen_segment(5.0);
-        assert!(young.0 < 1.0, "on the way in it is as faint as any other front: {}", young.0);
-    }
-
-    #[test]
-    fn test_a_pulse_in_kerr_weakens_as_it_leaves_and_is_finite_everywhere_it_is_drawn() {
-        // The property the drawing leans on, over a real Kerr run rather than a limiting case:
-        // the strength is a positive finite number on every piece of every front, and a piece of
-        // front on its way out is weaker than it was. Rays that fall inward are not asked to be
-        // weaker, because they are not: the blueshift and the focusing both run the other way.
-        let metric = KerrSchild::new(1.0, 0.90);
-        let first = static_pulse(&metric, 6.0, 144, 0.1, 1.0);
-        let later = static_pulse(&metric, 6.0, 144, 0.1, 4.0);
-        let n = first.rays.len();
-        let (mut outgoing, mut weaker) = (0, 0);
-        for i in 0..n {
-            let j = (i + 1) % n;
-            for pulse in [&first, &later] {
-                let s = pulse.segment_strength(&metric, i, j);
-                assert!(s.is_finite() && s > 0.0, "strength {s} on segment {i} of a live front");
-            }
-            if later.rays[i].alive() && later.rays[i].r > first.rays[i].r {
-                outgoing += 1;
-                if later.segment_strength(&metric, i, j) < first.segment_strength(&metric, i, j) {
-                    weaker += 1;
-                }
-            }
-        }
-        println!("a = 0.90: {weaker} of {outgoing} outgoing segments weakened between t = 1 and 4");
-        assert!(outgoing > 20, "the pulse has an outgoing half: {outgoing} segments");
-        assert_eq!(weaker, outgoing, "every one of them is weaker for having spread");
-    }
-}
-
 #[cfg(test)]
 mod late_survivors_on_r_minus {
     //! Where the survivors of a pulse sent inside r+ sit at late times, and on which side of r-.
@@ -6295,4 +5684,3 @@ mod late_survivors_on_r_minus {
         }
     }
 }
-
