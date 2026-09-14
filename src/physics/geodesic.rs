@@ -193,9 +193,10 @@ impl GeodesicState {
     ///     u^r       = +sqrt(R) / r^2
     /// Unlike the ingoing root, whose 1/Delta poles cancel identically (see `derivatives`), these
     /// genuinely diverge at Delta = 0, and that is physics rather than a coordinate artefact: an
-    /// outgoing worldline cannot cross a horizon outward in an ingoing chart. Within
-    /// |Delta| < 1e-6 (or if R is still negative) the outgoing start is refused and the ingoing
-    /// root is used instead.
+    /// outgoing worldline cannot cross a horizon outward in an ingoing chart. Where Delta < 1e-6 -
+    /// on a horizon, and everywhere between the two, where no future-directed worldline is outgoing
+    /// at all - or where R is still negative, the outgoing start is refused and the ingoing root is
+    /// used instead.
     pub fn new_with_direction(
         metric: &KerrSchild,
         start_t: f64,
@@ -287,7 +288,14 @@ impl GeodesicState {
         let a2 = a * a;
         let delta = metric.delta(r);
         let big_r = Self::radial_potential(metric, r, self.energy, self.l_ang);
-        if delta.abs() < 1e-6 || big_r < 0.0 {
+        // Delta < 0 as well as Delta = 0, and for a stronger reason than the poles. Between the
+        // horizons r is timelike, so every future-directed worldline has dr/dtau < 0 and there is
+        // no outgoing root to start on: the formulas below still return a unit timelike vector
+        // there, but a past-directed one (u^t = -38 at r = 1.0 for a = 0.90), which is the
+        // time-reverse of a real worldline rather than a real one. Region III is not affected -
+        // Delta > 0 again below r-, and the outgoing root there is future-directed and is what
+        // `test_outgoing_start_in_region_iii_freezes_at_the_cauchy_horizon` follows.
+        if delta < 1e-6 || big_r < 0.0 {
             return ingoing();
         }
 
@@ -804,6 +812,48 @@ mod tests {
         assert!((lo - r_min).abs() < 1e-3, "perihelion reached {lo}, want {r_min}");
         assert!((hi - r_max).abs() < 1e-3, "apastron reached {hi}, want {r_max}");
         assert!(changes >= 2, "u^r must change sign at least twice, got {changes}");
+    }
+
+    #[test]
+    fn test_an_outgoing_start_is_never_past_directed() {
+        // Between the horizons r is timelike, so every future-directed worldline has dr/dtau < 0
+        // and there is no outgoing root to start on. The closed forms do not know that: they return
+        // a perfectly good unit timelike vector there, pointing into the past (u^t = -38 at r = 1.0
+        // for a = 0.90), which is the time-reverse of a real worldline. An observer seeded on it
+        // would run with dtau/dt < 0 - proper time going backwards while r decreases.
+        //
+        // So the refusal is Delta < 1e-6, not |Delta| < 1e-6: on a horizon because the forms are
+        // singular there, and between them because there is nothing to ask for. Region III is a
+        // different case and is left alone - Delta > 0 again below r-, the outgoing root is
+        // future-directed, and the worldline it starts is the one the test below follows.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let (rm, rp) = (metric.inner_horizon(), metric.outer_horizon());
+        let mut refused = 0;
+        for k in 1..=60 {
+            let r = 0.1 + (12.0 - 0.1) * f64::from(k) / 60.0;
+            let geo = GeodesicState::new_with_direction(&metric, 0.0, r, 1.0, 0.0, true);
+            assert!(
+                geo.u[0] > 0.0,
+                "an outgoing start at r = {r} is past-directed: u^t = {}",
+                geo.u[0]
+            );
+            assert!(
+                (metric.norm(r, &geo.u) + 1.0).abs() < 1e-9,
+                "and it must still be a unit timelike vector at r = {r}"
+            );
+            let between = r > rm && r < rp;
+            if between {
+                assert!(geo.u[1] < 0.0, "between the horizons it must fall instead: r = {r}");
+                refused += 1;
+            } else {
+                assert!(geo.u[1] > 0.0, "and everywhere else it must actually go out: r = {r}");
+            }
+        }
+        println!(
+            "60 radii from 0.1M to 12M: every outgoing start future-directed, {refused} of them \
+             refused between r- = {rm:.3} and r+ = {rp:.3}"
+        );
+        assert!(refused > 0, "the sweep has to cross the trapped region to mean anything");
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use crate::gui::theme::Theme;
 use crate::physics::geodesic::GeodesicState;
 use crate::physics::kerr_schild::KerrSchild;
-use crate::physics::observer::{Observer, ObserverMode, ObserverPair, WorldlineParams};
+use crate::physics::observer::{Observer, ObserverMode, ObserverPair, Release, WorldlineParams};
 use crate::physics::wavefront::{Endpoint, RAYS_PER_PULSE, SignalField, SignalPair};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,10 +47,16 @@ pub enum StepMode {
 /// and they are identical in shape: the two observers are the same idea run twice, so there is one
 /// description of what a card holds rather than a Bob-shaped set of fields and an Alice-shaped one.
 ///
-/// None of it is read from the observer. A card is a standing request - what to build the next
-/// time this observer is dropped - and the observer, once built, carries its own copy of the
-/// constants in its geodesic state. `energy`, `l_ang` and `outgoing_start` therefore take effect at
-/// the next drop, exactly as `delta_t_delay` does; `enabled` and `transmit` take effect at once.
+/// None of it is read from the observer, with one exception: `drop_r` is written back from the
+/// observer's own radius whenever the clock reads zero, so that dragging a marker at the start of a
+/// run moves where they are dropped from (`AppControls::remember_drop_positions`). Otherwise a card
+/// is a standing request - what to build the next time this observer is dropped - and the observer,
+/// once built, carries its own copy of the constants in its geodesic state. `l_ang`, `release` and
+/// `drop_r` therefore take effect at the next drop, exactly as `delta_t_delay` does; `enabled` and
+/// `transmit` take effect at once.
+///
+/// There is no energy on the card. E is what the release implies at the radius it happens at - see
+/// `Release` - so it is derived at the drop and reported under the sliders rather than dialled.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ObserverSettings {
     /// Whether this observer is in the simulation at all. Unticked, they are not stepped, not
@@ -62,12 +68,12 @@ pub struct ObserverSettings {
     /// Coordinate time after the drop at which this observer is released; until then they hover at
     /// the drop radius as a static observer.
     pub delta_t_delay: f64,
-    /// Conserved energy per unit mass E = -u_t of the dropped worldline.
-    pub energy: f64,
-    /// Conserved axial angular momentum per unit mass L = u_phi, in units of M.
+    /// Conserved axial angular momentum per unit mass L = u_phi, in units of M. The one constant
+    /// of the motion the user states directly; E follows from it and from `release`.
     pub l_ang: f64,
-    /// Start on the outgoing root of r^4 (dr/dtau)^2 = R(r).
-    pub outgoing_start: bool,
+    /// Where this observer's fall is released from, which is what sets their energy. See
+    /// `Release`: at rest at the drop radius, or from rest at infinity.
+    pub release: Release,
     /// The radius this observer is dropped from, by ⏮ Reset and at startup.
     ///
     /// It starts at `DROP_RADIUS` and is then whatever the user last put the observer at while the
@@ -95,9 +101,8 @@ impl ObserverSettings {
             enabled: true,
             transmit: true,
             delta_t_delay,
-            energy: 1.0,
             l_ang: 0.0,
-            outgoing_start: false,
+            release: Release::FromInfinity,
             drop_r: DROP_RADIUS,
             mode: ObserverMode::FreeFall,
         }
@@ -111,9 +116,10 @@ impl ObserverSettings {
         Self { mode: ObserverMode::Zamo, ..Self::raindrop(delta_t_delay) }
     }
 
-    /// The constants of motion this card is asking for.
-    fn worldline_params(&self) -> WorldlineParams {
-        WorldlineParams::new(self.energy, self.l_ang, self.outgoing_start)
+    /// The worldline this card is asking for: the release it names, at the radius it names, with
+    /// the angular momentum it names. E is derived rather than dialled - see `Release`.
+    fn worldline_params(&self, metric: &KerrSchild) -> WorldlineParams {
+        WorldlineParams::released(metric, self.drop_r, self.l_ang, self.release)
     }
 
     /// The observer this card asks for, dropped at `drop_r` on the clock's reading `start_t`
@@ -133,7 +139,7 @@ impl ObserverSettings {
                 self.drop_r,
                 start_t + self.delta_t_delay,
                 start_phi,
-                self.worldline_params(),
+                self.worldline_params(metric),
             );
             obs.mode = self.mode;
             obs
@@ -291,7 +297,10 @@ const DROP_RADIUS: f64 = 4.5;
 ///
 /// They are written about "the observer" rather than about Bob, because both cards show them.
 const FREE_FALL_TIP: &str = "A timelike geodesic: the observer falls with no thrust at all and their accelerometer reads exactly zero, which is the whole content of the word. Which geodesic is fixed by the two conserved quantities they were dropped with, the energy per unit mass E = −u_t and the axial angular momentum per unit mass L = u_ϕ on the sliders below, and their four-velocity is the one the integrator is carrying along that curve, so the telemetry, the frame their pulses go out into and the frame their receptions are measured in are all the same object as the worldline being drawn. E = 1 with L = 0 is the raindrop, dropped from rest at infinity and falling straight in; that is the congruence the River of Space is made of, so they are then riding one of the drops. A geodesic exists at every radius and this is the only mode that does: they cross the ergosphere, the outer horizon r₊ and the Cauchy horizon r₋ in finite proper time with nothing local happening to them at any of them, and for the equatorial L = 0 case the fall ends on the ring, where the curvature is genuinely infinite and the chart stops. Give them enough prograde angular momentum and they freeze onto r₋ instead, their proper time reaching a finite limit while the coordinate clock runs on. It is the mode the light cones and both transmissions read most naturally in, because an infaller is the observer the whole interior picture is drawn for.";
-const MANUAL_DRAG_TIP: &str = "The observer's position is yours: set their radius on the slider below — and Bob's marker can be dragged straight across either canvas as well — and they stay exactly where you put them while the clock runs. What the two boost sliders set is their velocity — β_r radially and β_ϕ azimuthally, as fractions of c — relative to the local raindrop, the observer dropped from rest at infinity passing through that same point, which is the one reference frame that exists at every radius, between the horizons included. Their four-velocity is that raindrop frame boosted by (β_r, β_ϕ), so the telemetry, the rest-frame view and the pulses they transmit are all drawn for an observer moving at that velocity through the point you are holding them at, while the point itself does not drift. Those two statements are not one worldline, and here that is deliberate: the position is an input rather than an integration, so the drawn marker and the reported velocity are answering different questions, and this is the only mode in which they are allowed to. β = 0 reproduces the free-fall frame exactly; anything else is a rocket, and the thrust that holding it would cost is what the telemetry quotes as a_thrust. Let go of the marker and free fall resumes from the new event with their conserved E and L unchanged, rather than from wherever they were before you picked them up.";
+const DROP_RADIUS_TIP: &str = "Where this observer is dropped from, and where ⏮ Reset builds them. It is the same number as the position of their marker at t = 0: drag the marker while the clock reads zero and this slider follows, move this slider and the next drop lands there, because there is one drop radius per observer and two ways to say it. Like everything else on the card it is a standing request — it takes effect at the next drop rather than teleporting a run already under way. It also sets their energy, since E is whatever the release at that radius implies: released at rest, a drop from further out has more of it, and E → 1 as the drop radius runs to infinity, which is the raindrop. The slider is logarithmic because the interesting range spans the ring at 0.05M and the far field at 30M, and nothing stops you dropping somebody inside a horizon: there they cannot be at rest, and the card says what it does instead.";
+const AT_REST_TIP: &str = "The observer is at rest at the moment they are released: dr/dτ = 0, and the worldline starts exactly on a turning point of the radial potential, R(r) = 0. Their energy is then whatever that costs — E = V(r, L), the effective potential at the drop radius, which at 4.5M with L = 0 and a = 0.90 is 0.7504 — so E is reported rather than dialled, and it moves when the drop radius or L moves. This is the release a user usually means by \"dropped\": the run begins when the engines are cut. It is also the only release that joins the hover before it without a jump: while they wait they hold that same four-velocity under thrust, so nothing in their motion changes at the release except that the thrust stops. At rest means at rest in r; with L = 0 in Kerr they are still carried round at the frame-dragging rate, which is the ZAMO. Between the horizons nothing can hold a radius at all and the release falls back to the raindrop.";
+const FROM_INFINITY_TIP: &str = "The observer arrives having fallen from rest infinitely far away: E = 1 exactly, whatever radius they are dropped at, which means they are already moving when the run starts. At 4.5M that is two thirds of the speed of light inward past a static observer — nothing accelerated them to it, it is what the initial condition says about their history. With L = 0 this is the raindrop, a member of the same E = 1 congruence the River of Space is drawn from and the frame every wavefront colour and every measured shift in the app is quoted against, so it is the release that makes an observer one of the drops in the river rather than an interloper drifting through it. The price is that a Release Delay in front of it is a fiction: they cannot hover and then be moving at 0.667c without an infinite acceleration, so the release is a genuine discontinuity in the worldline, which is the honest statement that they did not come from here. Choose At rest here if you want the wait and the fall to join.";
+const ANGULAR_MOMENTUM_TIP: &str = "The conserved angular momentum per unit mass, L = u_ϕ, in units of M. It is the one constant of the motion set directly, because it is the one the app's central result is stated in: which branch of the inner horizon an infaller reaches is decided by the sign of E − Ω₋L, with Ω₋ = a/(r₋²+a²) = 0.798/M at a = 0.90. Released at rest from 4.5M the crossover sits at L = 0.985 — below it they cross the near branch of r₋ at finite coordinate time, above it they settle onto the far branch, where t → ∞ and their own clock reaches r₋ in finite proper time while the outside universe's whole future arrives at once. Walk the slider across that value and the picture changes character. L also decides whether they fall at all: from rest, enough of it and the centrifugal barrier throws them outward instead, and past about L = 4 at 4.5M the energy that costs exceeds 1 and they escape to infinity. Prograde is positive, retrograde negative, and the two are not mirror images around a spinning hole.";
 const STATIC_TIP: &str = "The observer hovers: fixed r and fixed ϕ, station-keeping against the distant stars, with a four-velocity along the time-translation Killing vector ∂/∂t normalised to unit length. The thrust that costs is real, it is what the telemetry reports as a_prop, and it grows without bound as they near the static limit. That worldline exists only where ∂/∂t is timelike, g_tt < 0, which on the equator means r > 2M — outside the ergosphere, not merely outside the horizon. Inside the ergosphere the frame dragging is total: holding ϕ fixed is a spacelike motion there and no rocket, however powerful, can do it. The selection is kept rather than refused, because it is a standing request and resumes by itself the moment they are somewhere it can exist again, but what they actually do in the meantime is fall freely — in position as much as in velocity — and this panel and their telemetry box both read “Static impossible here (r ≤ 2M): falling freely” while that lasts. It is the mode for the exterior: gravitational blueshift, the redshift of an infaller's signal and the weight of the hole are all statements about what a static observer measures.";
 const ZAMO_TIP: &str = "The zero-angular-momentum observer, the frame in which a spinning hole looks as unrotating as it can. They hold their radius like the static observer but do not fight the frame dragging: they are swept around at the local dragging rate ω = −g_tϕ/g_ϕϕ, exactly fast enough that their own angular momentum L = u_ϕ vanishes, and their four-velocity is γ(1, 0, ω). Light leaves them with no built-in swirl, which is why the River of Space quotes its flow speed past them, β = √(1 − α²), reaching c at the outer horizon, and why they are the observer the lapse α belongs to. A fixed-r worldline is timelike only outside the outer horizon r₊, so unlike the static observer they survive the whole ergosphere — going along with the dragging is precisely what the static observer cannot afford to stop doing. At r₊ and inside it the radial direction is timelike and nothing can hold a radius at all; the selection is kept, they fall freely instead, and this panel and their telemetry box both read “ZAMO impossible inside r₊: falling freely” until they are back outside. Use it to read the ergosphere, where it is the only hovering observer there is.";
 
@@ -447,8 +456,6 @@ impl ObserverCard {
                 ui.label("Motion:");
                 ui.selectable_value(&mut obs.mode, ObserverMode::FreeFall, "Free Fall")
                     .on_hover_text(FREE_FALL_TIP);
-                ui.selectable_value(&mut obs.mode, ObserverMode::ManualDrag, "Drag / Manual")
-                    .on_hover_text(MANUAL_DRAG_TIP);
                 ui.selectable_value(&mut obs.mode, ObserverMode::Static, "Static")
                     .on_hover_text(STATIC_TIP);
                 ui.selectable_value(&mut obs.mode, ObserverMode::Zamo, "ZAMO")
@@ -466,89 +473,94 @@ impl ObserverCard {
                 ui.label(egui::RichText::new(note).small().color(Theme::TEXT_MUTED));
             }
 
-            if obs.mode == ObserverMode::ManualDrag {
-                if use_km {
-                    let mut r_km = metric.r_to_km(obs.r);
-                    let min_km = metric.r_to_km(0.05);
-                    let max_km = metric.r_to_km(5.5);
-                    if ui
-                        .add(egui::Slider::new(&mut r_km, min_km..=max_km).text("Radial Position r (km)"))
-                        .changed()
-                    {
-                        obs.r = metric.km_to_r(r_km);
-                    }
-                } else {
-                    ui.add(egui::Slider::new(&mut obs.r, 0.05..=5.5).text("Radial Position r (M)"));
-                }
-
-                // The boost only defines a worldline in ManualDrag mode: free fall, static and
-                // ZAMO observers each pin down their own 4-velocity, so a beta there would be
-                // ignored. Hide the sliders rather than show dead controls.
-                ui.add(egui::Slider::new(&mut obs.beta_r, -0.95..=0.95).text("Radial Boost β_r"));
-                ui.add(egui::Slider::new(&mut obs.beta_phi, -0.95..=0.95).text("Azimuthal Boost β_ϕ"));
-                ui.label(
-                    egui::RichText::new(format!(
-                        "Velocity relative to a raindrop observer (dropped from rest at infinity) at {}'s r",
-                        self.name
-                    ))
-                    .small()
-                    .color(Theme::TEXT_MUTED),
-                );
-
-                if ui
-                    .button("Reset Thrusters")
-                    .on_hover_text(
-                        "Set both boosts back to zero, which puts this observer at rest in the local raindrop frame: β = 0 is free fall exactly, and their proper acceleration goes back to nothing.",
-                    )
-                    .clicked()
-                {
-                    obs.beta_r = 0.0;
-                    obs.beta_phi = 0.0;
-                }
-            }
-
             ui.add(
                 egui::Slider::new(&mut settings.delta_t_delay, 0.0..=30.0)
                     .text("Release Delay Δt"),
             )
             .on_hover_text(
-                "How long after the drop this observer is let go. Until then they hover at the drop radius as a static observer — a real worldline, with a clock running at √(−g_tt) of coordinate time and a frame to transmit from — and the wait is what puts one observer behind the other on the same infall. It takes effect at the next ⏮ Reset, since a release time is part of a worldline rather than something that can be changed under one.",
+                "How long after the drop this observer is let go. Until then they hold the drop radius on the worldline they are about to fall on — a real worldline, under thrust, with a clock of its own and a frame to transmit from — and the release is the moment that thrust stops. The wait is what puts one observer behind the other on the same infall. Released at rest, nothing in their motion changes at the release except the thrust: the hover and the fall are the same four-velocity. Released from rest at infinity there is nothing to hold, since that worldline is already moving in r, so they wait as a static observer and the release is a jump. It takes effect at the next ⏮ Reset, since a release time is part of a worldline rather than something that can be changed under one.",
             );
-            ui.add(
-                egui::Slider::new(&mut settings.energy, 0.90..=1.60)
-                    .text("Energy E (per unit mass)"),
-            );
+            // Where they are dropped from. The same number a drag at t = 0 sets, and the same
+            // number Reset builds them at, so the slider and the marker are two ways to say one
+            // thing. It is a standing request like the rest of the card: it takes effect at the
+            // next drop, which is why moving it does not teleport a run already under way.
+            if use_km {
+                let mut r_km = metric.r_to_km(settings.drop_r);
+                let min_km = metric.r_to_km(0.05);
+                let max_km = metric.r_to_km(30.0);
+                if ui
+                    .add(
+                        egui::Slider::new(&mut r_km, min_km..=max_km)
+                            .logarithmic(true)
+                            .text("Drop radius r (km)"),
+                    )
+                    .on_hover_text(DROP_RADIUS_TIP)
+                    .changed()
+                {
+                    settings.drop_r = metric.km_to_r(r_km);
+                }
+            } else {
+                ui.add(
+                    egui::Slider::new(&mut settings.drop_r, 0.05..=30.0)
+                        .logarithmic(true)
+                        .text("Drop radius r (M)"),
+                )
+                .on_hover_text(DROP_RADIUS_TIP);
+            }
+
+            // How they are let go of, which is what fixes E.
+            ui.horizontal(|ui| {
+                ui.label("Release:");
+                ui.selectable_value(&mut settings.release, Release::AtRest, "At rest here")
+                    .on_hover_text(AT_REST_TIP);
+                ui.selectable_value(
+                    &mut settings.release,
+                    Release::FromInfinity,
+                    "From rest at ∞",
+                )
+                .on_hover_text(FROM_INFINITY_TIP);
+            });
+
             ui.add(
                 egui::Slider::new(&mut settings.l_ang, -4.0..=4.0)
                     .text("Angular momentum L (per unit mass, M)"),
-            );
-            ui.checkbox(&mut settings.outgoing_start, "Start on the outgoing root (dr/dτ > 0)");
+            )
+            .on_hover_text(ANGULAR_MOMENTUM_TIP);
+
+            // What the card has actually asked for, in the two numbers the physics uses and the
+            // one a user can picture. E is derived, so it is reported rather than dialled, and the
+            // speed is what a static observer at the drop radius would clock them at as they pass:
+            // gamma = E / sqrt(-g_tt) against that observer, so v = sqrt(1 - 1/gamma^2).
+            let params = settings.worldline_params(metric);
+            let g_tt = metric.metric_components(settings.drop_r)[0][0];
+            let speed = if g_tt < 0.0 {
+                let gamma = params.energy / (-g_tt).sqrt();
+                (1.0 - 1.0 / (gamma * gamma).max(1.0)).max(0.0).sqrt()
+            } else {
+                f64::NAN
+            };
+            let bound = if params.energy < 1.0 { "bound" } else { "unbound" };
             ui.label(
-                egui::RichText::new(format!(
-                    "Dropped from r = {:.2}M — drag the marker while the clock reads 0 to move it",
-                    settings.drop_r
-                ))
+                egui::RichText::new(if speed.is_finite() {
+                    format!(
+                        "E = {:.4} ({bound}), starting at {:.3}c past a static observer there",
+                        params.energy, speed
+                    )
+                } else {
+                    format!("E = {:.4} ({bound})", params.energy)
+                })
                 .small()
                 .color(Theme::TEXT_MUTED),
             );
-
-            // Below the effective potential V(r, L) there is no timelike geodesic through the
-            // drop radius at all, so the drop raises E to the floor instead of refusing.
-            let floor = GeodesicState::energy_floor(metric, settings.drop_r, settings.l_ang);
-            if settings.energy < floor {
-                ui.label(
-                    egui::RichText::new(format!(
-                        "E raised to {:.3}: below that, r = {:.2}M is forbidden for this L",
-                        floor, settings.drop_r
-                    ))
-                    .small()
-                    .color(Theme::TEXT_MUTED),
-                );
-            }
-            if settings.outgoing_start {
+            // The one place "at rest" has no meaning: between the horizons r is timelike and
+            // nothing holds a radius, so the release falls back to the raindrop. `release_energy`
+            // makes that decision; this says it out loud where the user made the request.
+            if settings.release == Release::AtRest
+                && GeodesicState::energy_floor(metric, settings.drop_r, settings.l_ang) <= 0.0
+            {
                 ui.label(
                     egui::RichText::new(
-                        "Outgoing start: the ingoing chart cannot follow an outward crossing of r₋",
+                        "Nothing can be at rest between the horizons: released as a raindrop (E = 1)",
                     )
                     .small()
                     .color(Theme::TEXT_MUTED),

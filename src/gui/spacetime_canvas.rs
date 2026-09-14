@@ -532,10 +532,11 @@ impl Marker {
 /// A marker drag in progress: whose it is, and the Motion they were on when it started.
 ///
 /// The Motion is kept because `Observer::set_drag_position` puts whoever is being moved into
-/// Drag / Manual for as long as the pointer holds them - that is what a hand on the marker means -
-/// and dropping them has to give back the worldline they were on. A free-faller resumes free fall
-/// from the event they were dropped at; a ZAMO goes back to holding the new radius; an observer
-/// who was in Drag / Manual by choice stays there.
+/// `ObserverMode::ManualDrag` for as long as the pointer holds them - that is what a hand on the
+/// marker means - and dropping them has to give back the worldline they were on. A free-faller is
+/// released again at the event they were dropped at, on their own `Release`; a ZAMO goes back to
+/// holding the new radius. Nothing selects that held state from the panel any more: it is the
+/// mechanism of the drag and nothing else.
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct MarkerDrag {
     who: Marker,
@@ -2380,7 +2381,7 @@ mod canvas_tests {
         // three frames of `SpacetimeCanvas::render` with egui deciding what counts as a drag - and
         // each has to end up at the event it was dropped at, on the Motion it was on before the
         // hand went on it. Alice's is ZAMO, which is exactly the case the restore matters for: she
-        // has to go back to holding her *new* radius rather than being left in Drag / Manual or
+        // has to go back to holding her *new* radius rather than being left in the held state or
         // silently put into free fall.
         let metric = KerrSchild::new(1.0, 0.65);
         let ctx = egui::Context::default();

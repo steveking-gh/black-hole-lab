@@ -491,7 +491,7 @@ mod tests {
     use super::*;
     use crate::gui::controls::active_preset;
     use crate::physics::geodesic::GeodesicState;
-    use crate::physics::observer::{ObserverMode, WorldlineParams};
+    use crate::physics::observer::{ObserverMode, Release, WorldlineParams};
     use crate::physics::wavefront::Pulse;
     use eframe::App;
 
@@ -1078,24 +1078,37 @@ mod tests {
     }
 
     #[test]
-    fn test_each_observer_gets_their_own_energy_and_angular_momentum() {
-        // E and L are per observer now, one pair of sliders on each card, and a drop has to put
-        // each of them on their own geodesic rather than on a shared one. Alice is given E = 1.2
-        // and Bob L = 1.0, and each worldline is asked what constants it is actually carrying.
+    fn test_each_observer_gets_their_own_release_and_angular_momentum() {
+        // A release and an L per card, and a drop has to put each observer on their own geodesic
+        // rather than on a shared one. E is not on the card any more: it is whatever the release
+        // implies at the radius it happens at, so what is checked here is that the worldline each
+        // observer ends up carrying is the one their own card asked for.
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
         trailing_raindrops(&mut app);
-        app.controls.alice.energy = 1.2;
+        // Alice as she opens: from rest at infinity, so E = 1 exactly whatever her radius.
+        app.controls.alice.release = Release::FromInfinity;
+        // Bob let go at rest, with angular momentum, from further out.
+        app.controls.bob.release = Release::AtRest;
         app.controls.bob.l_ang = 1.0;
+        app.controls.bob.drop_r = 6.0;
         app.controls.bob.delta_t_delay = 8.0;
         drop_observers(&mut app);
 
         let al = alice_of(&app).geodesic.expect("free-fall observers carry a geodesic state");
         let b = bob_of(&app).geodesic.expect("free-fall observers carry a geodesic state");
-        assert!((al.energy - 1.2).abs() < 1e-12, "Alice's E = {}", al.energy);
+        assert!((al.energy - 1.0).abs() < 1e-12, "a raindrop has E = 1: {}", al.energy);
         assert!(al.l_ang.abs() < 1e-12, "and her L is still her own: {}", al.l_ang);
-        assert!((b.energy - 1.0).abs() < 1e-12, "Bob's E = {}", b.energy);
+        // At rest means at rest: E is the effective potential at his own drop radius, and his
+        // worldline starts on a turning point of it.
+        let floor = GeodesicState::energy_floor(&app.metric, 6.0, 1.0);
+        assert!((b.energy - floor).abs() < 1e-12, "Bob's E = {} against V(6, 1) = {floor}", b.energy);
         assert!((b.l_ang - 1.0).abs() < 1e-12, "and his L = {}", b.l_ang);
+        assert!(b.u[1].abs() < 1e-6, "released at rest: dr/dtau = {}", b.u[1]);
+        println!(
+            "Alice from infinity: E = {:.4}; Bob at rest from 6M with L = 1: E = {:.4}",
+            al.energy, b.energy
+        );
         for obs in [alice_of(&app), bob_of(&app)] {
             assert!(
                 (app.metric.norm(obs.r, &obs.four_velocity(&app.metric)) + 1.0).abs() < 1e-9,
@@ -1109,38 +1122,40 @@ mod tests {
             app.step_forward(0.05);
         }
         println!(
-            "after 2.5 M: Alice (E = 1.2) at r = {:.4}, Bob (L = 1, hovering until t = 8) at r = {:.4}",
+            "after 2.5 M: Alice (raindrop) at r = {:.4}, Bob (at rest from 6M, hovering until \
+             t = 8) at r = {:.4}",
             alice_of(&app).r,
             bob_of(&app).r
         );
         assert!(
-            alice_of(&app).r < 4.0,
-            "the higher-energy Alice is falling faster than the raindrop: r = {}",
+            alice_of(&app).r < 4.5,
+            "the raindrop is already moving when the run starts: r = {}",
             alice_of(&app).r
         );
+        assert!(
+            (bob_of(&app).r - 6.0).abs() < 1e-9,
+            "while Bob is still holding his radius: r = {}",
+            bob_of(&app).r
+        );
 
-        // And the panel renders both muted hints: the energy-floor clamp and the outgoing-start
-        // caveat. Below the effective potential there is no timelike geodesic through r = 4.5M at
-        // all, and the drop raises E to the floor rather than refusing.
-        app.controls.bob.energy = 0.92;
-        app.controls.bob.l_ang = 3.5;
-        app.controls.bob.outgoing_start = true;
-        let floor = GeodesicState::energy_floor(&app.metric, 4.5, app.controls.bob.l_ang);
-        assert!(floor > app.controls.bob.energy, "the test needs a clamped case: floor = {floor}");
+        // The one radius where "at rest" has no meaning: between the horizons nothing holds r, so
+        // the release falls back to the raindrop and the panel says so.
+        app.controls.bob.drop_r = 1.0;
+        app.controls.bob.l_ang = 0.0;
         drop_observers(&mut app);
-        egui::__run_test_ui(|ui| {
-            let mut frame = eframe::Frame::_new_kittest();
-            app.ui(ui, &mut frame);
-        });
         let geo = bob_of(&app).geodesic.expect("free-fall observers carry a geodesic state");
-        assert!((geo.energy - floor).abs() < 1e-12, "E = {} vs floor {floor}", geo.energy);
-        assert!((geo.l_ang - 3.5).abs() < 1e-12);
+        assert!((geo.energy - 1.0).abs() < 1e-12, "inside r+ a rest release is a raindrop: {}", geo.energy);
+        assert!(
+            painted_text(&mut app).contains("Nothing can be at rest between the horizons"),
+            "and the card says which release it actually made"
+        );
 
         // Defaults stay the raindrop constants on both cards, both let go at once, and the
         // difference between them is the Motion: Alice holds the ZAMO circle, Bob falls.
         let d = AppControls::default();
         for card in [d.alice, d.bob] {
-            assert_eq!((card.energy, card.l_ang, card.outgoing_start), (1.0, 0.0, false));
+            assert_eq!((card.l_ang, card.release), (0.0, Release::FromInfinity));
+            assert_eq!(card.drop_r, 4.5, "and both are dropped from the same radius");
             assert!(card.enabled && card.transmit);
             assert_eq!(card.delta_t_delay, 0.0);
         }
@@ -1205,6 +1220,42 @@ mod tests {
     }
 
     #[test]
+    fn test_letting_go_of_a_marker_releases_them_again_where_they_were_dropped() {
+        // A drag is a teleport followed by an engine cut, and the cut means the same thing wherever
+        // it happens: the observer's own release is re-read at the new radius. Dragged by somebody
+        // released at rest, the marker comes to rest there; dragged by a raindrop, it is still a
+        // raindrop. It used to carry the old E across instead, which is the energy of a release
+        // that happened somewhere else - so a marker pulled outward would shoot back in, and one
+        // pushed inward would hang.
+        let mut app = SpacetimeApp::default();
+        app.controls.bob.release = Release::AtRest;
+        app.controls.bob.l_ang = 0.5;
+        drop_observers(&mut app);
+        // Part-way into the run, so this is a re-release rather than the original drop.
+        for _ in 0..20 {
+            app.step_forward(0.05);
+        }
+        drag_bob_to(&mut app, 9.0);
+        let geo = bob_of(&app).geodesic.expect("a dragged observer keeps their geodesic");
+        let floor = GeodesicState::energy_floor(&app.metric, 9.0, 0.5);
+        println!("let go at 9M: E = {:.4} against V(9, 0.5) = {floor:.4}", geo.energy);
+        assert!((geo.energy - floor).abs() < 1e-12, "released at rest there: E = {}", geo.energy);
+        assert!(geo.u[1].abs() < 1e-6, "which is what at rest means: dr/dtau = {}", geo.u[1]);
+        assert!((geo.l_ang - 0.5).abs() < 1e-12, "and L is carried across: {}", geo.l_ang);
+
+        // The raindrop keeps its own meaning under the same gesture.
+        app.controls.bob.release = Release::FromInfinity;
+        drop_observers(&mut app);
+        for _ in 0..20 {
+            app.step_forward(0.05);
+        }
+        drag_bob_to(&mut app, 9.0);
+        let geo = bob_of(&app).geodesic.expect("a dragged observer keeps their geodesic");
+        assert!((geo.energy - 1.0).abs() < 1e-12, "still a raindrop: E = {}", geo.energy);
+        assert!(geo.u[1] < 0.0, "and still falling: dr/dtau = {}", geo.u[1]);
+    }
+
+    #[test]
     fn test_control_defaults() {
         let d = AppControls::default();
         // Kilometres are the default unit, and nothing throttles the step near r₋ any more:
@@ -1237,7 +1288,8 @@ mod tests {
             for _ in 0..2 {
                 app.ui(ui, &mut frame);
             }
-            // A ManualDrag observer is the non-geodesic case, which prints a_thrust and no E / L.
+            // The held state a drag puts an observer in is the non-geodesic case, which prints
+            // a_thrust and no E / L.
             app.bob.as_mut().expect("Bob is enabled").mode = ObserverMode::ManualDrag;
             app.ui(ui, &mut frame);
         });
@@ -2240,7 +2292,7 @@ mod tests {
     #[test]
     fn test_the_panel_renders_with_every_combination_of_the_two_cards() {
         // Four runs of the panel, one per combination of the two Enable boxes, each in all three
-        // reference frames and with the Drag / Manual sub-controls laid out for whoever is there.
+        // reference frames, and with either observer in the held state a drag puts them in.
         // The rest-frame views in particular have to cope with the observer whose frame was asked
         // for being absent, and with both of them being absent.
         for alice_on in [true, false] {
@@ -2265,8 +2317,8 @@ mod tests {
                             painted.contains("OBSERVER ALICE") && painted.contains("OBSERVER BOB"),
                             "both cards are always on the panel: {painted}"
                         );
-                        // Drag / Manual, so the radial slider, the two boost sliders and the
-                        // thruster reset are laid out too - for either observer, which is new.
+                        // And with both of them in the held state a marker drag puts them in,
+                        // which no control selects any more but every drag passes through.
                         for obs in [app.alice.as_mut(), app.bob.as_mut()].into_iter().flatten() {
                             obs.mode = ObserverMode::ManualDrag;
                         }

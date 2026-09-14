@@ -29,6 +29,43 @@ pub enum ObserverMode {
     Zamo,
 }
 
+/// Where an observer's fall is released from, which is what fixes their energy.
+///
+/// E is not a thing a user can sensibly dial. It is the *history* of the worldline - E = 1 means
+/// "has already fallen from rest at infinity", and an observer dropped at 4.5M with E = 1 starts
+/// the run doing two thirds of the speed of light - so asking for it directly makes the initial
+/// condition something to be discovered rather than stated. These two are the statements a user
+/// actually means, and `release_energy` turns either into the E it implies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Release {
+    /// At rest at the radius they are dropped from: dr/dtau = 0, the worldline starting exactly on
+    /// a turning point of R(r). This is the run beginning when they cut their engines, and it is
+    /// the one release that joins the hover before it without a jump in velocity.
+    AtRest,
+    /// From rest at infinity: E = 1, the raindrop. They arrive at the drop radius already moving,
+    /// which is what "fell from far away" means, and they are then a member of the same E = 1,
+    /// L = 0 congruence the river of space is drawn from.
+    FromInfinity,
+}
+
+/// The conserved energy of a worldline with angular momentum `l_ang` released at radius `r` under
+/// `release`.
+///
+/// `AtRest` is the effective potential V(r, L) - the smallest E for which R(r) >= 0, so R(r) = 0
+/// and the worldline starts at a turning point. It does not exist everywhere: between the horizons
+/// r is timelike and nothing can be at rest in it, and there `energy_floor` has no root to return.
+/// The fall back there is the raindrop, because E = 1 is the one release that means something at
+/// every radius, and the card says so where it applies.
+pub fn release_energy(metric: &KerrSchild, r: f64, l_ang: f64, release: Release) -> f64 {
+    match release {
+        Release::FromInfinity => 1.0,
+        Release::AtRest => {
+            let floor = GeodesicState::energy_floor(metric, r, l_ang);
+            if floor > 0.0 { floor } else { 1.0 }
+        }
+    }
+}
+
 /// The constants of motion that define an observer's free-fall worldline: the conserved energy
 /// per unit mass E = -u_t, the conserved axial angular momentum per unit mass L = u_phi (in units
 /// of M), and which root of r^4 (dr/dtau)^2 = R(r) the worldline starts on.
@@ -36,9 +73,15 @@ pub enum ObserverMode {
 pub struct WorldlineParams {
     pub energy: f64,
     pub l_ang: f64,
-    /// Start on the outgoing root. Only meaningful where Delta != 0; see
-    /// `GeodesicState::new_with_direction` for why the ingoing chart refuses it at a horizon.
+    /// Start on the outgoing root. Only meaningful where Delta > 0; see
+    /// `GeodesicState::new_with_direction` for why the ingoing chart refuses it on a horizon and
+    /// between the horizons. No control sets it any more - a release is at rest or from infinity,
+    /// and at a turning point the two roots are the same point - but the worldline exists and the
+    /// geodesic tests pin it.
     pub outgoing: bool,
+    /// How to re-derive E if this worldline is released again somewhere else, which is what letting
+    /// go of a dragged marker does. `energy` is what it currently is; this is what it means.
+    pub release: Release,
 }
 
 impl Default for WorldlineParams {
@@ -48,16 +91,30 @@ impl Default for WorldlineParams {
             energy: 1.0,
             l_ang: 0.0,
             outgoing: false,
+            release: Release::FromInfinity,
         }
     }
 }
 
 impl WorldlineParams {
+    /// Raw constants, for a test that wants a particular worldline rather than a particular
+    /// release. Re-releasing one of these - a drag - puts them on the raindrop, since an energy
+    /// stated as a number says nothing about where it came from.
+    ///
+    /// Test-only: the app states a release and lets E follow, through `released`.
+    #[cfg(test)]
     pub fn new(energy: f64, l_ang: f64, outgoing: bool) -> Self {
+        Self { energy, l_ang, outgoing, release: Release::FromInfinity }
+    }
+
+    /// The worldline a release at `r` with angular momentum `l_ang` puts an observer on. This is
+    /// the app's own path: the card says where and how, and E follows.
+    pub fn released(metric: &KerrSchild, r: f64, l_ang: f64, release: Release) -> Self {
         Self {
-            energy,
+            energy: release_energy(metric, r, l_ang, release),
             l_ang,
-            outgoing,
+            outgoing: false,
+            release,
         }
     }
 }
@@ -125,6 +182,9 @@ pub struct Observer {
     start: TrailPoint,
     /// Release coordinate time t_release (e.g. 0 for Alice, delta_t for Bob)
     pub release_t: f64,
+    /// What this observer's release means, so that a re-release at another radius - letting go of a
+    /// dragged marker - can work out the E that belongs there. See `Release`.
+    pub release: Release,
     /// Is the observer active/released yet?
     pub is_active: bool,
 }
@@ -191,6 +251,7 @@ impl Observer {
             trail: vec![start],
             start,
             release_t,
+            release: params.release,
             is_active: start_t >= release_t,
         }
     }
@@ -234,6 +295,7 @@ impl Observer {
             stalled: false,
         };
         self.geodesic = Some(geo);
+        self.release = params.release;
         self.trail.clear();
         self.trail.push(self.start);
         self.is_active = self.t >= self.release_t;
@@ -283,14 +345,21 @@ impl Observer {
         }
     }
 
-    /// Let go of a dragged observer: resume the worldline from the new event. The geodesic is
-    /// re-seeded at (t, r, phi) with the same conserved (E, L) on the ingoing root (the energy
-    /// floor clamps E if the new radius is forbidden for that L), proper time continues from its
-    /// current value, and the observer returns to `mode`. Free fall then resumes from wherever
-    /// the user dropped the marker, instead of the marker hovering at the dragged position.
+    /// Let go of a dragged observer: release them again, at the event the marker was dropped on.
+    ///
+    /// A drag is a teleport followed by an engine cut, and the cut means the same thing wherever it
+    /// happens: the observer's own `Release` is re-read at the new radius, so a marker let go of by
+    /// somebody released at rest is at rest *there*, and one let go of by a raindrop is still a
+    /// raindrop. L is carried across unchanged, being the one constant the user chose directly.
+    ///
+    /// It used to carry E across instead. That made a drag into a statement about a worldline the
+    /// observer is no longer on - E is the energy of a release that happened at a different radius -
+    /// so the marker came to rest somewhere it had no business being at rest, or shot inward from a
+    /// radius it should have been hanging at.
     pub fn release_from_drag(&mut self, metric: &KerrSchild, mode: ObserverMode) {
         if let Some(old) = self.geodesic {
-            let mut geo = GeodesicState::new_infall(metric, self.t, self.r, old.energy, old.l_ang);
+            let energy = release_energy(metric, self.r, old.l_ang, self.release);
+            let mut geo = GeodesicState::new_infall(metric, self.t, self.r, energy, old.l_ang);
             geo.phi = self.phi;
             geo.tau = self.tau;
             self.geodesic = Some(geo);
@@ -300,19 +369,25 @@ impl Observer {
         self.is_active = true;
     }
 
-    /// While waiting for release the observer hovers at fixed (r, phi): coordinate time follows the
-    /// simulation clock and proper time ticks at the static-observer rate sqrt(-g_tt) dt.
-    /// The worldline is therefore a vertical segment that turns into the infall curve at t = release_t.
+    /// While waiting for release the observer holds their radius on the worldline of
+    /// `hover_four_velocity`: coordinate time follows the simulation clock, phi turns at
+    /// u^phi/u^t and proper time ticks at dt/u^t. For the static hover that rate is exactly the
+    /// sqrt(-g_tt) dt it has always been, u^t there being 1/sqrt(-g_tt); for the at-rest release it
+    /// is the rate of the worldline they are about to fall on, which is what makes the release
+    /// smooth. The trail is therefore a vertical segment in (t, r) either way, and turns into the
+    /// infall curve at t = release_t.
     fn hover(&mut self, metric: &KerrSchild, current_sim_time: f64, dt: f64) {
         self.is_active = false;
         self.t = current_sim_time;
-        let g_tt = metric.metric_components(self.r)[0][0];
-        if g_tt < 0.0 {
-            self.tau += (-g_tt).sqrt() * dt.max(0.0);
+        let u = self.hover_four_velocity(metric);
+        if u[0] > 0.0 {
+            self.phi += (u[2] / u[0]) * dt.max(0.0);
+            self.tau += dt.max(0.0) / u[0];
         }
         if let Some(ref mut geo) = self.geodesic {
             geo.t = self.release_t;
             geo.tau = self.tau;
+            geo.phi = self.phi;
         }
         // Keep the trail as [start point, current hover point]
         self.trail.clear();
@@ -429,9 +504,7 @@ impl Observer {
     /// are released.
     pub fn four_velocity(&self, metric: &KerrSchild) -> [f64; 3] {
         if !self.is_active {
-            if let Some(u) = Self::static_four_velocity(metric, self.r) {
-                return u;
-            }
+            return self.hover_four_velocity(metric);
         } else if self.effective_mode(metric) == ObserverMode::FreeFall
             && self.geodesic_stands_on_current_event()
             && let Some(geo) = self.geodesic
@@ -439,6 +512,30 @@ impl Observer {
             return geo.u;
         }
         self.four_velocity_at(metric, self.r)
+    }
+
+    /// The worldline an observer still waiting for release is actually on.
+    ///
+    /// It is the one they are about to join, whenever that is a worldline of fixed r: an observer
+    /// released at rest has dr/dtau = 0 at the drop radius, so holding them there at exactly that
+    /// four-velocity is a real worldline - a platform under thrust, turning with whatever angular
+    /// momentum they were given - and the release is then an engine cut, continuous in every
+    /// component. Hovering as a *static* observer instead, which is what this used to do, left a
+    /// jump at the release: 0.116c of azimuthal velocity even for L = 0 at 4.5M, because at rest in
+    /// r is not the same as at rest in phi where the frame is dragged.
+    ///
+    /// Where the fall they are waiting for is already moving in r - a release from infinity, which
+    /// arrives at the drop radius at two thirds of the speed of light - no fixed-r worldline can
+    /// join it, and the wait falls back to the static observer as before. That discontinuity is not
+    /// an artefact to be smoothed away: it is the statement that they did not come from here.
+    fn hover_four_velocity(&self, metric: &KerrSchild) -> [f64; 3] {
+        if let Some(geo) = self.geodesic
+            && geo.u[1].abs() <= 1e-6 * (1.0 + geo.u[0].abs())
+        {
+            return geo.u;
+        }
+        Self::static_four_velocity(metric, self.r)
+            .unwrap_or_else(|| self.four_velocity_at(metric, self.r))
     }
 
     /// `four_velocity` for the same family of worldlines evaluated at an arbitrary radius.
@@ -791,12 +888,13 @@ impl Observer {
 
     /// Wind an observer back to before their release, onto the hovering worldline.
     ///
-    /// `hover` holds them at the event they were created at and ticks their clock at the static
-    /// observer's rate, so its accumulated proper time is exactly sqrt(-g_tt) (t - t_start) with
-    /// g_tt at the hover radius: that closed form is what is restored here, rather than a
-    /// subtraction, so a rewind that crosses the release event lands on the same clock the forward
-    /// run had at that time whatever route it took. The geodesic goes back to its release seed,
-    /// which is where it stood throughout the wait, and the trail back to [start, now].
+    /// `hover` holds them at the radius they were created at and ticks their clock at the rate of
+    /// the worldline they are holding, so its accumulated proper time is exactly (t - t_start)/u^t
+    /// and its azimuth start.phi + (u^phi/u^t)(t - t_start), with u the hover four-velocity there:
+    /// those closed forms are what is restored here, rather than a subtraction, so a rewind that
+    /// crosses the release event lands on the same clock the forward run had at that time whatever
+    /// route it took. The geodesic goes back to its release seed, which is where it stood
+    /// throughout the wait, and the trail back to [start, now].
     ///
     /// Getting the proper time exactly right is not cosmetic: a hovering observer transmits, and
     /// `SignalField` paces the emissions by their proper time, so a cadence put back even slightly
@@ -806,16 +904,18 @@ impl Observer {
         self.t = t_target;
         self.r = self.start.r;
         self.phi = self.start.phi;
-        let g_tt = metric.metric_components(self.r)[0][0];
-        self.tau = if g_tt < 0.0 {
-            (-g_tt).sqrt() * (t_target - self.start.t).max(0.0)
+        let waited = (t_target - self.start.t).max(0.0);
+        let u = self.hover_four_velocity(metric);
+        if u[0] > 0.0 {
+            self.tau = waited / u[0];
+            self.phi = self.start.phi + (u[2] / u[0]) * waited;
         } else {
-            self.start.tau
-        };
+            self.tau = self.start.tau;
+        }
         if let Some(ref mut geo) = self.geodesic {
             geo.t = self.release_t;
             geo.r = self.start.r;
-            geo.phi = self.start.phi;
+            geo.phi = self.phi;
             geo.tau = self.tau;
             geo.u = self.start.u;
             geo.stalled = false;
@@ -1389,6 +1489,65 @@ mod tests {
             "the trail must terminate on the ring rho = a = {}, got {rho_end}",
             metric.a.abs()
         );
+    }
+
+    /// The size of the kink in the worldline at the release: |u after - u before|, in the local
+    /// sense that matters, which is the relative speed between the two four-velocities. Zero means
+    /// the fall carries on from the hover without anything happening to the observer's motion.
+    fn release_jump(metric: &KerrSchild, release: Release, l_ang: f64) -> f64 {
+        let params = WorldlineParams::released(metric, 4.5, l_ang, release);
+        let mut obs = Observer::new_with_phi(metric, "Bob", 0.0, 4.5, 4.0, 0.0, params);
+        // Sampled either side of the release: the last frame of the wait, and the first frame of
+        // the fall. The step across it is small enough that the falling itself moves the
+        // four-velocity by ~1e-4, so anything larger than that is the kink.
+        let mut t = 0.0;
+        while t < 3.999 - 1e-12 {
+            let step = 0.1f64.min(3.999 - t);
+            t += step;
+            obs.step(metric, t, step);
+        }
+        assert!(!obs.is_active, "the sample before the release must be taken while waiting");
+        let before = obs.four_velocity(metric);
+        t += 0.002;
+        obs.step(metric, t, 0.002);
+        assert!(obs.is_active, "and the sample after it once they are let go");
+        let after = obs.four_velocity(metric);
+        // gamma = -u_before . u_after is 1 for identical vectors and grows with the relative
+        // speed between them; the speed itself is the legible number.
+        let g = metric.metric_components(obs.r);
+        let mut gamma = 0.0;
+        for i in 0..3 {
+            for j in 0..3 {
+                gamma -= g[i][j] * before[i] * after[j];
+            }
+        }
+        (1.0 - 1.0 / (gamma * gamma).max(1.0)).max(0.0).sqrt()
+    }
+
+    #[test]
+    fn test_a_release_at_rest_carries_on_from_the_hover_without_a_jump() {
+        // What "the run begins when they cut their engines" has to mean. An observer waiting out a
+        // release delay holds their radius on the worldline they are about to fall on, so at the
+        // release nothing happens to their motion at all: the thrust stops and the same
+        // four-velocity carries on as a geodesic. Anything else is an infinite acceleration drawn
+        // as a corner in the worldline - which is what this used to be, because the wait was spent
+        // as a *static* observer and the fall began at rest in r, and those differ by the frame
+        // dragging even for L = 0.
+        //
+        // Released from rest at infinity there is nothing to hold: that worldline is already doing
+        // two thirds of the speed of light at 4.5M, so the jump is real and is the honest statement
+        // that the observer did not come from here. Both are measured, and the point is the ratio.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let at_rest = release_jump(&metric, Release::AtRest, 0.0);
+        let spun = release_jump(&metric, Release::AtRest, 2.0);
+        let raindrop = release_jump(&metric, Release::FromInfinity, 0.0);
+        println!(
+            "the kink at the release, as a relative speed: at rest {at_rest:.2e}, at rest with \
+             L = 2 {spun:.2e}, from rest at infinity {raindrop:.4}"
+        );
+        assert!(at_rest < 1e-3, "an at-rest release is smooth: {at_rest}");
+        assert!(spun < 1e-3, "with angular momentum too: {spun}");
+        assert!(raindrop > 0.6, "and a raindrop arrives already moving: {raindrop}");
     }
 
     #[test]
