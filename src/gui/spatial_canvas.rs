@@ -43,7 +43,7 @@ impl Default for SpatialCanvas {
         Self {
             zoom: 48.0, // pixels per M
             pan_offset: Vec2::ZERO,
-            telemetry: TelemetryBoxes::default(),
+            telemetry: TelemetryBoxes::pinning(),
             river: RiverField::default(),
         }
     }

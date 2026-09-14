@@ -11,7 +11,7 @@ use std::collections::HashMap;
 /// Hover tip for the observer info boxes. Written as a plain multi-line literal (lines start at
 /// column 0 so no indentation leaks into the text).
 pub const TELEMETRY_HOVER_TIP: &str =
-"Drag: move the box anywhere on the canvas. Double-click: snap the box back to the observer. Each canvas remembers box positions per observer.
+"Drag: move the box anywhere on the canvas. On the equatorial view it then stays where you put it while the observer moves on; on the (t, r) diagram it keeps its offset from the observer. Double-click: snap the box back to the observer. Each canvas remembers box positions per observer.
 
 dr/dt — map speed: how fast the dot crosses the (t, r) chart per tick of the chart's shared clock. Far from the hole, this equals what a distant observer would measure. Near the hole, the chart uses a clock that lets infall and light cross the horizon without freezing, so the number only means something relative to the light wedge.
 
@@ -27,21 +27,73 @@ E, L — conserved energy and angular momentum per unit mass along the geodesic.
 
 Region tag — location relative to the horizons: outside r₊, between r₊ and r₋, or inside r₋, plus the ergosphere.";
 
-/// The drag offsets of the hovering telemetry boxes on one canvas, keyed by canvas tag and
-/// observer name so that the same observer can have a different box position in each diagram.
+/// Where a telemetry box is kept between frames once the user has moved it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Placement {
+    /// Displaced from the anchor next to the observer by this much: the box follows the observer.
+    Offset(Vec2),
+    /// At this position relative to the canvas's top-left corner, whatever the observer does.
+    Pinned(Vec2),
+}
+
+/// Where the box goes this frame, before clamping.
+fn resolve_placement(placement: Option<Placement>, anchored: Pos2, canvas_min: Pos2) -> Pos2 {
+    match placement {
+        None => anchored,
+        Some(Placement::Offset(v)) => anchored + v,
+        Some(Placement::Pinned(p)) => canvas_min + p,
+    }
+}
+
+/// What to remember after a frame in which the box ended up at `moved_min`.
+///
+/// A following box records its offset every frame, so a drag against the canvas edge does not
+/// build up an offset that snaps back later. A pinning box is left alone until the user actually
+/// drags it, since a box that has never been touched should keep following its observer; from
+/// the first drag on it records where it stands relative to the canvas every frame, which is what
+/// keeps a box that a resize has pushed inward from jumping back out again.
+fn remembered_placement(
+    pin_on_drag: bool,
+    dragged: bool,
+    previous: Option<Placement>,
+    moved_min: Pos2,
+    anchored: Pos2,
+    canvas_min: Pos2,
+) -> Option<Placement> {
+    if !pin_on_drag {
+        Some(Placement::Offset(moved_min - anchored))
+    } else if dragged || previous.is_some() {
+        Some(Placement::Pinned(moved_min - canvas_min))
+    } else {
+        None
+    }
+}
+
+/// The remembered positions of the hovering telemetry boxes on one canvas, keyed by canvas tag
+/// and observer name so that the same observer can have a different box position in each diagram.
 #[derive(Default)]
 pub struct TelemetryBoxes {
-    offsets: HashMap<String, Vec2>,
+    placements: HashMap<String, Placement>,
+    /// Whether a drag pins the box to the canvas where it was dropped (the equatorial view), or
+    /// keeps it following the observer at the dragged offset (the (t, r) diagram, the default).
+    pin_on_drag: bool,
 }
 
 impl TelemetryBoxes {
+    /// Boxes that stay where the user drops them, however the observer moves afterwards.
+    pub fn pinning() -> Self {
+        Self { placements: HashMap::new(), pin_on_drag: true }
+    }
+
     /// Lay out, register, drag and paint one observer's info box.
     ///
-    /// The box is anchored next to `pos` exactly as before, then displaced by the offset the user
-    /// has dragged it to and clamped back inside `canvas_rect`. The `ui.interact` must be called
-    /// after the canvas has allocated its own painter response: within a layer egui hands an
-    /// overlapping drag to the widget registered last, so registering here is what stops a drag on
-    /// the box from panning the background or grabbing Bob's marker.
+    /// The box is anchored next to `pos` exactly as before until the user moves it; after that it
+    /// is either displaced from that anchor by the dragged offset or pinned to the canvas where it
+    /// was dropped (see `Placement`), and in both cases clamped back inside `canvas_rect`. A
+    /// double-click forgets the move. The `ui.interact` must be called after the canvas has
+    /// allocated its own painter response: within a layer egui hands an overlapping drag to the
+    /// widget registered last, so registering here is what stops a drag on the box from panning
+    /// the background or grabbing Bob's marker.
     #[allow(clippy::too_many_arguments)]
     pub fn show(
         &mut self,
@@ -58,12 +110,13 @@ impl TelemetryBoxes {
         font_scale: f32,
     ) -> egui::Response {
         let key = format!("{canvas_tag}:{name}");
-        let offset = self.offsets.get(&key).copied().unwrap_or(Vec2::ZERO);
+        let previous = self.placements.get(&key).copied();
         let lines = telemetry_lines(name, color, obs, metric, use_km);
         let size = telemetry_box_size(painter, &lines, font_scale);
 
         let anchored = default_badge_pos(canvas_rect, pos, size);
-        let badge_rect = clamp_into(Rect::from_min_size(anchored + offset, size), canvas_rect);
+        let placed = resolve_placement(previous, anchored, canvas_rect.min);
+        let badge_rect = clamp_into(Rect::from_min_size(placed, size), canvas_rect);
 
         let id = ui.id().with(("telemetry", canvas_tag, name));
         // click_and_drag rather than drag alone: egui only reports a double-click on a widget that
@@ -71,13 +124,25 @@ impl TelemetryBoxes {
         let response = ui.interact(badge_rect, id, egui::Sense::click_and_drag());
 
         let badge_rect = if response.double_clicked() {
-            self.offsets.remove(&key);
+            self.placements.remove(&key);
             clamp_into(Rect::from_min_size(anchored, size), canvas_rect)
         } else {
             let moved = clamp_into(badge_rect.translate(response.drag_delta()), canvas_rect);
-            // Store where the box actually ended up, so a drag against the canvas edge does not
-            // build up an offset that snaps back later.
-            self.offsets.insert(key, moved.min - anchored);
+            match remembered_placement(
+                self.pin_on_drag,
+                response.dragged(),
+                previous,
+                moved.min,
+                anchored,
+                canvas_rect.min,
+            ) {
+                Some(placement) => {
+                    self.placements.insert(key, placement);
+                }
+                None => {
+                    self.placements.remove(&key);
+                }
+            }
             moved
         };
 
@@ -1563,5 +1628,56 @@ mod tests {
         let clamped = clamp_into(far_out, bounds);
         assert_eq!(clamped.size(), size);
         assert!(bounds.contains_rect(clamped), "{clamped:?} outside {bounds:?}");
+    }
+}
+
+#[cfg(test)]
+mod telemetry_placement_tests {
+    use super::*;
+
+    #[test]
+    fn test_a_dragged_box_on_a_pinning_canvas_stays_put_while_its_observer_moves() {
+        // The equatorial view: before any drag the box follows its observer; after one it stands
+        // at a fixed place on the canvas, and the anchor moving with the observer no longer moves
+        // it. A double-click clears the placement, which is the `None` branch of `resolve`.
+        let canvas_min = Pos2::new(100.0, 50.0);
+        let anchored = Pos2::new(300.0, 200.0);
+        assert_eq!(resolve_placement(None, anchored, canvas_min), anchored);
+        assert_eq!(
+            remembered_placement(true, false, None, anchored, anchored, canvas_min),
+            None,
+            "an untouched box keeps following"
+        );
+        let dropped = Pos2::new(140.0, 90.0);
+        let pinned = remembered_placement(true, true, None, dropped, anchored, canvas_min);
+        assert_eq!(pinned, Some(Placement::Pinned(Vec2::new(40.0, 40.0))));
+        let later_anchor = Pos2::new(420.0, 310.0);
+        assert_eq!(
+            resolve_placement(pinned, later_anchor, canvas_min),
+            dropped,
+            "the observer moved on and the box did not"
+        );
+        // Not dragged this frame, but already pinned: still pinned, at where it now stands.
+        let slid = Pos2::new(150.0, 90.0);
+        assert_eq!(
+            remembered_placement(true, false, pinned, slid, later_anchor, canvas_min),
+            Some(Placement::Pinned(Vec2::new(50.0, 40.0)))
+        );
+    }
+
+    #[test]
+    fn test_a_dragged_box_on_a_following_canvas_keeps_its_offset_from_its_observer() {
+        // The (t, r) diagram, unchanged: the drag is remembered as an offset from the anchor and
+        // the box goes on tracking the observer at that offset.
+        let canvas_min = Pos2::new(0.0, 0.0);
+        let anchored = Pos2::new(300.0, 200.0);
+        let dropped = Pos2::new(330.0, 180.0);
+        let placement = remembered_placement(false, true, None, dropped, anchored, canvas_min);
+        assert_eq!(placement, Some(Placement::Offset(Vec2::new(30.0, -20.0))));
+        let later_anchor = Pos2::new(300.0, 150.0);
+        assert_eq!(
+            resolve_placement(placement, later_anchor, canvas_min),
+            Pos2::new(330.0, 130.0)
+        );
     }
 }
