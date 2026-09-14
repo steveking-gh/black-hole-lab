@@ -51,9 +51,11 @@ pub enum StepMode {
 /// observer's own radius whenever the clock reads zero, so that dragging a marker at the start of a
 /// run moves where they are dropped from (`AppControls::remember_drop_positions`). Otherwise a card
 /// is a standing request - what to build the next time this observer is dropped - and the observer,
-/// once built, carries its own copy of the constants in its geodesic state. `l_ang`, `release` and
-/// `drop_r` therefore take effect at the next drop, exactly as `delta_t_delay` does; `enabled` and
-/// `transmit` take effect at once.
+/// once built, carries its own copy of the constants in its geodesic state. `l_ang`, `release`,
+/// `drop_r` and `delta_t_delay` therefore take effect at the next drop, *unless* the clock reads
+/// zero, where the run has not started and the card and the observer are the same thing: there they
+/// take effect at once and the marker moves as the slider moves. `enabled` and `transmit` take
+/// effect at once at any time.
 ///
 /// There is no energy on the card. E is what the release implies at the radius it happens at - see
 /// `Release` - so it is derived at the drop and reported under the sliders rather than dialled.
@@ -297,7 +299,7 @@ const DROP_RADIUS: f64 = 4.5;
 ///
 /// They are written about "the observer" rather than about Bob, because both cards show them.
 const FREE_FALL_TIP: &str = "A timelike geodesic: the observer falls with no thrust at all and their accelerometer reads exactly zero, which is the whole content of the word. Which geodesic is fixed by the two conserved quantities they were dropped with, the energy per unit mass E = −u_t and the axial angular momentum per unit mass L = u_ϕ on the sliders below, and their four-velocity is the one the integrator is carrying along that curve, so the telemetry, the frame their pulses go out into and the frame their receptions are measured in are all the same object as the worldline being drawn. E = 1 with L = 0 is the raindrop, dropped from rest at infinity and falling straight in; that is the congruence the River of Space is made of, so they are then riding one of the drops. A geodesic exists at every radius and this is the only mode that does: they cross the ergosphere, the outer horizon r₊ and the Cauchy horizon r₋ in finite proper time with nothing local happening to them at any of them, and for the equatorial L = 0 case the fall ends on the ring, where the curvature is genuinely infinite and the chart stops. Give them enough prograde angular momentum and they freeze onto r₋ instead, their proper time reaching a finite limit while the coordinate clock runs on. It is the mode the light cones and both transmissions read most naturally in, because an infaller is the observer the whole interior picture is drawn for.";
-const DROP_RADIUS_TIP: &str = "Where this observer is dropped from, and where ⏮ Reset builds them. It is the same number as the position of their marker at t = 0: drag the marker while the clock reads zero and this slider follows, move this slider and the next drop lands there, because there is one drop radius per observer and two ways to say it. Like everything else on the card it is a standing request — it takes effect at the next drop rather than teleporting a run already under way. It also sets their energy, since E is whatever the release at that radius implies: released at rest, a drop from further out has more of it, and E → 1 as the drop radius runs to infinity, which is the raindrop. The slider is logarithmic because the interesting range spans the ring at 0.05M and the far field at 30M, and nothing stops you dropping somebody inside a horizon: there they cannot be at rest, and the card says what it does instead.";
+const DROP_RADIUS_TIP: &str = "Where this observer is dropped from, and where ⏮ Reset builds them. It is the same number as the position of their marker at t = 0: drag the marker while the clock reads zero and this slider follows, move this slider and the next drop lands there, because there is one drop radius per observer and two ways to say it. While the clock reads zero it takes effect at once, since the run has not started and there is nothing for it to contradict; once the clock is running it is a standing request like everything else on the card, waiting for the next ⏮ Reset rather than teleporting a run already under way. It also sets their energy, since E is whatever the release at that radius implies: released at rest, a drop from further out has more of it, and E → 1 as the drop radius runs to infinity, which is the raindrop. The slider is logarithmic because the interesting range spans the ring at 0.05M and the far field at 30M, and nothing stops you dropping somebody inside a horizon: there they cannot be at rest, and the card says what it does instead.";
 const AT_REST_TIP: &str = "The observer is at rest at the moment they are released: dr/dτ = 0, and the worldline starts exactly on a turning point of the radial potential, R(r) = 0. Their energy is then whatever that costs — E = V(r, L), the effective potential at the drop radius, which at 4.5M with L = 0 and a = 0.90 is 0.7504 — so E is reported rather than dialled, and it moves when the drop radius or L moves. This is the release a user usually means by \"dropped\": the run begins when the engines are cut. It is also the only release that joins the hover before it without a jump: while they wait they hold that same four-velocity under thrust, so nothing in their motion changes at the release except that the thrust stops. At rest means at rest in r; with L = 0 in Kerr they are still carried round at the frame-dragging rate, which is the ZAMO. Between the horizons nothing can hold a radius at all and the release falls back to the raindrop.";
 const FROM_INFINITY_TIP: &str = "The observer arrives having fallen from rest infinitely far away: E = 1 exactly, whatever radius they are dropped at, which means they are already moving when the run starts. At 4.5M that is two thirds of the speed of light inward past a static observer — nothing accelerated them to it, it is what the initial condition says about their history. With L = 0 this is the raindrop, a member of the same E = 1 congruence the River of Space is drawn from and the frame every wavefront colour and every measured shift in the app is quoted against, so it is the release that makes an observer one of the drops in the river rather than an interloper drifting through it. The price is that a Release Delay in front of it is a fiction: they cannot hover and then be moving at 0.667c without an infinite acceleration, so the release is a genuine discontinuity in the worldline, which is the honest statement that they did not come from here. Choose At rest here if you want the wait and the fall to join.";
 const ANGULAR_MOMENTUM_TIP: &str = "The conserved angular momentum per unit mass, L = u_ϕ, in units of M. It is the one constant of the motion set directly, because it is the one the app's central result is stated in: which branch of the inner horizon an infaller reaches is decided by the sign of E − Ω₋L, with Ω₋ = a/(r₋²+a²) = 0.798/M at a = 0.90. Released at rest from 4.5M the crossover sits at L = 0.985 — below it they cross the near branch of r₋ at finite coordinate time, above it they settle onto the far branch, where t → ∞ and their own clock reaches r₋ in finite proper time while the outside universe's whole future arrives at once. Walk the slider across that value and the picture changes character. L also decides whether they fall at all: from rest, enough of it and the centrifugal barrier throws them outward instead, and past about L = 4 at 4.5M the energy that costs exceeds 1 and they escape to infinity. Prograde is positive, retrograde negative, and the two are not mirror images around a spinning hole.";
@@ -400,11 +402,13 @@ const BOB_CARD: ObserverCard = ObserverCard {
 impl ObserverCard {
     /// Draw this observer's card and apply what it says.
     ///
-    /// Two of the controls act on the spot rather than at the next drop, and both are enforced here
+    /// Three of them act on the spot rather than at the next drop, and all three are enforced here
     /// as a state of affairs rather than as an edge: an unticked Enable means the observer *is*
-    /// None every frame, and an unticked Transmit means their field *is* empty every frame. That
-    /// way a test, or a keybinding, that writes the flag directly gets the same simulation as a
-    /// user clicking the box.
+    /// None every frame, an unticked Transmit means their field *is* empty every frame, and while
+    /// the clock reads zero the observer *is* the one the card describes every frame - see
+    /// `describes`. That way a test, or a keybinding, that writes the field directly gets the same
+    /// simulation as a user moving the slider, which an edge-triggered `Response::changed` would
+    /// not: it would answer the click and ignore the write.
     #[allow(clippy::too_many_arguments)]
     fn show(
         &self,
@@ -478,7 +482,7 @@ impl ObserverCard {
                     .text("Release Delay Δt"),
             )
             .on_hover_text(
-                "How long after the drop this observer is let go. Until then they hold the drop radius on the worldline they are about to fall on — a real worldline, under thrust, with a clock of its own and a frame to transmit from — and the release is the moment that thrust stops. The wait is what puts one observer behind the other on the same infall. Released at rest, nothing in their motion changes at the release except the thrust: the hover and the fall are the same four-velocity. Released from rest at infinity there is nothing to hold, since that worldline is already moving in r, so they wait as a static observer and the release is a jump. It takes effect at the next ⏮ Reset, since a release time is part of a worldline rather than something that can be changed under one.",
+                "How long after the drop this observer is let go. Until then they hold the drop radius on the worldline they are about to fall on — a real worldline, under thrust, with a clock of its own and a frame to transmit from — and the release is the moment that thrust stops. The wait is what puts one observer behind the other on the same infall. Released at rest, nothing in their motion changes at the release except the thrust: the hover and the fall are the same four-velocity. Released from rest at infinity there is nothing to hold, since that worldline is already moving in r, so they wait as a static observer and the release is a jump. It takes effect at the next ⏮ Reset, or at once while the clock reads zero, since a release time is part of a worldline rather than something that can be changed under one.",
             );
             // Where they are dropped from. The same number a drag at t = 0 sets, and the same
             // number Reset builds them at, so the slider and the marker are two ways to say one
@@ -513,12 +517,8 @@ impl ObserverCard {
                 ui.label("Release:");
                 ui.selectable_value(&mut settings.release, Release::AtRest, "At rest here")
                     .on_hover_text(AT_REST_TIP);
-                ui.selectable_value(
-                    &mut settings.release,
-                    Release::FromInfinity,
-                    "From rest at ∞",
-                )
-                .on_hover_text(FROM_INFINITY_TIP);
+                ui.selectable_value(&mut settings.release, Release::FromInfinity, "From rest at ∞")
+                    .on_hover_text(FROM_INFINITY_TIP);
             });
 
             ui.add(
@@ -566,7 +566,55 @@ impl ObserverCard {
                     .color(Theme::TEXT_MUTED),
                 );
             }
+
+            // While the run is standing at its start, the card and the observer are the same
+            // thing. A drop radius, a release, an L or a delay stated there is a statement about
+            // the run that is about to happen, and there is nothing in progress for it to
+            // contradict, so it takes effect at once: the marker moves in both views as the slider
+            // moves, exactly as dragging the marker moves the slider
+            // (`AppControls::remember_drop_positions`). Without this the two disagree and the
+            // card loses - `remember_drop_positions` copies the observer's radius back over the
+            // slider on the next frame, and the slider springs back to where it was.
+            //
+            // Once the clock is running they go back to being standing requests, because by then
+            // there *is* something to contradict: a worldline with a history, light in flight from
+            // it, and arrivals recorded against it. Those wait for the next Reset.
+            if current_time == 0.0 && !self.describes(metric, settings, obs, current_time) {
+                // The light they had out was emitted by the worldline being replaced.
+                field.silence();
+                let phi = obs.phi;
+                obs.release_t = current_time + settings.delta_t_delay;
+                obs.reset_with_phi(
+                    metric,
+                    current_time,
+                    settings.drop_r,
+                    phi,
+                    settings.worldline_params(metric),
+                );
+            }
         });
+    }
+
+    /// Whether `obs` is the observer this card describes: the radius it names, the release it
+    /// names, the angular momentum it names, and let go at the moment its delay says.
+    ///
+    /// E is not compared, being a function of the other three (`release_energy`), and neither is
+    /// anything the observer has picked up since - their Motion, which a re-drop inherits from them
+    /// rather than reading off the card, or where they have got to, which is what the run is for.
+    fn describes(
+        &self,
+        metric: &KerrSchild,
+        settings: &ObserverSettings,
+        obs: &Observer,
+        start_t: f64,
+    ) -> bool {
+        let wanted = settings.worldline_params(metric);
+        let carried = obs.geodesic.map_or(wanted.l_ang, |geo| geo.l_ang);
+        let same = |a: f64, b: f64| (a - b).abs() <= 1e-9 * (1.0 + a.abs().max(b.abs()));
+        same(obs.r, settings.drop_r)
+            && same(carried, wanted.l_ang)
+            && same(obs.release_t, start_t + settings.delta_t_delay)
+            && obs.release == wanted.release
     }
 
     /// This observer as the card asks for them, dropped at the clock reading `start_t`.
@@ -671,15 +719,20 @@ impl AppControls {
         self.view_reset_requested = true;
     }
 
-    /// Take each observer's present radius as the radius they are dropped from, if and only if the
-    /// run is standing at its start.
+    /// Take the radius of any observer with a hand on them as the radius they are dropped from, if
+    /// the run is standing at its start.
     ///
-    /// The clock reading zero is the one moment nothing but the user is moving anybody: an observer
-    /// hovers or falls only as the clock advances, and a Reset has just put them where their card
-    /// says. So a radius that differs from the card's at t = 0 came from a drag on the (t, r)
-    /// diagram, and the rule is simply that where an observer stands at zero is where they are
-    /// dropped. Called once a frame by `SpacetimeApp::ui`, after the canvases have taken their
-    /// drags, so the position a drag ends on is the one that is kept.
+    /// This is the drag's half of one rule: while the clock reads zero, the card and the observer
+    /// are the same thing. The card is the one that says so - `ObserverCard::describes` puts the
+    /// observer back on it every frame - so a drag has to write the *card*, or the panel would undo
+    /// it on the next pass. That is what this does, and it is why it runs before the panel rather
+    /// than after it: the pointer's position is folded into the card, and the card is then enforced.
+    ///
+    /// The test for "is there a hand on them" is `ObserverMode::ManualDrag`, which is the held state
+    /// `Observer::set_drag_position` puts them in for exactly as long as the pointer holds them and
+    /// which nothing on the panel can select. Without that test this would copy every observer's
+    /// radius over their card every frame, and a drop radius typed into the card - by a slider, a
+    /// preset or a test - would be overwritten by the position it was trying to change.
     ///
     /// Only the radius. The drag also sets the observer's t, and can release them early through
     /// `Observer::release_from_drag`, but neither is a property of where the run starts: the clock
@@ -694,7 +747,9 @@ impl AppControls {
             return;
         }
         for (card, observer) in [(&mut self.alice, alice), (&mut self.bob, bob)] {
-            if let Some(obs) = observer {
+            if let Some(obs) = observer
+                && obs.mode == ObserverMode::ManualDrag
+            {
                 card.drop_r = obs.r;
             }
         }

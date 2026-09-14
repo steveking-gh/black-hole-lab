@@ -258,10 +258,15 @@ impl Observer {
 
     /// Reset observer with initial radius, coordinate time, azimuth phi and worldline constants.
     ///
-    /// Also test-only now. Restarting a run used to move the existing observers with this; it
-    /// builds them afresh from their cards instead (`AppControls::drop_observers`), because a card
-    /// carries a release delay and this cannot set one.
-    #[cfg(test)]
+    /// Put this observer back at the start of a worldline: a new radius, a new set of constants,
+    /// the clock at `start_t` and the trail thrown away.
+    ///
+    /// Restarting a *run* does not go through here - that builds both observers afresh from their
+    /// cards, in `AppControls::drop_observers`, because a card carries a release delay and this
+    /// cannot set one. What does go through here is restating one observer while the run is
+    /// standing at its start: with the clock at zero the card and the observer are the same thing,
+    /// so moving the drop radius, the release or L on the panel moves the observer at once instead
+    /// of waiting for a Reset that would change nothing else.
     pub fn reset_with_phi(
         &mut self,
         metric: &KerrSchild,

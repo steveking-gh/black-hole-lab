@@ -309,6 +309,23 @@ impl eframe::App for SpacetimeApp {
             );
         });
 
+        // Where the observers actually stand, folded into the cards, before anything reads a card.
+        //
+        // The order is the whole of it. While the clock reads zero the card and the observer are
+        // the same thing, and two things can move one of them: a slider on the panel, which writes
+        // the card, and a marker drag on a canvas, which writes the observer. Taking the observers'
+        // own positions first means the drag of the previous frame is part of the card by the time
+        // the panel enforces it, so the card never reverts a drag; and the panel's own changes take
+        // effect in the same frame they are made, so a slider never springs back. Reversed - which
+        // is where this call used to sit, after the canvases - the two fight, and which one wins
+        // depends on which of them the user touched last, which is exactly what neither of them can
+        // see. See `AppControls::remember_drop_positions` and `ObserverCard::describes`.
+        self.controls.remember_drop_positions(
+            self.alice.as_ref(),
+            self.bob.as_ref(),
+            self.current_time,
+        );
+
         // 3. Left Dock Panel: Controls
         egui::Panel::left("controls_panel").default_size(300.0).show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
@@ -419,15 +436,6 @@ impl eframe::App for SpacetimeApp {
                 );
             });
         });
-
-        // Where the observers stand once the canvases have had their drags. While the clock reads
-        // zero that is where they are dropped from, so a marker dragged at the start of a run is
-        // still there after the next Reset; see `AppControls::remember_drop_positions`.
-        self.controls.remember_drop_positions(
-            self.alice.as_ref(),
-            self.bob.as_ref(),
-            self.current_time,
-        );
 
         // 5. Theory & Horizon Explanation Modal
         if self.controls.show_theory_modal {
@@ -1168,11 +1176,20 @@ mod tests {
     /// while it is held and `release_from_drag` when it is let go, which is exactly the pair
     /// `SpacetimeCanvas::drag_markers` calls.
     fn drag_bob_to(app: &mut SpacetimeApp, r: f64) {
-        let SpacetimeApp { metric, bob, current_time, .. } = app;
-        let bob = bob.as_mut().expect("Bob is in this run");
-        let mode = bob.mode;
-        bob.set_drag_position(*current_time, r);
-        bob.release_from_drag(metric, mode);
+        let mode = bob_of(app).mode;
+        {
+            let SpacetimeApp { bob, current_time, .. } = app;
+            bob.as_mut().expect("Bob is in this run").set_drag_position(*current_time, r);
+        }
+        // A frame with the pointer still down. It is a real part of the gesture, not a detail of
+        // the harness: a drag writes the observer, and it is this frame that folds the new position
+        // into his card, where `ObserverCard::describes` will then keep it.
+        painted_text(app);
+        {
+            let SpacetimeApp { metric, bob, .. } = app;
+            bob.as_mut().expect("Bob is in this run").release_from_drag(metric, mode);
+        }
+        painted_text(app);
     }
 
     #[test]
@@ -1253,6 +1270,62 @@ mod tests {
         let geo = bob_of(&app).geodesic.expect("a dragged observer keeps their geodesic");
         assert!((geo.energy - 1.0).abs() < 1e-12, "still a raindrop: E = {}", geo.energy);
         assert!(geo.u[1] < 0.0, "and still falling: dr/dtau = {}", geo.u[1]);
+    }
+
+    #[test]
+    fn test_a_card_restated_at_the_start_of_a_run_moves_the_observer_at_once() {
+        // While the clock reads zero the card and the observer are the same thing, so a drop
+        // radius, a release, an L or a delay stated on the panel takes effect there and then - the
+        // marker moves in both views as the slider moves, which is the other half of a marker drag
+        // moving the slider. Nothing is under way for it to contradict.
+        //
+        // It is enforced as a state of affairs rather than on the slider's own `changed()` edge, so
+        // that writing the field directly - a test, a keybinding, a preset - gets the same
+        // simulation as a user dragging the widget.
+        let mut app = SpacetimeApp::default();
+        assert_eq!(app.current_time, 0.0);
+        let alice_before = alice_of(&app).r;
+
+        app.controls.bob.drop_r = 9.0;
+        painted_text(&mut app);
+        assert!((bob_of(&app).r - 9.0).abs() < 1e-9, "he is there now: {}", bob_of(&app).r);
+        assert!(
+            (alice_of(&app).r - alice_before).abs() < 1e-12,
+            "and nobody else moved: {}",
+            alice_of(&app).r
+        );
+
+        // The release and L are restated the same way, and E follows them.
+        app.controls.bob.release = Release::AtRest;
+        app.controls.bob.l_ang = 1.5;
+        painted_text(&mut app);
+        let geo = bob_of(&app).geodesic.expect("free-fall observers carry a geodesic state");
+        let floor = GeodesicState::energy_floor(&app.metric, 9.0, 1.5);
+        println!("restated to at-rest from 9M with L = 1.5: E = {:.4} against {floor:.4}", geo.energy);
+        assert!((geo.energy - floor).abs() < 1e-12, "E follows the release: {}", geo.energy);
+        assert!((geo.l_ang - 1.5).abs() < 1e-12, "L is his own: {}", geo.l_ang);
+        assert!(geo.u[1].abs() < 1e-6, "and he is at rest: dr/dtau = {}", geo.u[1]);
+
+        // So is the delay, which is a statement about the same worldline.
+        app.controls.bob.delta_t_delay = 5.0;
+        painted_text(&mut app);
+        assert_eq!(bob_of(&app).release_t, 5.0, "he waits until t = 5 now");
+        assert!(!bob_of(&app).is_active, "so he is still holding his radius");
+
+        // Once the clock is running they are standing requests again: there is a worldline with a
+        // history now, light in flight from it and arrivals recorded against it, and a slider does
+        // not reach back and change where any of that came from.
+        app.step_forward(0.5);
+        app.controls.bob.drop_r = 3.0;
+        painted_text(&mut app);
+        assert!(
+            (bob_of(&app).r - 9.0).abs() < 1e-9,
+            "the run is under way, so he stays where he is: {}",
+            bob_of(&app).r
+        );
+        // And the next Reset takes it, as the card has said all along.
+        drop_observers(&mut app);
+        assert!((bob_of(&app).r - 3.0).abs() < 1e-9, "Reset builds him there: {}", bob_of(&app).r);
     }
 
     #[test]
