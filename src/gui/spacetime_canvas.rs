@@ -618,6 +618,7 @@ impl SpacetimeCanvas {
     ///
     /// A drag whose observer has left the simulation - their card unticked while the pointer is
     /// down - is dropped rather than carried, because there is no worldline left to place.
+    #[allow(clippy::too_many_arguments)]
     fn drag_markers(
         &mut self,
         metric: &KerrSchild,
