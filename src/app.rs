@@ -233,72 +233,13 @@ impl eframe::App for SpacetimeApp {
         visuals.panel_fill = Theme::PANEL_BG;
         ctx.set_visuals(visuals);
 
-        // 1. Top Panel
+        // 1. Top Panel. The app's name and nothing else. It used to carry a strip of controls -
+        // the frame selector, the units and font-size widgets, the Theory Guide button - every one
+        // of which the left panel also has, and three view buttons (Reset Zoom, Focus r-, Focus
+        // Bob) that the user never reached for: the equatorial view's right-click menu centres on
+        // either observer and on the hole, and both canvases zoom on the wheel.
         egui::Panel::top("top_bar").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("SPACETIME LAB").heading().strong().color(Theme::HORIZON_OUTER));
-                ui.separator();
-                ui.label(
-                    egui::RichText::new(format!(
-                        "Kerr Metric (Mass = {:.2e} M☉, a/M = {:.3})",
-                        self.metric.m_solar,
-                        self.metric.a_star()
-                    ))
-                    .monospace()
-                    .color(Theme::TEXT_BRIGHT),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Theory Guide").clicked() {
-                        self.controls.show_theory_modal = !self.controls.show_theory_modal;
-                    }
-                    if ui.button("🔍 Reset Zoom").clicked() {
-                        self.spacetime_canvas.reset_zoom();
-                        self.spatial_canvas.zoom = 48.0;
-                        self.spatial_canvas.pan_offset = egui::Vec2::ZERO;
-                    }
-                    if ui.button("🎯 Focus r₋").on_hover_text("Zoom and focus directly on the Cauchy horizon (r₋)").clicked() {
-                        let rm = self.metric.inner_horizon();
-                        self.spacetime_canvas.focus_horizon(rm);
-                        self.spatial_canvas.zoom = 400.0;
-                        self.spatial_canvas.pan_offset = egui::Vec2::new(- (rm as f32) * 400.0, 0.0);
-                    }
-                    // Nothing to focus on when Bob is not in the simulation, so the button goes
-                    // with him rather than aiming both views at a remembered radius.
-                    if let Some(bob) = self.bob.as_ref()
-                        && ui.button("🎯 Focus Bob").on_hover_text("Zoom and focus directly on Bob's current radius").clicked()
-                    {
-                        self.spacetime_canvas.focus_bob(bob.r);
-                        self.spatial_canvas.zoom = 400.0;
-                        // Bob's screen position is the Kerr-Schild embedding of (r, phi); the canvas
-                        // draws Cartesian y upward (screen y is flipped), so the centring pan is (-x, +y).
-                        let (bx, by) = bob.cartesian_position(&self.metric);
-                        self.spatial_canvas.pan_offset =
-                            egui::Vec2::new(-(bx as f32) * 400.0, (by as f32) * 400.0);
-                    }
-                    ui.checkbox(&mut self.controls.use_km, "📏 Kilometers (km)");
-
-                    // Font Size quick adjustment buttons
-                    ui.label(format!("🔤 {:.0}%", self.controls.font_scale * 100.0));
-                    if ui.button("➕").on_hover_text("Increase Font Size").clicked() {
-                        self.controls.font_scale = (self.controls.font_scale + 0.1).clamp(0.7, 1.8);
-                    }
-                    if ui.button("➖").on_hover_text("Decrease Font Size").clicked() {
-                        self.controls.font_scale = (self.controls.font_scale - 0.1).clamp(0.7, 1.8);
-                    }
-                    egui::ComboBox::from_id_salt("top_frame_selector")
-                        .selected_text(match self.controls.frame_of_ref {
-                            ReferenceFrame::DistantObserver => "🌐 Global Foliation",
-                            ReferenceFrame::Bob => "👤 Bob's Frame",
-                            ReferenceFrame::Alice => "👩 Alice's Frame",
-                        })
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut self.controls.frame_of_ref, ReferenceFrame::DistantObserver, "🌐 Global Foliation (Kerr-Schild)");
-                            ui.selectable_value(&mut self.controls.frame_of_ref, ReferenceFrame::Bob, "👤 Bob's Rest Frame (45° Cones)");
-                            ui.selectable_value(&mut self.controls.frame_of_ref, ReferenceFrame::Alice, "👩 Alice's Rest Frame (45° Cones)");
-                        });
-                    ui.label(egui::RichText::new("Ingoing Kerr-Schild Chart").small().color(Theme::TEXT_MUTED));
-                });
-            });
+            ui.label(egui::RichText::new("SPACETIME LAB").heading().strong().color(Theme::HORIZON_OUTER));
         });
 
         // 2. Bottom Panel: Cauchy Effects HUD
@@ -1641,14 +1582,16 @@ mod tests {
 
     #[test]
     fn test_extreme_zoom_focus() {
+        // A full frame with the radial window wound down to a strip 0.05 M wide straddling the
+        // Cauchy horizon, which is as far as the wheel will take it. Every tick, every worldline
+        // and every wavefront in the (t, r) view is then placed by arithmetic on differences far
+        // smaller than r itself, so this is where a projection that only works at the default
+        // scale would show it.
         let mut app = SpacetimeApp::default();
         let rm = app.metric.inner_horizon();
+        app.spacetime_canvas.max_r = 0.05;
+        app.spacetime_canvas.r_offset = rm - 0.025;
 
-        app.spacetime_canvas.focus_horizon(rm);
-        assert!(app.spacetime_canvas.max_r <= 0.05);
-        assert!((app.spacetime_canvas.r_offset - (rm - 0.025)).abs() < 0.01);
-
-        // Test running UI in extreme zoom state
         egui::__run_test_ui(|ui| {
             let mut frame = eframe::Frame::_new_kittest();
             app.ui(ui, &mut frame);

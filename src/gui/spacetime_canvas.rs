@@ -532,23 +532,6 @@ impl Default for SpacetimeCanvas {
 }
 
 impl SpacetimeCanvas {
-    pub fn reset_zoom(&mut self) {
-        self.max_r = 5.5;
-        self.r_offset = 0.0;
-        self.time_window = 14.0;
-        self.time_offset = 0.0;
-    }
-
-    pub fn focus_horizon(&mut self, rm: f64) {
-        self.max_r = 0.05;
-        self.r_offset = (rm - 0.025).max(0.0);
-    }
-
-    pub fn focus_bob(&mut self, bob_r: f64) {
-        self.max_r = 0.05;
-        self.r_offset = (bob_r - 0.025).max(0.0);
-    }
-
     /// Render the (t, r) spacetime foliation canvas with an integrated, perfectly aligned 1D radial track
     #[allow(clippy::too_many_arguments)]
     pub fn render(
