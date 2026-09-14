@@ -1,0 +1,29 @@
+src/physics/observer.rs
+  s_5e464e0dde83ec::t_04d4df1d57544d 261-269
+src/gui/controls.rs
+  s_5e464e0dde83ec::t_cc9c21a4b2e5c6 405,407-411,485,520-521,582,598-617
+  s_5e464e0dde83ec::t_0ee63977bb3433 722-729,731-735,750-752
+  s_5e464e0dde83ec::t_04d4df1d57544d 54-58,302,569-581,583-592
+  s_5e464e0dde83ec::t_bfc965ebc8e3fd 593-594,618-619
+src/app.rs
+  s_5e464e0dde83ec::t_e9f4d2b74ca4b5 312-328
+  s_5e464e0dde83ec::t_0ee63977bb3433 1179-1192
+  s_5e464e0dde83ec::t_339a8512cd5383 1276-1330
+  s_5e464e0dde83ec::t_3d5b0e06e310d8 1275
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "250189c6a2e4ed6f41ea71fd50721101f7b74934",
+  "prompts": {},
+  "sessions": {
+    "s_5e464e0dde83ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc7a846d-d13c-4554-b9bf-dc2dee2f30eb",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
