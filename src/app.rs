@@ -311,20 +311,14 @@ impl eframe::App for SpacetimeApp {
         // 4. Central Panel: Split View between Spacetime (t, r) and Spatial (x, y)
         egui::CentralPanel::default().show(ui, |ui| {
             let avail = ui.available_size();
-            // Two rows above the foliation canvas - the frame selector and the title - against one
-            // above the equatorial canvas. Both canvases are given the same height, so the height
-            // taken out is the taller of the two headers and the equatorial view carries the
-            // difference as slack at its foot rather than running off the bottom of the window.
-            let header_height = 24.0 + FRAME_ROW_HEIGHT;
+            // One row above each canvas: the frame selector on the left, the plain title on the
+            // right. Both canvases are given the same height, so the height taken out is the
+            // taller of the two headers - the combo box - and the equatorial view carries the few
+            // points of difference as slack at its foot.
+            let header_height = FRAME_ROW_HEIGHT;
             let canvas_height = (avail.y - header_height - 10.0).max(250.0);
             let left_width = (avail.x * 0.53).max(200.0);
             let right_width = (avail.x - left_width - 12.0).max(200.0);
-
-            let (left_title, left_sub) = match self.controls.frame_of_ref {
-                ReferenceFrame::DistantObserver => ("GLOBAL FOLIATION (t, r)", "Ingoing Kerr-Schild (Smooth across r₊ & r₋)"),
-                ReferenceFrame::Bob => ("BOB'S REST FRAME (45° CONES)", "Local Minkowski Space (c ≡ 1)"),
-                ReferenceFrame::Alice => ("ALICE'S REST FRAME (45° CONES)", "Local Minkowski Space (c ≡ 1)"),
-            };
 
             ui.horizontal(|ui| {
                 // Left Column: Spacetime foliation (t, r) with aligned 1D track
@@ -334,9 +328,11 @@ impl eframe::App for SpacetimeApp {
                     |ui| {
                         // Whose frame the diagram below is drawn in. It sits on the view it
                         // governs rather than on the control panel: every other thing the choice
-                        // changes - the axes, the light cones, the clock grid - is in this column,
-                        // and reading the label off the picture is how the user knows which of the
-                        // three pictures they are looking at.
+                        // changes - the axes, the light cones, the clock grid - is in this column.
+                        // It is also the only title this column has. There used to be a row under
+                        // it naming the frame again in cyan, which said nothing the selected item
+                        // does not, and in a rest frame said nothing the canvas's own banner does
+                        // not either.
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("Frame of reference:").small().color(Theme::TEXT_MUTED));
                             egui::ComboBox::from_id_salt("frame_of_ref_foliation_combo")
@@ -349,12 +345,6 @@ impl eframe::App for SpacetimeApp {
                                 });
                             ui.checkbox(&mut self.controls.show_distant_clock_grid, "Distant clock grid")
                                 .on_hover_text(DISTANT_CLOCK_GRID_TIP);
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(left_title).strong().color(Theme::HORIZON_OUTER));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(egui::RichText::new(left_sub).small().color(Theme::BOB_COLOR));
-                            });
                         });
                         self.spacetime_canvas.render(
                             ui,
