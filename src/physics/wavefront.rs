@@ -5670,7 +5670,7 @@ mod late_survivors_on_r_minus {
         let (a20, b20, na, nb) = run_to(20.0, &mut field);
         let (a60, b60, na60, nb60) = run_to(60.0, &mut field);
         println!(
-            "t = 20: {na} survivors above r- within {a20:.2e}, {nb} below within {b20:.2e};              t = 60: {na60} above within {a60:.2e}, {nb60} below within {b60:.2e};              predicted collapse over 40 M: exp(-{:.2})",
+            "t = 20: {na} survivors above r- within {a20:.2e}, {nb} below within {b20:.2e}; t = 60: {na60} above within {a60:.2e}, {nb60} below within {b60:.2e}; predicted collapse over 40 M: exp(-{:.2})",
             40.0 * kappa
         );
         assert!(na >= 10 && nb >= 10, "both populations are well represented: {na} / {nb}");
