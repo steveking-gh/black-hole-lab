@@ -385,6 +385,25 @@ impl KerrSchild {
         (r * c - self.a * s, r * s + self.a * c)
     }
 
+    /// The equatorial chart point (r, phi) drawn at the Cartesian position (x, y): the inverse of
+    /// `cartesian_position`, with the radius held at or above `r_floor`.
+    ///
+    /// x + iy = (r + ia)e^{i phi} has modulus sqrt(r^2 + a^2) and argument phi + atan2(a, r), so
+    ///     r   = sqrt(rho^2 - a^2),   rho = hypot(x, y)
+    ///     phi = atan2(y, x) - atan2(a, r)
+    /// and the inversion is exact wherever it exists. It does not exist everywhere: rho < |a| is a
+    /// disc of the drawn plane no equatorial point maps into - the ring is the circle rho = |a|,
+    /// and the whole r > 0 equator lies outside it - so a point in there is read as the smallest
+    /// radius allowed instead, at the azimuth it was pointing at. The floor is the caller's because
+    /// it is a drawing decision: the ring is the end of every worldline that reaches it, and a drop
+    /// onto r = 0 is a drop onto nothing there is a frame at.
+    pub fn chart_point(&self, x: f64, y: f64, r_floor: f64) -> (f64, f64) {
+        let a2 = self.a * self.a;
+        let rho2 = x * x + y * y;
+        let r = (rho2 - a2).max(0.0).sqrt().max(r_floor);
+        (r, y.atan2(x) - self.a.atan2(r))
+    }
+
     /// Jacobian of `cartesian_position`, i.e. the Cartesian velocity of a coordinate velocity
     /// (dr/dt, dphi/dt) at the chart point (r, phi):
     ///     d(x + i y)/dt = (dr/dt - a dphi/dt + i r dphi/dt) e^{i phi}
@@ -651,6 +670,51 @@ impl KerrSchild {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn test_the_chart_point_of_a_drawn_position_inverts_the_embedding() {
+        // What a drag on the equatorial view has to do with the pixel under the pointer. The view
+        // draws x + iy = (r + ia)e^{i phi}, so a screen position is a Cartesian point of that
+        // plane and `chart_point` is the way back to the (r, phi) it came from. Exactly the way
+        // back, wherever the way back exists: this round-trips every point of a grid over the
+        // drawn plane and asks for the same chart point out.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let floor = 0.04;
+        let mut worst_r = 0.0f64;
+        let mut worst_phi = 0.0f64;
+        for k in 0..40 {
+            for j in 0..40 {
+                let r = 0.05 + 12.0 * f64::from(k) / 39.0;
+                let phi = -std::f64::consts::PI + std::f64::consts::TAU * f64::from(j) / 39.0;
+                let (x, y) = metric.cartesian_position(r, phi);
+                let (back_r, back_phi) = metric.chart_point(x, y, floor);
+                worst_r = worst_r.max((back_r - r).abs());
+                let turn = std::f64::consts::TAU;
+                let apart = (back_phi - phi).rem_euclid(turn);
+                worst_phi = worst_phi.max(apart.min(turn - apart));
+            }
+        }
+        println!(
+            "1600 points of the drawn plane round-tripped: r to within {worst_r:.2e}, phi to \
+             within {worst_phi:.2e} rad"
+        );
+        assert!(worst_r < 1e-9 && worst_phi < 1e-9, "the inversion is exact: {worst_r}, {worst_phi}");
+
+        // The hole in the middle of the map. The ring is the circle rho = |a|, and the whole r > 0
+        // equator lies outside it, so a pointer inside that disc is asking for a point that does
+        // not exist: it gets the floor, at the azimuth it was pointing at, rather than a NaN.
+        let inside = metric.a * 0.5;
+        let (r, phi) = metric.chart_point(inside, 0.0, floor);
+        assert!((r - floor).abs() < 1e-12, "inside the ring the radius floors: {r}");
+        assert!(phi.is_finite(), "and the azimuth is still an angle: {phi}");
+        let (r, _) = metric.chart_point(0.0, 0.0, floor);
+        assert!((r - floor).abs() < 1e-12, "dead centre included: {r}");
+        // And just outside it the radius comes back up off the floor continuously.
+        let (r, _) = metric.chart_point(metric.a * 1.001, 0.0, floor);
+        println!("rho = 1.001a gives r = {r:.4} against a floor of {floor}");
+        assert!(r >= floor, "never below the floor: {r}");
+    }
+
     use super::*;
 
     #[test]

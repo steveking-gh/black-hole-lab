@@ -76,6 +76,19 @@ pub struct ObserverSettings {
     /// Where this observer's fall is released from, which is what sets their energy. See
     /// `Release`: at rest at the drop radius, or from rest at infinity.
     pub release: Release,
+    /// The azimuth this observer is dropped at, in radians of the chart coordinate phi.
+    ///
+    /// Free, in the sense that the radius is not: Kerr is axisymmetric, so phi is a cyclic
+    /// coordinate and moving an observer in it changes none of their constants - E, L and the whole
+    /// radial problem are untouched. Only the *difference* between the two observers' azimuths
+    /// means anything, and what it means is how far apart they are around the hole: how long light
+    /// takes to get from one to the other, and where on r- one of them crosses relative to the band
+    /// of frozen arcs the other's transmission has left standing there, co-rotating at Omega_-.
+    ///
+    /// It is not the angle the marker is drawn at. The embedding is x + iy = (r + ia)e^{i phi}, so
+    /// the drawn azimuth is phi + atan2(a, r) - 11 degrees further round at r = 4.5M and 42 degrees
+    /// at r = 1M, for a = 0.90 - which is why the card reports the drawn position as well.
+    pub drop_phi: f64,
     /// The radius this observer is dropped from, by ⏮ Reset and at startup.
     ///
     /// It starts at `DROP_RADIUS` and is then whatever the user last put the observer at while the
@@ -105,6 +118,7 @@ impl ObserverSettings {
             delta_t_delay,
             l_ang: 0.0,
             release: Release::FromInfinity,
+            drop_phi: 0.0,
             drop_r: DROP_RADIUS,
             mode: ObserverMode::FreeFall,
         }
@@ -126,13 +140,8 @@ impl ObserverSettings {
 
     /// The observer this card asks for, dropped at `drop_r` on the clock's reading `start_t`
     /// and released `delta_t_delay` of coordinate time later, or None when the card is unticked.
-    fn dropped(
-        &self,
-        metric: &KerrSchild,
-        name: &str,
-        start_phi: f64,
-        start_t: f64,
-    ) -> Option<Observer> {
+    fn dropped(&self, metric: &KerrSchild, name: &str, start_t: f64) -> Option<Observer> {
+        let start_phi = self.drop_phi;
         self.enabled.then(|| {
             let mut obs = Observer::new_with_phi(
                 metric,
@@ -248,7 +257,7 @@ impl Default for AppControls {
             // HUD's "Alice → Bob" line and the Theory Guide describe - put a delay on Bob's card
             // and he cuts through her pulses exactly as those texts say - but it is a
             // configuration to reach for rather than the layout the app opens on.
-            alice: ObserverSettings::zamo(0.0),
+            alice: ObserverSettings { drop_phi: ALICE_DROP_PHI, ..ObserverSettings::zamo(0.0) },
             bob: ObserverSettings::raindrop(0.0),
             show_theory_modal: false,
             use_km: true,
@@ -291,6 +300,12 @@ const DISTANCE_STEP_MIN_SPEED: f64 = 0.01;
 /// to be a few tens of M. After that each card carries its own `ObserverSettings::drop_r`.
 const DROP_RADIUS: f64 = 4.5;
 
+/// The azimuth Alice is dropped at out of the box, a quarter of a radian round from Bob. Two
+/// observers at the same (r, phi) would be the same observer; the gap is what makes the pair a
+/// pair, and it is the one the release gap and the signal travel time are quoted against. After
+/// that each card carries its own `ObserverSettings::drop_phi`.
+const ALICE_DROP_PHI: f64 = 0.25;
+
 /// The hover tips on the four Motion buttons of an observer card. Each says what worldline the
 /// option is, which 4-velocity it puts at the observer's event, where that worldline exists, what
 /// happens where it does not - `Observer::effective_mode`'s fallback - and what the mode is for.
@@ -300,6 +315,7 @@ const DROP_RADIUS: f64 = 4.5;
 /// They are written about "the observer" rather than about Bob, because both cards show them.
 const FREE_FALL_TIP: &str = "A timelike geodesic: the observer falls with no thrust at all and their accelerometer reads exactly zero, which is the whole content of the word. Which geodesic is fixed by the two conserved quantities they were dropped with, the energy per unit mass E = −u_t and the axial angular momentum per unit mass L = u_ϕ on the sliders below, and their four-velocity is the one the integrator is carrying along that curve, so the telemetry, the frame their pulses go out into and the frame their receptions are measured in are all the same object as the worldline being drawn. E = 1 with L = 0 is the raindrop, dropped from rest at infinity and falling straight in; that is the congruence the River of Space is made of, so they are then riding one of the drops. A geodesic exists at every radius and this is the only mode that does: they cross the ergosphere, the outer horizon r₊ and the Cauchy horizon r₋ in finite proper time with nothing local happening to them at any of them, and for the equatorial L = 0 case the fall ends on the ring, where the curvature is genuinely infinite and the chart stops. Give them enough prograde angular momentum and they freeze onto r₋ instead, their proper time reaching a finite limit while the coordinate clock runs on. It is the mode the light cones and both transmissions read most naturally in, because an infaller is the observer the whole interior picture is drawn for.";
 const DROP_RADIUS_TIP: &str = "Where this observer is dropped from, and where ⏮ Reset builds them. It is the same number as the position of their marker at t = 0: drag the marker while the clock reads zero and this slider follows, move this slider and the next drop lands there, because there is one drop radius per observer and two ways to say it. While the clock reads zero it takes effect at once, since the run has not started and there is nothing for it to contradict; once the clock is running it is a standing request like everything else on the card, waiting for the next ⏮ Reset rather than teleporting a run already under way. It also sets their energy, since E is whatever the release at that radius implies: released at rest, a drop from further out has more of it, and E → 1 as the drop radius runs to infinity, which is the raindrop. The slider is logarithmic because the interesting range spans the ring at 0.05M and the far field at 30M, and nothing stops you dropping somebody inside a horizon: there they cannot be at rest, and the card says what it does instead.";
+const DROP_AZIMUTH_TIP: &str = "Where round the hole this observer is dropped, in the chart angle ϕ. It is the coordinate the drop radius does not cover, and a marker dragged on the equatorial view sets both at once. Nothing about the worldline depends on it on its own: Kerr is axisymmetric, so ϕ is a cyclic coordinate and rotating an observer changes none of their constants — E, L, the effective potential and the whole radial problem are exactly as they were. What does depend on it is the *pair*. The difference between the two azimuths is how far apart they stand around the hole, so it sets how long light takes to cross between them and from which side; and inside r₊ it decides how much of the other's frozen light the crosser actually meets, since each pulse's E − Ω₋L < 0 arc settles onto a band of r₋ and co-rotates there at Ω₋ rather than covering every azimuth. Put them on opposite sides and Bob crosses somewhere Alice's stack has not reached. The marker is not drawn at this angle: the embedding x + iy = (r + ia)e^{iϕ} turns it a further atan2(a, r) round — 11° at r = 4.5M, 42° at r = 1M for a = 0.90 — and the line below the sliders reports where the dot actually lands.";
 const AT_REST_TIP: &str = "The observer is at rest at the moment they are released: dr/dτ = 0, and the worldline starts exactly on a turning point of the radial potential, R(r) = 0. Their energy is then whatever that costs — E = V(r, L), the effective potential at the drop radius, which at 4.5M with L = 0 and a = 0.90 is 0.7504 — so E is reported rather than dialled, and it moves when the drop radius or L moves. This is the release a user usually means by \"dropped\": the run begins when the engines are cut. It is also the only release that joins the hover before it without a jump: while they wait they hold that same four-velocity under thrust, so nothing in their motion changes at the release except that the thrust stops. At rest means at rest in r; with L = 0 in Kerr they are still carried round at the frame-dragging rate, which is the ZAMO. Between the horizons nothing can hold a radius at all and the release falls back to the raindrop.";
 const FROM_INFINITY_TIP: &str = "The observer arrives having fallen from rest infinitely far away: E = 1 exactly, whatever radius they are dropped at, which means they are already moving when the run starts. At 4.5M that is two thirds of the speed of light inward past a static observer — nothing accelerated them to it, it is what the initial condition says about their history. With L = 0 this is the raindrop, a member of the same E = 1 congruence the River of Space is drawn from and the frame every wavefront colour and every measured shift in the app is quoted against, so it is the release that makes an observer one of the drops in the river rather than an interloper drifting through it. The price is that a Release Delay in front of it is a fiction: they cannot hover and then be moving at 0.667c without an infinite acceleration, so the release is a genuine discontinuity in the worldline, which is the honest statement that they did not come from here. Choose At rest here if you want the wait and the fall to join.";
 const ANGULAR_MOMENTUM_TIP: &str = "The conserved angular momentum per unit mass, L = u_ϕ, in units of M. It is the one constant of the motion set directly, because it is the one the app's central result is stated in: which branch of the inner horizon an infaller reaches is decided by the sign of E − Ω₋L, with Ω₋ = a/(r₋²+a²) = 0.798/M at a = 0.90. Released at rest from 4.5M the crossover sits at L = 0.985 — below it they cross the near branch of r₋ at finite coordinate time, above it they settle onto the far branch, where t → ∞ and their own clock reaches r₋ in finite proper time while the outside universe's whole future arrives at once. Walk the slider across that value and the picture changes character. L also decides whether they fall at all: from rest, enough of it and the centrifugal barrier throws them outward instead, and past about L = 4 at 4.5M the energy that costs exceeds 1 and they escape to infinity. Prograde is positive, retrograde negative, and the two are not mirror images around a spinning hole.";
@@ -379,23 +395,18 @@ fn same_to_a_millionth(x: f64, y: f64) -> bool {
 struct ObserverCard {
     name: &'static str,
     colour: egui::Color32,
-    /// The azimuth a drop starts this observer at. The two differ so that the equatorial view can
-    /// tell the trails apart; the physics of an equatorial worldline does not depend on it.
-    start_phi: f64,
     transmit_tip: &'static str,
 }
 
 const ALICE_CARD: ObserverCard = ObserverCard {
     name: "Alice",
     colour: Theme::ALICE_COLOR,
-    start_phi: 0.25,
     transmit_tip: ALICE_SIGNAL_TIP,
 };
 
 const BOB_CARD: ObserverCard = ObserverCard {
     name: "Bob",
     colour: Theme::BOB_COLOR,
-    start_phi: 0.0,
     transmit_tip: BOB_SIGNAL_TIP,
 };
 
@@ -512,6 +523,21 @@ impl ObserverCard {
                 .on_hover_text(DROP_RADIUS_TIP);
             }
 
+            // And at what azimuth. In degrees, because nobody thinks in radians, and free to run
+            // the whole turn: the pair can be put on opposite sides of the hole.
+            let mut degrees = settings.drop_phi.to_degrees();
+            if ui
+                .add(
+                    egui::Slider::new(&mut degrees, -180.0..=180.0)
+                        .suffix("°")
+                        .text("Drop azimuth ϕ"),
+                )
+                .on_hover_text(DROP_AZIMUTH_TIP)
+                .changed()
+            {
+                settings.drop_phi = degrees.to_radians();
+            }
+
             // How they are let go of, which is what fixes E.
             ui.horizontal(|ui| {
                 ui.label("Release:");
@@ -548,6 +574,27 @@ impl ObserverCard {
                     )
                 } else {
                     format!("E = {:.4} ({bound})", params.energy)
+                })
+                .small()
+                .color(Theme::TEXT_MUTED),
+            );
+            // Where that lands on the equatorial view, which is not where the naive polar reading
+            // of (r, phi) would put it: the embedding x + iy = (r + ia)e^{i phi} turns the marker a
+            // further atan2(a, r) round and draws it at radius sqrt(r^2 + a^2). The card says the
+            // chart coordinates, which are what the physics is stated in, and this says the dot.
+            let (x, y) = metric.cartesian_position(settings.drop_r, settings.drop_phi);
+            ui.label(
+                egui::RichText::new(if use_km {
+                    format!(
+                        "Drawn at x = {}, y = {} — drag the marker on the equatorial view to move it",
+                        metric.format_km(metric.r_to_km(x)),
+                        metric.format_km(metric.r_to_km(y))
+                    )
+                } else {
+                    format!(
+                        "Drawn at x = {x:.2}M, y = {y:.2}M — drag the marker on the equatorial \
+                         view to move it"
+                    )
                 })
                 .small()
                 .color(Theme::TEXT_MUTED),
@@ -611,7 +658,13 @@ impl ObserverCard {
         let wanted = settings.worldline_params(metric);
         let carried = obs.geodesic.map_or(wanted.l_ang, |geo| geo.l_ang);
         let same = |a: f64, b: f64| (a - b).abs() <= 1e-9 * (1.0 + a.abs().max(b.abs()));
+        // The azimuth is compared as an angle: a drag reads it out of `atan2` in (-pi, pi], and a
+        // card can be holding the same direction written as 6.0 rather than -0.28.
+        let turn = std::f64::consts::TAU;
+        let apart = (obs.phi - settings.drop_phi).rem_euclid(turn);
         same(obs.r, settings.drop_r)
+            && apart.min(turn - apart) <= 1e-9
+
             && same(carried, wanted.l_ang)
             && same(obs.release_t, start_t + settings.delta_t_delay)
             && obs.release == wanted.release
@@ -625,7 +678,7 @@ impl ObserverCard {
         start_t: f64,
     ) -> Observer {
         settings
-            .dropped(metric, self.name, self.start_phi, start_t)
+            .dropped(metric, self.name, start_t)
             .expect("only called with the card ticked")
     }
 
@@ -643,7 +696,7 @@ impl ObserverCard {
         previous: Option<&Observer>,
         start_t: f64,
     ) -> Option<Observer> {
-        let mut obs = settings.dropped(metric, self.name, self.start_phi, start_t)?;
+        let mut obs = settings.dropped(metric, self.name, start_t)?;
         if let Some(prev) = previous {
             obs.mode = prev.mode;
         }
@@ -719,8 +772,9 @@ impl AppControls {
         self.view_reset_requested = true;
     }
 
-    /// Take the radius of any observer with a hand on them as the radius they are dropped from, if
-    /// the run is standing at its start.
+    /// Take the position of any observer with a hand on them as the position they are dropped
+    /// from, if the run is standing at its start. Both coordinates: the equatorial view drags them
+    /// about the plane, so a drag says a radius and an azimuth.
     ///
     /// This is the drag's half of one rule: while the clock reads zero, the card and the observer
     /// are the same thing. The card is the one that says so - `ObserverCard::describes` puts the
@@ -751,6 +805,7 @@ impl AppControls {
                 && obs.mode == ObserverMode::ManualDrag
             {
                 card.drop_r = obs.r;
+                card.drop_phi = obs.phi;
             }
         }
     }

@@ -357,7 +357,7 @@ impl eframe::App for SpacetimeApp {
             // The observers under the pointer have just been replaced by fresh ones, so a drag of
             // the old worldline is not carried into the new run: both markers are pickable again
             // from the moment the reset lands.
-            self.spacetime_canvas.end_drag();
+            self.spatial_canvas.end_drag();
         }
 
         // 4. Central Panel: Split View between Spacetime (t, r) and Spatial (x, y)
@@ -389,8 +389,8 @@ impl eframe::App for SpacetimeApp {
                         self.spacetime_canvas.render(
                             ui,
                             &self.metric,
-                            self.bob.as_mut(),
-                            self.alice.as_mut(),
+                            self.bob.as_ref(),
+                            self.alice.as_ref(),
                             self.current_time,
                             canvas_height,
                             self.controls.use_km,
@@ -418,8 +418,9 @@ impl eframe::App for SpacetimeApp {
                         self.spatial_canvas.render(
                             ui,
                             &self.metric,
-                            &self.bob,
-                            &self.alice,
+                            &mut self.bob,
+                            &mut self.alice,
+                            self.current_time,
                             self.controls.show_river,
                             SignalViews { alice: &self.signal, bob: &self.bob_signal },
                             canvas_height,

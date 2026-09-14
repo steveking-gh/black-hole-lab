@@ -504,59 +504,17 @@ fn telemetry_lines(
     lines
 }
 
-/// How close to the ring a drag may put an observer. The ring is the curvature singularity and the
-/// end of every worldline that reaches it, so a drop onto r = 0 is a drop onto nothing there is a
-/// frame at; this is the same floor the old Bob-only drag used.
-const RING_DROP_FLOOR: f64 = 0.04;
-
-/// Which observer's marker a drag on the (t, r) diagram has hold of. Both of them can be picked
-/// up: a drag is the question "what if they were *here* instead", and it is as fair to ask of
-/// Alice as of Bob.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Marker {
-    Alice,
-    Bob,
-}
-
-impl Marker {
-    /// The drawn radius of this observer's marker, which also sets how close the pointer has to
-    /// come to pick it up.
-    fn radius(self) -> f32 {
-        match self {
-            Self::Alice => 5.5,
-            Self::Bob => 8.0,
-        }
-    }
-}
-
-/// A marker drag in progress: whose it is, and the Motion they were on when it started.
-///
-/// The Motion is kept because `Observer::set_drag_position` puts whoever is being moved into
-/// `ObserverMode::ManualDrag` for as long as the pointer holds them - that is what a hand on the
-/// marker means - and dropping them has to give back the worldline they were on. A free-faller is
-/// released again at the event they were dropped at, on their own `Release`; a ZAMO goes back to
-/// holding the new radius. Nothing selects that held state from the panel any more: it is the
-/// mechanism of the drag and nothing else.
-#[derive(Clone, Copy, PartialEq, Debug)]
-struct MarkerDrag {
-    who: Marker,
-    mode_before: ObserverMode,
-    /// Marker centre minus pointer at the moment the pointer took hold, in screen pixels, added
-    /// back on every frame of the drag. Without it the observer is placed *at* the pointer, so
-    /// picking a marker up anywhere but dead centre teleports it under the cursor by as much as
-    /// three marker radii before the drag has moved at all.
-    grab: Vec2,
-}
+/// The drawn radius of each observer's marker on the (t, r) diagram. They are not pickable here -
+/// a marker is dragged on the equatorial view, which draws the plane they actually stand in - so
+/// unlike `Who::marker_radius` these are drawing sizes and nothing else.
+const ALICE_MARKER_RADIUS: f32 = 5.5;
+const BOB_MARKER_RADIUS: f32 = 8.0;
 
 pub struct SpacetimeCanvas {
     pub max_r: f64,
     pub r_offset: f64,
     pub time_window: f64,
     pub time_offset: f64,
-    /// The marker drag in progress on this canvas, if any. Cleared when the pointer is released,
-    /// when the observer being dragged leaves the simulation, and by `SpacetimeCanvas::end_drag`
-    /// when the run is rebuilt under it.
-    dragging: Option<MarkerDrag>,
     /// Where the user has dragged each info box on this canvas, per diagram and per observer.
     pub telemetry: TelemetryBoxes,
 }
@@ -568,7 +526,6 @@ impl Default for SpacetimeCanvas {
             r_offset: 0.0,
             time_window: 14.0,
             time_offset: 0.0,
-            dragging: None,
             telemetry: TelemetryBoxes::default(),
         }
     }
@@ -592,109 +549,14 @@ impl SpacetimeCanvas {
         self.r_offset = (bob_r - 0.025).max(0.0);
     }
 
-    /// Forget any marker drag in progress. Called when the run is rebuilt under the canvas - the
-    /// observer being held is replaced by a fresh one from their card - so that the next pointer
-    /// press starts a drag of the new worldline rather than continuing one of a worldline that no
-    /// longer exists. Both markers are pickable again the moment the reset lands.
-    pub fn end_drag(&mut self) {
-        self.dragging = None;
-    }
-
-    /// Start, continue and finish a drag of either observer's marker.
-    ///
-    /// One set of rules for both of them. A press within three marker radii picks up the nearest
-    /// marker under it; while the pointer holds it the observer stands at the pointer's *radius*,
-    /// put there by `Observer::set_drag_position`, which is what a hand on the marker means: the
-    /// worldline is being placed rather than integrated. Releasing hands them back the Motion they
-    /// were on through `Observer::release_from_drag`, which releases them again at the event they
-    /// were dropped at, so a drag asks "what if they were here" without answering the separate
-    /// question of how they move.
-    ///
-    /// A drag says where, not when: the observer's t is the simulation clock's, whatever height the
-    /// pointer is at. This diagram has two axes and only one of them is a thing an observer can be
-    /// moved along. Every worldline in the run stands at the same t, because that is what the clock
-    /// means, and an observer left at another one is not somewhere the run can be: dragged upward
-    /// they stood in the future of the light drawn around them, and dragged below the clock line
-    /// they took `Observer::release_from_drag`'s release time with them - which, at the start of a
-    /// run, no longer matched their card and had the card put them back on the clock line, so a
-    /// drag that wandered downward snapped back while one that wandered up did not. Neither is a
-    /// question about the geometry, so the pointer's height is simply not read.
-    ///
-    /// The dropped radius is clamped into the radial window on screen and held off the ring, so a
-    /// drag cannot put an observer somewhere the user cannot see or onto the curvature singularity
-    /// itself. The window is `r_offset .. r_offset + max_r` and not `0 .. max_r`: `max_r` is the
-    /// *width* of the drawn range rather than its top, and clamping to it threw every drag taken
-    /// while the view was panned or zoomed - which is what the Focus r- and Focus Bob buttons do -
-    /// onto a radius far below the one under the pointer.
-    ///
-    /// A drag whose observer has left the simulation - their card unticked while the pointer is
-    /// down - is dropped rather than carried, because there is no worldline left to place.
-    #[allow(clippy::too_many_arguments)]
-    fn drag_markers(
-        &mut self,
-        metric: &KerrSchild,
-        response: &egui::Response,
-        alice: Option<&mut Observer>,
-        bob: Option<&mut Observer>,
-        window: std::ops::RangeInclusive<f64>,
-        current_time: f64,
-        to_screen: impl Fn(&Observer) -> Pos2,
-        to_radius: impl Fn(Pos2) -> f64,
-    ) {
-        let mut markers: Vec<(Marker, &mut Observer)> = Vec::new();
-        if let Some(al) = alice {
-            markers.push((Marker::Alice, al));
-        }
-        if let Some(b) = bob {
-            markers.push((Marker::Bob, b));
-        }
-
-        if response.drag_started()
-            && let Some(pointer) = response.interact_pointer_pos()
-        {
-            let mut nearest: Option<(MarkerDrag, f32)> = None;
-            for (who, obs) in markers.iter() {
-                let reach = who.radius() * 3.0;
-                let at = to_screen(obs);
-                let distance = at.distance(pointer);
-                if distance < reach && nearest.is_none_or(|(_, best)| distance < best) {
-                    let drag =
-                        MarkerDrag { who: *who, mode_before: obs.mode, grab: at - pointer };
-                    nearest = Some((drag, distance));
-                }
-            }
-            self.dragging = nearest.map(|(drag, _)| drag);
-        }
-
-        let Some(drag) = self.dragging else {
-            return;
-        };
-        let floor = RING_DROP_FLOOR.max(*window.start());
-        match markers.iter_mut().find(|(who, _)| *who == drag.who) {
-            Some((_, obs)) => {
-                if response.dragged()
-                    && let Some(pointer) = response.interact_pointer_pos()
-                {
-                    let r = to_radius(pointer + drag.grab);
-                    obs.set_drag_position(current_time, r.clamp(floor, window.end().max(floor)));
-                }
-                if response.drag_stopped() {
-                    obs.release_from_drag(metric, drag.mode_before);
-                    self.dragging = None;
-                }
-            }
-            None => self.dragging = None,
-        }
-    }
-
     /// Render the (t, r) spacetime foliation canvas with an integrated, perfectly aligned 1D radial track
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         ui: &mut egui::Ui,
         metric: &KerrSchild,
-        bob: Option<&mut Observer>,
-        alice: Option<&mut Observer>,
+        bob: Option<&Observer>,
+        alice: Option<&Observer>,
         current_time: f64,
         canvas_height: f32,
         use_km: bool,
@@ -737,13 +599,13 @@ impl SpacetimeCanvas {
         // The rest-frame views need one observer to be the frame and take the other, if there is
         // one, as a guest. Either may be missing, so the frame the user asked for falls back to
         // whoever is left, and with nobody left there is no rest frame to draw at all.
-        let (mut bob, mut alice) = (bob, alice);
+        let (bob, alice) = (bob, alice);
         match frame_of_ref {
             ReferenceFrame::Bob | ReferenceFrame::Alice => {
                 painter.rect_filled(rect, 4.0, Theme::CANVAS_BG);
                 let (asked, other) = match frame_of_ref {
-                    ReferenceFrame::Alice => (alice.as_deref(), bob.as_deref()),
-                    _ => (bob.as_deref(), alice.as_deref()),
+                    ReferenceFrame::Alice => (alice, bob),
+                    _ => (bob, alice),
                 };
                 match (asked, other) {
                     (Some(focus), other) => self.render_observer_frame(
@@ -773,8 +635,8 @@ Tick Enable Observer on Alice's or Bob's card",
                     &response,
                     rect,
                     metric,
-                    bob.as_deref_mut(),
-                    alice.as_deref_mut(),
+                    bob,
+                    alice,
                     current_time,
                     use_km,
                     font_scale,
@@ -879,7 +741,7 @@ Tick Enable Observer on Alice's or Bob's card",
         let center_y = t_rect.center().y + 2.0;
 
         // Draw Alice on Track
-        if let Some(al) = alice.as_deref()
+        if let Some(al) = alice
             && al.is_active
         {
             let al_x = track_to_x(al.r);
@@ -888,7 +750,7 @@ Tick Enable Observer on Alice's or Bob's card",
         }
 
         // Draw Bob on Track
-        if let Some(bob) = bob.as_deref().filter(|b| b.is_active) {
+        if let Some(bob) = bob.filter(|b| b.is_active) {
             let bob_x = track_to_x(bob.r);
             t_painter.circle_filled(Pos2::new(bob_x, center_y), 6.5, Theme::BOB_COLOR);
             t_painter.circle_stroke(Pos2::new(bob_x, center_y), 8.5, Stroke::new(1.0, Color32::WHITE));
@@ -896,7 +758,7 @@ Tick Enable Observer on Alice's or Bob's card",
         }
 
         // Radial separation between Alice and Bob, if both are present
-        if let (Some(al), Some(bob)) = (alice.as_deref(), bob.as_deref())
+        if let (Some(al), Some(bob)) = (alice, bob)
             && al.is_active
             && bob.is_active
         {
@@ -931,8 +793,8 @@ Tick Enable Observer on Alice's or Bob's card",
         response: &egui::Response,
         rect: Rect,
         metric: &KerrSchild,
-        bob: Option<&mut Observer>,
-        alice: Option<&mut Observer>,
+        bob: Option<&Observer>,
+        alice: Option<&Observer>,
         current_time: f64,
         use_km: bool,
         font_scale: f32,
@@ -942,10 +804,10 @@ Tick Enable Observer on Alice's or Bob's card",
         let t_max = current_time + self.time_offset + self.time_window * 0.3;
 
         // The radial projection, in locals rather than read through `self`, so that the closures
-        // built on it do not hold a borrow of the canvas for as long as they live: the marker drag
-        // below needs `&mut self` while they are still in scope. They are taken before the
-        // background pan, so every projection in this frame is the one the user is looking at as
-        // they press: a pan applied to the closures mid-frame would move the picture out from
+        // built on it do not hold a borrow of the canvas for as long as they live. They are taken
+        // before the background pan, so every projection in this frame is the one the user is
+        // looking at as they press: a pan applied to the closures mid-frame would move the picture
+        // out from
         // under the pointer that is acting on it, which is exactly what the time axis already
         // avoids by fixing t_min and t_max above.
         let (r_offset, max_r) = (self.r_offset, self.max_r);
@@ -958,11 +820,6 @@ Tick Enable Observer on Alice's or Bob's card",
         let to_screen_y = |t: f64| -> f32 {
             let frac = ((t - t_min) / (t_max - t_min)) as f32;
             rect.bottom() - frac * rect.height()
-        };
-
-        let to_coord_r = |screen_x: f32| -> f64 {
-            let frac = ((screen_x - rect.left()) / rect.width()) as f64;
-            (r_offset + frac * max_r).max(0.0)
         };
 
         // Both observers' cones span the same slice of the zoom window.
@@ -1306,10 +1163,9 @@ Tick Enable Observer on Alice's or Bob's card",
         draw_wedges(signals.alice, Theme::ALICE_COLOR);
 
         // Alice Worldline & Marker. The info boxes are registered last, below, so that a drag on
-        // a box beats the canvas's own pan/drag response instead of panning time or moving Bob.
-        let (mut bob, mut alice) = (bob, alice);
+        // a box beats the canvas's own pan response instead of panning the diagram.
         let mut alice_box: Option<Pos2> = None;
-        if let Some(al) = alice.as_deref() {
+        if let Some(al) = alice {
             if al.trail.len() >= 2 {
                 let points: Vec<Pos2> = al
                     .trail
@@ -1325,9 +1181,7 @@ Tick Enable Observer on Alice's or Bob's card",
                     draw_cone(al);
                 }
                 if rect.contains(alice_pos) {
-                    let held = self.dragging.is_some_and(|d| d.who == Marker::Alice);
-                    let colour = if held { Color32::WHITE } else { Theme::ALICE_COLOR };
-                    painter.circle_filled(alice_pos, Marker::Alice.radius(), colour);
+                    painter.circle_filled(alice_pos, ALICE_MARKER_RADIUS, Theme::ALICE_COLOR);
                     painter.circle_stroke(alice_pos, 7.5, Stroke::new(1.0, Color32::WHITE));
                     alice_box = Some(alice_pos);
                 }
@@ -1335,7 +1189,7 @@ Tick Enable Observer on Alice's or Bob's card",
         }
 
         // Bob Worldline & Dragging
-        if let Some(bob) = bob.as_deref().filter(|b| b.trail.len() >= 2) {
+        if let Some(bob) = bob.filter(|b| b.trail.len() >= 2) {
             let points: Vec<Pos2> = bob
                 .trail
                 .iter()
@@ -1372,25 +1226,9 @@ Tick Enable Observer on Alice's or Bob's card",
         }
 
 
-        // Either marker can be picked up and put somewhere else. It is registered before the
-        // telemetry boxes, which go last of all, so that a drag on a box moves the box rather than
-        // the observer underneath it, and *before* the background pan below, which stands down
-        // while a marker is held: the pan reads `self.dragging`, and a pick made after it would
-        // leave the first frame of every marker drag panning the diagram as well.
-        self.drag_markers(
-            metric,
-            response,
-            alice.as_deref_mut(),
-            bob.as_deref_mut(),
-            r_offset..=r_offset + max_r,
-            current_time,
-            |obs| Pos2::new(to_screen_x(obs.r), to_screen_y(obs.t)),
-            |at| to_coord_r(at.x),
-        );
-
         // Mouse drag background panning for time and radial offset. It takes effect on the next
         // frame, since this frame's projections were fixed above.
-        if response.dragged() && self.dragging.is_none() {
+        if response.dragged() {
             let delta = response.drag_delta();
             let dt = (delta.y as f64 / rect.height() as f64) * (t_max - t_min);
             self.time_offset += dt;
@@ -1401,7 +1239,7 @@ Tick Enable Observer on Alice's or Bob's card",
         // Everything left on this canvas is Bob's: his worldline, his light cone, his marker and
         // the two boxes read off him. With no Bob in the simulation there is none of it.
         let Some(bob) = bob else {
-            if let (Some(al), Some(alice_pos)) = (alice.as_deref(), alice_box) {
+            if let (Some(al), Some(alice_pos)) = (alice, alice_box) {
                 self.telemetry.show(
                     ui, painter, "spacetime", rect, alice_pos, "Alice", Theme::ALICE_COLOR, al,
                     metric, use_km, font_scale,
@@ -1410,7 +1248,7 @@ Tick Enable Observer on Alice's or Bob's card",
             return;
         };
 
-        let bob_radius = Marker::Bob.radius();
+        let bob_radius = BOB_MARKER_RADIUS;
 
         // Bob's Exact Light Cone
         let apex = Pos2::new(to_screen_x(bob.r), to_screen_y(bob.t));
@@ -1424,12 +1262,7 @@ Tick Enable Observer on Alice's or Bob's card",
         }
 
         // Bob avatar circle
-        let held = self.dragging.is_some_and(|d| d.who == Marker::Bob);
-        painter.circle_filled(
-            apex,
-            bob_radius,
-            if held { Color32::WHITE } else { Theme::BOB_COLOR },
-        );
+        painter.circle_filled(apex, bob_radius, Theme::BOB_COLOR);
         painter.circle_stroke(apex, bob_radius + 2.0, Stroke::new(1.5, Color32::WHITE));
 
         // Zoom hint overlay in top-left
@@ -1460,7 +1293,7 @@ Tick Enable Observer on Alice's or Bob's card",
         );
 
         // Draggable info boxes, registered after every other interaction on this canvas.
-        if let (Some(al), Some(alice_pos)) = (alice.as_deref(), alice_box) {
+        if let (Some(al), Some(alice_pos)) = (alice, alice_box) {
             self.telemetry.show(
                 ui, painter, "spacetime", rect, alice_pos, "Alice", Theme::ALICE_COLOR, al, metric, use_km,
                 font_scale,
@@ -2207,318 +2040,6 @@ mod canvas_tests {
         }
     }
 
-    /// One real frame of the (t, r) diagram with both observers on it, driven by whatever pointer
-    /// events are handed in, returning the screen position of each marker as it was painted.
-    ///
-    /// The positions are read off the painter rather than recomputed from the canvas's projection,
-    /// so a test that then presses on one of them is pressing where the user sees it.
-    fn marker_frame(
-        canvas: &mut SpacetimeCanvas,
-        ctx: &egui::Context,
-        metric: &KerrSchild,
-        alice: &mut Observer,
-        bob: &mut Observer,
-        events: Vec<egui::Event>,
-    ) -> Vec<(Color32, f32, Pos2)> {
-        use crate::physics::wavefront::SignalField;
-        let signal = SignalField::default();
-        // The observers' own t, because in the app every worldline stands at the simulation clock
-        // - that is what a clock is - and a marker drag is now a statement about r alone, made at
-        // whatever time the run has reached. A frame rendered at some other clock would be asking
-        // the canvas about a run that cannot happen, and the drag would pull the marker to the
-        // clock's line to say so.
-        assert!(
-            (alice.t - bob.t).abs() < 1e-9,
-            "both observers stand at the simulation clock: {} and {}",
-            alice.t,
-            bob.t
-        );
-        let clock = alice.t;
-        let input = egui::RawInput {
-            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
-            events,
-            ..Default::default()
-        };
-        let output = ctx.clone().run_ui(input, |ui| {
-            canvas.render(
-                ui,
-                metric,
-                Some(bob),
-                Some(alice),
-                clock,
-                600.0,
-                false,
-                ReferenceFrame::DistantObserver,
-                1.0,
-                SignalViews { alice: &signal, bob: &signal },
-                false,
-            );
-        });
-        let mut circles = Vec::new();
-        fn walk(shape: &egui::Shape, out: &mut Vec<(Color32, f32, Pos2)>) {
-            match shape {
-                egui::Shape::Circle(c) => out.push((c.fill, c.radius, c.center)),
-                egui::Shape::Vec(inner) => {
-                    for shape in inner {
-                        walk(shape, out);
-                    }
-                }
-                _ => {}
-            }
-        }
-        for clipped in output.shapes.iter() {
-            walk(&clipped.shape, &mut circles);
-        }
-        output.drop_without_applying_deltas();
-        circles
-    }
-
-    /// Where the marker of the given colour and drawn radius was painted on the main canvas.
-    fn marker_at(circles: &[(Color32, f32, Pos2)], colour: Color32, radius: f32) -> Option<Pos2> {
-        circles
-            .iter()
-            .find(|(fill, r, _)| *fill == colour && (*r - radius).abs() < 1e-6)
-            .map(|(_, _, at)| *at)
-    }
-
-    #[test]
-    fn test_a_drag_puts_an_observer_under_the_pointer_however_the_view_is_zoomed() {
-        // Two ways the drag used to throw an observer somewhere the pointer never went.
-        //
-        // The radial window on screen is r_offset ..= r_offset + max_r, and `max_r` is its *width*
-        // rather than its top. The drop was clamped into 0.04 ..= max_r, which is the same range
-        // only while the view has never been panned; zoom in on r- with the Focus button - a
-        // window 0.05 M wide sitting at r- itself - and every drag, however small, was clamped to
-        // r = 0.05, throwing the observer from the Cauchy horizon to within a hair of the ring.
-        //
-        // And the observer was placed *at* the pointer rather than keeping the offset the pointer
-        // took hold at, so a marker picked up anywhere but dead centre jumped under the cursor
-        // before the drag had moved at all - as much as three marker radii, which is most of the
-        // width of that zoomed-in window.
-        //
-        // Both are measured here against the drawing: the projection is recovered from where the
-        // marker is actually painted at two known radii, so what is checked is that moving the
-        // pointer by n pixels moves the observer by exactly the n pixels' worth of radius the
-        // diagram is drawn at.
-        let metric = KerrSchild::new(1.0, 0.65);
-        let r_minus = metric.inner_horizon();
-        let ctx = egui::Context::default();
-        ctx.set_fonts(egui::FontDefinitions::empty());
-
-        // The Focus r- window: 0.05 M wide, centred on the Cauchy horizon, and nowhere near 0.
-        let mut canvas = SpacetimeCanvas {
-            max_r: 0.05,
-            r_offset: (r_minus - 0.025).max(0.0),
-            ..Default::default()
-        };
-        let mut alice = Observer::new(&metric, "Alice", 0.0, 4.5, 0.0);
-        let mut bob = Observer::new(&metric, "Bob", 0.0, r_minus, 0.0);
-        let start_r = bob.r;
-
-        // The projection, read off the painter at two radii a known distance apart.
-        let bob_x = |canvas: &mut SpacetimeCanvas, alice: &mut Observer, bob: &mut Observer| {
-            let painted = marker_frame(canvas, &ctx, &metric, alice, bob, vec![]);
-            marker_at(&painted, Theme::BOB_COLOR, Marker::Bob.radius())
-                .expect("Bob's marker is always painted")
-        };
-        let at = bob_x(&mut canvas, &mut alice, &mut bob);
-        bob.r = start_r + 0.01;
-        let moved = bob_x(&mut canvas, &mut alice, &mut bob);
-        bob.r = start_r;
-        let px_per_m = ((moved.x - at.x) / 0.01) as f64;
-        assert!(px_per_m > 100.0, "the window is zoomed in: {px_per_m} px per M");
-
-        // Pressed a little off centre, which is where the grab offset earns its place.
-        let press = at + Vec2::new(6.0, 4.0);
-        let events = |pos: Pos2, pressed: Option<bool>| {
-            let mut events = vec![egui::Event::PointerMoved(pos)];
-            if let Some(pressed) = pressed {
-                events.push(egui::Event::PointerButton {
-                    pos,
-                    button: egui::PointerButton::Primary,
-                    pressed,
-                    modifiers: Default::default(),
-                });
-            }
-            events
-        };
-        marker_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, events(press, Some(true)));
-        // Past egui's drag threshold: the pick happens here, and nothing has moved yet.
-        let nudge = press + Vec2::new(9.0, 0.0);
-        marker_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, events(nudge, None));
-        assert_eq!(canvas.dragging.map(|d| d.who), Some(Marker::Bob), "his marker was picked up");
-
-        let travel = Vec2::new(40.0, -25.0);
-        let drop_at = press + travel;
-        marker_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, events(drop_at, None));
-        marker_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, events(drop_at, Some(false)));
-
-        let window = canvas.r_offset..=canvas.r_offset + canvas.max_r;
-        let expected = start_r + travel.x as f64 / px_per_m;
-        println!(
-            "Focus r- window {:.4}..={:.4} M at {px_per_m:.0} px/M: dragged {} px and Bob went \
-             {:.5} -> {:.5} M, wanted {expected:.5}",
-            window.start(),
-            window.end(),
-            travel.x,
-            start_r,
-            bob.r
-        );
-        assert!(
-            window.contains(&bob.r),
-            "he must land inside the window he was dragged in, not at {}",
-            bob.r
-        );
-        assert!(
-            (bob.r - expected).abs() < 2.0 / px_per_m,
-            "he must land under the pointer: {} against {expected}",
-            bob.r
-        );
-        // The same statement made the other way round: the marker ends up under the same point of
-        // the cursor it was picked up by, which is what the grab offset is for. In r only - the
-        // pointer travelled 25 px up the diagram as well, and a drag says where, not when, so the
-        // marker stays on the clock's own line.
-        let ended = bob_x(&mut canvas, &mut alice, &mut bob);
-        assert!(
-            (ended.x - (at.x + travel.x)).abs() < 2.0,
-            "the marker follows the pointer in r: {ended:?} against {:?}",
-            at + travel
-        );
-        assert!(
-            (ended.y - at.y).abs() < 2.0,
-            "and holds the clock line in t: {ended:?} against {at:?}"
-        );
-    }
-
-    #[test]
-    fn test_either_observers_marker_can_be_dragged_and_is_dropped_back_onto_their_own_motion() {
-        // A drag is the question "what if they were *here* instead", and it is as fair to ask of
-        // Alice as of Bob: until now only his marker could be picked up, and hers was painted on a
-        // canvas that had been handed her worldline immutably. Both are driven here through the
-        // real thing - a pointer pressed on the marker where it was painted, moved, and released,
-        // three frames of `SpacetimeCanvas::render` with egui deciding what counts as a drag - and
-        // each has to end up at the event it was dropped at, on the Motion it was on before the
-        // hand went on it. Alice's is ZAMO, which is exactly the case the restore matters for: she
-        // has to go back to holding her *new* radius rather than being left in the held state or
-        // silently put into free fall.
-        let metric = KerrSchild::new(1.0, 0.65);
-        let ctx = egui::Context::default();
-        ctx.set_fonts(egui::FontDefinitions::empty());
-
-        for (who, colour, mode) in [
-            ("Alice", Theme::ALICE_COLOR, ObserverMode::Zamo),
-            ("Bob", Theme::BOB_COLOR, ObserverMode::FreeFall),
-        ] {
-            let mut canvas = SpacetimeCanvas::default();
-            let mut alice = Observer::new_with_phi(
-                &metric,
-                "Alice",
-                0.0,
-                4.5,
-                0.0,
-                0.25,
-                crate::physics::observer::WorldlineParams::default(),
-            );
-            alice.mode = ObserverMode::Zamo;
-            let mut bob = Observer::new_with_phi(
-                &metric,
-                "Bob",
-                0.0,
-                4.5,
-                0.0,
-                0.0,
-                crate::physics::observer::WorldlineParams::default(),
-            );
-            for _ in 0..10 {
-                alice.step(&metric, alice.t + 0.1, 0.1);
-                bob.step(&metric, bob.t + 0.1, 0.1);
-            }
-            let radius = if who == "Alice" { Marker::Alice.radius() } else { Marker::Bob.radius() };
-
-            // Frame 1: nothing but the painting, to find out where the marker is.
-            let painted = marker_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
-            let at = marker_at(&painted, colour, radius)
-                .unwrap_or_else(|| panic!("{who}'s marker is painted: {painted:?}"));
-            let before = match who {
-                "Alice" => (alice.t, alice.r),
-                _ => (bob.t, bob.r),
-            };
-
-            // Frame 2: the press, on the marker.
-            marker_frame(
-                &mut canvas, &ctx, &metric, &mut alice, &mut bob,
-                vec![
-                    egui::Event::PointerMoved(at),
-                    egui::Event::PointerButton {
-                        pos: at,
-                        button: egui::PointerButton::Primary,
-                        pressed: true,
-                        modifiers: Default::default(),
-                    },
-                ],
-            );
-            // Frame 3: past egui's drag threshold, but still on the marker, which is where the
-            // pick happens.
-            let nudge = at + Vec2::new(10.0, 0.0);
-            marker_frame(
-                &mut canvas, &ctx, &metric, &mut alice, &mut bob,
-                vec![egui::Event::PointerMoved(nudge)],
-            );
-            assert_eq!(
-                canvas.dragging.map(|d| d.who),
-                Some(if who == "Alice" { Marker::Alice } else { Marker::Bob }),
-                "{who}'s marker must be the one picked up, got {:?}",
-                canvas.dragging
-            );
-
-            // Frame 4: the move itself, well away from where it started.
-            let dropped_at = at + Vec2::new(-90.0, -40.0);
-            marker_frame(
-                &mut canvas, &ctx, &metric, &mut alice, &mut bob,
-                vec![egui::Event::PointerMoved(dropped_at)],
-            );
-            // Frame 5: the release.
-            marker_frame(
-                &mut canvas, &ctx, &metric, &mut alice, &mut bob,
-                vec![egui::Event::PointerButton {
-                    pos: dropped_at,
-                    button: egui::PointerButton::Primary,
-                    pressed: false,
-                    modifiers: Default::default(),
-                }],
-            );
-
-            let moved = match who {
-                "Alice" => (alice.t, alice.r, alice.mode),
-                _ => (bob.t, bob.r, bob.mode),
-            };
-            println!(
-                "{who} dragged from (t = {:.3}, r = {:.3}) to (t = {:.3}, r = {:.3}), Motion {:?}                  - the pointer went 40 px up the diagram and the t did not move",
-                before.0, before.1, moved.0, moved.1, moved.2
-            );
-            assert!(
-                moved.1 < before.1 - 0.05,
-                "{who} must end up at a smaller radius: {} vs {}",
-                moved.1,
-                before.1
-            );
-            assert!(
-                (moved.0 - before.0).abs() < 1e-9,
-                "{who} must stay on the clock's own t: {} vs {}",
-                moved.0,
-                before.0
-            );
-            assert_eq!(moved.2, mode, "{who} is dropped back onto the Motion they were on");
-            assert!(canvas.dragging.is_none(), "and the canvas is not still holding them");
-
-            // A drag interrupted by a rebuild of the run is dropped rather than carried into it.
-            canvas.dragging =
-                Some(MarkerDrag { who: Marker::Bob, mode_before: mode, grab: Vec2::ZERO });
-            canvas.end_drag();
-            assert!(canvas.dragging.is_none(), "a reset leaves both markers pickable again");
-        }
-    }
-
     /// One real frame of `SpacetimeCanvas::render` in Bob's rest frame, with the distant clock grid
     /// on or off, returning how many line segments were painted and the text of every galley.
     fn frame_view_pass(show_distant_clock_grid: bool) -> (usize, String) {
@@ -2529,7 +2050,7 @@ mod canvas_tests {
         let mut bob =
             Observer::new_with_phi(&metric, "Bob", 0.0, 4.5, 0.0, 0.0, WorldlineParams::default());
         bob.step(&metric, 0.1, 0.1);
-        let mut alice: Option<Observer> = None;
+        let alice: Option<Observer> = None;
         let signal = SignalField::default();
         // Zoomed in on the frame, so that the chosen rung of the ladder sits close to its own
         // minimum gap and a whole run of lines lands inside the rectangle rather than one.
@@ -2545,8 +2066,8 @@ mod canvas_tests {
             canvas.render(
                 ui,
                 &metric,
-                Some(&mut bob),
-                alice.as_mut(),
+                Some(&bob),
+                alice.as_ref(),
                 0.1,
                 600.0,
                 false,

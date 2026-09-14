@@ -4,7 +4,7 @@ use crate::gui::spacetime_canvas::TelemetryBoxes;
 use crate::gui::theme::Theme;
 use crate::physics::geodesic::GeodesicState;
 use crate::physics::kerr_schild::KerrSchild;
-use crate::physics::observer::Observer;
+use crate::physics::observer::{Observer, ObserverMode};
 use crate::physics::wavefront::SignalField;
 use egui::{Color32, Pos2, Stroke, Vec2};
 
@@ -54,6 +54,30 @@ impl Who {
     }
 }
 
+/// How close to the ring a drag may put an observer. The ring is the curvature singularity and
+/// the end of every worldline that reaches it, so a drop onto r = 0 is a drop onto nothing there is
+/// a frame at.
+const RING_DROP_FLOOR: f64 = 0.04;
+
+/// A marker drag in progress: whose it is, and the Motion they were on when it started.
+///
+/// The Motion is kept because `Observer::set_drag_position` puts whoever is being moved into
+/// `ObserverMode::ManualDrag` for as long as the pointer holds them - that is what a hand on the
+/// marker means - and dropping them has to give back the worldline they were on. A free-faller is
+/// released again at the event they were dropped at, on their own `Release`; a ZAMO goes back to
+/// holding the new radius. Nothing selects that held state from the panel: it is the mechanism of
+/// the drag and nothing else.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct MarkerDrag {
+    who: Who,
+    mode_before: ObserverMode,
+    /// Marker centre minus pointer at the moment the pointer took hold, in screen pixels, added
+    /// back on every frame of the drag. Without it the observer is placed *at* the pointer, so
+    /// picking a marker up anywhere but dead centre teleports it under the cursor by as much as
+    /// three marker radii before the drag has moved at all.
+    grab: Vec2,
+}
+
 pub struct SpatialCanvas {
     pub zoom: f32,
     pub pan_offset: Vec2,
@@ -67,6 +91,10 @@ pub struct SpatialCanvas {
     /// this one wins, being the more particular request, and it falls back to the selector's
     /// choice while the observer it names is not in the simulation.
     centred_on: Option<Who>,
+    /// The marker drag in progress on this canvas, if any. Cleared when the pointer is released,
+    /// when the observer being dragged leaves the simulation, and by `SpatialCanvas::end_drag` when
+    /// the run is rebuilt under it.
+    dragging: Option<MarkerDrag>,
     /// Where the user has dragged each info box on this canvas, per observer.
     pub telemetry: TelemetryBoxes,
     /// The animated raindrop flow. It is advanced from the app's own simulation clock, not from
@@ -80,6 +108,7 @@ impl Default for SpatialCanvas {
             zoom: 48.0, // pixels per M
             pan_offset: Vec2::ZERO,
             centred_on: None,
+            dragging: None,
             telemetry: TelemetryBoxes::pinning(),
             river: RiverField::default(),
         }
@@ -87,6 +116,93 @@ impl Default for SpatialCanvas {
 }
 
 impl SpatialCanvas {
+    /// Forget any marker drag in progress. Called when the run is rebuilt under the canvas - the
+    /// observer being held is replaced by a fresh one from their card - so that the next pointer
+    /// press starts a drag of the new worldline rather than continuing one of a worldline that no
+    /// longer exists. Both markers are pickable again the moment the reset lands.
+    pub fn end_drag(&mut self) {
+        self.dragging = None;
+    }
+
+    /// Start, continue and finish a drag of either observer's marker.
+    ///
+    /// One set of rules for both of them. A press within three marker radii picks up the nearest
+    /// marker under it; while the pointer holds it the observer stands at the chart point under the
+    /// pointer, put there by `Observer::set_drag_position`, which is what a hand on the marker
+    /// means: the worldline is being placed rather than integrated. Releasing hands them back the
+    /// Motion they were on through `Observer::release_from_drag`, which releases them again at the
+    /// event they were dropped at, so a drag asks "what if they were here" without answering the
+    /// separate question of how they move.
+    ///
+    /// This is the view to ask it in. The plane it draws is where the two observers actually stand
+    /// relative to one another, so a drag here sets both coordinates an equatorial observer has -
+    /// the radius and the azimuth - and the pair can be put on opposite sides of the hole, which no
+    /// control could say before. The (t, r) diagram, where this used to live, squeezes the whole
+    /// plane onto one axis: a drag there could only ever slide somebody along the radius, and the
+    /// other axis was a time, which is not a thing an observer can be moved along at all.
+    ///
+    /// The azimuth is free in a way the radius is not: Kerr is axisymmetric, so moving an observer
+    /// in phi changes none of their constants - E and L and the whole radial problem are untouched
+    /// - and only the *difference* in azimuth between the two observers means anything.
+    ///
+    /// A drag whose observer has left the simulation - their card unticked while the pointer is
+    /// down - is dropped rather than carried, because there is no worldline left to place.
+    #[allow(clippy::too_many_arguments)] // the same count the drawing paths carry
+    fn drag_markers(
+        &mut self,
+        metric: &KerrSchild,
+        response: &egui::Response,
+        alice: Option<&mut Observer>,
+        bob: Option<&mut Observer>,
+        current_time: f64,
+        to_screen: impl Fn(&Observer) -> Pos2,
+        to_chart: impl Fn(Pos2) -> (f64, f64),
+    ) {
+        let mut markers: Vec<(Who, &mut Observer)> = Vec::new();
+        if let Some(al) = alice {
+            markers.push((Who::Alice, al));
+        }
+        if let Some(b) = bob {
+            markers.push((Who::Bob, b));
+        }
+
+        if response.drag_started()
+            && let Some(pointer) = response.interact_pointer_pos()
+        {
+            let mut nearest: Option<(MarkerDrag, f32)> = None;
+            for (who, obs) in markers.iter() {
+                let reach = who.marker_radius() * 3.0;
+                let at = to_screen(obs);
+                let distance = at.distance(pointer);
+                if distance < reach && nearest.is_none_or(|(_, best)| distance < best) {
+                    let drag = MarkerDrag { who: *who, mode_before: obs.mode, grab: at - pointer };
+                    nearest = Some((drag, distance));
+                }
+            }
+            self.dragging = nearest.map(|(drag, _)| drag);
+        }
+
+        let Some(drag) = self.dragging else {
+            return;
+        };
+        match markers.iter_mut().find(|(who, _)| *who == drag.who) {
+            Some((_, obs)) => {
+                if response.dragged()
+                    && let Some(pointer) = response.interact_pointer_pos()
+                {
+                    let (r, phi) = to_chart(pointer + drag.grab);
+                    obs.set_drag_position(current_time, r);
+                    obs.phi = phi;
+                }
+                if response.drag_stopped() {
+                    obs.release_from_drag(metric, drag.mode_before);
+                    self.dragging = None;
+                }
+            }
+            None => self.dragging = None,
+        }
+    }
+
     /// The observer the view is anchored to this frame, or None when it is anchored to the hole.
     ///
     /// Following an observer who is not in the simulation is following nobody, so the view stays on
@@ -103,7 +219,12 @@ impl SpatialCanvas {
             Who::Alice => alice.as_ref(),
             Who::Bob => bob.as_ref(),
         };
-        self.centred_on.and_then(observer).or(match frame_of_ref {
+        // A drag of the observer the view is holding on to suspends the hold: otherwise the pan
+        // compensates for every pixel the pointer moves them, the marker sits pinned to the middle
+        // of the canvas, and the drag looks like it is doing nothing at all. It resumes the moment
+        // the pointer lets go, with the view re-centring on wherever they were put.
+        let held = self.dragging.map(|drag| drag.who);
+        self.centred_on.filter(|who| held != Some(*who)).and_then(observer).or(match frame_of_ref {
             ReferenceFrame::Bob => bob.as_ref(),
             ReferenceFrame::Alice => alice.as_ref(),
             ReferenceFrame::DistantObserver => None,
@@ -138,8 +259,9 @@ impl SpatialCanvas {
         &mut self,
         ui: &mut egui::Ui,
         metric: &KerrSchild,
-        bob: &Option<Observer>,
-        alice: &Option<Observer>,
+        bob: &mut Option<Observer>,
+        alice: &mut Option<Observer>,
+        current_time: f64,
         show_river: bool,
         signals: SignalViews<'_>,
         canvas_height: f32,
@@ -174,11 +296,6 @@ impl SpatialCanvas {
                 }
                 self.zoom = new_zoom;
             }
-        }
-
-        // Pan with mouse drag
-        if response.dragged() {
-            self.pan_offset += response.drag_delta();
         }
 
         // Center of the canvas with frame of reference tracking
@@ -483,6 +600,34 @@ impl SpatialCanvas {
             );
         }
 
+        // 6a. The drag, registered after the markers are drawn - their screen positions are what
+        // a press is tested against - and before the canvas's own pan below, so that a press on a
+        // marker moves the observer instead of the view.
+        //
+        // The pointer is mapped back through the embedding: a screen point is a Cartesian (x, y) of
+        // the drawn plane, and `KerrSchild::chart_point` inverts x + iy = (r + ia)e^{i phi} to the
+        // (r, phi) it came from. Inside the ring circle, rho < a, there is no equatorial point at
+        // all, so that whole disc of the picture maps to the floor rather than to nothing.
+        self.drag_markers(
+            metric,
+            &response,
+            alice.as_mut(),
+            bob.as_mut(),
+            current_time,
+            |obs| to_screen(obs.cartesian_position(metric)),
+            |at| {
+                let x = f64::from(at.x - center.x) / f64::from(zoom);
+                let y = -f64::from(at.y - center.y) / f64::from(zoom);
+                metric.chart_point(x, y, RING_DROP_FLOOR)
+            },
+        );
+
+        // Pan with the mouse, unless a marker has the drag. It takes effect on the next frame,
+        // since this frame's projection was fixed above.
+        if response.dragged() && self.dragging.is_none() {
+            self.pan_offset += response.drag_delta();
+        }
+
         // 6b. The canvas's right-click menu: where the view should look, and what it should go
         // on looking at. It is offered anywhere on the canvas rather than on the markers, because
         // "take me to Bob" is most useful exactly when Bob is not on the screen to be pointed at,
@@ -577,7 +722,8 @@ impl SpatialCanvas {
                  Bob's fronts: same gain colours at half stroke, mint emission dots\n\
                  Receptions: triangle on the receiver's trail in the sender's colour (amber = Alice → Bob, mint = Bob → Alice)\n\
                  {}\
-                 🔍 Zoom: {:.0} px/M (Scroll to zoom, drag to pan)",
+                 🔍 Zoom: {:.0} px/M (scroll to zoom, drag the background to pan,\n\
+                 drag either observer's marker to put them anywhere in the plane)",
                 metric.format_physical_distance(1.0),
                 metric.m_solar,
                 metric.format_km(metric.r_to_km(rp)),
@@ -614,7 +760,8 @@ impl SpatialCanvas {
                  Bob's fronts: same gain colours at half stroke, mint emission dots\n\
                  Receptions: triangle on the receiver's trail in the sender's colour (amber = Alice → Bob, mint = Bob → Alice)\n\
                  {}\
-                 🔍 Zoom: {:.0} px/M (Scroll to zoom, drag to pan)",
+                 🔍 Zoom: {:.0} px/M (scroll to zoom, drag the background to pan,\n\
+                 drag either observer's marker to put them anywhere in the plane)",
                 metric.format_physical_distance(1.0),
                 metric.format_physical_time(1.0),
                 metric.m_solar,
@@ -1313,15 +1460,20 @@ mod tests {
         canvas: &mut SpatialCanvas,
         ctx: &egui::Context,
         metric: &KerrSchild,
-        alice: &Option<Observer>,
-        bob: &Option<Observer>,
+        alice: &mut Option<Observer>,
+        bob: &mut Option<Observer>,
+        events: Vec<egui::Event>,
     ) -> (Vec<(Color32, f32, Pos2)>, egui::Id) {
         use crate::physics::wavefront::SignalField;
         let signal = SignalField::default();
         let mut details = true;
         let mut ui_id = egui::Id::NULL;
+        // The observers' own t, because in the app every worldline stands at the simulation clock,
+        // and a drag places them at it.
+        let clock = alice.as_ref().or(bob.as_ref()).map_or(0.0, |obs| obs.t);
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::Vec2::new(800.0, 700.0))),
+            events,
             ..Default::default()
         };
         let output = ctx.clone().run_ui(input, |ui| {
@@ -1331,6 +1483,7 @@ mod tests {
                 metric,
                 bob,
                 alice,
+                clock,
                 false,
                 SignalViews { alice: &signal, bob: &signal },
                 600.0,
@@ -1394,7 +1547,7 @@ mod tests {
         let ctx = egui::Context::default();
         ctx.set_fonts(egui::FontDefinitions::empty());
         let mut canvas = SpatialCanvas::default();
-        let alice: Option<Observer> = None;
+        let mut alice: Option<Observer> = None;
         let mut bob = Some(Observer::new_with_phi(
             &metric,
             "Bob",
@@ -1411,9 +1564,9 @@ mod tests {
             }
         };
         // Off: Bob moves, the hole does not.
-        let (before, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob);
+        let (before, _) = spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
         fall(&mut bob);
-        let (after, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob);
+        let (after, _) = spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
         let bob_moved = (marker_of(&after, Who::Bob) - marker_of(&before, Who::Bob)).length();
         let hole_moved = (hole_of(&after) - hole_of(&before)).length();
         assert!(bob_moved > 5.0, "he crosses the canvas as he falls: {bob_moved} px");
@@ -1421,9 +1574,9 @@ mod tests {
 
         // On: Bob does not move, the hole does, and by exactly what his own motion would have been.
         canvas.centred_on = Some(Who::Bob);
-        let (before, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob);
+        let (before, _) = spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
         fall(&mut bob);
-        let (moved, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob);
+        let (moved, _) = spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
         let bob_held = (marker_of(&moved, Who::Bob) - marker_of(&before, Who::Bob)).length();
         let hole_slid = hole_of(&moved) - hole_of(&before);
         println!(
@@ -1446,9 +1599,9 @@ mod tests {
 
         // Switched off again, he goes back to crossing the canvas.
         canvas.centred_on = None;
-        let (parked, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob);
+        let (parked, _) = spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
         fall(&mut bob);
-        let (released, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob);
+        let (released, _) = spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
         assert!(
             (marker_of(&released, Who::Bob) - marker_of(&parked, Who::Bob)).length() > 5.0,
             "with the toggle off he is on the move again"
@@ -1456,6 +1609,198 @@ mod tests {
         assert!(
             (hole_of(&released) - hole_of(&parked)).length() < 1e-3,
             "and the hole is back to standing still"
+        );
+    }
+
+    /// The pointer events one step of a drag is made of: a move, optionally with the button going
+    /// down or coming up.
+    fn pointer(pos: Pos2, pressed: Option<bool>) -> Vec<egui::Event> {
+        let mut events = vec![egui::Event::PointerMoved(pos)];
+        if let Some(pressed) = pressed {
+            events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            });
+        }
+        events
+    }
+
+    #[test]
+    fn test_either_marker_can_be_dragged_anywhere_in_the_plane() {
+        // The drag lives here now, and this is why: the equatorial view draws the plane the two
+        // observers actually stand in, so a drag on it sets both coordinates an equatorial observer
+        // has. On the (t, r) diagram, where this used to be, the whole plane is squeezed onto one
+        // axis and a drag could only ever slide somebody along the radius - the pair could never be
+        // put on opposite sides of the hole, which is the arrangement that decides how long light
+        // takes to cross between them and how much of the other's frozen light a crosser meets.
+        //
+        // Bob is dragged to the point diametrically opposite Alice. Both are then at the same
+        // drawn radius, so the embedding turns both by the same atan2(a, r) and the azimuths differ
+        // by exactly half a turn.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let mut canvas = SpatialCanvas::default();
+        let params = crate::physics::observer::WorldlineParams::default();
+        let mut alice =
+            Some(Observer::new_with_phi(&metric, "Alice", 0.0, 4.5, 0.0, 0.25, params));
+        let mut bob = Some(Observer::new_with_phi(&metric, "Bob", 0.0, 4.5, 0.0, 0.0, params));
+        let mode_before = bob.as_ref().expect("Bob is in this run").mode;
+
+        // Frame 1: nothing but the painting, to find out where the markers are.
+        let (painted, _) = spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
+        let centre = hole_of(&painted);
+        let her = marker_of(&painted, Who::Alice);
+        let his = marker_of(&painted, Who::Bob);
+        assert!((his - centre).length() > 50.0, "his marker is well clear of the hole");
+
+        // The antipode of Alice's marker, which is where Bob is going. egui calls the drag
+        // started on the frame that crosses its own threshold, and the grab offset is taken from
+        // the pointer *there*, so the marker moves by what the pointer has moved since that frame:
+        // to land him on the target, the pointer finishes that much past it.
+        let target = centre - (her - centre);
+        let nudge = his + Vec2::new(12.0, 0.0);
+        let finish = target + (nudge - his);
+        for (pos, pressed) in [
+            (his, Some(true)),      // press on him
+            (nudge, None),          // past egui's drag threshold: the pick happens here
+            (finish, None),         // the move itself
+            (finish, Some(false)),  // and the release
+        ] {
+            spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, pointer(pos, pressed));
+        }
+
+        let (after, _) = spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
+        let landed = marker_of(&after, Who::Bob);
+        let al = alice.as_ref().expect("Alice is in this run");
+        let b = bob.as_ref().expect("Bob is in this run");
+        let turn = std::f64::consts::TAU;
+        let apart = (b.phi - al.phi).rem_euclid(turn);
+        println!(
+            "Bob dragged to Alice's antipode: r = {:.4} against her {:.4}, and their azimuths are \
+             {:.4} rad apart",
+            b.r,
+            al.r,
+            apart.min(turn - apart)
+        );
+        assert!((landed - target).length() < 2.0, "the marker went where the pointer did: {landed:?}");
+        assert!((b.r - al.r).abs() < 0.05, "at the same radius she is at: {} vs {}", b.r, al.r);
+        assert!(
+            (apart.min(turn - apart) - std::f64::consts::PI).abs() < 0.02,
+            "half a turn apart: {apart} rad"
+        );
+        assert_eq!(b.mode, mode_before, "and dropped back onto the Motion he was on");
+        assert!(canvas.dragging.is_none(), "with the canvas no longer holding him");
+        // Alice, who was not touched, has not moved at all.
+        assert!((al.r - 4.5).abs() < 1e-12 && (al.phi - 0.25).abs() < 1e-12, "Alice stayed put");
+    }
+
+    #[test]
+    fn test_a_drag_keeps_the_grab_offset_and_stops_at_the_ring() {
+        // Two things the drag has to get right about the pointer. It is picked up wherever it is
+        // pressed - press a marker off centre and it must not jump under the cursor - and it cannot
+        // be dropped onto the ring: the disc rho < a in the middle of the picture is not a region
+        // of the equatorial plane at all, and the ring itself is the curvature singularity, so the
+        // radius floors at `RING_DROP_FLOOR` rather than going to nothing.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let mut canvas = SpatialCanvas::default();
+        let params = crate::physics::observer::WorldlineParams::default();
+        let mut alice: Option<Observer> = None;
+        let mut bob = Some(Observer::new_with_phi(&metric, "Bob", 0.0, 6.0, 0.0, 0.0, params));
+
+        let (painted, _) = spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
+        let centre = hole_of(&painted);
+        let his = marker_of(&painted, Who::Bob);
+        // Pressed a little off centre, which is where the grab offset earns its place.
+        // The travel is measured from the frame egui calls the drag started on, since that is
+        // the pointer the grab offset is taken against.
+        let press = his + Vec2::new(5.0, 3.0);
+        let nudge = press + Vec2::new(12.0, 0.0);
+        let travel = Vec2::new(-60.0, 40.0);
+        for (pos, pressed) in [
+            (press, Some(true)),
+            (nudge, None),
+            (nudge + travel, None),
+            (nudge + travel, Some(false)),
+        ] {
+            spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, pointer(pos, pressed));
+        }
+        let (after, _) = spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
+        let landed = marker_of(&after, Who::Bob);
+        println!(
+            "pressed {:.0} px off his centre and moved {:?}: the marker moved to {landed:?}, \
+             wanted {:?}",
+            (press - his).length(),
+            travel,
+            his + travel
+        );
+        assert!(
+            (landed - (his + travel)).length() < 2.0,
+            "the marker moves by what the pointer moved, not to where it is: {landed:?}"
+        );
+
+        // And now into the middle of the hole, which is not a place.
+        let nudge = landed + Vec2::new(12.0, 0.0);
+        let into_the_hole = centre + (nudge - landed);
+        for (pos, pressed) in [
+            (landed, Some(true)),
+            (nudge, None),
+            (into_the_hole, None),
+            (into_the_hole, Some(false)),
+        ] {
+            spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, pointer(pos, pressed));
+        }
+        let r = bob.as_ref().expect("Bob is in this run").r;
+        println!("dragged onto the middle of the ring: r = {r} against a floor of {RING_DROP_FLOOR}");
+        assert!((r - RING_DROP_FLOOR).abs() < 1e-9, "he stops at the ring floor: {r}");
+    }
+
+    #[test]
+    fn test_centring_lets_go_of_an_observer_while_they_are_being_dragged() {
+        // Keep Centered pans the view to hold somebody in the middle, which is exactly the wrong
+        // thing to do to the observer under the pointer: the pan would cancel every pixel of the
+        // drag, the marker would sit pinned to the centre, and the drag would look like it was
+        // doing nothing while in fact moving them. So a drag of the centred observer suspends the
+        // centring, and it resumes on release with the view re-centring on wherever they were put.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let mut canvas = SpatialCanvas::default();
+        let params = crate::physics::observer::WorldlineParams::default();
+        let mut alice: Option<Observer> = None;
+        let mut bob = Some(Observer::new_with_phi(&metric, "Bob", 0.0, 6.0, 0.0, 0.0, params));
+        canvas.centred_on = Some(Who::Bob);
+
+        let (painted, _) = spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
+        let at = marker_of(&painted, Who::Bob);
+        let travel = Vec2::new(-70.0, 35.0);
+        for (pos, pressed) in [
+            (at, Some(true)),
+            (at + Vec2::new(12.0, 0.0), None),
+            (at + travel, None),
+        ] {
+            spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, pointer(pos, pressed));
+        }
+        let (held, _) = spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
+        let moved = marker_of(&held, Who::Bob);
+        println!("centred on Bob and dragged {travel:?}: his marker went from {at:?} to {moved:?}");
+        assert!(
+            (moved - at).length() > 20.0,
+            "the drag moves him across the canvas rather than being cancelled by the pan: {moved:?}"
+        );
+
+        // Released, the hold comes back and puts him in the middle again.
+        spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, pointer(at + travel, Some(false)));
+        let (released, _) = spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
+        let recentred = marker_of(&released, Who::Bob);
+        assert_eq!(canvas.centred_on, Some(Who::Bob), "the request was never cancelled");
+        assert!(
+            (recentred - hole_of(&painted)).length() < 2.0 || (recentred - at).length() < 2.0,
+            "and he is back in the middle of the view: {recentred:?}"
         );
     }
 
@@ -1471,12 +1816,13 @@ mod tests {
         ctx.set_fonts(egui::FontDefinitions::empty());
         let mut canvas = SpatialCanvas::default();
         let params = crate::physics::observer::WorldlineParams::default();
-        let alice = Some(Observer::new_with_phi(&metric, "Alice", 0.0, 9.0, 0.0, 2.2, params));
+        let mut alice =
+            Some(Observer::new_with_phi(&metric, "Alice", 0.0, 9.0, 0.0, 2.2, params));
         let mut bob =
             Some(Observer::new_with_phi(&metric, "Bob", 0.0, 4.5, 0.0, 0.0, params));
         // Nothing is panned and nothing is being tracked yet, so the hole is in the middle of the
         // canvas and that is the point everything below is measured against.
-        let (before, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob);
+        let (before, _) = spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
         let centre = hole_of(&before);
         let off_centre = (marker_of(&before, Who::Bob) - centre).length();
         canvas.look_at(
@@ -1486,7 +1832,7 @@ mod tests {
             ReferenceFrame::DistantObserver,
             bob.as_ref().expect("Bob is in this run").cartesian_position(&metric),
         );
-        let (gone_to, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob);
+        let (gone_to, _) = spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
         let landed = (marker_of(&gone_to, Who::Bob) - centre).length();
         println!(
             "Bob started {off_centre:.0} px off centre and Goto put him {landed:.3} px from it"
@@ -1499,13 +1845,13 @@ mod tests {
         for _ in 0..10 {
             b.step(&metric, b.t + 0.1, 0.1);
         }
-        let (after, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob);
+        let (after, _) = spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
         let drifted = (marker_of(&after, Who::Bob) - centre).length();
         assert!(drifted > 5.0, "a Goto does not follow him: {drifted} px");
 
         // And the hole is a target like any other: it sits at the origin of the embedding.
         canvas.look_at(&metric, &bob, &alice, ReferenceFrame::DistantObserver, (0.0, 0.0));
-        let (at_hole, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob);
+        let (at_hole, _) = spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
         assert!(
             (hole_of(&at_hole) - centre).length() < 1e-3,
             "Goto Black Hole centres the hole: {:?}",
