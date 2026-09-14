@@ -1329,6 +1329,44 @@ mod tests {
     }
 
     #[test]
+    fn test_a_marker_drag_says_where_not_when() {
+        // The (t, r) diagram has two axes and only one of them is something an observer can be
+        // moved along: every worldline in the run stands at the simulation clock, because that is
+        // what a clock is. A drag therefore places them in r and leaves their t where it was.
+        //
+        // It used to take the pointer's height as well, and that showed. Dragged upward an observer
+        // stood in the future of the light drawn around them; dragged below the clock line they
+        // took `Observer::release_from_drag`'s `release_t = min(release_t, t)` with them, which at
+        // the start of a run no longer matched their card, so the card put them back on the clock
+        // line - a drag that wandered downward snapped back while one that wandered up did not.
+        let mut app = SpacetimeApp::default();
+        drag_bob_to(&mut app, 9.0);
+        assert!((bob_of(&app).r - 9.0).abs() < 1e-9, "the radius is his: {}", bob_of(&app).r);
+        assert_eq!(bob_of(&app).t, app.current_time, "and he still stands at the clock");
+        assert_eq!(bob_of(&app).t, alice_of(&app).t, "on the same line everybody else is on");
+        assert_eq!(bob_of(&app).release_t, 0.0, "with the release his card asked for");
+
+        // And with the run under way, where nothing restates him afterwards: the drag itself has
+        // to leave the clock alone, rather than being tidied up by the card.
+        for _ in 0..20 {
+            app.step_forward(0.05);
+        }
+        let clock = app.current_time;
+        drag_bob_to(&mut app, 3.0);
+        assert!((bob_of(&app).r - 3.0).abs() < 1e-9, "moved in r: {}", bob_of(&app).r);
+        assert!(
+            (bob_of(&app).t - clock).abs() < 1e-9,
+            "and not in t: {} against a clock of {clock}",
+            bob_of(&app).t
+        );
+        assert!(
+            (app.controls.bob.drop_r - 9.0).abs() < 1e-9,
+            "a drag once the run is moving is not a drop position either: {}",
+            app.controls.bob.drop_r
+        );
+    }
+
+    #[test]
     fn test_control_defaults() {
         let d = AppControls::default();
         // Kilometres are the default unit, and nothing throttles the step near r₋ any more:

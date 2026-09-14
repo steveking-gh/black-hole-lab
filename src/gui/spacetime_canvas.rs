@@ -603,12 +603,22 @@ impl SpacetimeCanvas {
     /// Start, continue and finish a drag of either observer's marker.
     ///
     /// One set of rules for both of them. A press within three marker radii picks up the nearest
-    /// marker under it; while the pointer holds it the observer stands at the pointer's event, put
-    /// there by `Observer::set_drag_position`, which is what a hand on the marker means: the
+    /// marker under it; while the pointer holds it the observer stands at the pointer's *radius*,
+    /// put there by `Observer::set_drag_position`, which is what a hand on the marker means: the
     /// worldline is being placed rather than integrated. Releasing hands them back the Motion they
-    /// were on through `Observer::release_from_drag`, which restarts the geodesic from the event
-    /// they were dropped at, so a drag asks "what if they were here" without answering the
-    /// separate question of how they move.
+    /// were on through `Observer::release_from_drag`, which releases them again at the event they
+    /// were dropped at, so a drag asks "what if they were here" without answering the separate
+    /// question of how they move.
+    ///
+    /// A drag says where, not when: the observer's t is the simulation clock's, whatever height the
+    /// pointer is at. This diagram has two axes and only one of them is a thing an observer can be
+    /// moved along. Every worldline in the run stands at the same t, because that is what the clock
+    /// means, and an observer left at another one is not somewhere the run can be: dragged upward
+    /// they stood in the future of the light drawn around them, and dragged below the clock line
+    /// they took `Observer::release_from_drag`'s release time with them - which, at the start of a
+    /// run, no longer matched their card and had the card put them back on the clock line, so a
+    /// drag that wandered downward snapped back while one that wandered up did not. Neither is a
+    /// question about the geometry, so the pointer's height is simply not read.
     ///
     /// The dropped radius is clamped into the radial window on screen and held off the ring, so a
     /// drag cannot put an observer somewhere the user cannot see or onto the curvature singularity
@@ -627,8 +637,9 @@ impl SpacetimeCanvas {
         alice: Option<&mut Observer>,
         bob: Option<&mut Observer>,
         window: std::ops::RangeInclusive<f64>,
+        current_time: f64,
         to_screen: impl Fn(&Observer) -> Pos2,
-        to_event: impl Fn(Pos2) -> (f64, f64),
+        to_radius: impl Fn(Pos2) -> f64,
     ) {
         let mut markers: Vec<(Marker, &mut Observer)> = Vec::new();
         if let Some(al) = alice {
@@ -664,8 +675,8 @@ impl SpacetimeCanvas {
                 if response.dragged()
                     && let Some(pointer) = response.interact_pointer_pos()
                 {
-                    let (t, r) = to_event(pointer + drag.grab);
-                    obs.set_drag_position(t, r.clamp(floor, window.end().max(floor)));
+                    let r = to_radius(pointer + drag.grab);
+                    obs.set_drag_position(current_time, r.clamp(floor, window.end().max(floor)));
                 }
                 if response.drag_stopped() {
                     obs.release_from_drag(metric, drag.mode_before);
@@ -952,11 +963,6 @@ Tick Enable Observer on Alice's or Bob's card",
         let to_coord_r = |screen_x: f32| -> f64 {
             let frac = ((screen_x - rect.left()) / rect.width()) as f64;
             (r_offset + frac * max_r).max(0.0)
-        };
-
-        let to_coord_t = |screen_y: f32| -> f64 {
-            let frac = ((rect.bottom() - screen_y) / rect.height()) as f64;
-            t_min + frac * (t_max - t_min)
         };
 
         // Both observers' cones span the same slice of the zoom window.
@@ -1377,8 +1383,9 @@ Tick Enable Observer on Alice's or Bob's card",
             alice.as_deref_mut(),
             bob.as_deref_mut(),
             r_offset..=r_offset + max_r,
+            current_time,
             |obs| Pos2::new(to_screen_x(obs.r), to_screen_y(obs.t)),
-            |at| (to_coord_t(at.y), to_coord_r(at.x)),
+            |at| to_coord_r(at.x),
         );
 
         // Mouse drag background panning for time and radial offset. It takes effect on the next
@@ -2200,9 +2207,6 @@ mod canvas_tests {
         }
     }
 
-    /// The simulation clock every `marker_frame` renders at.
-    const MARKER_FRAME_CLOCK: f64 = 0.0;
-
     /// One real frame of the (t, r) diagram with both observers on it, driven by whatever pointer
     /// events are handed in, returning the screen position of each marker as it was painted.
     ///
@@ -2218,10 +2222,18 @@ mod canvas_tests {
     ) -> Vec<(Color32, f32, Pos2)> {
         use crate::physics::wavefront::SignalField;
         let signal = SignalField::default();
-        // A clock of its own, not read off either observer: the time window is pinned to the
-        // simulation clock, and a window that slid with the observer being dragged would hide
-        // every vertical move by following it.
-        let clock = MARKER_FRAME_CLOCK;
+        // The observers' own t, because in the app every worldline stands at the simulation clock
+        // - that is what a clock is - and a marker drag is now a statement about r alone, made at
+        // whatever time the run has reached. A frame rendered at some other clock would be asking
+        // the canvas about a run that cannot happen, and the drag would pull the marker to the
+        // clock's line to say so.
+        assert!(
+            (alice.t - bob.t).abs() < 1e-9,
+            "both observers stand at the simulation clock: {} and {}",
+            alice.t,
+            bob.t
+        );
+        let clock = alice.t;
         let input = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
             events,
@@ -2363,12 +2375,18 @@ mod canvas_tests {
             bob.r
         );
         // The same statement made the other way round: the marker ends up under the same point of
-        // the cursor it was picked up by, which is what the grab offset is for.
+        // the cursor it was picked up by, which is what the grab offset is for. In r only - the
+        // pointer travelled 25 px up the diagram as well, and a drag says where, not when, so the
+        // marker stays on the clock's own line.
         let ended = bob_x(&mut canvas, &mut alice, &mut bob);
         assert!(
-            (ended - (at + travel)).length() < 2.0,
-            "the marker follows the pointer: {ended:?} against {:?}",
+            (ended.x - (at.x + travel.x)).abs() < 2.0,
+            "the marker follows the pointer in r: {ended:?} against {:?}",
             at + travel
+        );
+        assert!(
+            (ended.y - at.y).abs() < 2.0,
+            "and holds the clock line in t: {ended:?} against {at:?}"
         );
     }
 
@@ -2475,7 +2493,7 @@ mod canvas_tests {
                 _ => (bob.t, bob.r, bob.mode),
             };
             println!(
-                "{who} dragged from (t = {:.3}, r = {:.3}) to (t = {:.3}, r = {:.3}), Motion {:?}",
+                "{who} dragged from (t = {:.3}, r = {:.3}) to (t = {:.3}, r = {:.3}), Motion {:?}                  - the pointer went 40 px up the diagram and the t did not move",
                 before.0, before.1, moved.0, moved.1, moved.2
             );
             assert!(
@@ -2484,7 +2502,12 @@ mod canvas_tests {
                 moved.1,
                 before.1
             );
-            assert!(moved.0 > before.0, "{who} must end up later in t: {} vs {}", moved.0, before.0);
+            assert!(
+                (moved.0 - before.0).abs() < 1e-9,
+                "{who} must stay on the clock's own t: {} vs {}",
+                moved.0,
+                before.0
+            );
             assert_eq!(moved.2, mode, "{who} is dropped back onto the Motion they were on");
             assert!(canvas.dragging.is_none(), "and the canvas is not still holding them");
 
