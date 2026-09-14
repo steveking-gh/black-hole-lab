@@ -325,7 +325,7 @@ impl eframe::App for SpacetimeApp {
                 );
             });
         });
-        // Reset, a preset change and Drop Observers all put the clock back to zero, and the (t, r)
+        // Reset and a preset change both put the clock back to zero, and the (t, r)
         // canvas is panned in time by an offset from the clock, so the pan has to go back with it
         // or the user is left looking at an empty stretch of diagram above the run they have just
         // restarted. The panel raises the request and it is taken here, before the canvases are
@@ -420,6 +420,15 @@ impl eframe::App for SpacetimeApp {
             });
         });
 
+        // Where the observers stand once the canvases have had their drags. While the clock reads
+        // zero that is where they are dropped from, so a marker dragged at the start of a run is
+        // still there after the next Reset; see `AppControls::remember_drop_positions`.
+        self.controls.remember_drop_positions(
+            self.alice.as_ref(),
+            self.bob.as_ref(),
+            self.current_time,
+        );
+
         // 5. Theory & Horizon Explanation Modal
         if self.controls.show_theory_modal {
             egui::Window::new("Relativistic Spacetime & Cauchy Horizon Theory")
@@ -498,8 +507,7 @@ mod tests {
         app.alice.as_ref().expect("Alice's card is ticked in this test")
     }
 
-    /// Rebuild the run from the two cards, which is what ⏮ Reset, Drop Observers and the app's own
-    /// startup all do. A test that wants a layout other than the default one sets the cards and
+    /// Rebuild the run from the two cards, which is what ⏮ Reset and the app's own startup do. A test that wants a layout other than the default one sets the cards and
     /// calls this, rather than assembling observers by hand behind the panel's back.
     fn drop_observers(app: &mut SpacetimeApp) {
         let SpacetimeApp { metric, alice, bob, signal, bob_signal, controls, current_time, .. } =
@@ -618,8 +626,8 @@ mod tests {
     #[test]
     fn test_resetting_the_run_puts_the_time_pan_back_to_the_start() {
         // Dragging the (t, r) canvas pans it in time, and that pan is an offset from the simulation
-        // clock rather than an absolute time. Reset, a preset change and Drop Observers all put the
-        // clock back to zero; before this, the pan stayed where it was, and the user was left
+        // clock rather than an absolute time. Reset and a preset change both put the clock back to
+        // zero; before this, the pan stayed where it was, and the user was left
         // looking at a stretch of empty diagram with the restarted run somewhere off the edge of
         // it. Every control that zeroes the clock now raises `view_reset_requested`, and this walks
         // the whole path: the action, the request, and the frame that consumes it.
@@ -911,7 +919,7 @@ mod tests {
 
     #[test]
     fn test_alice_signal_is_received_through_the_app_loop() {
-        // The layout Drop Observers builds, at a shorter delay: Alice released from r = 4.5M
+        // The layout a Reset builds, at a shorter delay: Alice released from r = 4.5M
         // at t = 0 and Bob held at the same radius until t = Delta t, so his worldline trails hers
         // and her signal climbs to him. This walks the app's own wiring rather than the physics
         // module: the field is advanced on the simulation clock, Alice emits on her proper
@@ -1139,6 +1147,61 @@ mod tests {
         assert_eq!(d.alice.mode, ObserverMode::Zamo);
         assert_eq!(d.bob.mode, ObserverMode::FreeFall);
         assert_eq!(d.release_gap(), 0.0, "no trailing delay, so no stack for anyone to cut");
+    }
+
+    /// The drag the (t, r) canvas takes on a marker, without the pointer: `set_drag_position`
+    /// while it is held and `release_from_drag` when it is let go, which is exactly the pair
+    /// `SpacetimeCanvas::drag_markers` calls.
+    fn drag_bob_to(app: &mut SpacetimeApp, r: f64) {
+        let SpacetimeApp { metric, bob, current_time, .. } = app;
+        let bob = bob.as_mut().expect("Bob is in this run");
+        let mode = bob.mode;
+        bob.set_drag_position(*current_time, r);
+        bob.release_from_drag(metric, mode);
+    }
+
+    #[test]
+    fn test_an_observer_moved_at_the_start_of_a_run_is_dropped_there_by_the_next_reset() {
+        // Where somebody is dropped from is a property of the run, and the only way to say it is
+        // to put them there: drag the marker while the clock reads zero and that is where Reset
+        // builds them from, for as long as the app is open. Before this, the drag was thrown away
+        // by the next Reset and the run always restarted at 4.5M, which made the drag useless for
+        // the thing it is most wanted for - starting an observer from somewhere else.
+        let mut app = SpacetimeApp::default();
+        assert_eq!(app.current_time, 0.0, "the app opens at the start of the run");
+        drag_bob_to(&mut app, 7.25);
+        // One real frame, because it is the frame that takes the position: see
+        // `AppControls::remember_drop_positions`.
+        painted_text(&mut app);
+        assert!((app.controls.bob.drop_r - 7.25).abs() < 1e-9, "the card took the drag");
+
+        drop_observers(&mut app);
+        let dropped = bob_of(&app).r;
+        println!("dragged to 7.25M at t = 0, Reset drops him at {dropped:.4}M");
+        assert!((dropped - 7.25).abs() < 1e-9, "Reset puts him back where he was put: {dropped}");
+        // Alice, who was not touched, is still dropped where she always was.
+        assert!(
+            (alice_of(&app).r - 4.5).abs() < 1e-9,
+            "and nobody else moves: {}",
+            alice_of(&app).r
+        );
+
+        // A drag taken once the run is moving is a change to a worldline in progress, not to where
+        // the run starts, so the next Reset goes back to the remembered drop instead of to it.
+        app.step_forward(0.5);
+        drag_bob_to(&mut app, 2.0);
+        painted_text(&mut app);
+        assert!(
+            (app.controls.bob.drop_r - 7.25).abs() < 1e-9,
+            "a drag off the start is not a drop position: {}",
+            app.controls.bob.drop_r
+        );
+        drop_observers(&mut app);
+        assert!(
+            (bob_of(&app).r - 7.25).abs() < 1e-9,
+            "so Reset still builds him at 7.25M: {}",
+            bob_of(&app).r
+        );
     }
 
     #[test]
@@ -1464,8 +1527,8 @@ mod tests {
 
     #[test]
     fn test_bobs_signal_reaches_alice_and_rewinds_through_the_app_loop() {
-        // Bob's transmission through the app's own wiring, in the layout Drop Observers builds and
-        // at the default delay: Alice released from r = 4.5M at t = 0, Bob hovering at the same
+        // Bob's transmission through the app's own wiring, in the layout a Reset builds and at the
+        // default delay: Alice released from r = 4.5M at t = 0, Bob hovering at the same
         // radius until t = 8. He transmits throughout the wait - a static observer with a clock and
         // a frame - and this walks the whole loop over the hover: `SignalPair` advances his field
         // on the simulation clock, his proper time paces the emissions at sqrt(-g_tt) = 0.745 of
@@ -2011,12 +2074,12 @@ mod tests {
     }
 
     #[test]
-    fn test_startup_reset_and_drop_observers_all_build_the_same_layout() {
-        // Three ways into the same run. Reset used to put Bob at r = 3.8M released at t = 0 while
-        // Drop Observers put him at 4.5M with a delay, so the app opened on one layout, one button
-        // rebuilt it and the other built a different one; with a card per observer that is simply
-        // confusing. All three now go through `AppControls::drop_observers`, and this is what pins
-        // that: the two buttons are one call, and the call agrees with `SpacetimeApp::default`.
+    fn test_startup_and_reset_build_the_same_layout() {
+        // Two ways into the same run. There used to be a third, a Drop Observers button that put
+        // Bob at 4.5M with a delay while Reset put him at 3.8M released at once, so the app opened
+        // on one layout, one button rebuilt it and the other built a different one. That button is
+        // gone and what is left goes through `AppControls::drop_observers`, which this pins: a
+        // Reset, a Reset of a Reset, and `SpacetimeApp::default` all agree.
         let app = SpacetimeApp::default();
         let opening = layout(&app);
         assert_eq!(opening.len(), 2, "both cards are ticked out of the box");
@@ -2038,17 +2101,17 @@ mod tests {
         }
         assert!(bob_of(&app).r < 2.0 && !app.signal.pulses.is_empty(), "a run in progress");
 
-        // The action behind ⏮ Reset, and behind Drop Observers, and behind the preset row.
+        // The action behind ⏮ Reset, and behind the preset row.
         drop_observers(&mut app);
         assert_eq!(app.current_time, 0.0, "the clock goes back with it");
         assert_same_layout("Reset vs startup", &layout(&app), &opening);
 
-        // And again from the rebuilt state, which is what pressing the other button does.
+        // And again from the rebuilt state: a Reset of a Reset is the same Reset.
         for _ in 0..30 {
             app.step_forward(0.05);
         }
         drop_observers(&mut app);
-        assert_same_layout("Drop Observers vs startup", &layout(&app), &opening);
+        assert_same_layout("Reset of a Reset vs startup", &layout(&app), &opening);
     }
 
     #[test]

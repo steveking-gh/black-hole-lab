@@ -68,6 +68,15 @@ pub struct ObserverSettings {
     pub l_ang: f64,
     /// Start on the outgoing root of r^4 (dr/dtau)^2 = R(r).
     pub outgoing_start: bool,
+    /// The radius this observer is dropped from, by ⏮ Reset and at startup.
+    ///
+    /// It starts at `DROP_RADIUS` and is then whatever the user last put the observer at while the
+    /// clock read zero: `AppControls::remember_drop_positions` copies it off the observer every
+    /// frame the run is standing at its start, which is the one moment nothing else is moving them,
+    /// so dragging a marker there is a statement about where the run begins rather than a nudge
+    /// that the next Reset throws away. A drag taken once the clock is running is not remembered -
+    /// that one is a change to a worldline in progress, and the run it began is already behind it.
+    pub drop_r: f64,
     /// The Motion a *fresh* drop of this observer starts on.
     ///
     /// It is the only field here that the observer does not simply keep: Motion lives on the
@@ -89,6 +98,7 @@ impl ObserverSettings {
             energy: 1.0,
             l_ang: 0.0,
             outgoing_start: false,
+            drop_r: DROP_RADIUS,
             mode: ObserverMode::FreeFall,
         }
     }
@@ -106,7 +116,7 @@ impl ObserverSettings {
         WorldlineParams::new(self.energy, self.l_ang, self.outgoing_start)
     }
 
-    /// The observer this card asks for, dropped at `DROP_RADIUS` on the clock's reading `start_t`
+    /// The observer this card asks for, dropped at `drop_r` on the clock's reading `start_t`
     /// and released `delta_t_delay` of coordinate time later, or None when the card is unticked.
     fn dropped(
         &self,
@@ -120,7 +130,7 @@ impl ObserverSettings {
                 metric,
                 name,
                 start_t,
-                DROP_RADIUS,
+                self.drop_r,
                 start_t + self.delta_t_delay,
                 start_phi,
                 self.worldline_params(),
@@ -154,7 +164,7 @@ pub struct AppControls {
     /// A drawing choice and nothing else: the reception test interpolates in (r, phi) along the
     /// same segments either way, so this cannot move an arrival or change a measured shift.
     /// Default on, because on is the drawing that matches what is being detected. Like every
-    /// other control it survives Reset and Drop Observers, which rebuild the run and not the panel.
+    /// other control it survives Reset, which rebuilds the run and not the panel.
     pub draw_front_arcs: bool,
     /// Whether the segments whose two rays have wound more than a full turn apart are dropped from
     /// the drawing instead of being interpolated across. See
@@ -165,7 +175,7 @@ pub struct AppControls {
     /// turns are spread evenly over every radius between the two rays and therefore drift outward
     /// across r₊ as the run goes on, which nothing physical does. Like `draw_front_arcs` it is a
     /// drawing choice and cannot move an arrival or change a measured shift, and like every other
-    /// control it survives Reset and Drop Observers.
+    /// control it survives Reset.
     pub hide_wound_segments: bool,
     /// Whether the equatorial view's block of details (horizon radii, scale, spin, the colour
     /// keys) is drawn in its corner. Off, a single line with the view's name and zoom stands in
@@ -191,7 +201,7 @@ pub struct AppControls {
     /// t = const of the chart's Killing time, one line per round unit of the distant clock,
     /// labelled with its offset from the observer's now.
     ///
-    /// Default on, and like every control it is untouched by Reset and Drop Observers. It is a
+    /// Default on, and like every control it is untouched by Reset. It is a
     /// view setting and nothing else: the lines are read off `LocalFrame::surface_t_const`, which
     /// takes only the observer's tetrad, so turning it off removes drawing and no physics.
     pub show_distant_clock_grid: bool,
@@ -268,9 +278,9 @@ const DISTANCE_STEP_STALLED_DT: f64 = 0.1;
 /// only on how long one press of an arrow key is allowed to be worth.
 const DISTANCE_STEP_MIN_SPEED: f64 = 0.01;
 
-/// The radius both observers are dropped from, by ⏮ Reset, by Drop Observers and at startup: far
-/// enough outside the ergosphere (r_E = 2M on the equator) for a static hover to exist there, close
-/// enough in for the whole fall to be a few tens of M.
+/// The radius both observers are dropped from out of the box: far enough outside the ergosphere
+/// (r_E = 2M on the equator) for a static hover to exist there, close enough in for the whole fall
+/// to be a few tens of M. After that each card carries its own `ObserverSettings::drop_r`.
 const DROP_RADIUS: f64 = 4.5;
 
 /// The hover tips on the four Motion buttons of an observer card. Each says what worldline the
@@ -289,13 +299,13 @@ const ZAMO_TIP: &str = "The zero-angular-momentum observer, the frame in which a
 const WAVEFRONT_POINTS_TIP: &str = "How finely a pulse samples the emitter's light cone: n directions at α = 2πi/n, spaced 360/n degrees apart — 2.5° at the default of 144 — with α = 0, the emitter's own outward radial leg, always the first of them whatever n is. Each direction is one exact null geodesic, so this is the resolution of the whole picture the light draws: more points give finer tongues where the front is being swallowed at the ring, more beads along the frozen arcs stacked on r₋, shorter segments around the loop on the equatorial view, and rarer handovers from one sheet of a front to the next in the reception test, since neighbouring rays are then closer together in azimuth. They are not free. Integrating the rays, testing them against the receiver's worldline and drawing them all scale linearly in the count: about 1.1 ms of frame time for each extra 72 rays a pulse with forty pulses in flight, of which the integration and the reception test are 0.3 ms, so 1024 points is about seven times the work of 144 and the play loop is the first thing to feel it. It applies to pulses sent from now on. Light already in flight is the geodesics that were launched, and each pulse keeps the count it went out with, so the slider changes the transmission rather than redrawing it.";
 
 /// The hover tip on the Arcs between wavefront points checkbox.
-const FRONT_ARCS_TIP: &str = "Whether the pieces of a wavefront between neighbouring rays are drawn. Ticked, each piece is the curve linear in (r, ϕ) from one ray to the next, cut into steps of at most 0.05 rad and each step put through the embedding x + iy = (r + ia)e^{iϕ} — so a piece joining two rays sitting on r₋ is drawn as an arc of the r₋ circle, and one joining two rays a quarter of a turn apart is drawn going round. Unticked, nothing is drawn between the rays: the front is shown as the calculated points themselves, one dot per ray in the same gain colour the arc would have had, and the frozen family keeps its heavier beads. Nothing physical turns on it. The reception test interpolates in (r, ϕ) along exactly the same pieces whichever way they are drawn, so an arrival happens at the same event, at the same measured shift, in both settings. What the tick buys is that the front you are looking at is the same curve the detector is testing; what unticking buys is the raw output of the integrator with no interpolation laid over it, which is worth being able to see, because everything the arcs add is inference. Inside r₋ the annulus is thin (at a = 0.90 the embedding puts r₋ at ρ = 1.06 against the ring at ρ = 0.90) and neighbouring rays wind at wildly different rates, dϕ/dt running from about −5 per M near the ring to +0.8 for one settling onto r₋, so a pair of neighbours ends up most of a radian apart and the arc between them is drawn along a curve no ray was integrated on; the dots are the part that is not inferred. It is independent of the winding cut on the checkbox below it, which drops the two or so segments per pulse whose rays have wound more than a whole turn apart; with the arcs unticked that cut has nothing left to drop, since every live ray is already drawn as its own dot. The setting is a view setting and is kept across ⏮ Reset and Drop Observers, as every control on this panel is.";
+const FRONT_ARCS_TIP: &str = "Whether the pieces of a wavefront between neighbouring rays are drawn. Ticked, each piece is the curve linear in (r, ϕ) from one ray to the next, cut into steps of at most 0.05 rad and each step put through the embedding x + iy = (r + ia)e^{iϕ} — so a piece joining two rays sitting on r₋ is drawn as an arc of the r₋ circle, and one joining two rays a quarter of a turn apart is drawn going round. Unticked, nothing is drawn between the rays: the front is shown as the calculated points themselves, one dot per ray in the same gain colour the arc would have had, and the frozen family keeps its heavier beads. Nothing physical turns on it. The reception test interpolates in (r, ϕ) along exactly the same pieces whichever way they are drawn, so an arrival happens at the same event, at the same measured shift, in both settings. What the tick buys is that the front you are looking at is the same curve the detector is testing; what unticking buys is the raw output of the integrator with no interpolation laid over it, which is worth being able to see, because everything the arcs add is inference. Inside r₋ the annulus is thin (at a = 0.90 the embedding puts r₋ at ρ = 1.06 against the ring at ρ = 0.90) and neighbouring rays wind at wildly different rates, dϕ/dt running from about −5 per M near the ring to +0.8 for one settling onto r₋, so a pair of neighbours ends up most of a radian apart and the arc between them is drawn along a curve no ray was integrated on; the dots are the part that is not inferred. It is independent of the winding cut on the checkbox below it, which drops the two or so segments per pulse whose rays have wound more than a whole turn apart; with the arcs unticked that cut has nothing left to drop, since every live ray is already drawn as its own dot. The setting is a view setting and is kept across ⏮ Reset, as every control on this panel is.";
 
 /// The hover tip on the Hide segments wound past a full turn checkbox.
-const HIDE_WOUND_TIP: &str = "Whether the pieces of a front whose two rays have wound more than one whole turn apart in ϕ are drawn at all. Such a pair is not an ordinary neighbouring pair that has drifted: it straddles a critical impact parameter, the emission angle either side of which a ray is captured rather than escaping. At a = 0.90 the prograde equatorial photon orbit sits at r_ph = 1.56M, just outside r₊ = 1.44M, and the retrograde one at 3.89M. The ray just inside the critical angle hangs on that unstable orbit for tens of M and then spirals in and freezes onto r₋, where it co-rotates at Ω₋ = 0.9 per M for ever; the ray just outside it hangs there too and then escapes outward at very nearly c. The real front between them is pinned on the photon orbit: a spiral inward from the far ray down to r_ph, a pile-up of turns at r_ph that no sampling of the light cone can resolve, and a spiral from r_ph down to r₋. Two rays 2.5° apart cannot carry that shape, and the drawing does not have the information to invent it. What the interpolation linear in (r, ϕ) draws in its place is an Archimedean spiral with the whole winding spread evenly over every radius between the two ends, r₊ included, so as the outer ray runs away while the winding grows only at Ω₋, the turns drift steadily outward across the outer horizon — a fan of spiral arms crossing r₊ that no ray took and nothing in the spacetime does. That is inference the drawing should not be making, so ticked, those segments are simply not drawn: each of the two rays is marked with its own dot in its own gain colour instead, so the cut reads as a gap with marked ends rather than as a silent hole. One whole turn is the threshold because past 2π the pair has been round the hole relative to one another and the segment covers every azimuth, so the sampling has no information at all about what the front does in there; below it the arc still misplaces the winding but is one arc between two neighbours of the same sheet. It removes about two segments per pulse — the prograde critical angle and the retrograde one, one segment each — and nothing else: every other segment is drawn exactly as before. Nothing physical turns on it. Reception detection is untouched: Pulse::scan interpolates in (r, ϕ) along every segment whether or not it is drawn, so an arrival happens at the same event, at the same measured shift, ticked or unticked. Unticking it puts the spirals back, which is worth being able to do — it is the honest picture of what two samples that far apart actually say. The setting is a view setting and is kept across ⏮ Reset and Drop Observers, as every control on this panel is.";
+const HIDE_WOUND_TIP: &str = "Whether the pieces of a front whose two rays have wound more than one whole turn apart in ϕ are drawn at all. Such a pair is not an ordinary neighbouring pair that has drifted: it straddles a critical impact parameter, the emission angle either side of which a ray is captured rather than escaping. At a = 0.90 the prograde equatorial photon orbit sits at r_ph = 1.56M, just outside r₊ = 1.44M, and the retrograde one at 3.89M. The ray just inside the critical angle hangs on that unstable orbit for tens of M and then spirals in and freezes onto r₋, where it co-rotates at Ω₋ = 0.9 per M for ever; the ray just outside it hangs there too and then escapes outward at very nearly c. The real front between them is pinned on the photon orbit: a spiral inward from the far ray down to r_ph, a pile-up of turns at r_ph that no sampling of the light cone can resolve, and a spiral from r_ph down to r₋. Two rays 2.5° apart cannot carry that shape, and the drawing does not have the information to invent it. What the interpolation linear in (r, ϕ) draws in its place is an Archimedean spiral with the whole winding spread evenly over every radius between the two ends, r₊ included, so as the outer ray runs away while the winding grows only at Ω₋, the turns drift steadily outward across the outer horizon — a fan of spiral arms crossing r₊ that no ray took and nothing in the spacetime does. That is inference the drawing should not be making, so ticked, those segments are simply not drawn: each of the two rays is marked with its own dot in its own gain colour instead, so the cut reads as a gap with marked ends rather than as a silent hole. One whole turn is the threshold because past 2π the pair has been round the hole relative to one another and the segment covers every azimuth, so the sampling has no information at all about what the front does in there; below it the arc still misplaces the winding but is one arc between two neighbours of the same sheet. It removes about two segments per pulse — the prograde critical angle and the retrograde one, one segment each — and nothing else: every other segment is drawn exactly as before. Nothing physical turns on it. Reception detection is untouched: Pulse::scan interpolates in (r, ϕ) along every segment whether or not it is drawn, so an arrival happens at the same event, at the same measured shift, ticked or unticked. Unticking it puts the spirals back, which is worth being able to do — it is the honest picture of what two samples that far apart actually say. The setting is a view setting and is kept across ⏮ Reset, as every control on this panel is.";
 
 /// The hover tip on the Enable Observer checkbox, the same on both cards.
-const DISTANT_CLOCK_GRID_TIP: &str = "Whether the rest-frame view draws the distant clock's own moments. The chart's time t is a Killing time: a difference of t along any static worldline is exactly the proper time a clock at rest at infinity records between the same two moments, so the surfaces t = const are that far-away clock's tick marks, carried inward. Ticked, they are drawn as a muted grid across the observer's local frame, one line per round unit of distant time — 50 µs, 200 ms, 30 min, 5e6 yr — each labelled with its offset from the observer's now, and the legend says which unit it is. The unit is chosen from the observer's u^t and the pixel scale of the view and from nothing else, so as the outside clock runs faster and faster on their screen the grid climbs the ladder from milliseconds through seconds and years rather than collapsing into a solid block. Where each line meets the worldline is exact, not linearised: consecutive lines Δt apart cross it Δt/u^t of the observer's own proper time apart, which is the whole content of the statement that the distant clock runs fast by u^t. Every one of these lines is flatter than 45°, in every region, because dt is timelike everywhere in this chart (g^tt = −(1 + 2M/r) < 0), so unlike a surface r = const they never turn null at a horizon and the grid reads the same way on both sides of r₊. Going through r₊ on the raindrop, or crossing the near branch of r₋, u^t stays finite and the spacing barely moves. Aimed at the far branch of r₋ instead — E − Ω₋L < 0, which at a = 0.90 is where E = 1, L = 2.2 goes — u^t grows like exp(κ₋t) and the lines pile up on the worldline without limit: infinitely many of the distant clock's moments are crossed in a finite amount of the observer's own time, and the grid shows that as the lines bunching against the origin. What it does not show is anything the observer sees. A slice of constant t is a simultaneity convention, a choice of which far-away events to call “now”, and no measurement singles it out; what is actually seen is the light, and the ingoing blueshift ν_in/ν_∞ in the telemetry box diverges on that same approach at the same rate — near the far branch it is u^t times r₋²/(r₋² + a²). The lines are a label on the geometry; the blueshift is the observation. It is a view setting and is kept across ⏮ Reset and Drop Observers, as every control on this panel is.";
+const DISTANT_CLOCK_GRID_TIP: &str = "Whether the rest-frame view draws the distant clock's own moments. The chart's time t is a Killing time: a difference of t along any static worldline is exactly the proper time a clock at rest at infinity records between the same two moments, so the surfaces t = const are that far-away clock's tick marks, carried inward. Ticked, they are drawn as a muted grid across the observer's local frame, one line per round unit of distant time — 50 µs, 200 ms, 30 min, 5e6 yr — each labelled with its offset from the observer's now, and the legend says which unit it is. The unit is chosen from the observer's u^t and the pixel scale of the view and from nothing else, so as the outside clock runs faster and faster on their screen the grid climbs the ladder from milliseconds through seconds and years rather than collapsing into a solid block. Where each line meets the worldline is exact, not linearised: consecutive lines Δt apart cross it Δt/u^t of the observer's own proper time apart, which is the whole content of the statement that the distant clock runs fast by u^t. Every one of these lines is flatter than 45°, in every region, because dt is timelike everywhere in this chart (g^tt = −(1 + 2M/r) < 0), so unlike a surface r = const they never turn null at a horizon and the grid reads the same way on both sides of r₊. Going through r₊ on the raindrop, or crossing the near branch of r₋, u^t stays finite and the spacing barely moves. Aimed at the far branch of r₋ instead — E − Ω₋L < 0, which at a = 0.90 is where E = 1, L = 2.2 goes — u^t grows like exp(κ₋t) and the lines pile up on the worldline without limit: infinitely many of the distant clock's moments are crossed in a finite amount of the observer's own time, and the grid shows that as the lines bunching against the origin. What it does not show is anything the observer sees. A slice of constant t is a simultaneity convention, a choice of which far-away events to call “now”, and no measurement singles it out; what is actually seen is the light, and the ingoing blueshift ν_in/ν_∞ in the telemetry box diverges on that same approach at the same rate — near the far branch it is u^t times r₋²/(r₋² + a²). The lines are a label on the geometry; the blueshift is the observation. It is a view setting and is kept across ⏮ Reset, as every control on this panel is.";
 
 const ENABLE_TIP: &str = "Whether this observer is in the simulation at all. Unticked, they are not merely hidden: there is no worldline to step, nothing of them in either view, no telemetry box, no light going out and no arrival coming in, and their transmission is dropped. The other observer's transmission goes on exactly as before — the light already in flight does not care whether anybody is left to hear it — but records no reception, because there is nobody there to make one. Ticking the box back on drops this observer afresh from this card, at r = 4.5M on the clock's current reading, hovering there until their own Release Delay has passed; the rest of the run is left alone, so the other observer is not restarted.";
 
@@ -502,7 +512,7 @@ impl ObserverCard {
                     .text("Release Delay Δt"),
             )
             .on_hover_text(
-                "How long after the drop this observer is let go. Until then they hover at r = 4.5M as a static observer — a real worldline, with a clock running at √(−g_tt) of coordinate time and a frame to transmit from — and the wait is what puts one observer behind the other on the same infall. It takes effect at the next ⏮ Reset or Drop Observers, since a release time is part of a worldline rather than something that can be changed under one.",
+                "How long after the drop this observer is let go. Until then they hover at the drop radius as a static observer — a real worldline, with a clock running at √(−g_tt) of coordinate time and a frame to transmit from — and the wait is what puts one observer behind the other on the same infall. It takes effect at the next ⏮ Reset, since a release time is part of a worldline rather than something that can be changed under one.",
             );
             ui.add(
                 egui::Slider::new(&mut settings.energy, 0.90..=1.60)
@@ -513,15 +523,23 @@ impl ObserverCard {
                     .text("Angular momentum L (per unit mass, M)"),
             );
             ui.checkbox(&mut settings.outgoing_start, "Start on the outgoing root (dr/dτ > 0)");
+            ui.label(
+                egui::RichText::new(format!(
+                    "Dropped from r = {:.2}M — drag the marker while the clock reads 0 to move it",
+                    settings.drop_r
+                ))
+                .small()
+                .color(Theme::TEXT_MUTED),
+            );
 
-            // Below the effective potential V(r, L) there is no timelike geodesic through
-            // r = 4.5M at all, so the drop raises E to the floor instead of refusing.
-            let floor = GeodesicState::energy_floor(metric, DROP_RADIUS, settings.l_ang);
+            // Below the effective potential V(r, L) there is no timelike geodesic through the
+            // drop radius at all, so the drop raises E to the floor instead of refusing.
+            let floor = GeodesicState::energy_floor(metric, settings.drop_r, settings.l_ang);
             if settings.energy < floor {
                 ui.label(
                     egui::RichText::new(format!(
-                        "E raised to {:.3}: below that, r = {}M is forbidden for this L",
-                        floor, DROP_RADIUS
+                        "E raised to {:.3}: below that, r = {:.2}M is forbidden for this L",
+                        floor, settings.drop_r
                     ))
                     .small()
                     .color(Theme::TEXT_MUTED),
@@ -602,24 +620,25 @@ fn transport_button(ui: &mut egui::Ui, glyph: &str, caption: &str, tip: &str) ->
 }
 
 impl AppControls {
-    /// Build the run the app opens on, and that ⏮ Reset and Drop Observers rebuild: the clock at
-    /// zero, both transmissions dropped, and every ticked observer re-dropped from r = 4.5M -
-    /// Alice at ϕ = 0.25, Bob at ϕ = 0 - each hovering there until their own Release Delay has
-    /// passed, on the worldline their own E, L and outgoing flag pick out.
+    /// Build the run the app opens on, and that ⏮ Reset rebuilds: the clock at zero, both
+    /// transmissions dropped, and every ticked observer re-dropped from their card's own
+    /// `ObserverSettings::drop_r` - Alice at ϕ = 0.25, Bob at ϕ = 0 - each hovering there until
+    /// their own Release Delay has passed, on the worldline their own E, L and outgoing flag pick
+    /// out.
     ///
     /// There is one layout rather than two. Reset used to put Bob at r = 3.8M released at t = 0
-    /// while Drop Observers put him at 4.5M with a delay, so the same run had two openings and the
-    /// two buttons disagreed about which; with a card per observer that is simply confusing, so
-    /// Reset, Drop Observers and `SpacetimeApp::default` all come through here.
+    /// while a second button, Drop Observers, put him at 4.5M with a delay, so the same run had two
+    /// openings and the two buttons disagreed about which; that button is gone and Reset, the
+    /// preset row and `SpacetimeApp::default` all come through here.
     ///
     /// The transmissions are cleared rather than rewound. A rewind keeps the light in flight, and
     /// there is none to keep: the wavefronts standing in the field were emitted by worldlines that
     /// this is about to replace, and where the geometry itself has just changed under them they are
     /// null geodesics of a metric that no longer applies.
     ///
-    /// All three callers - the transport's Reset and Drop Observers buttons, and the preset row,
-    /// which restarts the run because it has changed the hole - also want the (t, r) view put back
-    /// where it starts, so the request is raised here rather than at each of them.
+    /// Both callers - the transport's Reset button, and the preset row, which restarts the run
+    /// because it has changed the hole - also want the (t, r) view put back where it starts, so the
+    /// request is raised here rather than at each of them.
     ///
     /// It is `pub(crate)` because these are egui buttons and a test cannot click one without a
     /// harness that drives the pointer:
@@ -638,6 +657,35 @@ impl AppControls {
         *alice = ALICE_CARD.redropped(metric, &self.alice, alice.as_ref(), 0.0);
         *bob = BOB_CARD.redropped(metric, &self.bob, bob.as_ref(), 0.0);
         self.view_reset_requested = true;
+    }
+
+    /// Take each observer's present radius as the radius they are dropped from, if and only if the
+    /// run is standing at its start.
+    ///
+    /// The clock reading zero is the one moment nothing but the user is moving anybody: an observer
+    /// hovers or falls only as the clock advances, and a Reset has just put them where their card
+    /// says. So a radius that differs from the card's at t = 0 came from a drag on the (t, r)
+    /// diagram, and the rule is simply that where an observer stands at zero is where they are
+    /// dropped. Called once a frame by `SpacetimeApp::ui`, after the canvases have taken their
+    /// drags, so the position a drag ends on is the one that is kept.
+    ///
+    /// Only the radius. The drag also sets the observer's t, and can release them early through
+    /// `Observer::release_from_drag`, but neither is a property of where the run starts: the clock
+    /// goes back to zero on a Reset and the release delay is the card's own.
+    pub fn remember_drop_positions(
+        &mut self,
+        alice: Option<&Observer>,
+        bob: Option<&Observer>,
+        current_time: f64,
+    ) {
+        if current_time != 0.0 {
+            return;
+        }
+        for (card, observer) in [(&mut self.alice, alice), (&mut self.bob, bob)] {
+            if let Some(obs) = observer {
+                card.drop_r = obs.r;
+            }
+        }
     }
 
     /// Whether the (t, r) view has been asked to go back to the start since this was last called,
@@ -748,7 +796,7 @@ impl AppControls {
                     ui,
                     "⏮",
                     "Reset",
-                    "Put the run back to the layout the app opens on, which is the one Drop Observers builds: the clock at zero and every ticked observer dropped afresh from their card.",
+                    "Put the run back to its start: the clock to zero, both transmissions dropped, and every ticked observer dropped afresh from their card - Alice at ϕ = 0.25 and Bob at ϕ = 0, each from their own drop radius, each hovering there until their own Release Delay, on the worldline their own E and L pick out. Two things are not read off the card. Motion is inherited: an observer being replaced hands their own Motion to the one replacing them, so a Reset never answers a question about how somebody moves that the user has not asked, and a card that has just been ticked on starts as it does out of the box. And the drop radius is wherever that observer was standing the last time the clock read zero, so dragging a marker at the start of a run moves where they are dropped from.",
                 ) {
                     self.drop_observers(metric, alice, bob, &mut signals, current_time);
                 }
@@ -875,18 +923,6 @@ impl AppControls {
                     self.font_scale = (self.font_scale + 0.1).clamp(0.7, 1.8);
                 }
             });
-
-            ui.separator();
-            ui.label(
-                egui::RichText::new(
-                    "Drop Observers rebuilds every ticked observer from their card: Alice from r = 4.5M at ϕ = 0.25 and Bob from r = 4.5M at ϕ = 0, each hovering there until their own Release Delay, on the worldline their own E and L pick out. Motion is the one thing it does not read off the card: an observer being replaced hands their own Motion to the one replacing them, so a rebuild never puts a Static or ZAMO observer back on the free-fall worldline. A card that has just been ticked on has nobody to inherit from and starts as it does out of the box, Alice on the ZAMO circle and Bob in free fall. Both transmissions are dropped and the clock goes back to zero. ⏮ Reset builds the same layout, and it is the one the app opens on.",
-                )
-                .small()
-                .color(Theme::TEXT_MUTED),
-            );
-            if ui.button("Drop Observers").clicked() {
-                self.drop_observers(metric, alice, bob, &mut signals, current_time);
-            }
 
             ui.separator();
             ui.label(egui::RichText::new("📐 UNITS & COORDINATE SYSTEM").small().strong().color(Theme::TEXT_BRIGHT));
