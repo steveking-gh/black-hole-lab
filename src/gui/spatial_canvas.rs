@@ -592,6 +592,15 @@ impl SpatialCanvas {
 /// nothing about the physics. A segment with one frozen end and one crossing end is drawn in the
 /// ordinary pass: that pair is the tear in the loop, where the front is being pulled apart into its
 /// two families, and it belongs to neither.
+///
+/// The heavy pass is applied only inside r+. The sign of E - Omega_- L is a property of the ray
+/// from birth, and outside r+ it is carried by most of the prograde half of every ring an emitter
+/// sends - light that is nowhere near r- and may never get there, since a ray let go at 4.5 M with
+/// that sign can escape just as well as fall. Drawn heavily out there it split each fresh ring into
+/// a bright half and a faint one for no reason the picture could show, since the weight exists to
+/// keep an arc visible once it has collapsed onto r-, and nothing outside r+ has. Inside r+ every
+/// ray of the family is on its way to r- and reaches a pixel of it within a few M, which is where
+/// the weight is needed and the only place it is now applied.
 /// Largest azimuthal span of one drawn piece of a wavefront segment, in radians.
 ///
 /// A segment of the front is the piece of null surface between two neighbouring rays, and what it
@@ -850,8 +859,14 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
             .collect();
         // One classification and one projection per ray per frame, both of which the segment loop
         // would otherwise repeat for each of the two segments a ray belongs to.
-        let frozen: Vec<bool> =
-            pulse.rays.iter().map(|ray| ray.alive() && ray.frozen(metric)).collect();
+        // "Frozen" for the drawing is the frozen family *inside r+*, the only place the heavy pass
+        // is needed: see the doc above `MAX_ARC_STEP`.
+        let r_plus = metric.outer_horizon();
+        let frozen: Vec<bool> = pulse
+            .rays
+            .iter()
+            .map(|ray| ray.alive() && ray.r < r_plus && ray.frozen(metric))
+            .collect();
         // The ray positions themselves, which the frozen dots sit on; the segments between them
         // are drawn as arcs in (r, phi) between them, or not at all when the arcs are off.
         let points: Vec<Pos2> = pulse
@@ -1172,6 +1187,75 @@ mod tests {
             "with the arcs off every live ray is one dot, plus one emission dot per pulse"
         );
         assert!(circles_off > circles_on, "and that is more dots than the frozen beads alone");
+    }
+
+    #[test]
+    fn test_outside_r_plus_a_fresh_ring_is_drawn_at_one_weight() {
+        // A ring let go at r = 4.5 has a prograde half with E - Omega_- L < 0 - the sign is fixed
+        // at birth - but nothing about it has collapsed onto r-, so nothing about it needs the
+        // heavy frozen pass, and drawing it heavily split every ring into a bright half and a
+        // faint one. Every polyline of such a ring must come out at the same stroke width and the
+        // same opacity, and no bead at all.
+        use crate::physics::observer::{Observer, WorldlineParams};
+        let metric = KerrSchild::new(1.0, 0.90);
+        let emitter =
+            Observer::new_with_phi(&metric, "Bob", 0.0, 4.5, 0.0, 0.0, WorldlineParams::default());
+        let mut field = SignalField::default();
+        field.emit_if_due(&metric, &emitter);
+        field.advance(&metric, 0.5);
+        let rays = &field.pulses[0].rays;
+        assert!(rays.iter().all(|ray| ray.alive() && ray.r > metric.outer_horizon()));
+        assert!(
+            rays.iter().any(|ray| ray.frozen(&metric)),
+            "the ring does carry rays of the frozen family, which is what the test is about"
+        );
+
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let output = ctx.run_ui(Default::default(), |ui| {
+            let (_, painter) =
+                ui.allocate_painter(egui::Vec2::new(400.0, 400.0), egui::Sense::hover());
+            let to_screen =
+                |(x, y): (f64, f64)| Pos2::new(200.0 + 30.0 * x as f32, 200.0 - 30.0 * y as f32);
+            draw_signal_field(
+                &painter,
+                &metric,
+                &field,
+                Theme::BOB_COLOR,
+                Theme::SECONDARY_FRONT_WIDTH,
+                FrontStyle { arcs: true, hide_wound: true },
+                &to_screen,
+            );
+        });
+        let mut strokes: Vec<(u32, u8)> = Vec::new();
+        let mut circles = 0;
+        fn walk(shape: &egui::Shape, strokes: &mut Vec<(u32, u8)>, circles: &mut usize) {
+            match shape {
+                egui::Shape::Path(path) => {
+                    let alpha = match path.stroke.color {
+                        egui::epaint::ColorMode::Solid(colour) => colour.a(),
+                        egui::epaint::ColorMode::UV(_) => 0,
+                    };
+                    strokes.push((path.stroke.width.to_bits(), alpha));
+                }
+                egui::Shape::Circle(_) => *circles += 1,
+                egui::Shape::Vec(inner) => inner.iter().for_each(|s| walk(s, strokes, circles)),
+                _ => {}
+            }
+        }
+        for clipped in output.shapes.iter() {
+            walk(&clipped.shape, &mut strokes, &mut circles);
+        }
+        output.drop_without_applying_deltas();
+        assert_eq!(strokes.len(), rays.len(), "one polyline per segment of the ring");
+        let first = strokes[0];
+        assert!(
+            strokes.iter().all(|s| *s == first),
+            "every segment at one width and one opacity: {:?}",
+            strokes.iter().collect::<std::collections::HashSet<_>>()
+        );
+        assert_eq!(first.1, Theme::SHIFT_ALPHA, "the ordinary opacity, not the frozen pass");
+        assert_eq!(circles, 1, "the emission dot and no beads");
     }
 
     #[test]
