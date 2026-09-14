@@ -199,9 +199,35 @@ impl Theme {
     // family's gain grows like exp(kappa_- t) - but it runs much further: those rays reach 1e5
     // within a run, where the reception ramp is built for the 1e3 an actual arrival shows, so the
     // two ceilings are different numbers about different quantities and neither is the other's.
-    /// log10(gain) at or below which the colour is clamped to `FRONT_MAROON_RGB`. A ray can lose
+    //
+    // Every stop of this ramp is the same lightness. That is not decoration: on these fronts the
+    // alpha channel carries the signal strength (`strength_alpha`), so any lightness the *hue* ramp
+    // carried of its own would be read as strength that is not there. The old ramp ran from a
+    // near-black maroon to white, a factor of 157 in relative luminance, against the factor of at
+    // most 2.5 the strength of a drawn front spans across the picture: the colour drowned the
+    // measurement it was drawn beside. So the stops are laid out in Oklab at a fixed lightness
+    // `FRONT_STOP_LIGHTNESS` and a fixed chroma `FRONT_STOP_CHROMA`, with only the hue moving, and
+    // what is left for the eye to read as brightness is the fluence and nothing else.
+    //
+    // Fixed chroma as well as fixed lightness, because of Helmholtz-Kohlrausch: a saturated colour
+    // looks brighter than a desaturated one of the same luminance, so a ramp that ran from grey to
+    // vivid would leak into the same channel by another route. The one stop that breaks it is the
+    // bottom one, which is nearly colourless on purpose - see `FRONT_GREY_RGB`.
+    //
+    // With lightness spent, the hue sequence is the spectrum itself: red - orange - yellow - green
+    // - blue - violet, in the order a spectrograph lays them out, which is the order the quantity
+    // being drawn moves in. White is gone from the middle of the ramp because white is the one
+    // colour that cannot be had at a fixed lightness below its own.
+    /// Oklab lightness every stop of the front ramp is built at, and `FRONT_STOP_CHROMA` the Oklab
+    /// chroma. 0.72 is where the constant chroma available across the six hues is widest: yellow
+    /// runs out of gamut below it and blue above, and 0.145 is what both can hold there.
+    pub const FRONT_STOP_LIGHTNESS: f64 = 0.72;
+    /// See `FRONT_STOP_LIGHTNESS`. The bottom stop is the deliberate exception.
+    pub const FRONT_STOP_CHROMA: f64 = 0.145;
+
+    /// log10(gain) at or below which the colour is clamped to `FRONT_GREY_RGB`. A ray can lose
     /// frequency between two raindrops rather than gain it - one climbing outward, away from the
-    /// congruence's fall - and a tenfold loss is as dark as that end gets.
+    /// congruence's fall - and a tenfold loss is as far as that end goes.
     pub const FRONT_LOG_MIN: f64 = -1.0;
     /// log10(gain) of a front that has neither gained nor lost: every ray at its own emission.
     pub const FRONT_LOG_BIRTH: f64 = 0.0;
@@ -209,31 +235,39 @@ impl Theme {
     pub const FRONT_LOG_ORANGE: f64 = 0.5;
     /// log10(gain) at which the ramp reaches `FRONT_YELLOW_RGB`: a tenfold blueshift.
     pub const FRONT_LOG_YELLOW: f64 = 1.0;
-    /// log10(gain) at which the ramp reaches `FRONT_WHITE_RGB`: about thirtyfold.
-    pub const FRONT_LOG_WHITE: f64 = 1.5;
+    /// log10(gain) at which the ramp reaches `FRONT_GREEN_RGB`: about thirtyfold.
+    pub const FRONT_LOG_GREEN: f64 = 1.5;
     /// log10(gain) at which the ramp reaches `FRONT_BLUE_RGB`: a thousandfold blueshift.
     pub const FRONT_LOG_BLUE: f64 = 3.0;
     /// log10(gain) at or above which the colour is clamped to `FRONT_VIOLET_RGB`: a hundred
     /// thousandfold, which is the order the stack frozen on r- reaches within a run.
     pub const FRONT_LOG_MAX: f64 = 5.0;
 
-    pub const FRONT_MAROON_RGB: [u8; 3] = [45, 0, 12]; // a tenfold loss: nearly black maroon
-    pub const FRONT_RED_RGB: [u8; 3] = [170, 25, 20]; // deep red, the colour of a newborn front
-    pub const FRONT_ORANGE_RGB: [u8; 3] = [235, 120, 30];
-    pub const FRONT_YELLOW_RGB: [u8; 3] = [255, 225, 90];
-    pub const FRONT_WHITE_RGB: [u8; 3] = [245, 245, 250];
-    pub const FRONT_BLUE_RGB: [u8; 3] = [60, 140, 255]; // BLUESHIFT_BLUE
-    pub const FRONT_VIOLET_RGB: [u8; 3] = [190, 60, 255]; // BLUESHIFT_VIOLET
+    // The six spectral hues below are the Oklab hues the old ramp's stops already had, carried over
+    // unchanged and re-struck at the common lightness and chroma; green is the one new hue, filling
+    // the place white held. A `#[test]` measures the lightness of all seven.
+    /// A tenfold loss: colourless. The bottom stop is the one place the ramp leaves the spectrum,
+    /// because it stands for light that has come off the red end of it, and there is no hue below
+    /// red to go to. It is drawn at chroma 0.025 rather than 0 so that it reads as the end of the
+    /// warm run rather than as a stroke that has lost its colour by accident, and at the same
+    /// lightness as everything else so that a weak front and a losing one cannot be confused.
+    pub const FRONT_GREY_RGB: [u8; 3] = [180, 159, 156];
+    pub const FRONT_RED_RGB: [u8; 3] = [242, 126, 111]; // the colour of a newborn front
+    pub const FRONT_ORANGE_RGB: [u8; 3] = [234, 135, 70];
+    pub const FRONT_YELLOW_RGB: [u8; 3] = [191, 163, 18];
+    pub const FRONT_GREEN_RGB: [u8; 3] = [100, 188, 105];
+    pub const FRONT_BLUE_RGB: [u8; 3] = [105, 165, 254];
+    pub const FRONT_VIOLET_RGB: [u8; 3] = [194, 137, 231];
 
     /// The ramp above as (log10(gain), colour) stops, in increasing order of the first entry.
     /// `front_colour` interpolates between consecutive stops and clamps outside the two ends, so
     /// this array is the whole definition of the ramp and the consts are its labels.
     pub const FRONT_STOPS: [(f64, [u8; 3]); 7] = [
-        (Self::FRONT_LOG_MIN, Self::FRONT_MAROON_RGB),
+        (Self::FRONT_LOG_MIN, Self::FRONT_GREY_RGB),
         (Self::FRONT_LOG_BIRTH, Self::FRONT_RED_RGB),
         (Self::FRONT_LOG_ORANGE, Self::FRONT_ORANGE_RGB),
         (Self::FRONT_LOG_YELLOW, Self::FRONT_YELLOW_RGB),
-        (Self::FRONT_LOG_WHITE, Self::FRONT_WHITE_RGB),
+        (Self::FRONT_LOG_GREEN, Self::FRONT_GREEN_RGB),
         (Self::FRONT_LOG_BLUE, Self::FRONT_BLUE_RGB),
         (Self::FRONT_LOG_MAX, Self::FRONT_VIOLET_RGB),
     ];
@@ -250,12 +284,21 @@ impl Theme {
     /// How many decades of signal strength the wavefront alpha spans: full strength at 1, and
     /// nothing left to draw at ten to the minus this.
     ///
-    /// Four, which reaches a luminosity distance of a hundred M. The drawn field ends at
-    /// `wavefront::R_ESCAPE` = 16 M, so a pulse crossing the whole picture fades by a little over
-    /// two decades of it and stays visible the whole way; what the last two decades are for is the
-    /// light that has gone round the hole, or out and back, and is genuinely too faint to be worth
-    /// a line. Changing it changes only how much of the fade is spent on screen.
-    pub const STRENGTH_FADE_DECADES: f64 = 4.0;
+    /// This is the one free number in the strength display, and it is a calibration rather than a
+    /// taste: it says how much of the alpha range one decade of fluence is worth. It is set from
+    /// what is actually on screen. A transmission holds `wavefront::MAX_PULSES` pulses at
+    /// `wavefront::EMISSION_INTERVAL_TAU` apart, so the oldest front drawn is about six M old and
+    /// an emitter outside the horizon has its whole field inside about a decade and a half of
+    /// fluence; at four decades that span came out as alpha 100 to 170, a factor of 1.7 that the
+    /// eye reads as no variation at all. Two decades puts the same span across most of the range.
+    /// `test_the_fade_is_calibrated_to_the_field_it_is_drawn_over` measures it on the default run
+    /// and fails if either end is wasted.
+    ///
+    /// The cost is at the faint end: two decades reaches a luminosity distance of 10 M, so light
+    /// that has gone round the hole, or out and back across the drawn field, is cut rather than
+    /// drawn at an alpha of two. That is the display cut, and it is the same statement as the fade
+    /// rather than a threshold bolted beside it.
+    pub const STRENGTH_FADE_DECADES: f64 = 2.0;
 
     /// The alpha a piece of wavefront is drawn at, given the signal strength there
     /// (`Pulse::segment_strength`) and the alpha its field uses at full strength.
@@ -285,10 +328,12 @@ impl Theme {
     }
 
     /// The colour of a wavefront gain nu(infaller here) / nu(infaller at the emission event), at
-    /// opacity `alpha`: deep red at 1, where every front is born, darkening to maroon at a tenfold
-    /// loss and running deep red - orange - yellow - white - blue - violet up to a hundred
-    /// thousandfold gain, clamped at both ends. A non-positive or non-finite gain, which no real
-    /// measurement produces, is drawn at the dark end.
+    /// opacity `alpha`: red at 1, where every front is born, running red, orange, yellow, green,
+    /// blue, violet up to a hundred thousandfold gain and out to a colourless grey at a tenfold
+    /// loss, clamped at both ends. Every one of those stops is the same lightness, so what the
+    /// colour says is the shift and only the shift; the brightness is `alpha`'s to carry. A
+    /// non-positive or non-finite gain, which no real measurement produces, is drawn at the grey
+    /// end.
     pub fn front_colour(gain: f64, alpha: u8) -> Color32 {
         let log = if gain.is_finite() && gain > 0.0 {
             gain.log10().clamp(Self::FRONT_LOG_MIN, Self::FRONT_LOG_MAX)
@@ -312,5 +357,149 @@ impl Theme {
             }
         }
         Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], alpha)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Theme;
+
+    /// The Oklab coordinates (L, a, b) of an sRGB triple, which is the space the front ramp's stops
+    /// were struck in and so the space the claim about them has to be checked in.
+    ///
+    /// Bjorn Ottosson's transform, verbatim: sRGB -> linear light, the linear-light-to-cone matrix,
+    /// cube roots, and the cone-to-Lab matrix. L is a perceptual lightness, 0 at black and 1 at
+    /// white, and (a, b) are the opponent axes, so the chroma is the length of (a, b) and the hue
+    /// is its angle. It lives here rather than in the drawing code because nothing the app draws
+    /// needs it: the ramp is seven constants, and this is how they were computed and how they are
+    /// audited.
+    fn oklab(rgb: [u8; 3]) -> (f64, f64, f64) {
+        let (r, g, b) = (linear(rgb[0]), linear(rgb[1]), linear(rgb[2]));
+        let l = (0.412_221_470_8 * r + 0.536_332_536_3 * g + 0.051_445_992_9 * b).cbrt();
+        let m = (0.211_903_498_2 * r + 0.680_699_545_1 * g + 0.107_396_956_6 * b).cbrt();
+        let s = (0.088_302_461_9 * r + 0.281_718_837_6 * g + 0.629_978_700_5 * b).cbrt();
+        (
+            0.210_454_255_3 * l + 0.793_617_785_0 * m - 0.004_072_046_8 * s,
+            1.977_998_495_1 * l - 2.428_592_205_0 * m + 0.450_593_709_9 * s,
+            0.025_904_037_1 * l + 0.782_771_766_2 * m - 0.808_675_766_0 * s,
+        )
+    }
+
+    /// One sRGB channel as linear light, which both colour measures below start from.
+    fn linear(c: u8) -> f64 {
+        let c = f64::from(c) / 255.0;
+        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    }
+
+    /// Relative luminance, CIE Y: what a photometer pointed at the pixel would read, and so what
+    /// the alpha channel is competing with when it tries to say how strong a signal is.
+    fn luminance(rgb: [u8; 3]) -> f64 {
+        0.2126 * linear(rgb[0]) + 0.7152 * linear(rgb[1]) + 0.0722 * linear(rgb[2])
+    }
+
+    /// The ramp's colour at a gain, as a plain sRGB triple.
+    fn stop(gain: f64) -> [u8; 3] {
+        let c = Theme::front_colour(gain, 255);
+        [c.r(), c.g(), c.b()]
+    }
+
+    #[test]
+    fn test_the_front_ramp_carries_no_brightness_of_its_own() {
+        // The claim the wavefront display rests on: colour says shift, brightness says strength.
+        // It only holds if the colour ramp is flat in brightness, because a viewer cannot unsee a
+        // white stroke being brighter than a red one - they would read the ramp's own lightness as
+        // fluence, and there would be no telling which channel they were looking at. So every stop
+        // is struck at one Oklab lightness and one chroma, and this measures both along the
+        // interpolated ramp rather than only at the stops: a leg between two stops of equal
+        // lightness can still sag in the middle, because `front_colour` interpolates in sRGB.
+        let mut lightness = (f64::INFINITY, 0.0f64);
+        let mut relative = (f64::INFINITY, 0.0f64);
+        for step in 0..=600 {
+            let log = Theme::FRONT_LOG_MIN
+                + (Theme::FRONT_LOG_MAX - Theme::FRONT_LOG_MIN) * f64::from(step) / 600.0;
+            let rgb = stop(10.0_f64.powf(log));
+            let (l, _, _) = oklab(rgb);
+            lightness = (lightness.0.min(l), lightness.1.max(l));
+            let y = luminance(rgb);
+            relative = (relative.0.min(y), relative.1.max(y));
+        }
+        println!(
+            "across the whole ramp: Oklab lightness {:.3}..{:.3} against a target of {:.2}, and \
+             relative luminance {:.3}..{:.3}, a spread of {:.2}x",
+            lightness.0,
+            lightness.1,
+            Theme::FRONT_STOP_LIGHTNESS,
+            relative.0,
+            relative.1,
+            relative.1 / relative.0
+        );
+        assert!(
+            (lightness.0 - Theme::FRONT_STOP_LIGHTNESS).abs() < 0.02
+                && (lightness.1 - Theme::FRONT_STOP_LIGHTNESS).abs() < 0.02,
+            "no colour on the ramp departs from the common lightness: {lightness:?}"
+        );
+        // The number that matters is the one beside it: the strength of a drawn front spans a
+        // factor of about 2.5 in alpha across the picture, so the ramp's own luminance has to stay
+        // well inside that or it drowns it. The ramp this replaced spanned a factor of 157.
+        assert!(
+            relative.1 / relative.0 < 1.25,
+            "and the brightness it leaks is small beside the alpha's own: {relative:?}"
+        );
+
+        // At the stops themselves, where the chroma claim can be made exactly. The six spectral
+        // stops are one chroma; the bottom one is deliberately nearly colourless.
+        for (log, rgb) in Theme::FRONT_STOPS {
+            let (l, a, b) = oklab(rgb);
+            let chroma = a.hypot(b);
+            let want = if rgb == Theme::FRONT_GREY_RGB { 0.025 } else { Theme::FRONT_STOP_CHROMA };
+            assert!(
+                (l - Theme::FRONT_STOP_LIGHTNESS).abs() < 0.005 && (chroma - want).abs() < 0.005,
+                "the stop at log10(gain) = {log} is off the ramp's lightness or chroma: \
+                 L = {l:.3}, C = {chroma:.3}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_the_front_ramp_only_ever_turns_one_way_in_hue() {
+        // With the lightness spent, the hue is the whole of the ramp, so it has to run one way:
+        // red - orange - yellow - green - blue - violet, the spectral order, from the gain of 1
+        // every front is born at up to the 1e5 the frozen stack reaches. A ramp that doubled back
+        // would put two different shifts on the same colour.
+        //
+        // Below the birth stop it leaves the spectrum instead: that leg runs to a colourless grey,
+        // which is a fall in chroma at a fixed hue rather than a turn, so it is measured on its own
+        // at the end.
+        let hue = |gain: f64| -> f64 {
+            let (_, a, b) = oklab(stop(gain));
+            let h = b.atan2(a).to_degrees();
+            if h < 0.0 { h + 360.0 } else { h }
+        };
+        let mut previous = hue(1.0);
+        let mut worst = 0.0f64;
+        for step in 1..=500 {
+            let log = Theme::FRONT_LOG_BIRTH
+                + (Theme::FRONT_LOG_MAX - Theme::FRONT_LOG_BIRTH) * f64::from(step) / 500.0;
+            let h = hue(10.0_f64.powf(log));
+            worst = worst.max(previous - h);
+            previous = h;
+        }
+        println!(
+            "the ramp turns from {:.0} deg at gain 1 to {:.0} deg at 1e5, never doubling back by \
+             more than {worst:.2} deg",
+            hue(1.0),
+            hue(1e5)
+        );
+        // A degree of slack for the rounding to 8-bit sRGB, which puts a wobble of about a fifth of
+        // a degree into the interpolation near the blue stop; the ramp itself never turns back.
+        assert!(worst < 1.0, "the hue runs one way from gain 1 to the top: it fell by {worst} deg");
+        assert!(hue(1e5) - hue(1.0) > 250.0, "and it runs the length of the spectrum");
+
+        // The losing end: the newborn red's own hue, with the colour drained out of it.
+        let (_, a, b) = oklab(stop(0.1));
+        assert!(
+            a.hypot(b) < 0.3 * Theme::FRONT_STOP_CHROMA,
+            "a tenfold loss is drawn nearly colourless rather than as another shift"
+        );
     }
 }

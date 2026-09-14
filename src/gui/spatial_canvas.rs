@@ -512,10 +512,11 @@ impl SpatialCanvas {
                  Drag: Ω_H = {:.3}/M = {:.3e} rad/s\n\
                  River: colour √(1−α²) vs ZAMO (1 at r₊); length √(2M/r) (1 at 2M)\n\
                  Front colour: ν an infaller here measures ÷ ν the infaller passing the emitter\n\
-                 measured as it left: deep red ×1 (every front is born red), yellow ×10,\n\
-                 white ×30, blue ×1000, violet ×100000, maroon below ×1\n\
+                 measured as it left: red ×1 (every front is born red), orange ×3, yellow ×10,\n\
+                 green ×30, blue ×1000, violet ×100000, grey below ×1. One lightness throughout,\n\
+                 so the colour carries the shift and nothing else\n\
                  Front opacity: signal strength, the fluence that infaller measures ÷ the fluence\n\
-                 the same flash delivers 1M away in flat space. Solid at ×1, gone at ×1e-4;\n\
+                 the same flash delivers 1M away in flat space. Solid at ×1, gone at ×1e-2;\n\
                  both transmissions are taken to carry the same energy per pulse\n\
                  Beaded arcs on r₋: the frozen family (E − Ω₋L < 0, never crosses this branch)\n\
                  {}\
@@ -551,10 +552,11 @@ impl SpatialCanvas {
                  Drag: Ω_H = {:.3}/M\n\
                  River: colour √(1−α²) vs ZAMO (1 at r₊); length √(2M/r) (1 at 2M)\n\
                  Front colour: ν an infaller here measures ÷ ν the infaller passing the emitter\n\
-                 measured as it left: deep red ×1 (every front is born red), yellow ×10,\n\
-                 white ×30, blue ×1000, violet ×100000, maroon below ×1\n\
+                 measured as it left: red ×1 (every front is born red), orange ×3, yellow ×10,\n\
+                 green ×30, blue ×1000, violet ×100000, grey below ×1. One lightness throughout,\n\
+                 so the colour carries the shift and nothing else\n\
                  Front opacity: signal strength, the fluence that infaller measures ÷ the fluence\n\
-                 the same flash delivers 1M away in flat space. Solid at ×1, gone at ×1e-4;\n\
+                 the same flash delivers 1M away in flat space. Solid at ×1, gone at ×1e-2;\n\
                  both transmissions are taken to carry the same energy per pulse\n\
                  Beaded arcs on r₋: the frozen family (E − Ω₋L < 0, never crosses this branch)\n\
                  {}\
@@ -703,7 +705,7 @@ fn draw_ring_spin_arrow(painter: &egui::Painter, center: Pos2, ring_px: f32, spi
 /// half red - so a fresh front is born split in two, which says something true about the emission but
 /// nothing at all about where the light has since been. Held between raindrops, every ray of a pulse
 /// starts at gain exactly 1, because at the emission event the two f_factors are the same number
-/// computed twice: a new front comes out one uniform deep red and then earns its way up the ramp as
+/// computed twice: a new front comes out one uniform red and then earns its way up the ramp as
 /// it falls, and what the colour then shows is what the light has gained on its way here. The gain
 /// is carried *along* each segment rather than averaged over it: log10(gain) is interpolated
 /// linearly between the two rays in the same loop coordinate the position is interpolated in, and
@@ -890,7 +892,7 @@ pub const MARKER_MENU_ID: &str = "spatial-marker-menu";
 /// A segment is drawn in the colour of the gain its light carries, and its two rays need not carry
 /// anything like the same gain. Where the front is being torn apart - one ray settling onto r- and
 /// climbing like exp(kappa_- t) up the ramp while its neighbour crosses and is gone - a single
-/// segment runs from gain 1 to gain 1e5: five decades, the whole ramp from deep red to violet.
+/// segment runs from gain 1 to gain 1e5: five decades, the whole ramp from red to violet.
 /// Painted in one colour that segment is violet along its entire length, which says the light at
 /// the far end has gained a hundred thousandfold when it has gained nothing at all, and the ramp
 /// then reads as a jump at a ray rather than as the climb along the front that it is.
@@ -898,7 +900,7 @@ pub const MARKER_MENU_ID: &str = "spatial-marker-menu";
 /// So the gain is carried along the segment: log10(gain) is interpolated linearly in the same loop
 /// coordinate s that `segment_arc` interpolates the position in, and the polyline is cut into bands
 /// of at most this many decades, each drawn at the colour of its own midpoint. A quarter of a
-/// decade is under half the narrowest leg of `Theme::FRONT_STOPS` - the half-decade from deep red
+/// decade is under half the narrowest leg of `Theme::FRONT_STOPS` - the half-decade from red
 /// to orange - so no band can straddle a stop of the ramp unnoticed, and the five-decade case costs
 /// twenty polylines where it used to cost one. The interpolation is in log10 because that is the
 /// coordinate the ramp itself is keyed to, so a band is a fixed slice of the drawn ramp rather than
@@ -1594,23 +1596,27 @@ mod tests {
     }
 
     #[test]
-    fn test_the_front_ramp_starts_deep_red_and_ends_violet() {
+    fn test_the_front_ramp_starts_red_and_ends_violet() {
         // The three statements the wavefront colouring makes to the eye. A front is born at gain 1
-        // and must come out at the deep-red stop exactly, because every ray of a fresh pulse is at
-        // that gain and the whole point is that the loop is one colour. The frozen family runs to
-        // a gain of 1e5 within a run, and that end of the ramp must be the violet stop rather than
-        // saturating early or wrapping. And in between, the direction of travel has to read as
-        // "more blueshift" all the way up, which for this palette means the blue channel never
-        // goes back down between the yellow of a tenfold gain and the violet at the top.
-        let deep_red = Theme::front_colour(1.0, 255);
+        // and must come out at the red stop exactly, because every ray of a fresh pulse is at that
+        // gain and the whole point is that the loop is one colour. The frozen family runs to a gain
+        // of 1e5 within a run, and that end of the ramp must be the violet stop rather than
+        // saturating early or wrapping. And below 1 - a ray can lose frequency between two
+        // raindrops, one climbing outward away from the congruence's fall - it must leave the
+        // spectrum rather than run further along it.
+        //
+        // What is *not* asserted here any more is that a loss looks darker. It cannot: every stop
+        // of this ramp is one lightness, because the brightness belongs to the signal strength on
+        // the alpha channel. `theme::tests` measures that; this measures the three landmarks.
+        let red = Theme::front_colour(1.0, 255);
         assert_eq!(
-            (deep_red.r(), deep_red.g(), deep_red.b()),
+            (red.r(), red.g(), red.b()),
             (
                 Theme::FRONT_RED_RGB[0],
                 Theme::FRONT_RED_RGB[1],
                 Theme::FRONT_RED_RGB[2]
             ),
-            "a front at gain 1 must be exactly the deep-red stop"
+            "a front at gain 1 must be exactly the red stop"
         );
         let violet = Theme::front_colour(1e5, 255);
         assert_eq!(
@@ -1626,46 +1632,20 @@ mod tests {
         // rays of a real front reach 1e6 within thirty M.
         assert_eq!(Theme::front_colour(1e9, 255), violet, "the ramp is clamped at the top");
 
-        // Below 1 it darkens towards maroon rather than brightening: a ray can lose frequency
-        // between two raindrops, and that must not look like a gain.
-        let maroon = Theme::front_colour(0.1, 255);
+        let grey = Theme::front_colour(0.1, 255);
         assert_eq!(
-            (maroon.r(), maroon.g(), maroon.b()),
+            (grey.r(), grey.g(), grey.b()),
             (
-                Theme::FRONT_MAROON_RGB[0],
-                Theme::FRONT_MAROON_RGB[1],
-                Theme::FRONT_MAROON_RGB[2]
+                Theme::FRONT_GREY_RGB[0],
+                Theme::FRONT_GREY_RGB[1],
+                Theme::FRONT_GREY_RGB[2]
             ),
-            "a tenfold loss must be exactly the maroon stop"
-        );
-        let dimmer = Theme::front_colour(0.5, 255);
-        assert!(
-            (dimmer.r() as u32 + dimmer.g() as u32 + dimmer.b() as u32)
-                < (deep_red.r() as u32 + deep_red.g() as u32 + deep_red.b() as u32),
-            "losing frequency must darken the deep red, not brighten it: {dimmer:?}"
-        );
-
-        // Monotone in blue from a tenfold gain to the top of the ramp, sampled finely enough to
-        // catch a dip inside any one leg of the ramp as well as at the joins.
-        let mut previous = 0u8;
-        let mut worst: Option<(f64, u8, u8)> = None;
-        for step in 0..=400 {
-            let log = Theme::FRONT_LOG_YELLOW
-                + (Theme::FRONT_LOG_MAX - Theme::FRONT_LOG_YELLOW) * (step as f64) / 400.0;
-            let blue = Theme::front_colour(10.0_f64.powf(log), 255).b();
-            if blue < previous && worst.is_none() {
-                worst = Some((log, previous, blue));
-            }
-            previous = blue;
-        }
-        assert!(
-            worst.is_none(),
-            "the blue channel must never fall between gains of 10 and 1e5: {worst:?}"
+            "a tenfold loss must be exactly the grey stop"
         );
         println!(
             "the front ramp: gain 1 -> {:?}, 10 -> {:?}, 30 -> {:?}, 1e3 -> {:?}, 1e5 -> {:?}, \
              and 0.1 -> {:?}",
-            (deep_red.r(), deep_red.g(), deep_red.b()),
+            (red.r(), red.g(), red.b()),
             {
                 let c = Theme::front_colour(10.0, 255);
                 (c.r(), c.g(), c.b())
@@ -1679,7 +1659,7 @@ mod tests {
                 (c.r(), c.g(), c.b())
             },
             (violet.r(), violet.g(), violet.b()),
-            (maroon.r(), maroon.g(), maroon.b()),
+            (grey.r(), grey.g(), grey.b()),
         );
     }
 
