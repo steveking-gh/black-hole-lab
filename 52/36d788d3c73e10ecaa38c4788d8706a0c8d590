@@ -1,0 +1,25 @@
+src/gui/spatial_canvas.rs
+  s_5e464e0dde83ec::t_d4d8cd8a94e544 1363-1373,1477-1478,1480-1481,1490,1503,1510-1512
+  s_5e464e0dde83ec::t_cf3d4b51ae3350 1414,1416,1424,1426,1449,1451,1463-1468,1474-1476,1479,1482-1489,1491-1500,1502,1504-1509,1513
+  s_5e464e0dde83ec::t_3d6d3bad4ceb0b 60,90-135,153-154,198,486-507,509-510,512-525,543-547,553
+src/app.rs
+  s_5e464e0dde83ec::t_f3f1e5fa171d27 932-933,969,1150-1152
+src/gui/controls.rs
+  s_5e464e0dde83ec::t_833b0ccec2625d 217,225,576-603,737-744,747-752,759-764,781-786
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "5236d788d3c73e10ecaa38c4788d8706a0c8d590",
+  "prompts": {},
+  "sessions": {
+    "s_5e464e0dde83ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc7a846d-d13c-4554-b9bf-dc2dee2f30eb",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
