@@ -376,6 +376,7 @@ impl eframe::App for SpacetimeApp {
                             self.controls.frame_of_ref,
                             self.controls.font_scale,
                             SignalViews { alice: &self.signal, bob: &self.bob_signal },
+                            self.controls.show_distant_clock_grid,
                         );
                     },
                 );

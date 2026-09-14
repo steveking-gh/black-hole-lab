@@ -175,6 +175,72 @@ impl LocalFrame {
         }
         LocalLine { point, dir }
     }
+
+    /// The line drawn by the surface t = t_obs + `dt` of the chart's time in the (xi^1, xi^0)
+    /// plane: one tick mark of the distant clock.
+    ///
+    /// The ingoing Kerr-Schild t is a Killing time. A difference of t along any static worldline is
+    /// the proper time a clock at rest at infinity records between the same two slices, so the
+    /// surfaces t = const *are* the distant observer's clock labels, carried inward.
+    ///
+    /// A displacement stays on one iff its t-component is Delta t = dt. Writing
+    /// Delta x^mu = xi^a e_a^mu, exactly as in `surface_r_const` but with the covector dt in place
+    /// of dr, that condition reads
+    ///
+    ///     n_a xi^a = dt,      n_a = e_a^mu (dt)_mu = e_a^t,
+    ///
+    /// so n_0 = u^t, n_1 = e1^t, n_2 = e2^t. The view draws the slice xi^2 = 0 of that plane, the
+    /// line u^t xi^0 + e1^t xi^1 = dt, anchored at its point closest to the origin; its direction
+    /// (n_0, -n_1) annihilates (n_0, n_1) and its slope is d xi^0 / d xi^1 = -n_1 / n_0.
+    ///
+    /// Two things about the drawing, both of them exact statements rather than approximations:
+    ///
+    /// * n_2 = e2^t is *not* zero in the `for_observer` gauge - that gauge makes only e2^r vanish -
+    ///   so the full surface t = const leaves the drawn slice, and what is drawn is its trace, the
+    ///   set of its points with xi^2 = 0. The trace is still entirely made of events the distant
+    ///   clock labels with the same reading, and nothing about where it meets the observer is lost,
+    ///   because the observer's own worldline has xi^1 = xi^2 = 0 and so lies in the drawn slice.
+    /// * The line crosses that worldline at xi^0 = dt / u^t exactly (`LocalLine::xi0_at_axis`
+    ///   returns the ratio of the components, and the dropped n_2 never enters it). Consecutive
+    ///   slices dt apart are therefore spaced by dt / u^t of the observer's own proper time,
+    ///   whatever the tilt of the drawn trace: that is the whole content of "the distant clock
+    ///   runs fast by the factor u^t = dt / d tau", and it is the spacing the grid is scaled by.
+    ///
+    /// Every such line is spacelike, everywhere, for every observer. In this chart
+    /// g^tt = -(1 + 2M/r) < 0 at every r > 0, and eta^{ab} n_a n_b = g^tt, so
+    /// -n_0^2 + n_1^2 + n_2^2 < 0; dropping n_2^2 >= 0 only strengthens it, leaving
+    /// |slope| = |n_1| / n_0 < 1. The lines are always flatter than 45 degrees, they never turn
+    /// null at a horizon the way the surfaces r = const do, and they pile up on the worldline
+    /// exactly when u^t runs away - which is what happens on the way to the far branch of r-,
+    /// where u^t grows like exp(kappa_- t), so infinitely many of the distant clock's slices are
+    /// crossed in a finite amount of the observer's own time.
+    ///
+    /// This is a simultaneity convention and not what the observer sees. What is seen is the light,
+    /// and the ingoing blueshift in the telemetry box diverges at the same rate on that approach.
+    pub fn surface_t_const(&self, dt: f64) -> LocalLine {
+        let n0 = self.tetrad.e0[0];
+        let n1 = self.tetrad.e1[0];
+
+        let norm_sq = n0 * n0 + n1 * n1;
+        if norm_sq < 1e-300 {
+            // Unreachable for a future-directed timelike u: n_0 = u^t > 0 along every such
+            // worldline in the ingoing chart. Kept so the function is total.
+            return LocalLine {
+                point: [0.0, 0.0],
+                dir: [0.0, 1.0],
+            };
+        }
+
+        let point = [dt * n1 / norm_sq, dt * n0 / norm_sq];
+        let inv = norm_sq.sqrt();
+        let mut dir = [n0 / inv, -n1 / inv];
+        // Canonical orientation: rightward, or upward for a line of constant xi^1. Flipping both
+        // components leaves the slope, and so `xi0_at_axis`, untouched.
+        if dir[0] < 0.0 || (dir[0] == 0.0 && dir[1] < 0.0) {
+            dir = [-dir[0], -dir[1]];
+        }
+        LocalLine { point, dir }
+    }
 }
 
 #[cfg(test)]
@@ -454,5 +520,210 @@ mod tests {
         let here = frame.vector_to_local(&raindrop(&metric, r_focus));
         let n_here = -here[0] * here[0] + here[1] * here[1] + here[2] * here[2];
         assert!((n_here + 1.0).abs() < 1e-9, "eta(v, v) = {n_here} at the observer's own event");
+    }
+
+    /// Step the geodesic with E = 1 and this L from r = 4.5 in fixed steps of *coordinate* time,
+    /// collecting (t, r, u^mu) at every step. Coordinate time is the right pacing here because the
+    /// question the distant clock grid asks is exactly "how much of the observer's own time is one
+    /// unit of t worth", and that is u^t.
+    fn walk(metric: &KerrSchild, l_ang: f64, dt: f64, t_end: f64) -> Vec<(f64, f64, [f64; 3])> {
+        use crate::physics::observer::{Observer, WorldlineParams};
+        let mut bob = Observer::new_with_phi(
+            metric,
+            "Bob",
+            0.0,
+            4.5,
+            0.0,
+            0.0,
+            WorldlineParams::new(1.0, l_ang, false),
+        );
+        let mut out = Vec::new();
+        let mut t = 0.0;
+        while t < t_end && bob.r > 1e-3 {
+            t += dt;
+            bob.step(metric, t, dt);
+            out.push((t, bob.r, bob.four_velocity(metric)));
+        }
+        out
+    }
+
+    #[test]
+    fn test_surface_t_const_crosses_the_worldline_at_dt_over_u_t_and_never_tilts_past_45_degrees() {
+        // The two claims the distant clock grid rests on, checked for every observer the frame view
+        // can be drawn for, in every region, and at every step of the runaway worldline.
+        //
+        // 1. `xi0_at_axis` is exactly dt / u^t. The drawn trace is the slice xi^2 = 0 of the plane
+        //    n_a xi^a = dt with n_a = e_a^t, and the observer's own worldline lies inside that
+        //    slice (xi^1 = xi^2 = 0), so dropping n_2 - which is not zero in this gauge, only e2^r
+        //    is - cannot move the crossing: u^t xi^0 = dt there. That is what makes the *spacing*
+        //    of the grid exact even though the surface itself leaves the drawn plane.
+        // 2. |d xi^0 / d xi^1| < 1: these lines are spacelike, always. eta^{ab} n_a n_b = g^tt =
+        //    -(1 + 2M/r) < 0 at every r > 0 in this chart, so n_1^2 < n_0^2 - n_2^2 <= n_0^2.
+        //    Unlike the surfaces r = const, which turn null at each horizon, a surface t = const
+        //    never does: the grid reads the same way on both sides of r+ and of r-.
+        let deltas = [-5.0, -1.0, -0.1, 0.0, 0.01, 0.1, 1.0, 5.0, 1e4];
+        let mut worst_rel = 0.0f64;
+        let mut worst_slope = 0.0f64;
+        let mut checked = 0usize;
+
+        fn check(
+            frame: &LocalFrame,
+            who: &str,
+            r: f64,
+            deltas: &[f64],
+            worst_rel: &mut f64,
+            worst_slope: &mut f64,
+            checked: &mut usize,
+        ) {
+            let u_t = frame.tetrad().e0[0];
+            assert!(u_t > 0.0, "u^t = {u_t} must be positive for {who} at r={r}");
+            for &dt in deltas {
+                let line = frame.surface_t_const(dt);
+                let xi0 = line
+                    .xi0_at_axis()
+                    .expect("a line flatter than 45 degrees always meets the worldline");
+                let want = dt / u_t;
+                let rel = (xi0 - want).abs() / want.abs().max(f64::MIN_POSITIVE);
+                assert!(
+                    rel < 1e-12,
+                    "xi0_at_axis = {xi0} vs dt/u^t = {want} (rel {rel:.3e}) for {who} at r={r}, dt={dt}"
+                );
+                let slope = line.slope().abs();
+                assert!(
+                    slope < 1.0,
+                    "a surface t = const must be spacelike: |slope| = {slope} for {who} at r={r}"
+                );
+                assert_eq!(line.character(0.0), SurfaceCharacter::Spacelike);
+                *worst_rel = worst_rel.max(rel);
+                *worst_slope = worst_slope.max(slope);
+                *checked += 1;
+            }
+        }
+
+        for &a in &[0.0, 0.65, 0.90, 0.95] {
+            let metric = KerrSchild::new(1.0, a);
+            let rp = metric.outer_horizon();
+            for &r in probe_radii(&metric).iter() {
+                // Free fall exists at every radius, r+ and r- and between them included.
+                let frame = LocalFrame::for_observer(&metric, r, &raindrop(&metric, r));
+                check(&frame, "free fall", r, &deltas, &mut worst_rel, &mut worst_slope, &mut checked);
+                if r > rp {
+                    let frame = LocalFrame::for_observer(&metric, r, &zamo(&metric, r));
+                    check(&frame, "ZAMO", r, &deltas, &mut worst_rel, &mut worst_slope, &mut checked);
+                }
+                if metric.metric_components(r)[0][0] < 0.0 {
+                    let frame = LocalFrame::for_observer(&metric, r, &static_obs(&metric, r));
+                    check(&frame, "static", r, &deltas, &mut worst_rel, &mut worst_slope, &mut checked);
+                }
+            }
+        }
+
+        // The worldline the grid is really about: E = 1, L = 2.2 at a = 0.90 has E - Omega_- L < 0,
+        // so it is bound for the far branch of r- and its u^t runs away like exp(kappa_- t). The
+        // exactness of the crossing has to survive u^t in the thousands, which is where a formula
+        // that had leaned on the dropped n_2 would show up.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let track = walk(&metric, 2.2, 0.1, 45.0);
+        let mut u_t_max = 0.0f64;
+        for &(_, r, u) in track.iter() {
+            let frame = LocalFrame::for_observer(&metric, r, &u);
+            check(&frame, "E=1, L=2.2 infaller", r, &deltas, &mut worst_rel, &mut worst_slope, &mut checked);
+            u_t_max = u_t_max.max(u[0]);
+        }
+        println!(
+            "surface_t_const: {checked} (observer, dt) pairs, including {} steps of the L = 2.2 \
+             walk up to u^t = {u_t_max:.4e}; worst relative error in xi0_at_axis = {worst_rel:.3e}; \
+             the steepest line seen still missed 45 degrees, by 1 - |slope| = {:.3e}",
+            track.len(),
+            1.0 - worst_slope
+        );
+    }
+
+    #[test]
+    fn test_the_distant_clock_piles_up_on_the_far_branch_of_r_minus_and_not_on_the_way_to_r_plus() {
+        // What the grid is for, as a number. The lines of the distant clock, dt apart in the
+        // chart's Killing time, cross the observer's worldline dt / u^t of their own proper time
+        // apart, so the spacing of the grid *is* 1 / u^t.
+        //
+        // Bound for the far branch of r- (E - Omega_- L < 0, here E = 1 and L = 2.2 at a = 0.90),
+        // the worldline never reaches r-: it settles onto it asymptotically, and an outgoing
+        // principal null ray closes on r- like exp(-kappa_- t), so u^t grows like exp(+kappa_- t)
+        // and the spacing collapses like exp(-kappa_- t). Over the last 10 M of the walk that is a
+        // definite number, exp(-kappa_- * 10), and it is checked against one - not against a fit.
+        // Infinitely many of the distant clock's moments are then crossed in a finite amount of the
+        // observer's own time, which is the grid piling up against the origin of the frame view.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let kappa = metric.inner_surface_gravity();
+        let dt = 0.1;
+        let track = walk(&metric, 2.2, dt, 45.0);
+        let spacing_at = |t_want: f64| -> (f64, f64, f64) {
+            let &(t, r, u) = track
+                .iter()
+                .min_by(|a, b| {
+                    (a.0 - t_want)
+                        .abs()
+                        .partial_cmp(&(b.0 - t_want).abs())
+                        .unwrap()
+                })
+                .expect("the walk has steps");
+            (t, r, dt / u[0])
+        };
+        let (t35, r35, s35) = spacing_at(35.0);
+        let (t45, r45, s45) = spacing_at(45.0);
+        let ratio = s45 / s35;
+        let predicted = (-kappa * (t45 - t35)).exp();
+        println!(
+            "L = 2.2 (far branch of r- = {:.4}): at t = {t35:.1}, r = {r35:.6}, one dt = {dt} of \
+             distant time is {s35:.4e} M of proper time; at t = {t45:.1}, r = {r45:.6}, it is \
+             {s45:.4e} M. Ratio {ratio:.4e} vs exp(-kappa_- * {:.1}) = {predicted:.4e} \
+             (kappa_- = {kappa:.6}), off by {:.1}%",
+            metric.inner_horizon(),
+            t45 - t35,
+            100.0 * (ratio / predicted - 1.0).abs()
+        );
+        assert!(r45 > metric.inner_horizon(), "the far branch is never crossed");
+        assert!(
+            (ratio / predicted - 1.0).abs() < 0.30,
+            "the pile-up rate must be kappa_-: ratio {ratio:.4e} vs exp(-kappa_- Delta t) = {predicted:.4e}"
+        );
+
+        // The L = 0 raindrop is the control. E - Omega_- L = 1 > 0, so it crosses r+ and then the
+        // near branch of r- in finite coordinate time with u^t finite the whole way: nothing piles
+        // up, the grid keeps very nearly the same step, and the view through both horizons is calm.
+        let rain = walk(&metric, 0.0, dt, 60.0);
+        let through = rain
+            .iter()
+            .take_while(|&&(_, r, _)| r > metric.inner_horizon())
+            .map(|&(t, r, u)| (t, r, dt / u[0]))
+            .collect::<Vec<_>>();
+        let crossed_rp = through.iter().any(|&(_, r, _)| r < metric.outer_horizon());
+        assert!(crossed_rp, "the raindrop must actually reach r+");
+        assert!(
+            rain.iter().any(|&(_, r, _)| r <= metric.inner_horizon()),
+            "the raindrop must actually reach r-"
+        );
+        let lo = through.iter().fold(f64::INFINITY, |m, &(_, _, s)| m.min(s));
+        let hi = through.iter().fold(0.0f64, |m, &(_, _, s)| m.max(s));
+        let first = through.first().unwrap();
+        let last = through.last().unwrap();
+        println!(
+            "L = 0 raindrop: from t = {:.1}, r = {:.4} (spacing {:.4e} M) to t = {:.1}, r = {:.4} \
+             (spacing {:.4e} M); over the whole fall through r+ = {:.4} to r- = {:.4} the spacing \
+             stays within a factor {:.4}",
+            first.0,
+            first.1,
+            first.2,
+            last.0,
+            last.1,
+            last.2,
+            metric.outer_horizon(),
+            metric.inner_horizon(),
+            hi / lo
+        );
+        assert!(
+            hi / lo < 3.0,
+            "nothing piles up on the way through r+ and the near branch of r-: factor {}",
+            hi / lo
+        );
     }
 }

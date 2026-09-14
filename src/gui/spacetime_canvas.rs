@@ -27,6 +27,171 @@ E, L — conserved energy and angular momentum per unit mass along the geodesic.
 
 Region tag — location relative to the horizons: outside r₊, between r₊ and r₋, or inside r₋, plus the ergosphere.";
 
+/// Seconds in a Julian year, the unit the top of the distant clock grid's ladder is counted in.
+const SECONDS_PER_YEAR: f64 = 86400.0 * 365.25;
+
+/// Smallest on-screen gap, in points at `font_scale` = 1, that `distant_clock_grid_step` will
+/// leave between two neighbouring lines of the distant clock grid. Below this the lines stop being
+/// readable as separate slices and start being a smear, so the ladder is climbed instead.
+pub const MIN_GRID_PX: f32 = 28.0;
+
+/// Smallest vertical gap, in points at `font_scale` = 1, between two *labelled* lines of that grid.
+/// A 9-point monospace row is about 12 points tall; this leaves a little air around it. It only
+/// ever bites at the very top of the ladder, where no rung is coarse enough to reach `MIN_GRID_PX`
+/// and the lines are squeezed anyway.
+const CLOCK_LABEL_MIN_PX: f32 = 16.0;
+
+/// The rungs of the ladder below a year, as (seconds in the unit, the multiples of it that are
+/// used, the unit's name). Within each unit the 1-2-5 pattern is carried on up through the decades
+/// until the next unit takes over, so the ladder has no holes in it: no two neighbouring rungs are
+/// more than a factor of 2.5 apart, and the step actually chosen is therefore never more than that
+/// much coarser than the smallest readable one. (1, 2, 5 once per unit would leave gaps of 200
+/// between 5 µs and 1 ms and of 73 between 5 days and a year, and in those gaps a grid asked for a
+/// line every 36 µs would get one every 1 ms - two hundred times too coarse, which on a canvas a
+/// few hundred points tall is one line and no grid at all.)
+///
+/// Microseconds and milliseconds are at the bottom because for a 10 solar-mass hole one M of
+/// coordinate time is 49 microseconds, and outside the hole u^t is of order 1, so the grid an
+/// exterior observer wants is measured in tens of microseconds.
+const CLOCK_UNITS: [(f64, &[f64], &str); 6] = [
+    (1e-6, &[1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0], "µs"),
+    (1e-3, &[1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0], "ms"),
+    (1.0, &[1.0, 2.0, 5.0, 10.0, 20.0, 30.0], "s"),
+    (60.0, &[1.0, 2.0, 5.0, 10.0, 20.0, 30.0], "min"),
+    (3600.0, &[1.0, 2.0, 5.0, 10.0, 12.0], "hr"),
+    (86400.0, &[1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0], "day"),
+];
+
+/// How many decades of years the ladder carries on for above one year. 1e30 years at a hundred
+/// points per M is past any u^t a f64 worldline integrator can reach.
+const CLOCK_YEAR_DECADES: i32 = 30;
+
+/// The whole ladder, in ascending order, as (seconds, the step named in its own unit). Years run on
+/// in the same 1-2-5 pattern decade after decade, which is where the powers of ten come from:
+/// 1 yr, 2 yr, 5 yr, 10 yr, ..., 1e6 yr, 2e6 yr, and so on.
+fn distant_clock_ladder() -> Vec<(f64, String)> {
+    let name = |multiple: f64, unit: &str| {
+        if multiple < 1e4 {
+            format!("{multiple:.0} {unit}")
+        } else {
+            format!("{multiple:.0e} {unit}")
+        }
+    };
+    let mut rungs = Vec::new();
+    for (unit_seconds, multiples, unit) in CLOCK_UNITS {
+        for &multiple in multiples {
+            rungs.push((multiple * unit_seconds, name(multiple, unit)));
+        }
+    }
+    for decade in 0..=CLOCK_YEAR_DECADES {
+        for mantissa in [1.0, 2.0, 5.0] {
+            let years = mantissa * 10.0_f64.powi(decade);
+            rungs.push((years * SECONDS_PER_YEAR, name(years, "yr")));
+        }
+    }
+    rungs
+}
+
+/// One rung of the distant clock grid: how much of the chart's Killing time t separates two
+/// neighbouring lines, and the name of the unit that step is a round number of.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GridStep {
+    /// The step in units of M of coordinate time t, which is what `LocalFrame::surface_t_const`
+    /// takes. Lines are drawn at t = t_obs + k * step_m for integer k.
+    pub step_m: f64,
+    /// The step named in its own unit, e.g. "5 min", "1 ms", "1e6 yr".
+    pub label: String,
+}
+
+/// The coarsest-but-one rung of the ladder 1, 2, 5 x {us, ms, s, min, hr, day, yr}, then decades of
+/// years, that still leaves at least `MIN_GRID_PX` * `font_scale` points between neighbouring lines
+/// of the distant clock grid - that is, the smallest step that is readable.
+///
+/// The lines are the surfaces t = const of the chart's Killing time, and
+/// `LocalFrame::surface_t_const` puts consecutive ones, `step_m` apart in t, exactly
+/// `step_m / u^t` of the observer's proper time apart on their worldline. The drawn plane carries
+/// `px_per_m` points per M of xi, so the on-screen gap is `step_m / u_t * px_per_m` and the rung
+/// has to satisfy `step_m >= MIN_GRID_PX * font_scale * u_t / px_per_m`.
+///
+/// The choice is made from u^t and the pixel scale alone: nothing about where the observer is, or
+/// what the hole is doing, enters except through u^t. That is deliberate. As an observer falls
+/// toward the far branch of r- their u^t grows like exp(kappa_- t), so the distant clock runs away
+/// on their screen; the grid answers by climbing the ladder - milliseconds, seconds, minutes,
+/// years, then decades of years - and stays readable the whole way down instead of collapsing into
+/// a solid block. `seconds_per_m` converts the hole's own time unit M into seconds (for a 10 solar
+/// mass hole, 4.9e-5 s), so the same ladder serves a stellar-mass hole and a quasar.
+pub fn distant_clock_grid_step(
+    u_t: f64,
+    px_per_m: f32,
+    seconds_per_m: f64,
+    font_scale: f32,
+) -> GridStep {
+    // u^t is positive along every future-directed timelike worldline in the ingoing chart; a
+    // non-finite one can only come from a broken caller, and is answered with the top of the
+    // ladder rather than a panic.
+    let u_t = if u_t.is_finite() { u_t.max(1e-12) } else { f64::INFINITY };
+    let px_per_m = if px_per_m.is_finite() {
+        (px_per_m as f64).max(1e-9)
+    } else {
+        1e-9
+    };
+    let seconds_per_m = if seconds_per_m.is_finite() && seconds_per_m > 0.0 {
+        seconds_per_m
+    } else {
+        1.0
+    };
+    let min_px = (MIN_GRID_PX * font_scale.max(0.05)) as f64;
+    // The smallest readable step, first in M of coordinate time and then in seconds of the
+    // distant clock, which is the ladder's own currency.
+    let needed_seconds = min_px * u_t / px_per_m * seconds_per_m;
+
+    let ladder = distant_clock_ladder();
+    let (seconds, label) = ladder
+        .iter()
+        .find(|(seconds, _)| *seconds >= needed_seconds)
+        // Off the top of the ladder: the coarsest rung there is, with the lines closer together
+        // than `MIN_GRID_PX`. The labelling guard in the view thins the labels out in that case.
+        .unwrap_or_else(|| ladder.last().expect("the ladder is never empty"));
+    GridStep {
+        step_m: seconds / seconds_per_m,
+        label: label.clone(),
+    }
+}
+
+/// A compact, signed reading of the distant clock `seconds` away from the observer's now: the label
+/// on one line of the grid. "+5 min", "-2 h", "+1e6 yr", and "now" for the slice through the
+/// observer's own event.
+fn distant_clock_offset_label(seconds: f64) -> String {
+    if seconds == 0.0 || !seconds.is_finite() {
+        return "now".to_string();
+    }
+    let sign = if seconds < 0.0 { "-" } else { "+" };
+    let s = seconds.abs();
+    let (value, unit) = if s < 1e-3 {
+        (s * 1e6, "µs")
+    } else if s < 1.0 {
+        (s * 1e3, "ms")
+    } else if s < 60.0 {
+        (s, "s")
+    } else if s < 3600.0 {
+        (s / 60.0, "min")
+    } else if s < 86400.0 {
+        (s / 3600.0, "h")
+    } else if s < SECONDS_PER_YEAR {
+        (s / 86400.0, "d")
+    } else {
+        (s / SECONDS_PER_YEAR, "yr")
+    };
+    let number = if value >= 1e4 {
+        format!("{value:.0e}")
+    } else if (value - value.round()).abs() < 1e-6 * value.max(1.0) {
+        format!("{:.0}", value.round())
+    } else {
+        format!("{value:.1}")
+    };
+    format!("{sign}{number} {unit}")
+}
+
 /// Where a telemetry box is kept between frames once the user has moved it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Placement {
@@ -394,6 +559,7 @@ impl SpacetimeCanvas {
         frame_of_ref: ReferenceFrame,
         font_scale: f32,
         signals: SignalViews<'_>,
+        show_distant_clock_grid: bool,
     ) {
         let total_size = egui::Vec2::new(ui.available_width(), canvas_height);
         let track_height = (60.0 * font_scale.sqrt()).max(50.0);
@@ -440,9 +606,11 @@ impl SpacetimeCanvas {
                 match (asked, other) {
                     (Some(focus), other) => self.render_observer_frame(
                         ui, &painter, rect, metric, focus, other, use_km, font_scale,
+                        show_distant_clock_grid,
                     ),
                     (None, Some(focus)) => self.render_observer_frame(
                         ui, &painter, rect, metric, focus, None, use_km, font_scale,
+                        show_distant_clock_grid,
                     ),
                     (None, None) => {
                         painter.text(
@@ -1191,6 +1359,7 @@ Tick Enable Observer on Alice's or Bob's card",
         other_obs: Option<&Observer>,
         use_km: bool,
         font_scale: f32,
+        show_distant_clock_grid: bool,
     ) {
         let center = rect.center();
         let scale = (rect.width() / (self.max_r as f32).max(1e-5)) * 0.45;
@@ -1214,7 +1383,68 @@ Tick Enable Observer on Alice's or Bob's card",
 
         let frame = LocalFrame::for_observer(metric, focus_obs.r, &focus_obs.four_velocity(metric));
 
-        // 2. Surfaces r = const, every one of them placed by the dual tetrad.
+        // 2. The distant clock's own slices: the surfaces t = const of the chart's Killing time,
+        // which is proper time on a clock at rest at infinity. `surface_t_const` places each of
+        // them from the covector dt in local components, so a line labelled "+5 min" is the set of
+        // events the distant clock reads five minutes after it read the observer's now, and it
+        // meets this worldline at exactly 5 min / u^t of the observer's own proper time. The step
+        // is picked from u^t and the pixel scale alone, so the grid stays readable while the
+        // outside clock runs away.
+        //
+        // `scale` is the pixel scale of the drawn plane: points per M of xi. The physical second
+        // per M of coordinate time is t_g / M, the same conversion `format_physical_time` uses.
+        let u_t = frame.tetrad().e0[0];
+        let seconds_per_m = metric.t_grav_seconds() / metric.m.max(1e-12);
+        let clock_grid = distant_clock_grid_step(u_t, scale, seconds_per_m, font_scale);
+        // Proper time on the observer's own clock between two neighbouring lines, in M. Exact.
+        let clock_proper_step = if u_t.is_finite() && u_t > 0.0 {
+            clock_grid.step_m / u_t
+        } else {
+            f64::INFINITY
+        };
+        if show_distant_clock_grid && clock_proper_step.is_finite() && clock_proper_step > 0.0 {
+            let spacing_px = (clock_proper_step as f32) * scale;
+            // How far in xi^0 the grid has to reach to cover the rectangle: half its height, plus
+            // half its width, because a slice is tilted by up to (but never quite) 45 degrees.
+            let reach = ((rect.height() + rect.width()) * 0.5 / scale.max(1e-6)) as f64;
+            let k_max = ((reach / clock_proper_step).ceil() as i64).clamp(0, 4096);
+            // Label every n-th line, where n is the fewest that keeps two labels from touching.
+            // With the step chosen at `MIN_GRID_PX` or coarser this is 1; it only rises at the top
+            // of the ladder, where no rung is coarse enough and the lines are squeezed together.
+            let label_every = if spacing_px > 0.0 {
+                (((CLOCK_LABEL_MIN_PX * font_scale) / spacing_px).ceil() as i64).max(1)
+            } else {
+                1
+            };
+            let label_colour = Color32::from_rgba_premultiplied(140, 165, 195, 180);
+            for k in -k_max..=k_max {
+                let dt = (k as f64) * clock_grid.step_m;
+                let line = frame.surface_t_const(dt);
+                let anchor = to_screen(line.point[0], line.point[1]);
+                let dir = Vec2::new(line.dir[0] as f32, -(line.dir[1] as f32));
+                let Some((end_a, end_b)) = clip_line_to_rect(anchor, dir, rect) else {
+                    continue;
+                };
+                painter.line_segment(
+                    [end_a, end_b],
+                    Stroke::new(Theme::GRID_LINE_WIDTH, Theme::GRID_LINE),
+                );
+                if k % label_every != 0 {
+                    continue;
+                }
+                let x = rect.left() + 6.0;
+                let y = segment_y_at_x(end_a, end_b, x);
+                painter.text(
+                    Pos2::new(x, y - 2.0),
+                    egui::Align2::LEFT_BOTTOM,
+                    distant_clock_offset_label(dt * seconds_per_m),
+                    egui::FontId::monospace(9.0 * font_scale),
+                    label_colour,
+                );
+            }
+        }
+
+        // 3. Surfaces r = const, every one of them placed by the dual tetrad.
         let ergo_faint = Color32::from_rgba_unmultiplied(
             Theme::ERGOSPHERE_LINE.r(),
             Theme::ERGOSPHERE_LINE.g(),
@@ -1444,14 +1674,28 @@ Tick Enable Observer on Alice's or Bob's card",
             font_scale,
         );
 
+        let mut banner = format!(
+            "🔭 {}'S REST FRAME  |  first-order local inertial frame (c ≡ 1, 45° light cones); \
+             surfaces r = const placed by the dual tetrad",
+            focus_obs.name.to_uppercase()
+        );
+        if show_distant_clock_grid && clock_proper_step.is_finite() && clock_proper_step > 0.0 {
+            // The grid's two numbers side by side: what one line is worth on the distant clock, and
+            // what the gap between two of them is worth on this observer's own clock. The second is
+            // step_m / u^t, the exact spacing `surface_t_const` puts on the worldline - a
+            // simultaneity convention, not what the observer sees; see the checkbox's tip.
+            banner.push_str(&format!(
+                "\nDistant clock grid: 1 line per {} of distant time; \
+                 {} on {}'s clock between lines",
+                clock_grid.label,
+                metric.format_physical_time(clock_proper_step),
+                focus_obs.name
+            ));
+        }
         painter.text(
             Pos2::new(rect.left() + 8.0, rect.top() + 8.0),
             egui::Align2::LEFT_TOP,
-            format!(
-                "🔭 {}'S REST FRAME  |  first-order local inertial frame (c ≡ 1, 45° light cones); \
-                 surfaces r = const placed by the dual tetrad",
-                focus_obs.name.to_uppercase()
-            ),
+            banner,
             egui::FontId::proportional(11.0 * font_scale),
             Color32::from_rgb(150, 220, 255),
         );
@@ -1679,5 +1923,251 @@ mod telemetry_placement_tests {
             resolve_placement(placement, later_anchor, canvas_min),
             Pos2::new(330.0, 130.0)
         );
+    }
+}
+
+#[cfg(test)]
+mod distant_clock_grid_tests {
+    use super::*;
+
+    /// One M of coordinate time in seconds for the app's default hole, ten solar masses:
+    /// t_g = GM/c^3 = 4.9e-5 s. At that scale a raindrop outside the hole, whose u^t is of order 1,
+    /// wants a grid measured in tens of microseconds, which is why the ladder reaches below a
+    /// second - and why it carries the 1-2-5 pattern up through the decades inside each unit.
+    const TEN_SOLAR_SECONDS_PER_M: f64 = 4.9e-5;
+
+    #[test]
+    fn test_the_distant_clock_grid_step_climbs_the_ladder_as_the_outside_clock_runs_away() {
+        // The step is chosen from u^t and the pixel scale and from nothing else: the on-screen gap
+        // between two lines is step_m / u^t * px_per_m, so the rung has to clear MIN_GRID_PX. What
+        // makes that a *grid* rather than a single line is that the ladder has no holes in it - the
+        // chosen rung is never much coarser than the one actually needed - so the four things
+        // checked here are: the ladder's own step ratios, monotonicity, readability, and that a
+        // real exterior view comes out with a run of lines in it rather than one.
+
+        // 1. No hole wider than a factor of 2.5 anywhere in the ladder, ends included. 1, 2, 5 once
+        //    per unit would leave 5 µs -> 1 ms (200x) and 5 day -> 1 yr (73x); carrying the 1-2-5
+        //    pattern up through the decades inside each unit closes both.
+        let ladder = distant_clock_ladder();
+        let mut worst_ratio = 0.0f64;
+        let mut worst_pair = (String::new(), String::new());
+        for pair in ladder.windows(2) {
+            let (lo, hi) = (&pair[0], &pair[1]);
+            assert!(hi.0 > lo.0, "the ladder must ascend: {} then {}", lo.1, hi.1);
+            let ratio = hi.0 / lo.0;
+            if ratio > worst_ratio {
+                worst_ratio = ratio;
+                worst_pair = (lo.1.clone(), hi.1.clone());
+            }
+        }
+        // The tolerance is f64 rounding on the ratios themselves (5 / 2 comes out as
+        // 2.5000000000000004 through the unit scale factors), not slack in the rule.
+        assert!(
+            worst_ratio <= 2.5 * (1.0 + 1e-9),
+            "widest hole in the ladder is {} -> {} ({worst_ratio}x)",
+            worst_pair.0,
+            worst_pair.1
+        );
+
+        let px_per_m = 100.0f32;
+        let secs = TEN_SOLAR_SECONDS_PER_M;
+        let mut previous = 0.0f64;
+        let mut samples = 0usize;
+        let mut worst_gap = f64::INFINITY;
+        let mut widest_gap = 0.0f64;
+        for i in 0..=200 {
+            let u_t = 10.0f64.powf(i as f64 * 0.1);
+            let step = distant_clock_grid_step(u_t, px_per_m, secs, 1.0);
+            // 2. Monotone non-decreasing: a faster outside clock never buys a finer grid.
+            assert!(
+                step.step_m >= previous,
+                "step fell from {previous} to {} at u^t = {u_t:e}",
+                step.step_m
+            );
+            previous = step.step_m;
+            // 3. Readable: never closer together on screen than MIN_GRID_PX, and - because the
+            //    ladder has no holes - never more than 2.5 times that far apart either.
+            let gap = step.step_m / u_t * (px_per_m as f64);
+            assert!(
+                gap >= MIN_GRID_PX as f64,
+                "lines {gap} px apart at u^t = {u_t:e} (step {})",
+                step.label
+            );
+            assert!(
+                gap <= 2.5 * MIN_GRID_PX as f64 * (1.0 + 1e-9),
+                "lines {gap} px apart at u^t = {u_t:e} (step {}): the ladder has a hole",
+                step.label
+            );
+            worst_gap = worst_gap.min(gap);
+            widest_gap = widest_gap.max(gap);
+            samples += 1;
+        }
+
+        // 4. The view the app actually opens on: Bob falling free outside a ten solar-mass hole has
+        //    u^t of order 1.5, and the frame view runs at about 57 points per M at the default zoom.
+        //    One M is 49 µs there, so a readable grid is in tens of microseconds - and a 500 point
+        //    tall canvas has to hold a run of those lines, not one.
+        let exterior = distant_clock_grid_step(1.5, 57.0, TEN_SOLAR_SECONDS_PER_M, 1.0);
+        let spacing_px = exterior.step_m / 1.5 * 57.0;
+        let fit = (500.0 / spacing_px).floor() as i32;
+        assert!(
+            fit >= 6,
+            "only {fit} lines of {} fit a 500 px view ({spacing_px:.1} px apart)",
+            exterior.label
+        );
+
+        // Where the ladder stands for a ten solar-mass hole at a hundred points per M, decade by
+        // decade of u^t: microseconds outside the hole, up through milliseconds, seconds, minutes,
+        // hours and days, and into the years and then the powers of ten of years as the observer
+        // falls toward the far branch of r- and the outside clock runs away.
+        let at = |u_t: f64| distant_clock_grid_step(u_t, px_per_m, secs, 1.0).label;
+        let walk: Vec<String> = (0..=20).map(|e| at(10.0f64.powi(e))).collect();
+        println!(
+            "distant clock ladder: {} rungs, widest step ratio {worst_ratio:.3} ({} -> {}); \
+             {samples} samples of u^t in [1, 1e20], on-screen gap between {worst_gap:.2} and \
+             {widest_gap:.2} px (MIN_GRID_PX = {MIN_GRID_PX}); u^t = 1e0..1e20 -> {walk:?}; \
+             at u^t = 1.5, 57 px/M the step is {} = {:.4} M, {spacing_px:.1} px apart, {fit} lines \
+             in a 500 px view",
+            ladder.len(),
+            worst_pair.0,
+            worst_pair.1,
+            exterior.label,
+            exterior.step_m
+        );
+        assert_eq!(at(1.0), "20 µs");
+        assert!(walk.iter().any(|l| l.ends_with(" ms")));
+        assert!(walk.iter().any(|l| l.ends_with(" s")));
+        assert!(walk.iter().any(|l| l.ends_with(" min")));
+        assert!(walk.iter().any(|l| l.ends_with(" hr")));
+        assert!(walk.iter().any(|l| l.ends_with(" day")));
+        assert!(walk.last().unwrap().ends_with(" yr"));
+
+        // Microseconds are reachable at the bottom: a supermassive hole, where one M is hours, puts
+        // even a coarse grid far below a second of the chart's own time unit.
+        let tiny = distant_clock_grid_step(1.0, 1e6, 1e-3, 1.0);
+        assert!(
+            tiny.label.ends_with(" \u{b5}s"),
+            "the bottom of the ladder is microseconds, got {}",
+            tiny.label
+        );
+        // A bigger font asks for more room and so for a coarser grid, never a finer one.
+        let small = distant_clock_grid_step(1e6, px_per_m, secs, 1.0);
+        let large = distant_clock_grid_step(1e6, px_per_m, secs, 2.0);
+        assert!(large.step_m >= small.step_m, "{} vs {}", large.label, small.label);
+    }
+
+    /// Every line segment an egui painter was handed, counted through nested `Shape::Vec`s.
+    fn count_line_segments(shape: &egui::Shape) -> usize {
+        match shape {
+            egui::Shape::LineSegment { .. } => 1,
+            egui::Shape::Vec(inner) => inner.iter().map(count_line_segments).sum(),
+            _ => 0,
+        }
+    }
+
+    /// One real frame of `SpacetimeCanvas::render` in Bob's rest frame, with the distant clock grid
+    /// on or off, returning how many line segments were painted and the text of every galley.
+    fn frame_view_pass(show_distant_clock_grid: bool) -> (usize, String) {
+        use crate::physics::observer::{Observer, WorldlineParams};
+        use crate::physics::wavefront::SignalField;
+
+        let metric = KerrSchild::new(1.0, 0.90);
+        let mut bob =
+            Observer::new_with_phi(&metric, "Bob", 0.0, 4.5, 0.0, 0.0, WorldlineParams::default());
+        bob.step(&metric, 0.1, 0.1);
+        let alice: Option<Observer> = None;
+        let signal = SignalField::default();
+        let mut canvas = SpacetimeCanvas::default();
+        // Zoomed in on the frame, so that the chosen rung of the ladder sits close to its own
+        // minimum gap and a whole run of lines lands inside the rectangle rather than one.
+        canvas.max_r = 0.6;
+
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
+            ..Default::default()
+        };
+        let output = ctx.run_ui(input, |ui| {
+            canvas.render(
+                ui,
+                &metric,
+                Some(&mut bob),
+                &alice,
+                0.1,
+                600.0,
+                false,
+                ReferenceFrame::Bob,
+                1.0,
+                SignalViews { alice: &signal, bob: &signal },
+                show_distant_clock_grid,
+            );
+        });
+        let mut lines = 0;
+        let mut text = String::new();
+        for clipped in output.shapes.iter() {
+            lines += count_line_segments(&clipped.shape);
+            fn collect(shape: &egui::Shape, out: &mut String) {
+                match shape {
+                    egui::Shape::Text(t) => {
+                        out.push_str(t.galley.text());
+                        out.push('\n');
+                    }
+                    egui::Shape::Vec(inner) => inner.iter().for_each(|s| collect(s, out)),
+                    _ => {}
+                }
+            }
+            collect(&clipped.shape, &mut text);
+        }
+        output.drop_without_applying_deltas();
+        (lines, text)
+    }
+
+    #[test]
+    fn test_the_frame_view_draws_the_distant_clock_grid_only_when_it_is_asked_to() {
+        // The checkbox at the one place it acts. Two real passes of the canvas over the same
+        // observer differ by the grid: the lines themselves, and the legend line that says what one
+        // of them is worth on each of the two clocks. Nothing else in the view moves, because the
+        // grid is read off `LocalFrame::surface_t_const` and touches no physics.
+        let (off_lines, off_text) = frame_view_pass(false);
+        let (on_lines, on_text) = frame_view_pass(true);
+        println!(
+            "Bob's rest frame at r = 4.5: {off_lines} line segments with the distant clock grid \
+             off, {on_lines} with it on ({} grid lines drawn)",
+            on_lines - off_lines
+        );
+        assert!(
+            on_lines >= off_lines + 5,
+            "the grid must add a run of lines: {on_lines} vs {off_lines}"
+        );
+        assert!(
+            !off_text.contains("Distant clock grid"),
+            "the legend line belongs to the grid and goes with it"
+        );
+        assert!(
+            on_text.contains("Distant clock grid: 1 line per "),
+            "the legend must name the unit and the proper interval: {on_text}"
+        );
+        assert!(
+            on_text.contains("on Bob's clock between lines"),
+            "the legend must say whose clock the interval is on: {on_text}"
+        );
+        assert!(on_text.contains("now"), "the slice through the observer's own event is labelled");
+    }
+
+    #[test]
+    fn test_a_distant_clock_label_names_the_offset_in_its_own_unit_with_a_sign() {
+        // The label on one line: which way it is from the observer's now, and how far in the
+        // largest unit that leaves a number worth reading.
+        assert_eq!(distant_clock_offset_label(0.0), "now");
+        assert_eq!(distant_clock_offset_label(5e-5), "+50 \u{b5}s");
+        assert_eq!(distant_clock_offset_label(-2e-3), "-2 ms");
+        assert_eq!(distant_clock_offset_label(3.0), "+3 s");
+        assert_eq!(distant_clock_offset_label(300.0), "+5 min");
+        assert_eq!(distant_clock_offset_label(-7200.0), "-2 h");
+        assert_eq!(distant_clock_offset_label(86400.0 * 3.0), "+3 d");
+        assert_eq!(distant_clock_offset_label(SECONDS_PER_YEAR * 1e6), "+1e6 yr");
+        // A step that lands between two units keeps one decimal rather than lying about being round.
+        assert_eq!(distant_clock_offset_label(65.0 * 60.0), "+1.1 h");
     }
 }
