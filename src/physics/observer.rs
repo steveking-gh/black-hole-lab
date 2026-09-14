@@ -524,6 +524,13 @@ impl Observer {
     /// residual below 1e-7 even at r ~ r-/2, where u varies on the scale of r itself. The two
     /// terms then cancel to numerical noise, which is the statement that the coded geodesic
     /// really is a geodesic of the coded metric.
+    ///
+    /// That cancellation is a diagnostic of the integrator, not a reading of the observer's
+    /// accelerometer, and the two part company where the stencil cannot follow: on a worldline
+    /// bound for the far branch of r-, u^t has a pole at r-, the two terms are each of order
+    /// (u^t)^2, and the truncation error of a difference taken across a pole is unbounded. The
+    /// accelerometer of an observer in free fall is `accelerometer_geom`, which is zero there by
+    /// definition; this residual is what the tests check.
     pub fn four_acceleration(&self, metric: &KerrSchild) -> [f64; 3] {
         let u = self.four_velocity(metric);
         let gamma = metric.christoffel(self.r);
@@ -556,21 +563,41 @@ impl Observer {
         accel
     }
 
-    /// Magnitude sqrt(g_{mu nu} a^mu a^nu) of the proper acceleration, in geometric units (1/M).
+    /// Magnitude sqrt(g_{mu nu} a^mu a^nu) of `four_acceleration`, in geometric units (1/M).
     /// The 4-acceleration of a timelike worldline is spacelike, so the radicand is non-negative
-    /// up to round-off; it is clamped at zero.
+    /// up to round-off; it is clamped at zero. For the fixed-r modes this is the thrust; for a
+    /// free-faller it is the integrator residual described on `four_acceleration`, and the
+    /// accelerometer reading to show is `accelerometer_geom`.
     pub fn proper_acceleration_geom(&self, metric: &KerrSchild) -> f64 {
         let accel = self.four_acceleration(metric);
         metric.norm(self.r, &accel).max(0.0).sqrt()
     }
 
+    /// What the observer's accelerometer reads, in geometric units (1/M).
+    ///
+    /// An observer in free fall is on a geodesic - that is what the mode means, and it is the
+    /// geodesic equation the integrator is stepping - so the reading is exactly zero, and not the
+    /// finite-difference residual of `four_acceleration`, which is a check on the integrator
+    /// rather than a measurement and blows up on the approach to the far branch of r-. Every
+    /// other mode is held on its worldline by thrust, and the reading is that thrust; so is a
+    /// free-faller still waiting for release, who is being held at fixed r until then and
+    /// reports the static worldline's 4-velocity (see `four_velocity`).
+    pub fn accelerometer_geom(&self, metric: &KerrSchild) -> f64 {
+        if self.is_active && self.effective_mode(metric) == ObserverMode::FreeFall {
+            0.0
+        } else {
+            self.proper_acceleration_geom(metric)
+        }
+    }
+
     /// Is this worldline weightless, i.e. a geodesic?
-    /// The comparison is against a curvature-relative floor rather than an absolute one: the
-    /// residual left by the finite-difference du^mu/dtau grows with the local curvature scale
+    /// Free fall reads as weightless outright. For the other modes the comparison is against a
+    /// curvature-relative floor rather than an absolute one: the residual left by the
+    /// finite-difference du^mu/dtau in `four_acceleration` grows with the local curvature scale
     /// sqrt(K) = sqrt(48) M / r^3, and so does every honest acceleration near the singularity.
     pub fn is_free_falling(&self, metric: &KerrSchild) -> bool {
         let curvature_scale = metric.kretschmann_scalar(self.r).sqrt().max(1e-12);
-        self.proper_acceleration_geom(metric) < 1e-6 * curvature_scale
+        self.accelerometer_geom(metric) < 1e-6 * curvature_scale
     }
 
     /// Advance the worldline to the simulation clock's new value `current_sim_time`, which is
@@ -884,11 +911,11 @@ impl Observer {
         self.velocity_c(metric) * 299792.458
     }
 
-    /// Proper acceleration felt by the observer in Earth g's (weightlessness = 0.0), for every
-    /// mode. This is |a^mu| in geometric units (1/M) converted with a_SI = a_geom c^2 / r_g,
+    /// The accelerometer reading in Earth g's (weightlessness = 0.0), for every mode. This is
+    /// `accelerometer_geom` in geometric units (1/M) converted with a_SI = a_geom c^2 / r_g,
     /// r_g = GM/c^2 in metres, then divided by 9.80665 m/s^2.
     pub fn proper_acceleration_g(&self, metric: &KerrSchild) -> f64 {
-        let accel_geom = self.proper_acceleration_geom(metric);
+        let accel_geom = self.accelerometer_geom(metric);
         let c = 299792458.0;
         let rg_m = metric.r_grav_km() * 1000.0;
         (accel_geom * c * c / rg_m) / 9.80665
@@ -1611,6 +1638,11 @@ mod tests {
                 // the root the observer is actually on, so the climb is still weightless.
                 assert!(obs.four_velocity_at(&metric, obs.r)[1] > 0.0);
                 assert!(obs.is_free_falling(&metric), "a geodesic stays weightless after the turn");
+                let residual = obs.proper_acceleration_geom(&metric);
+                assert!(
+                    residual < 1e-6 * metric.kretschmann_scalar(obs.r).sqrt(),
+                    "and the integrator residual says so too: {residual}"
+                );
                 assert!(obs.r > 7.0, "climbing away from perihelion, r = {}", obs.r);
             }
         }
@@ -2034,6 +2066,51 @@ mod tests {
     }
 
     #[test]
+    fn test_a_free_faller_reads_zero_thrust_where_the_residual_check_cannot_follow() {
+        // Bob with E = 1, L = 2 at a = 0.90 heads for the far branch of r-: u^t grows like
+        // 1/(r - r-) on the way, and the finite difference behind `four_acceleration` is then a
+        // derivative taken across a pole, which no stencil survives. It used to print thousands
+        // of g of thrust on a worldline that has none. The accelerometer is zero for a geodesic
+        // whatever the diagnostic says, all the way to the stall on r-; and the diagnostic is
+        // seen to blow up on the same walk, so the two are known to part company here.
+        let metric = KerrSchild::with_solar_mass(1.0, 0.90, 10.0);
+        let mut bob = Observer::new_with_phi(
+            &metric,
+            "Bob",
+            0.0,
+            4.5,
+            0.0,
+            0.0,
+            WorldlineParams::new(1.0, 2.0, false),
+        );
+        let dt = 0.1;
+        let mut t = 0.0;
+        let mut residual_max = 0.0f64;
+        let mut floor_at_max = 0.0f64;
+        while t < 50.0 {
+            t += dt;
+            bob.step(&metric, t, dt);
+            assert_eq!(bob.proper_acceleration_g(&metric), 0.0, "thrust at t={t}, r={}", bob.r);
+            assert!(bob.is_free_falling(&metric), "weightless at t={t}, r={}", bob.r);
+            let residual = bob.proper_acceleration_geom(&metric);
+            if residual.is_finite() && residual > residual_max {
+                residual_max = residual;
+                floor_at_max = 1e-6 * metric.kretschmann_scalar(bob.r).sqrt();
+            }
+        }
+        let gap = bob.r - metric.inner_horizon();
+        println!(
+            "Bob ends {gap:.2e} above r- at t = {t:.1}; the largest integrator residual on the \
+             way was {residual_max:.3e}/M against a free-fall floor of {floor_at_max:.3e}/M"
+        );
+        assert!(gap < 1e-3, "the walk reached r-: r - r- = {gap}");
+        assert!(
+            residual_max > floor_at_max,
+            "the diagnostic does blow up on this worldline: {residual_max} vs {floor_at_max}"
+        );
+    }
+
+    #[test]
     fn test_is_free_falling_separates_geodesics_from_hovering() {
         // The telemetry label "(Free Fall)" is driven by this predicate, so it must not be fooled
         // by the numerical residual of a geodesic, nor call a hovering rocket weightless.
@@ -2041,9 +2118,14 @@ mod tests {
             let metric = KerrSchild::with_solar_mass(1.0, a, 10.0);
             let rp = metric.outer_horizon();
             for &r in &[20.0, 6.0, 3.0, rp, 1.0, 0.2] {
+                let obs = observer_at(&metric, ObserverMode::FreeFall, r);
+                assert!(obs.is_free_falling(&metric), "geodesic at r={r} (a={a}) reads weightless");
+                assert_eq!(obs.proper_acceleration_g(&metric), 0.0, "and shows no thrust");
+                // The integrator residual agrees here, where the stencil is sound.
+                let residual = obs.proper_acceleration_geom(&metric);
                 assert!(
-                    observer_at(&metric, ObserverMode::FreeFall, r).is_free_falling(&metric),
-                    "geodesic at r={r} (a={a}) must read as weightless"
+                    residual < 1e-6 * metric.kretschmann_scalar(r).sqrt(),
+                    "residual {residual} at r={r} (a={a})"
                 );
             }
             for &r in &[20.0, 6.0, 2.5] {
