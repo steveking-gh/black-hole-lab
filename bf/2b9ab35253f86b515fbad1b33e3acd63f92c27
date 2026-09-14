@@ -1,0 +1,64 @@
+src/gui/spacetime_canvas.rs
+  s_5e464e0dde83ec::t_48292bdd3c6547 1704-1731,1733-1743,1745-1763
+  s_5e464e0dde83ec::t_1c130183a4309e 2370,2387
+  s_5e464e0dde83ec::t_0ace5c12985d71 2174-2188,2190-2200,2202-2257,2265-2266,2276-2359
+  s_5e464e0dde83ec::t_670c1858ddbd6c 469,622-630,633,642-646,849-854,866-869,1702-1703,1834,2374
+  s_5e464e0dde83ec::t_938ad60b966a41 507-539,545-548,560,912,1305-1307,1351-1366,1368,1377,1391,1395
+  s_5e464e0dde83ec::t_8d2c50b83fcc8e 920-924,926,937
+  s_5e464e0dde83ec::t_ec9c4616a0aa3a 584-621,631-632,634-641,647-656,664,707,712-713,744,902,1287,1289,1427
+  s_5e464e0dde83ec::t_ef69e208676e63 2031-2034,2036
+  s_5e464e0dde83ec::t_b8523ce6f16f07 2189,2201,2258-2264,2267-2275
+  s_5e464e0dde83ec::t_d7bf8b57f1d219 870-889
+src/gui/theme.rs
+  s_5e464e0dde83ec::t_a386fe439e059b 21-23
+src/gui/controls.rs
+  s_5e464e0dde83ec::t_07c6bea55f3e05 119,127-129
+  s_5e464e0dde83ec::t_06683039191dd6 308,849
+  s_5e464e0dde83ec::t_c699b1baeb1446 226
+  s_5e464e0dde83ec::t_fa54a176f99505 921-924,926-927
+  s_5e464e0dde83ec::t_57d892d96429bc 71-79,92,96-101
+  s_5e464e0dde83ec::t_e862b12deeba8f 177-180
+  s_5e464e0dde83ec::t_22018f5139faee 227-234
+  s_5e464e0dde83ec::t_4d3761dde1643d 102-103
+src/physics/observer.rs
+  s_5e464e0dde83ec::t_670c1858ddbd6c 437,439
+src/physics/wavefront.rs
+  s_5e464e0dde83ec::t_39a363adb59bf1 3400
+src/physics/local_frame.rs
+  s_5e464e0dde83ec::t_2e96eb3e80d685 121
+src/gui/cauchy_effects.rs
+  s_5e464e0dde83ec::t_228bb674ef8f5a 70-76
+  s_5e464e0dde83ec::t_670c1858ddbd6c 14,66-69
+  s_5e464e0dde83ec::t_06683039191dd6 172-173
+src/app.rs
+  s_5e464e0dde83ec::t_af051a4222926e 528,531-542,1228
+  s_5e464e0dde83ec::t_1c80a3e168cd08 516-527,529-530,719,814
+  s_5e464e0dde83ec::t_ec9c4616a0aa3a 340-343,376
+  s_5e464e0dde83ec::t_26cdcedd2ddb89 1076,1079,1186,1190,1225-1227,1235,1482,1484
+  s_5e464e0dde83ec::t_6bebdde425fb53 1128-1129,1134,1136-1138,1641,2015-2016,2022-2026,2028,2034,2058,2120
+src/gui/spatial_canvas.rs
+  s_5e464e0dde83ec::t_04efcf83bafec9 279-281,512-561,761-764
+  s_5e464e0dde83ec::t_ef45a27ee2243e 299,322,361,382,496
+  s_5e464e0dde83ec::t_7eb3ab741468b3 1053-1140
+  s_5e464e0dde83ec::t_de43e9ea9b0c8b 765
+src/main.rs
+  s_5e464e0dde83ec::t_2e96eb3e80d685 1-7
+src/physics/tetrad.rs
+  s_5e464e0dde83ec::t_670c1858ddbd6c 173-175
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "bf2b9ab35253f86b515fbad1b33e3acd63f92c27",
+  "prompts": {},
+  "sessions": {
+    "s_5e464e0dde83ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc7a846d-d13c-4554-b9bf-dc2dee2f30eb",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
