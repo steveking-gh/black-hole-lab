@@ -576,15 +576,18 @@ impl SpatialCanvas {
             alice_box = Some(al_pos);
         }
         let bob_box = bob.as_ref().map(|b| {
+            // A plain dot, as Alice's is. He used to wear a white ring as well, which made the
+            // ring below - the one that means something - read as a second decoration on a marker
+            // that already had one, and gave two observers drawn from the same code two different
+            // liveries for no reason. The colour and the radius tell them apart.
             let bob_pos = to_screen(b.cartesian_position(metric));
-            // Bob circle marker
             painter.circle_filled(bob_pos, Who::Bob.marker_radius(), Theme::BOB_COLOR);
-            painter.circle_stroke(bob_pos, 9.0, Stroke::new(1.5, Color32::WHITE));
             bob_pos
         });
 
-        // The observer the view is holding on to wears a ring, so that a picture which is no
-        // longer moving under a falling observer says which one it is following.
+        // The observer the view is holding on to wears a ring, and now it is the only ring either
+        // marker can have, so that a picture which is no longer moving under a falling observer
+        // says which one it is following.
         if let Some(centred) = self.centred_on
             && let Some(at) = match centred {
                 Who::Alice => alice_box,
