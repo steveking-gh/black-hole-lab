@@ -414,6 +414,7 @@ impl eframe::App for SpacetimeApp {
                                 hide_wound: self.controls.hide_wound_segments,
                             },
                             &mut self.controls.show_spatial_details,
+                            !self.controls.is_playing,
                         );
                     },
                 );
