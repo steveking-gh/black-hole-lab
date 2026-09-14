@@ -147,6 +147,11 @@ pub struct AppControls {
     /// drawing choice and cannot move an arrival or change a measured shift, and like every other
     /// control it survives Reset and Drop Observers.
     pub hide_wound_segments: bool,
+    /// Whether the equatorial view's block of details (horizon radii, scale, spin, the colour
+    /// keys) is drawn in its corner. Off, a single line with the view's name and zoom stands in
+    /// for it, so the canvas is clear for the picture. Toggled by the button at the top right of
+    /// the view; like every control it is untouched by Reset.
+    pub show_spatial_details: bool,
     /// Draw the animated raindrop flow (the Painlevé-Gullstrand / Doran river) on the
     /// equatorial view.
     pub show_river: bool,
@@ -186,6 +191,7 @@ impl Default for AppControls {
             rays_per_pulse: RAYS_PER_PULSE,
             draw_front_arcs: true,
             hide_wound_segments: true,
+            show_spatial_details: true,
             show_river: true,
             show_streamlines: true,
             // Alice leads and Bob trails her by 8 M. Everything else in the app is written around

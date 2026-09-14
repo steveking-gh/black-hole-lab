@@ -65,6 +65,7 @@ impl SpatialCanvas {
         frame_of_ref: ReferenceFrame,
         font_scale: f32,
         style: FrontStyle,
+        show_details: bool,
     ) {
         let desired_size = egui::Vec2::new(ui.available_width(), canvas_height);
         let (response, painter) = ui.allocate_painter(desired_size, egui::Sense::drag());
@@ -432,7 +433,10 @@ impl SpatialCanvas {
         } else {
             ""
         };
-        let legend_text = if use_km {
+        let legend_text = if !show_details {
+            // Collapsed: the view's name and the one number that changes under the mouse.
+            format!("Equatorial View (θ = π/2)   🔍 {:.0} px/M   ▸ Details", self.zoom)
+        } else if use_km {
             format!(
                 "Equatorial View (θ = π/2, x + iy = (r + ia) e^{{iϕ}})\n\
                  Cartesian radius ρ = √(r²+a²); ring singularity at ρ = a\n\
