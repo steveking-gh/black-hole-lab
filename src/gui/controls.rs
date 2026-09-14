@@ -214,7 +214,7 @@ pub struct AppControls {
 impl Default for AppControls {
     fn default() -> Self {
         Self {
-            is_playing: true,
+            is_playing: false,
             step_mode: StepMode::Time,
             step_size: 0.1,
             play_speed: 1.0,
@@ -222,7 +222,7 @@ impl Default for AppControls {
             rays_per_pulse: RAYS_PER_PULSE,
             draw_front_arcs: true,
             hide_wound_segments: true,
-            show_spatial_details: true,
+            show_spatial_details: false,
             show_river: false,
             // Both are let go the moment the run starts, and the difference between them is the
             // worldline rather than the wait: Alice holds her radius on the ZAMO circle while Bob
@@ -573,6 +573,34 @@ impl ObserverCard {
     }
 }
 
+/// The four transport buttons - Play/Pause, Reset, Step Back, Step Fwd - are the controls a user
+/// reaches for most and the ones they reach for in a hurry, so they are drawn large, with the glyph
+/// on the button and the name underneath it rather than crowded onto it.
+///
+/// `TRANSPORT_BUTTON` is sized so that four of them and the spacing between them fit across the
+/// panel, which is 300 points wide, and so that the longest caption - "Step Back" - fits under one.
+const TRANSPORT_BUTTON: egui::Vec2 = egui::vec2(60.0, 44.0);
+
+/// One of them. Returns whether it was clicked, so the caller reads exactly as it did when these
+/// were `ui.button(..).clicked()`.
+fn transport_button(ui: &mut egui::Ui, glyph: &str, caption: &str, tip: &str) -> bool {
+    ui.vertical(|ui| {
+        ui.set_width(TRANSPORT_BUTTON.x);
+        let clicked = ui
+            .add_sized(
+                TRANSPORT_BUTTON,
+                egui::Button::new(egui::RichText::new(glyph).size(22.0)),
+            )
+            .on_hover_text(tip)
+            .clicked();
+        ui.vertical_centered(|ui| {
+            ui.label(egui::RichText::new(caption).size(11.0).color(Theme::TEXT_MUTED));
+        });
+        clicked
+    })
+    .inner
+}
+
 impl AppControls {
     /// Build the run the app opens on, and that ⏮ Reset and Drop Observers rebuild: the clock at
     /// zero, both transmissions dropped, and every ticked observer re-dropped from r = 4.5M -
@@ -706,30 +734,34 @@ impl AppControls {
         ui.group(|ui| {
             ui.label(egui::RichText::new("SIMULATION CONTROL").strong().color(Theme::UI_HEADING));
             ui.horizontal(|ui| {
-                let play_btn_text = if self.is_playing { "⏸ Pause (Space)" } else { "▶ Play (Space)" };
-                if ui
-                    .button(play_btn_text)
-                    .on_hover_text("Toggle Play/Pause simulation (Spacebar)")
-                    .clicked()
-                {
+                let (play_glyph, play_caption) =
+                    if self.is_playing { ("⏸", "Pause") } else { ("▶", "Play") };
+                if transport_button(
+                    ui,
+                    play_glyph,
+                    play_caption,
+                    "Toggle Play/Pause simulation (Spacebar)",
+                ) {
                     self.is_playing = !self.is_playing;
                 }
-                if ui
-                    .button("⏮ Reset")
-                    .on_hover_text("Put the run back to the layout the app opens on, which is the one Drop Observers builds: the clock at zero and every ticked observer dropped afresh from their card.")
-                    .clicked()
-                {
+                if transport_button(
+                    ui,
+                    "⏮",
+                    "Reset",
+                    "Put the run back to the layout the app opens on, which is the one Drop Observers builds: the clock at zero and every ticked observer dropped afresh from their card.",
+                ) {
                     self.drop_observers(metric, alice, bob, &mut signals, current_time);
                 }
                 let current_step = match self.step_mode {
                     StepMode::Time => self.step_size,
                     StepMode::Distance => self.distance_step(metric, bob.as_ref(), alice.as_ref()),
                 };
-                if ui
-                    .button("← Step Back")
-                    .on_hover_text("Step back by Step Size / Distance (Left Arrow key)")
-                    .clicked()
-                {
+                if transport_button(
+                    ui,
+                    "←",
+                    "Step Back",
+                    "Step back by Step Size / Distance (Left Arrow key)",
+                ) {
                     // The clock stops at t = 0, so everything that is stepped back with it is
                     // stepped back by however much of the step is left above zero.
                     let back = current_step.min(*current_time);
@@ -746,11 +778,12 @@ impl AppControls {
                         .rewind_to(metric, *current_time);
                     signals.step_back(metric, back, alice.as_ref(), bob.as_ref());
                 }
-                if ui
-                    .button("Step Fwd →")
-                    .on_hover_text("Step forward by Step Size / Distance (Right Arrow key)")
-                    .clicked()
-                {
+                if transport_button(
+                    ui,
+                    "→",
+                    "Step Fwd",
+                    "Step forward by Step Size / Distance (Right Arrow key)",
+                ) {
                     *current_time += current_step;
                     ObserverPair { bob: bob.as_mut(), alice: alice.as_mut() }
                         .step(metric, *current_time, current_step);

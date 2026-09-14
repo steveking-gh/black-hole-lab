@@ -57,8 +57,7 @@ impl Who {
 pub struct SpatialCanvas {
     pub zoom: f32,
     pub pan_offset: Vec2,
-    /// The observer the view is being kept centred on, set from the right-click menu on their
-    /// marker while the run is paused.
+    /// The observer the view is being kept centred on, set from the canvas's right-click menu.
     ///
     /// It is a view setting, held here with the pan and the zoom rather than on the panel: it says
     /// where the canvas is looking and nothing about the physics, and like the zoom it survives a
@@ -88,6 +87,52 @@ impl Default for SpatialCanvas {
 }
 
 impl SpatialCanvas {
+    /// The observer the view is anchored to this frame, or None when it is anchored to the hole.
+    ///
+    /// Following an observer who is not in the simulation is following nobody, so the view stays on
+    /// the hole rather than on a remembered position. A standing request to keep one of them
+    /// centred is answered first, and the Frame of Reference selector's own tracking is what is
+    /// left when there is no such request or the observer it names has gone.
+    fn followed<'a>(
+        &self,
+        bob: &'a Option<Observer>,
+        alice: &'a Option<Observer>,
+        frame_of_ref: ReferenceFrame,
+    ) -> Option<&'a Observer> {
+        let observer = |who: Who| match who {
+            Who::Alice => alice.as_ref(),
+            Who::Bob => bob.as_ref(),
+        };
+        self.centred_on.and_then(observer).or(match frame_of_ref {
+            ReferenceFrame::Bob => bob.as_ref(),
+            ReferenceFrame::Alice => alice.as_ref(),
+            ReferenceFrame::DistantObserver => None,
+        })
+    }
+
+    /// Pan the view so that the point `target` of the equatorial plane - Cartesian, in M, as
+    /// `Observer::cartesian_position` gives it - sits in the middle of the canvas.
+    ///
+    /// One pan, not a standing request: whoever is there is free to move out of the middle again,
+    /// which is what separates the menu's Goto items from its Keep Centered ones. The view's centre
+    /// is `rect.center() + pan_offset - tracking`, so putting `target` in the middle means a pan of
+    /// `tracking - target`, and when the view is already tracking that observer it is zero.
+    pub fn look_at(
+        &mut self,
+        metric: &KerrSchild,
+        bob: &Option<Observer>,
+        alice: &Option<Observer>,
+        frame_of_ref: ReferenceFrame,
+        target: (f64, f64),
+    ) {
+        let zoom = self.zoom;
+        let to_offset = |(x, y): (f64, f64)| Vec2::new(x as f32 * zoom, -(y as f32) * zoom);
+        let tracking = self
+            .followed(bob, alice, frame_of_ref)
+            .map_or(Vec2::ZERO, |obs| to_offset(obs.cartesian_position(metric)));
+        self.pan_offset = tracking - to_offset(target);
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
@@ -103,10 +148,10 @@ impl SpatialCanvas {
         font_scale: f32,
         style: FrontStyle,
         show_details: &mut bool,
-        paused: bool,
     ) {
         let desired_size = egui::Vec2::new(ui.available_width(), canvas_height);
-        let (response, painter) = ui.allocate_painter(desired_size, egui::Sense::drag());
+        let (response, painter) =
+            ui.allocate_painter(desired_size, egui::Sense::click_and_drag());
         let rect = response.rect;
 
         if rect.width() < 30.0 || rect.height() < 30.0 {
@@ -150,15 +195,7 @@ impl SpatialCanvas {
         // keep one of them centred is answered first, and the Frame of Reference selector's own
         // tracking is what is left when there is no such request or the observer it names has
         // gone.
-        let observer = |who: Who| match who {
-            Who::Alice => alice.as_ref(),
-            Who::Bob => bob.as_ref(),
-        };
-        let followed = self.centred_on.and_then(observer).or(match frame_of_ref {
-            ReferenceFrame::Bob => bob.as_ref(),
-            ReferenceFrame::Alice => alice.as_ref(),
-            ReferenceFrame::DistantObserver => None,
-        });
+        let followed = self.followed(bob, alice, frame_of_ref);
         let frame_tracking_offset =
             followed.map_or(Vec2::ZERO, |obs| to_offset(obs.cartesian_position(metric)));
         let center = rect.center() + self.pan_offset - frame_tracking_offset;
@@ -446,29 +483,46 @@ impl SpatialCanvas {
             );
         }
 
-        // 6b. The right-click menu on each marker. It is offered while the run is paused, which
-        // is when the picture is standing still enough to aim at a marker and when the question
-        // "follow this one" is usually being asked; a moving marker is not a thing to point at.
-        // The region is three marker radii across, the same reach the (t, r) diagram's drag uses,
-        // and is registered after the canvas's own drag response so that a press on a marker opens
-        // the menu instead of panning, and before the telemetry boxes, which go last of all.
-        if paused {
-            for (who, at) in [(Who::Alice, alice_box), (Who::Bob, bob_box)] {
-                let Some(at) = at else { continue };
-                let reach = Vec2::splat(who.marker_radius() * 3.0);
-                let id = ui.id().with((MARKER_MENU_ID, who.name()));
-                let response =
-                    ui.interact(egui::Rect::from_center_size(at, reach), id, egui::Sense::click());
-                response.context_menu(|ui| {
-                    let mut centred = self.centred_on == Some(who);
-                    let label = format!("Keep {} centred", who.name());
-                    if ui.checkbox(&mut centred, label).changed() {
-                        self.centred_on = centred.then_some(who);
-                        ui.close();
+        // 6b. The canvas's right-click menu: where the view should look, and what it should go
+        // on looking at. It is offered anywhere on the canvas rather than on the markers, because
+        // "take me to Bob" is most useful exactly when Bob is not on the screen to be pointed at,
+        // and it is offered whether or not the run is moving, since none of it touches the physics.
+        // It is registered on the canvas's own response, after the markers are drawn and before the
+        // telemetry boxes, which take their drags last.
+        //
+        // Going to somebody and keeping them centred are different requests and both are here: the
+        // first moves the view once and lets them walk out of it again, the second re-answers
+        // itself every frame. A Goto while somebody is being followed pans away from them without
+        // letting go, since the pan is measured from whatever the view is tracking.
+        response.context_menu(|ui| {
+            for (label, target) in [
+                ("Goto Bob", bob.as_ref().map(|o| o.cartesian_position(metric))),
+                ("Goto Alice", alice.as_ref().map(|o| o.cartesian_position(metric))),
+                // The hole is at the origin of the embedding x + iy = (r + ia)e^{i phi}, which is
+                // the centre of the ring rather than a point of the spacetime.
+                ("Goto Black Hole", Some((0.0, 0.0))),
+            ] {
+                if ui.add_enabled(target.is_some(), egui::Button::new(label)).clicked() {
+                    if let Some(at) = target {
+                        self.look_at(metric, bob, alice, frame_of_ref, at);
                     }
-                });
+                    ui.close();
+                }
             }
-        }
+            ui.separator();
+            for who in [Who::Bob, Who::Alice] {
+                let present = match who {
+                    Who::Alice => alice.is_some(),
+                    Who::Bob => bob.is_some(),
+                };
+                let mut centred = self.centred_on == Some(who);
+                let label = format!("Keep {} Centered", who.name());
+                if ui.add_enabled(present, egui::Checkbox::new(&mut centred, label)).changed() {
+                    self.centred_on = centred.then_some(who);
+                    ui.close();
+                }
+            }
+        });
 
         // 7. Title and Legend Overlay
         // Horizon angular velocity Ω_H = a / (2 M r₊) is a rate per unit coordinate time, so in
@@ -486,14 +540,17 @@ impl SpatialCanvas {
         // that has stopped moving under a falling observer should say why, and the menu that did
         // it is not discoverable by looking at the canvas.
         let centred_line = match self.centred_on {
-            Some(who) => format!("Keeping {} centred (right-click a marker to change)\n", who.name()),
-            None => "Right-click an observer while paused: keep the view centred on them\n".to_string(),
+            Some(who) => {
+                format!("Keeping {} centered (right-click anywhere to change)\n", who.name())
+            }
+            None => "Right-click anywhere: go to Bob, Alice or the hole, or keep one centered\n"
+                .to_string(),
         };
         let legend_text = if !*show_details {
             // Collapsed: the view's name and the one number that changes under the mouse.
             match self.centred_on {
                 Some(who) => format!(
-                    "Equatorial View (θ = π/2)   🔍 {:.0} px/M   centred on {}",
+                    "Equatorial View (θ = π/2)   🔍 {:.0} px/M   centered on {}",
                     self.zoom,
                     who.name()
                 ),
@@ -877,10 +934,6 @@ const RING_ARROW_MIN_PX: f32 = 14.0;
 /// How far outside their own marker the ring around a centred observer is drawn.
 const CENTRED_RING_GAP: f32 = 5.0;
 
-/// Salt for the id of a marker's right-click region, so that the two observers get one each and
-/// a test can ask the context whether the region was registered at all.
-pub const MARKER_MENU_ID: &str = "spatial-marker-menu";
-
 /// How much of the gain ramp one flat-coloured band of a segment may cover, in decades of gain.
 ///
 /// A segment is drawn in the colour of the gain its light carries, and its two rays need not carry
@@ -1262,7 +1315,6 @@ mod tests {
         metric: &KerrSchild,
         alice: &Option<Observer>,
         bob: &Option<Observer>,
-        paused: bool,
     ) -> (Vec<(Color32, f32, Pos2)>, egui::Id) {
         use crate::physics::wavefront::SignalField;
         let signal = SignalField::default();
@@ -1287,7 +1339,6 @@ mod tests {
                 1.0,
                 FrontStyle { arcs: true, hide_wound: true },
                 &mut details,
-                paused,
             );
         });
         let mut circles = Vec::new();
@@ -1307,6 +1358,17 @@ mod tests {
         }
         output.drop_without_applying_deltas();
         (circles, ui_id)
+    }
+
+    /// Where the hole was painted this frame: the ring's fill is drawn once, at the centre of the
+    /// geometry. With no pan and nobody being tracked it is also the middle of the canvas, which is
+    /// how a test knows where the middle is without knowing the layout.
+    fn hole_of(circles: &[(Color32, f32, Pos2)]) -> Pos2 {
+        circles
+            .iter()
+            .find(|(fill, _, _)| *fill == Theme::SINGULARITY_FILL)
+            .map(|(_, _, at)| *at)
+            .expect("the ring's fill marks the centre of the hole")
     }
 
     /// Where the observer's own marker was painted this frame.
@@ -1348,19 +1410,10 @@ mod tests {
                 b.step(&metric, b.t + 0.1, 0.1);
             }
         };
-        // The hole itself: the ring's fill is drawn once, at the centre of the geometry.
-        let hole_of = |circles: &[(Color32, f32, Pos2)]| {
-            circles
-                .iter()
-                .find(|(fill, _, _)| *fill == Theme::SINGULARITY_FILL)
-                .map(|(_, _, at)| *at)
-                .expect("the ring's fill marks the centre of the hole")
-        };
-
         // Off: Bob moves, the hole does not.
-        let (before, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob, true);
+        let (before, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob);
         fall(&mut bob);
-        let (after, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob, true);
+        let (after, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob);
         let bob_moved = (marker_of(&after, Who::Bob) - marker_of(&before, Who::Bob)).length();
         let hole_moved = (hole_of(&after) - hole_of(&before)).length();
         assert!(bob_moved > 5.0, "he crosses the canvas as he falls: {bob_moved} px");
@@ -1368,9 +1421,9 @@ mod tests {
 
         // On: Bob does not move, the hole does, and by exactly what his own motion would have been.
         canvas.centred_on = Some(Who::Bob);
-        let (before, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob, true);
+        let (before, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob);
         fall(&mut bob);
-        let (moved, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob, true);
+        let (moved, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob);
         let bob_held = (marker_of(&moved, Who::Bob) - marker_of(&before, Who::Bob)).length();
         let hole_slid = hole_of(&moved) - hole_of(&before);
         println!(
@@ -1393,9 +1446,9 @@ mod tests {
 
         // Switched off again, he goes back to crossing the canvas.
         canvas.centred_on = None;
-        let (parked, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob, true);
+        let (parked, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob);
         fall(&mut bob);
-        let (released, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob, true);
+        let (released, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob);
         assert!(
             (marker_of(&released, Who::Bob) - marker_of(&parked, Who::Bob)).length() > 5.0,
             "with the toggle off he is on the move again"
@@ -1407,38 +1460,57 @@ mod tests {
     }
 
     #[test]
-    fn test_the_marker_menu_is_offered_only_while_the_run_is_paused() {
-        // The menu is a paused-only affair: a marker that is moving is not a thing to point at,
-        // and the region that carries the menu would otherwise take presses that belong to the
-        // canvas's own pan. What is checked is the widget itself - whether egui was handed a
-        // clickable region over each marker in that frame - rather than a flag that says so.
+    fn test_going_to_an_observer_centres_them_once_and_lets_them_move_again() {
+        // The menu's two kinds of item, told apart. Goto is a pan: it puts somebody in the middle
+        // of the canvas at the moment it is asked, and from then on they are free to fall out of
+        // it again, which is what makes it the right answer to "where did Bob get to" and the
+        // wrong one to "follow Bob". Keep Centered is the standing request, and the test above is
+        // about that one.
         let metric = KerrSchild::new(1.0, 0.65);
         let ctx = egui::Context::default();
         ctx.set_fonts(egui::FontDefinitions::empty());
         let mut canvas = SpatialCanvas::default();
         let params = crate::physics::observer::WorldlineParams::default();
-        let alice =
-            Some(Observer::new_with_phi(&metric, "Alice", 0.0, 4.5, 0.0, 0.25, params));
-        let mut bob = Observer::new_with_phi(&metric, "Bob", 0.0, 4.5, 0.0, 0.0, params);
-        bob.step(&metric, 0.1, 0.1);
-        let bob = Some(bob);
+        let alice = Some(Observer::new_with_phi(&metric, "Alice", 0.0, 9.0, 0.0, 2.2, params));
+        let mut bob =
+            Some(Observer::new_with_phi(&metric, "Bob", 0.0, 4.5, 0.0, 0.0, params));
+        // Nothing is panned and nothing is being tracked yet, so the hole is in the middle of the
+        // canvas and that is the point everything below is measured against.
+        let (before, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob);
+        let centre = hole_of(&before);
+        let off_centre = (marker_of(&before, Who::Bob) - centre).length();
+        canvas.look_at(
+            &metric,
+            &bob,
+            &alice,
+            ReferenceFrame::DistantObserver,
+            bob.as_ref().expect("Bob is in this run").cartesian_position(&metric),
+        );
+        let (gone_to, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob);
+        let landed = (marker_of(&gone_to, Who::Bob) - centre).length();
+        println!(
+            "Bob started {off_centre:.0} px off centre and Goto put him {landed:.3} px from it"
+        );
+        assert!(off_centre > 20.0, "he is not already in the middle: {off_centre} px");
+        assert!(landed < 1e-3, "and Goto puts him there exactly: {landed} px");
 
-        for (paused, wanted) in [(true, true), (false, false)] {
-            // Twice: `Context::read_response` answers for the pass egui has just finished laying
-            // out, so a state that has held for only one frame is read against the frame before
-            // it. Two identical frames make the answer the one being asked for.
-            spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob, paused);
-            let (_, ui_id) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob, paused);
-            for who in [Who::Alice, Who::Bob] {
-                let registered =
-                    ctx.read_response(ui_id.with((MARKER_MENU_ID, who.name()))).is_some();
-                assert_eq!(
-                    registered, wanted,
-                    "paused = {paused}: {}'s marker menu registered = {registered}",
-                    who.name()
-                );
-            }
+        // Then he falls, and nothing holds him: that is the difference from Keep Centered.
+        let b = bob.as_mut().expect("Bob is in this run");
+        for _ in 0..10 {
+            b.step(&metric, b.t + 0.1, 0.1);
         }
+        let (after, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob);
+        let drifted = (marker_of(&after, Who::Bob) - centre).length();
+        assert!(drifted > 5.0, "a Goto does not follow him: {drifted} px");
+
+        // And the hole is a target like any other: it sits at the origin of the embedding.
+        canvas.look_at(&metric, &bob, &alice, ReferenceFrame::DistantObserver, (0.0, 0.0));
+        let (at_hole, _) = spatial_frame(&mut canvas, &ctx, &metric, &alice, &bob);
+        assert!(
+            (hole_of(&at_hole) - centre).length() < 1e-3,
+            "Goto Black Hole centres the hole: {:?}",
+            hole_of(&at_hole)
+        );
     }
 
     #[test]

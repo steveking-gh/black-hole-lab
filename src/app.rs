@@ -414,7 +414,6 @@ impl eframe::App for SpacetimeApp {
                                 hide_wound: self.controls.hide_wound_segments,
                             },
                             &mut self.controls.show_spatial_details,
-                            !self.controls.is_playing,
                         );
                     },
                 );
@@ -930,6 +929,8 @@ mod tests {
         // floor of 1/240 s; the playback rate is what buys enough simulation time to reach Bob's
         // crossing without running thousands of frames.
         app.controls.play_speed = 4.0;
+        // The app opens paused; this test is about what the play loop does, so it presses Play.
+        app.controls.is_playing = true;
 
         egui::__run_test_ui(|ui| {
             let mut frame = eframe::Frame::_new_kittest();
@@ -965,6 +966,7 @@ mod tests {
         let mut app = SpacetimeApp::default();
         app.controls.play_speed = 4.0;
         app.controls.step_size = 0.01;
+        app.controls.is_playing = true;
 
         egui::__run_test_ui(|ui| {
             let mut frame = eframe::Frame::_new_kittest();
@@ -1145,7 +1147,9 @@ mod tests {
         // Kilometres are the default unit, and nothing throttles the step near r₋ any more:
         // the play speed and the step size are the only things that set sim_dt.
         assert!(d.use_km, "distances are shown in km out of the box");
-        assert!(d.is_playing);
+        // Paused: the run the user is handed is a standing start, so that nothing has happened
+        // before they have had a chance to look at it or to move anybody.
+        assert!(!d.is_playing, "the app opens paused");
         assert_eq!(d.play_speed, 1.0);
         assert_eq!(d.step_size, 0.1);
         // Both observers are in the run and both are transmitting out of the box.
