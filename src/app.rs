@@ -1,5 +1,7 @@
 use crate::gui::cauchy_effects::CauchyEffects;
-use crate::gui::controls::{AppControls, ReferenceFrame, SignalViews, StepMode};
+use crate::gui::controls::{
+    AppControls, DISTANT_CLOCK_GRID_TIP, ReferenceFrame, SignalViews, StepMode,
+};
 use crate::gui::spacetime_canvas::SpacetimeCanvas;
 use crate::gui::spatial_canvas::{FrontStyle, SpatialCanvas};
 use crate::gui::theme::Theme;
@@ -7,6 +9,11 @@ use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::{Observer, ObserverPair};
 use crate::physics::wavefront::{Endpoint, SignalField, SignalPair};
 use std::time::Instant;
+
+/// The height of the frame-of-reference row that heads the foliation column: one combo box and one
+/// checkbox, plus the spacing egui puts between rows. It is taken out of the canvas height so that
+/// the row is added above the picture rather than pushing the foot of it out of the window.
+const FRAME_ROW_HEIGHT: f32 = 26.0;
 
 pub struct SpacetimeApp {
     metric: KerrSchild,
@@ -363,7 +370,11 @@ impl eframe::App for SpacetimeApp {
         // 4. Central Panel: Split View between Spacetime (t, r) and Spatial (x, y)
         egui::CentralPanel::default().show(ui, |ui| {
             let avail = ui.available_size();
-            let header_height = 24.0;
+            // Two rows above the foliation canvas - the frame selector and the title - against one
+            // above the equatorial canvas. Both canvases are given the same height, so the height
+            // taken out is the taller of the two headers and the equatorial view carries the
+            // difference as slack at its foot rather than running off the bottom of the window.
+            let header_height = 24.0 + FRAME_ROW_HEIGHT;
             let canvas_height = (avail.y - header_height - 10.0).max(250.0);
             let left_width = (avail.x * 0.53).max(200.0);
             let right_width = (avail.x - left_width - 12.0).max(200.0);
@@ -380,6 +391,24 @@ impl eframe::App for SpacetimeApp {
                     egui::Vec2::new(left_width, avail.y),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
+                        // Whose frame the diagram below is drawn in. It sits on the view it
+                        // governs rather than on the control panel: every other thing the choice
+                        // changes - the axes, the light cones, the clock grid - is in this column,
+                        // and reading the label off the picture is how the user knows which of the
+                        // three pictures they are looking at.
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Frame of reference:").small().color(Theme::TEXT_MUTED));
+                            egui::ComboBox::from_id_salt("frame_of_ref_foliation_combo")
+                                .selected_text(self.controls.frame_of_ref.label())
+                                .width(230.0)
+                                .show_ui(ui, |ui| {
+                                    for frame in [ReferenceFrame::DistantObserver, ReferenceFrame::Bob, ReferenceFrame::Alice] {
+                                        ui.selectable_value(&mut self.controls.frame_of_ref, frame, frame.label());
+                                    }
+                                });
+                            ui.checkbox(&mut self.controls.show_distant_clock_grid, "Distant clock grid")
+                                .on_hover_text(DISTANT_CLOCK_GRID_TIP);
+                        });
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new(left_title).strong().color(Theme::HORIZON_OUTER));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
