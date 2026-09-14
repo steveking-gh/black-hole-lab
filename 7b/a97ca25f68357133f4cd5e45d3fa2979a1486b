@@ -1,0 +1,20 @@
+src/gui/spatial_canvas.rs
+  s_5e464e0dde83ec::t_e4bf454ad8820e 595-603,862-869,1192-1229,1231,1233-1234,1240-1260
+  s_5e464e0dde83ec::t_e905aeee35c519 1230,1232,1235-1239
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "7ba97ca25f68357133f4cd5e45d3fa2979a1486b",
+  "prompts": {},
+  "sessions": {
+    "s_5e464e0dde83ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc7a846d-d13c-4554-b9bf-dc2dee2f30eb",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
