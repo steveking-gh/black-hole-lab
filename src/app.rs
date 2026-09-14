@@ -390,19 +390,6 @@ impl eframe::App for SpacetimeApp {
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("EQUATORIAL PLANE (x, y)").strong().color(Theme::HORIZON_CAUCHY));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                let label = if self.controls.show_spatial_details {
-                                    "▾ Details"
-                                } else {
-                                    "▸ Details"
-                                };
-                                ui.toggle_value(
-                                    &mut self.controls.show_spatial_details,
-                                    egui::RichText::new(label).small(),
-                                )
-                                .on_hover_text(
-                                    "Show or hide the block of details in the corner of the view: \
-                                     horizon radii, scale, spin, and the colour keys.",
-                                );
                                 ui.label(egui::RichText::new("Top-Down View").small().color(Theme::TEXT_MUTED));
                             });
                         });
@@ -422,7 +409,7 @@ impl eframe::App for SpacetimeApp {
                                 arcs: self.controls.draw_front_arcs,
                                 hide_wound: self.controls.hide_wound_segments,
                             },
-                            self.controls.show_spatial_details,
+                            &mut self.controls.show_spatial_details,
                         );
                     },
                 );

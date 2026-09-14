@@ -149,8 +149,8 @@ pub struct AppControls {
     pub hide_wound_segments: bool,
     /// Whether the equatorial view's block of details (horizon radii, scale, spin, the colour
     /// keys) is drawn in its corner. Off, a single line with the view's name and zoom stands in
-    /// for it, so the canvas is clear for the picture. Toggled by the button at the top right of
-    /// the view; like every control it is untouched by Reset.
+    /// for it, so the canvas is clear for the picture. Toggled by the Details button drawn just
+    /// above that block; like every control it is untouched by Reset.
     pub show_spatial_details: bool,
     /// Draw the animated raindrop flow (the Painlevé-Gullstrand / Doran river) on the
     /// equatorial view.

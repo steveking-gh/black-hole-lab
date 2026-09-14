@@ -65,7 +65,7 @@ impl SpatialCanvas {
         frame_of_ref: ReferenceFrame,
         font_scale: f32,
         style: FrontStyle,
-        show_details: bool,
+        show_details: &mut bool,
     ) {
         let desired_size = egui::Vec2::new(ui.available_width(), canvas_height);
         let (response, painter) = ui.allocate_painter(desired_size, egui::Sense::drag());
@@ -433,9 +433,9 @@ impl SpatialCanvas {
         } else {
             ""
         };
-        let legend_text = if !show_details {
+        let legend_text = if !*show_details {
             // Collapsed: the view's name and the one number that changes under the mouse.
-            format!("Equatorial View (θ = π/2)   🔍 {:.0} px/M   ▸ Details", self.zoom)
+            format!("Equatorial View (θ = π/2)   🔍 {:.0} px/M", self.zoom)
         } else if use_km {
             format!(
                 "Equatorial View (θ = π/2, x + iy = (r + ia) e^{{iϕ}})\n\
@@ -506,11 +506,32 @@ impl SpatialCanvas {
             )
         };
 
+        // The Details button sits just above the block it shows and hides, set in the block's own
+        // font so it reads as the block's first line. It is a widget placed over the canvas, so
+        // it takes the click instead of the canvas drag.
+        let legend_font = egui::FontId::monospace(11.0 * font_scale);
+        let button_label = if *show_details { "▾ Details" } else { "▸ Details" };
+        let button_size = Vec2::new(80.0 * font_scale, 16.0 * font_scale);
+        let button_rect = egui::Rect::from_min_size(rect.left_top() + Vec2::new(8.0, 6.0), button_size);
+        let button = egui::Button::new(
+            egui::RichText::new(button_label).font(legend_font.clone()).color(Theme::TEXT_BRIGHT),
+        )
+        .frame(false);
+        if ui
+            .put(button_rect, button)
+            .on_hover_text(
+                "Show or hide the block of details below: horizon radii, scale, spin, and the \
+                 colour keys.",
+            )
+            .clicked()
+        {
+            *show_details = !*show_details;
+        }
         painter.text(
-            rect.left_top() + Vec2::new(10.0, 10.0),
+            Pos2::new(rect.left() + 10.0, button_rect.bottom() + 2.0),
             egui::Align2::LEFT_TOP,
             legend_text,
-            egui::FontId::monospace(11.0 * font_scale),
+            legend_font,
             Theme::TEXT_BRIGHT,
         );
 
