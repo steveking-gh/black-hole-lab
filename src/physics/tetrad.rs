@@ -13,6 +13,13 @@ pub fn inner(metric: &KerrSchild, r: f64, a: &[f64; 3], b: &[f64; 3]) -> f64 {
     sum
 }
 
+/// Determinant of a 3 x 3 matrix given by rows.
+fn det3(m: &[[f64; 3]; 3]) -> f64 {
+    m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+        - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+}
+
 /// Local orthonormal tetrad e_{(a)}^mu carried by an observer with 4-velocity u at radius r on the
 /// equatorial plane: the frame in which that observer is at rest and light moves isotropically at
 /// c = 1. The three legs satisfy g(e_a, e_b) = diag(-1, +1, +1) exactly, so the cross terms
@@ -37,8 +44,10 @@ impl Tetrad {
     /// The plus sign in front of g(x, e0) e0 is the Lorentzian projector: the subtracted piece is
     /// g(x, e0) / g(e0, e0) times e0, and g(e0, e0) = -1 flips the sign. The orthogonal complement
     /// of a timelike vector is a positive-definite subspace, so g(v1, v1) > 0 and g(v2, v2) > 0 at
-    /// *every* radius r > 0, including at and inside both horizons, where the coordinate direction
-    /// d_r itself becomes timelike. No horizon-dependent special case is needed.
+    /// *every* radius r > 0, including at and inside both horizons, where the surfaces r = const
+    /// turn spacelike (g^rr < 0). No horizon-dependent special case is needed. (The coordinate
+    /// direction d_r itself stays spacelike in this chart, g_rr = 1 + 2M/r; it is the covector dr
+    /// whose character changes.) v1 can never vanish, since that would need d_r parallel to u.
     pub fn from_four_velocity(metric: &KerrSchild, r: f64, u: &[f64; 3]) -> Self {
         let r = r.max(1e-4);
         debug_assert!(
@@ -81,8 +90,8 @@ impl Tetrad {
     ///     w^mu = (u_phi, 0, -u_t),      g(w, u) = u_phi u_t - u_t u_phi = 0,
     ///
     /// which is spacelike because it lies in the (positive-definite) rest space of u. Then
-    /// e2 = w / sqrt(g(w, w)) and e1 is what is left over: the rest-space projection of d_r
-    /// orthogonalised against e2, which is automatically outward-pointing.
+    /// e2 = w / sqrt(g(w, w)) and e1 is what is left over: the one unit direction orthogonal to
+    /// both e0 and e2, with its sign fixed by the handedness of the frame (see the body).
     ///
     /// Why this gauge: the drawn plane of the diagram is span(e0, e1), the slice xi^2 = 0. The
     /// covector dr has local components n_a = e_a^r, and this gauge makes n_2 = 0, so
@@ -96,9 +105,10 @@ impl Tetrad {
     /// 45 degrees at the horizons, because there the null generator of the surface leaves the
     /// slice.
     ///
-    /// The degenerate case u_t = u_phi = 0 (possible only between the horizons, where d_r is
-    /// timelike) makes w vanish; the construction then falls back to the rest-space projection of
-    /// d_phi, which is the continuous limit, since u_phi -> 0 there.
+    /// The degenerate case u_t = u_phi = 0 (possible only between the horizons, where the
+    /// covector dr is timelike and u can be proportional to it) makes w vanish; the construction
+    /// then falls back to the rest-space projection of d_phi, which is the continuous limit,
+    /// since u_phi -> 0 there.
     pub fn from_four_velocity_axial(metric: &KerrSchild, r: f64, u: &[f64; 3]) -> Self {
         let r = r.max(1e-4);
         debug_assert!(
@@ -131,17 +141,48 @@ impl Tetrad {
         let n2 = w2.max(1e-300).sqrt();
         let e2 = [w[0] / n2, w[1] / n2, w[2] / n2];
 
-        // e1: the part of d_r orthogonal to both e0 (Lorentzian projector, hence the plus sign)
-        // and e2. g(v1, d_r) = g(v1, v1) > 0, so e1 points outward without any sign fix-up.
-        let d_r = [0.0, 1.0, 0.0];
-        let p0 = inner(metric, r, &d_r, &e0);
-        let p2 = inner(metric, r, &d_r, &e2);
-        let mut v1 = [0.0f64; 3];
+        // e1: the one unit direction orthogonal to both e0 and e2, built as the Hodge dual of
+        // e0 ^ e2 rather than as the rest-space projection of d_r. The projection does the same
+        // job wherever it is non-zero, and its natural sign rule g(e1, d_r) > 0 is what "outward"
+        // means far away. But d_r can fall into the plane span(e0, e2) along a perfectly good
+        // worldline - it happens between the horizons, near r = 1.09, for a prograde infall with
+        // E = 1, L = 2 at a = 0.90 - and there the projection passes through zero, so normalising
+        // it reverses e1 end for end from one step to the next and every surface drawn in the
+        // observer's frame mirrors left to right. The dual never vanishes. With
+        //
+        //     omega_alpha = sqrt|g| eps_{alpha beta gamma} e0^beta e2^gamma,
+        //     e1^mu       = +/- g^{mu alpha} omega_alpha,
+        //
+        // omega annihilates e0 and e2 by antisymmetry, and the cofactor identity
+        //     g^{mu alpha} eps_{mu beta gamma} eps_{alpha delta epsilon}
+        //         = (g_{beta delta} g_{gamma epsilon} - g_{beta epsilon} g_{gamma delta}) / det g
+        // gives g(e1, e1) = -[g(e0, e0) g(e2, e2) - g(e0, e2)^2] = 1 with no normalisation at all.
+        // The sign is the handedness of the frame: (e0, e1, e2) is given the orientation of
+        // (d_t, d_r, d_phi). That agrees with g(e1, d_r) > 0 for a static observer at large r, and
+        // it is continuous along every worldline because the determinant of an orthonormal frame
+        // in a fixed coordinate basis never vanishes. So e1 points outward wherever outward has a
+        // meaning, and keeps pointing the same way through the places where it does not.
+        let ginv = metric.inverse_metric(r);
+        let det_g = det3(&g);
+        debug_assert!(
+            det_g < 0.0,
+            "a Lorentzian 3-metric has det g < 0; got {det_g} at r = {r}"
+        );
+        let sqrt_abs_g = (-det_g).sqrt();
+        let omega = [
+            sqrt_abs_g * (e0[1] * e2[2] - e0[2] * e2[1]),
+            sqrt_abs_g * (e0[2] * e2[0] - e0[0] * e2[2]),
+            sqrt_abs_g * (e0[0] * e2[1] - e0[1] * e2[0]),
+        ];
+        let mut e1 = [0.0f64; 3];
         for mu in 0..3 {
-            v1[mu] = d_r[mu] + p0 * e0[mu] - p2 * e2[mu];
+            for alpha in 0..3 {
+                e1[mu] += ginv[mu][alpha] * omega[alpha];
+            }
         }
-        let n1 = inner(metric, r, &v1, &v1).max(1e-300).sqrt();
-        let e1 = [v1[0] / n1, v1[1] / n1, v1[2] / n1];
+        if det3(&[e0, e1, e2]) < 0.0 {
+            e1 = [-e1[0], -e1[1], -e1[2]];
+        }
 
         Self { e0, e1, e2 }
     }
@@ -363,5 +404,120 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_axial_e1_does_not_reverse_where_d_r_falls_into_the_plane_of_e0_and_e2() {
+        // The worldline that showed the flip: E = 1, L = 2 at a = 0.90, released from r = 4.5.
+        // E - Omega_- L < 0, so it heads for the far branch of r_- and never crosses the drawn one;
+        // on the way, between the horizons near r = 1.09, the coordinate direction d_r passes
+        // through span(e0, e2). With e1 taken as the normalised rest-space projection of d_r, its
+        // sign reference vanished there and e1 reversed between two consecutive steps, mirroring
+        // every surface in the observer's frame view. Along the whole walk from release to just
+        // above r_- the frame must stay orthonormal and consecutive e1's must nearly coincide.
+        // The walk is paced by the observer's own clock (capped in coordinate time, see below),
+        // because near r_- u^t grows without bound and a fixed coordinate step there spans a
+        // large turn of the frame; a reversal is a jump to overlap -1 at any step size, so the
+        // check discriminates.
+        // The walk also has to actually go through the degenerate configuration for the check to
+        // mean anything, and the witness for that is the old sign reference g(e1, d_r) changing
+        // sign along the way - under the old rule g(e1, d_r) = |v1| was positive by construction,
+        // so a sign change proves the old e1 and the new one differ by a sign somewhere, i.e. that
+        // the old e1 reversed on this worldline.
+        use crate::physics::observer::{Observer, WorldlineParams};
+        let metric = KerrSchild::new(1.0, 0.90);
+        let (r_plus, r_minus) = (metric.outer_horizon(), metric.inner_horizon());
+        let mut bob = Observer::new_with_phi(
+            &metric,
+            "Bob",
+            0.0,
+            4.5,
+            0.0,
+            0.0,
+            WorldlineParams::new(1.0, 2.0, false),
+        );
+        // Components of a vector in the raindrop tetrad at r. Two of Bob's frames at neighbouring
+        // events are compared through these rather than by dotting coordinate components taken
+        // at two different radii: for a frame boosted by u^t ~ 30 that mismatch is an error of
+        // order (delta g)(u^t)^2 and swamps the signal, while the raindrop frame is smooth in r
+        // and the Minkowski product of local components is cosh(delta rapidity) cos(delta angle),
+        // near 1 for a small step and near -1 for a reversal.
+        let local = |r: f64, v: &[f64; 3]| -> [f64; 3] {
+            let rain = Tetrad::from_four_velocity(&metric, r, &raindrop(&metric, r));
+            [
+                -inner(&metric, r, &rain.e0, v),
+                inner(&metric, r, &rain.e1, v),
+                inner(&metric, r, &rain.e2, v),
+            ]
+        };
+        // Each step is the smaller of one tick of Bob's own clock and 0.05 M of coordinate time:
+        // his clock, because in coordinate time the frame turns slowly early on and fast near r_-
+        // where u^t runs away; the cap, because near r_- one tick of his clock is many M.
+        let d_tau = 0.02;
+        let mut t = 0.0;
+        // One step first, so every frame below is the free-faller's own and not the static
+        // observer's that `four_velocity` reports before release.
+        t += d_tau;
+        bob.step(&metric, t, d_tau);
+        let d_r = [0.0, 1.0, 0.0];
+        let mut prev: Option<[f64; 3]> = None;
+        let mut proj_min = f64::INFINITY;
+        let (mut proj_pos, mut proj_neg) = (false, false);
+        let mut r_min = f64::INFINITY;
+        let mut overlap_min = f64::INFINITY;
+        let mut steps = 0;
+        while bob.r > r_minus + 1e-3 && t < 60.0 && steps < 10_000 {
+            let r = bob.r;
+            let u = bob.four_velocity(&metric);
+            let f = Tetrad::from_four_velocity_axial(&metric, r, &u);
+            let legs = [f.e0, f.e1, f.e2];
+            // Rounding in the products of components of size u^t, which runs into the thousands
+            // by the end of the walk.
+            let tol = 1e-11 * (1.0 + u[0] * u[0]);
+            for i in 0..3 {
+                for j in 0..3 {
+                    let expected = if i != j { 0.0 } else if i == 0 { -1.0 } else { 1.0 };
+                    let got = inner(&metric, r, &legs[i], &legs[j]);
+                    assert!(
+                        (got - expected).abs() < tol,
+                        "g(e{i}, e{j}) = {got} (want {expected}) at t={t}, r={r}"
+                    );
+                }
+            }
+            assert!(det3(&[f.e0, f.e1, f.e2]) > 0.0, "right-handed frame at t={t}, r={r}");
+            let proj = inner(&metric, r, &f.e1, &d_r);
+            proj_min = proj_min.min(proj.abs());
+            if proj > 0.0 {
+                proj_pos = true;
+            } else {
+                proj_neg = true;
+            }
+            let xi = local(r, &f.e1);
+            if let Some(p) = prev {
+                let overlap = -p[0] * xi[0] + p[1] * xi[1] + p[2] * xi[2];
+                assert!(
+                    overlap > 0.9,
+                    "e1 reversed between steps at t={t}, r={r}: overlap {overlap}"
+                );
+                overlap_min = overlap_min.min(overlap);
+            }
+            prev = Some(xi);
+            r_min = r_min.min(r);
+            // u^t = dt / d tau, so one tick of the observer's clock is this much coordinate time.
+            let dt = (d_tau * u[0]).min(0.05);
+            t += dt;
+            bob.step(&metric, t, dt);
+            steps += 1;
+        }
+        println!(
+            "walked to r = {r_min:.4} (r+ = {r_plus:.4}, r- = {r_minus:.4}) by t = {t:.2} in \
+             {steps} steps; smallest |g(e1, d_r)| seen = {proj_min:.3e}; smallest step overlap \
+             of e1 in the raindrop frame = {overlap_min:.4}"
+        );
+        assert!(r_min < r_plus, "the walk crossed r+ (reached r = {r_min})");
+        assert!(
+            proj_pos && proj_neg,
+            "g(e1, d_r) must change sign along this worldline, or the flip was never in reach"
+        );
     }
 }
