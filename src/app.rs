@@ -2,7 +2,7 @@ use crate::gui::cauchy_effects::CauchyEffects;
 use crate::gui::controls::{
     AppControls, DISTANT_CLOCK_GRID_TIP, ReferenceFrame, SignalViews, StepMode,
 };
-use crate::gui::spacetime_canvas::{REST_FRAME_TIP, SpacetimeCanvas};
+use crate::gui::spacetime_canvas::{KEEP_SURFACE_FRAMED_TIP, REST_FRAME_TIP, SpacetimeCanvas};
 use crate::gui::spatial_canvas::{FrontStyle, SpatialCanvas};
 use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
@@ -346,6 +346,15 @@ impl eframe::App for SpacetimeApp {
                                 });
                             ui.checkbox(&mut self.controls.show_distant_clock_grid, "Distant clock grid")
                                 .on_hover_text(DISTANT_CLOCK_GRID_TIP);
+                            // Only the rest frames have a window of their own to keep; the
+                            // foliation view's zoom is a window on r that the user pans.
+                            if self.controls.frame_of_ref != ReferenceFrame::DistantObserver {
+                                ui.checkbox(
+                                    &mut self.spacetime_canvas.keep_surface_framed,
+                                    "Auto-zoom",
+                                )
+                                .on_hover_text(KEEP_SURFACE_FRAMED_TIP);
+                            }
                         });
                         self.spacetime_canvas.render(
                             ui,

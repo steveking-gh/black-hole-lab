@@ -43,6 +43,43 @@ const SECONDS_PER_YEAR: f64 = 86400.0 * 365.25;
 /// rounding up to a round step, for the whole fall: it is set by the zoom and nothing else.
 pub const MIN_GRID_PX: f32 = 28.0;
 
+/// Tightest window the rest-frame view will open to, in M of the local chart's xi. The gap an
+/// observer freezing onto the far branch of r- has left when `geodesic::U_T_STALL` stops the
+/// worldline is about 1e-10 M, and r - r- is resolved in f64 down to an ulp of r, about 1e-16 M,
+/// so a floor of 1e-12 M leaves the whole of the approach the integrator can be trusted for on the
+/// zoomable side of it while staying four decades clear of the arithmetic's own floor.
+const FRAME_MAX_R_MIN: f64 = 1e-12;
+
+/// The rest-frame view's default window, and the widest that the automatic framing will open it to.
+/// The framing only ever tightens, so an observer with nothing close ahead of them is drawn at the
+/// scale the view has always opened on.
+const FRAME_MAX_R_DEFAULT: f64 = 5.5;
+
+/// Where up the canvas the automatic framing puts the surface it is framing, as a fraction of the
+/// half-height. Three tenths leaves the light cone below it room to be a cone.
+const FRAME_SURFACE_FRACTION: f32 = 0.30;
+
+/// How much of the way to the wanted window one frame of the automatic zoom travels, as an exponent
+/// on the ratio of the two. Log-lerping rather than snapping keeps the picture from strobing: on
+/// the approach to r- the gap closes by a factor of e every 1/kappa_- of coordinate time, which at
+/// a = 0.9 is 2.6 M, and a zoom that jumped to each frame's answer would jitter at exactly that
+/// rate.
+const FRAME_ZOOM_LERP: f64 = 0.15;
+
+/// How many fine zoom steps one held-shift scroll event is worth. egui smooths a notch of the wheel
+/// over a few frames, so twenty per frame works out at about a decade of zoom per notch of the
+/// hand - and the range between the view the app opens on and an observer's last femtoseconds is
+/// eleven decades, which at the fine step alone is a thousand scroll events.
+const COARSE_ZOOM_STEPS: i32 = 20;
+
+/// Hover gloss on the automatic framing.
+pub const KEEP_SURFACE_FRAMED_TIP: &str =
+"Re-derive the rest-frame view's zoom every frame so that the next surface the observer meets - the outer horizon, the Cauchy horizon, or the ring - stays on the canvas.
+
+A surface r = const crosses the observer's own time axis at xi^0 = (r - r_h) / |dr/dtau| exactly: the proper time they have left before they reach it. The framing follows that one number, so it needs no special case for the last moments - and on the approach to the far branch of r-, where the gap closes like exp(-kappa_- t) while the observer's remaining proper time shrinks with it, it is the only way to see the two of them at once.
+
+It only ever tightens the view. Any turn of the wheel switches it off.";
+
 /// Smallest vertical gap, in points at `font_scale` = 1, between two *labelled* lines of that grid.
 /// A 9-point monospace row is about 12 points tall; this leaves a little air around it. It only
 /// ever bites at the very top of the ladder, where no rung is coarse enough to reach `MIN_GRID_PX`
@@ -58,10 +95,21 @@ const CLOCK_LABEL_MIN_PX: f32 = 16.0;
 /// line every 36 µs would get one every 1 ms - two hundred times too coarse, which on a canvas a
 /// few hundred points tall is one line and no grid at all.)
 ///
-/// Microseconds and milliseconds are at the bottom because for a 10 solar-mass hole one M of
-/// coordinate time is 49 microseconds, and outside the hole u^t is of order 1, so the grid an
+/// Microseconds and milliseconds are in the middle of it because for a 10 solar-mass hole one M
+/// of coordinate time is 49 microseconds, and outside the hole u^t is of order 1, so the grid an
 /// exterior observer wants is measured in tens of microseconds.
-const CLOCK_UNITS: [(f64, &[f64], &str); 6] = [
+///
+/// It runs on down to femtoseconds for the approach to r-. An observer asymptoting to the far
+/// branch of the Cauchy horizon is a finite and *shrinking* proper time from it - the r- line
+/// crosses their own time axis at exactly Delta r / u^r (see `LocalFrame::surface_r_const`) - and
+/// at the point where `geodesic::U_T_STALL` stops the worldline that is about two femtoseconds for
+/// a ten solar-mass hole. A ladder that stopped at the microsecond could not put a single line
+/// between them and the horizon there, which is the one place in the app where the number is the
+/// whole story.
+const CLOCK_UNITS: [(f64, &[f64], &str); 9] = [
+    (1e-15, &[1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0], "fs"),
+    (1e-12, &[1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0], "ps"),
+    (1e-9, &[1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0], "ns"),
     (1e-6, &[1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0], "µs"),
     (1e-3, &[1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0], "ms"),
     (1.0, &[1.0, 2.0, 5.0, 10.0, 20.0, 30.0], "s"),
@@ -181,15 +229,21 @@ pub fn distant_clock_grid_step(
 }
 
 /// A compact, signed reading of the distant clock `seconds` away from the observer's now: the label
-/// on one line of the grid. "+5 min", "-2 h", "+1e6 yr", and "now" for the slice through the
-/// observer's own event.
+/// on one line of the grid. "+5 min", "-2 h", "+1e6 yr", "+20 fs", and "now" for the slice through
+/// the observer's own event.
 fn distant_clock_offset_label(seconds: f64) -> String {
     if seconds == 0.0 || !seconds.is_finite() {
         return "now".to_string();
     }
     let sign = if seconds < 0.0 { "-" } else { "+" };
     let s = seconds.abs();
-    let (value, unit) = if s < 1e-3 {
+    let (value, unit) = if s < 1e-12 {
+        (s * 1e15, "fs")
+    } else if s < 1e-9 {
+        (s * 1e12, "ps")
+    } else if s < 1e-6 {
+        (s * 1e9, "ns")
+    } else if s < 1e-3 {
         (s * 1e6, "µs")
     } else if s < 1.0 {
         (s * 1e3, "ms")
@@ -537,6 +591,15 @@ pub struct SpacetimeCanvas {
     pub r_offset: f64,
     pub time_window: f64,
     pub time_offset: f64,
+    /// The rest-frame view's window, in M of the local chart's xi across the full width. It is its
+    /// own number rather than `max_r` because the two views work at scales that have nothing to do
+    /// with each other: the foliation view looks at whole M of r, while a rest frame closing on r-
+    /// is interesting at 1e-10 M of xi. Sharing one would mean every trip into an observer's last
+    /// femtoseconds left the foliation view at a window it can draw nothing in.
+    pub frame_max_r: f64,
+    /// Keep the next surface the focus observer meets framed on the rest-frame view, re-deriving
+    /// the zoom every frame. See `KEEP_SURFACE_FRAMED_TIP`.
+    pub keep_surface_framed: bool,
     /// Where the user has dragged each info box on this canvas, per diagram and per observer.
     pub telemetry: TelemetryBoxes,
 }
@@ -548,6 +611,8 @@ impl Default for SpacetimeCanvas {
             r_offset: 0.0,
             time_window: 14.0,
             time_offset: 0.0,
+            frame_max_r: FRAME_MAX_R_DEFAULT,
+            keep_surface_framed: true,
             telemetry: TelemetryBoxes::default(),
         }
     }
@@ -584,20 +649,35 @@ impl SpacetimeCanvas {
             return;
         }
 
-        // Mouse wheel zoom on canvas (smooth 1/8th step size)
+        // Mouse wheel zoom on canvas (smooth 1/8th step size), with shift for the coarse step.
+        // The two views zoom their own windows: the foliation view's is a window on r, and panning
+        // it keeps the radius under the pointer where it is, while a rest frame's is a window on
+        // the local chart and is centred on the observer by construction.
         if response.hovered() {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll.abs() > 0.1 {
-                let step = 0.025;
-                let factor = if scroll > 0.0 { 1.0 - step } else { 1.0 + step };
-                let new_max_r = (self.max_r * factor).clamp(0.0001, 50.0);
-                if let Some(mpos) = response.hover_pos() {
-                    let mouse_frac = ((mpos.x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0) as f64;
-                    let mouse_r = self.r_offset + mouse_frac * self.max_r;
-                    self.r_offset = (mouse_r - mouse_frac * new_max_r).max(0.0);
+                let steps = if ui.input(|i| i.modifiers.shift) { COARSE_ZOOM_STEPS } else { 1 };
+                let factor = if scroll > 0.0 { 0.975f64.powi(steps) } else { 1.025f64.powi(steps) };
+                match frame_of_ref {
+                    ReferenceFrame::Bob | ReferenceFrame::Alice => {
+                        self.frame_max_r =
+                            (self.frame_max_r * factor).clamp(FRAME_MAX_R_MIN, 50.0);
+                        // The user has taken the wheel, so the automatic framing stands down until
+                        // they ask for it back - the same bargain the equatorial view's "Keep
+                        // centered" makes with a drag.
+                        self.keep_surface_framed = false;
+                    }
+                    ReferenceFrame::DistantObserver => {
+                        let new_max_r = (self.max_r * factor).clamp(0.0001, 50.0);
+                        if let Some(mpos) = response.hover_pos() {
+                            let mouse_frac = ((mpos.x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0) as f64;
+                            let mouse_r = self.r_offset + mouse_frac * self.max_r;
+                            self.r_offset = (mouse_r - mouse_frac * new_max_r).max(0.0);
+                        }
+                        self.max_r = new_max_r;
+                        self.time_window = (self.time_window * factor).clamp(0.005, 500.0);
+                    }
                 }
-                self.max_r = new_max_r;
-                self.time_window = (self.time_window * factor).clamp(0.005, 500.0);
             }
         }
 
@@ -1309,6 +1389,39 @@ Tick Enable Observer on Alice's or Bob's card",
         );
     }
 
+    /// The rest-frame window that puts the next surface the observer meets `FRAME_SURFACE_FRACTION`
+    /// of the way up the canvas, or `None` when there is nothing ahead of them to frame.
+    ///
+    /// A surface r = r_h crosses the observer's own time axis at xi^0 = (r_h - r) / u^r - set
+    /// xi^1 = 0 in the line `LocalFrame::surface_r_const` returns and everything else cancels - and
+    /// that is exactly the proper time they have left before they reach it. The smallest positive
+    /// one of those is the surface they are about to meet: the ring for a raindrop, r+ for anyone
+    /// still outside it, r- for a worldline with E - Omega_- L < 0 freezing onto the far branch.
+    ///
+    /// Nothing in the rule knows about horizons or about how far down the fall is: the same
+    /// expression asks for a window of M early on and of femtometres of r on the approach to r-,
+    /// where the observer's remaining proper time is femtoseconds and the gap is nine decades
+    /// below anything the view has ever had to draw.
+    fn framed_window(metric: &KerrSchild, obs: &Observer, rect: Rect) -> Option<f64> {
+        let u_r = obs.four_velocity(metric)[1];
+        if !u_r.is_finite() || u_r == 0.0 || rect.height() <= 1.0 || rect.width() <= 1.0 {
+            return None;
+        }
+        let ahead = [metric.outer_horizon(), metric.inner_horizon(), 0.0]
+            .into_iter()
+            .map(|r_h| (r_h - obs.r) / u_r)
+            .filter(|xi0| xi0.is_finite() && *xi0 > 0.0)
+            .fold(f64::INFINITY, f64::min);
+        if !ahead.is_finite() {
+            return None;
+        }
+        // xi^0 = ahead is to land FRAME_SURFACE_FRACTION of the half-height above the centre, and
+        // the view carries rect.width() / window * 0.45 points per M of xi.
+        let px_per_m = (FRAME_SURFACE_FRACTION * rect.height() * 0.5) as f64 / ahead;
+        let window = (rect.width() * 0.45) as f64 / px_per_m;
+        Some(window.clamp(FRAME_MAX_R_MIN, FRAME_MAX_R_DEFAULT))
+    }
+
     /// Render the focus observer's rest frame: the *first-order local inertial chart* defined by
     /// their orthonormal tetrad.
     ///
@@ -1337,8 +1450,18 @@ Tick Enable Observer on Alice's or Bob's card",
         font_scale: f32,
         show_distant_clock_grid: bool,
     ) {
+        // Keep the next surface the observer meets on the canvas, if the user has not taken the
+        // wheel. The window follows from one number and the same rule serves the whole fall, so
+        // there is no threshold anywhere in this and no special case for the last moments.
+        if self.keep_surface_framed
+            && let Some(target) = Self::framed_window(metric, focus_obs, rect)
+        {
+            let current = self.frame_max_r.max(FRAME_MAX_R_MIN);
+            self.frame_max_r = current * (target / current).powf(FRAME_ZOOM_LERP);
+        }
+
         let center = rect.center();
-        let scale = (rect.width() / (self.max_r as f32).max(1e-5)) * 0.45;
+        let scale = (rect.width() / (self.frame_max_r as f32).max(1e-12)) * 0.45;
         let to_screen = |xi1: f64, xi0: f64| -> Pos2 {
             Pos2::new(
                 center.x + (xi1 as f32) * scale,
@@ -1377,6 +1500,56 @@ Tick Enable Observer on Alice's or Bob's card",
             clock_grid.step_m / u_t
         } else {
             f64::INFINITY
+        };
+
+        // The head of the canvas: what one grid line is worth on each of the two clocks, and the
+        // ratio of those. It is laid out here, where the numbers are, and painted at the very end
+        // so that nothing covers it; `head_bottom` is where everything else may start.
+        //
+        // The first reading is the round step on the observer's own clock, fixed by the zoom and
+        // held for the whole fall (see `distant_clock_grid_step`); the second is that step times
+        // u^t, and is the one that runs away. Their ratio *is* u^t = dt/dtau, exactly - and once
+        // the two are in different units, 10 ms against 251 ms or 1 fs against 10 us, no eye
+        // compares them, so the number the picture actually turns on is the one to print.
+        let obs_color =
+            if focus_obs.name == "Alice" { Theme::ALICE_COLOR } else { Theme::BOB_COLOR };
+        let (head_lines, head_bottom) = if show_distant_clock_grid
+            && clock_proper_step.is_finite()
+            && clock_proper_step > 0.0
+        {
+            let font = egui::FontId::proportional(16.0 * font_scale);
+            let small = egui::FontId::proportional(12.0 * font_scale);
+            let distant = distant_clock_offset_label(clock_grid.step_m * seconds_per_m);
+            let ratio = if !u_t.is_finite() {
+                "1 : ∞   (dt/dτ)".to_string()
+            } else if u_t < 1e4 {
+                format!("1 : {u_t:.1}   (dt/dτ)")
+            } else {
+                format!("1 : {u_t:.2e}   (dt/dτ)")
+            };
+            let lines = vec![
+                vec![
+                    painter.layout_no_wrap(
+                        format!("{} on {}'s clock", clock_grid.label, focus_obs.name),
+                        font.clone(),
+                        obs_color,
+                    ),
+                    painter.layout_no_wrap("  =  ".to_string(), font.clone(), Theme::TEXT_MUTED),
+                    painter.layout_no_wrap(
+                        format!("{} on the distant clock", distant.trim_start_matches('+')),
+                        font,
+                        Theme::TEXT_BRIGHT,
+                    ),
+                ],
+                vec![painter.layout_no_wrap(ratio, small, Theme::TEXT_MUTED)],
+            ];
+            let height: f32 = lines
+                .iter()
+                .map(|line| line.iter().map(|g| g.rect.height()).fold(0.0, f32::max))
+                .sum();
+            (lines, rect.top() + 4.0 + height)
+        } else {
+            (Vec::new(), rect.top() + 18.0)
         };
         if show_distant_clock_grid && clock_proper_step.is_finite() && clock_proper_step > 0.0 {
             let spacing_px = (clock_proper_step as f32) * scale;
@@ -1484,7 +1657,7 @@ Tick Enable Observer on Alice's or Bob's card",
             let label = format!("{}\n{}\n{}", name, note, detail);
             let (label_pos, align) = if line.slope().abs() >= 1.0 {
                 // Steep line: hang the label off it, stacked down the top margin.
-                let y = (rect.top() + 26.0 + 36.0 * font_scale * (idx as f32)).min(rect.bottom() - 40.0);
+                let y = (head_bottom + 8.0 + 36.0 * font_scale * (idx as f32)).min(rect.bottom() - 40.0);
                 let x = segment_x_at_y(end_a, end_b, y)
                     .clamp(rect.left() + 6.0, rect.right() - 150.0 * font_scale);
                 (Pos2::new(x + 5.0, y), egui::Align2::LEFT_TOP)
@@ -1565,7 +1738,6 @@ Tick Enable Observer on Alice's or Bob's card",
             );
         }
 
-        let obs_color = if focus_obs.name == "Alice" { Theme::ALICE_COLOR } else { Theme::BOB_COLOR };
         painter.circle_filled(apex, 7.5, obs_color);
         painter.circle_stroke(apex, 9.5, Stroke::new(1.5, Color32::WHITE));
 
@@ -1650,38 +1822,19 @@ Tick Enable Observer on Alice's or Bob's card",
             font_scale,
         );
 
-        // The grid's two numbers, large, at the head of the canvas: the round step on the focus
-        // observer's own clock between two neighbouring lines, and what that same gap is worth on a
-        // clock at rest at infinity. The first is fixed by the zoom and holds for the whole fall
-        // (see `distant_clock_grid_step`); the second is that step times u^t, so it is the one that
-        // runs away, and watching it climb while the lines stay put is the point of the grid. Both
-        // are the spacing `surface_t_const` puts on the worldline - a simultaneity convention, not
-        // what the observer sees; see the checkbox's tip.
-        //
-        // It is laid out from the middle of the canvas outwards, which keeps it clear of the grid's
-        // own line labels down the left edge, and drawn last so that nothing is painted over it.
-        if show_distant_clock_grid && clock_proper_step.is_finite() && clock_proper_step > 0.0 {
-            let font = egui::FontId::proportional(16.0 * font_scale);
-            let distant = distant_clock_offset_label(clock_grid.step_m * seconds_per_m);
-            let parts = [
-                (format!("{} on {}'s clock", clock_grid.label, focus_obs.name), obs_color),
-                ("  =  ".to_string(), Theme::TEXT_MUTED),
-                (
-                    format!("{} on the distant clock", distant.trim_start_matches('+')),
-                    Theme::TEXT_BRIGHT,
-                ),
-            ];
-            let galleys: Vec<_> = parts
-                .into_iter()
-                .map(|(text, color)| painter.layout_no_wrap(text, font.clone(), color))
-                .collect();
-            let total: f32 = galleys.iter().map(|g| g.rect.width()).sum();
+        // Centred line by line, from the middle outwards, which keeps the head clear of the grid's
+        // own line labels down the left edge.
+        let mut y = rect.top() + 4.0;
+        for line in head_lines {
+            let total: f32 = line.iter().map(|g| g.rect.width()).sum();
+            let height = line.iter().map(|g| g.rect.height()).fold(0.0, f32::max);
             let mut x = (rect.center().x - total * 0.5).max(rect.left() + 4.0);
-            for galley in galleys {
+            for galley in line {
                 let width = galley.rect.width();
-                painter.galley(Pos2::new(x, rect.top() + 4.0), galley, Color32::WHITE);
+                painter.galley(Pos2::new(x, y), galley, Color32::WHITE);
                 x += width;
             }
+            y += height;
         }
     }
 }
@@ -2001,7 +2154,7 @@ mod canvas_tests {
         //    the view out - fewer points per M - never buys a finer step on the observer's clock.
         let mut previous = 0.0f64;
         let mut walk: Vec<String> = Vec::new();
-        for e in (-12..=6).rev() {
+        for e in (-12..=12).rev() {
             let zoom = 10.0f32.powi(e);
             let step = distant_clock_grid_step(1.0, zoom, secs, 1.0);
             assert!(
@@ -2016,7 +2169,7 @@ mod canvas_tests {
         // zoom up to the days at the shallowest. The span swept here is wider than the wheel's own
         // range, which is the point: the rung is a function of the scale, and no unit in that stretch
         // of the ladder is out of reach for want of the right u^t.
-        for unit in [" \u{b5}s", " ms", " s", " min", " hr", " day"] {
+        for unit in [" fs", " ps", " ns", " \u{b5}s", " ms", " s", " min", " hr", " day"] {
             assert!(
                 walk.iter().any(|l| l.ends_with(unit)),
                 "no rung in{unit} across the swept range of pixel scales: {walk:?}"
@@ -2047,7 +2200,7 @@ mod canvas_tests {
         println!(
             "distant clock grid: {} rungs, widest step ratio {worst_ratio:.3} ({} -> {}); u^t over \
              1e0..1e20 leaves the step at {} throughout, on-screen gap between {worst_gap:.2} and \
-             {widest_gap:.2} px (MIN_GRID_PX = {MIN_GRID_PX}); zoom 1e6..1e-12 px/M -> {walk:?}; at \
+             {widest_gap:.2} px (MIN_GRID_PX = {MIN_GRID_PX}); zoom 1e12..1e-12 px/M -> {walk:?}; at \
              the default view the step is {} = {:.4} M of Bob's own time, {spacing_px:.1} px apart, \
              {fit} lines in a 500 px view",
             ladder.len(),
@@ -2058,13 +2211,17 @@ mod canvas_tests {
             exterior.step_m / 1.5
         );
 
-        // Microseconds are reachable at the bottom: a supermassive hole, where one M is hours, puts
-        // even a coarse grid far below a second of the chart's own time unit.
-        let tiny = distant_clock_grid_step(1.0, 1e6, 1e-3, 1.0);
+        // The bottom of the ladder is what the approach to r- needs. When `geodesic::U_T_STALL`
+        // stops a worldline freezing onto the far branch it has about 1e-10 M of r left, which for
+        // a ten solar-mass hole is a couple of femtoseconds of the faller's own time; the automatic
+        // framing puts that on the canvas at around 1.8e12 points per M, and the rung wanted there
+        // is under one femtosecond. A ladder stopping at the microsecond would answer with a single
+        // line ten decades off the canvas.
+        let last_moments = distant_clock_grid_step(1e10, 1.8e12, TEN_SOLAR_SECONDS_PER_M, 1.0);
         assert!(
-            tiny.label.ends_with(" \u{b5}s"),
-            "the bottom of the ladder is microseconds, got {}",
-            tiny.label
+            last_moments.label.ends_with(" fs"),
+            "the bottom of the ladder is femtoseconds, got {}",
+            last_moments.label
         );
         // A bigger font asks for more room and so for a coarser grid, never a finer one.
         let small = distant_clock_grid_step(1e6, px_per_m, secs, 1.0);
@@ -2094,8 +2251,14 @@ mod canvas_tests {
         let alice: Option<Observer> = None;
         let signal = SignalField::default();
         // Zoomed in on the frame, so that the chosen rung of the ladder sits close to its own
-        // minimum gap and a whole run of lines lands inside the rectangle rather than one.
-        let mut canvas = SpacetimeCanvas { max_r: 0.6, ..Default::default() };
+        // minimum gap and a whole run of lines lands inside the rectangle rather than one. The
+        // automatic framing is off: this test is about the grid, and the framing would set the
+        // zoom from Bob's distance to the next surface instead.
+        let mut canvas = SpacetimeCanvas {
+            frame_max_r: 0.6,
+            keep_surface_framed: false,
+            ..Default::default()
+        };
 
         let ctx = egui::Context::default();
         ctx.set_fonts(egui::FontDefinitions::empty());
@@ -2174,10 +2337,110 @@ mod canvas_tests {
     }
 
     #[test]
+    fn test_the_automatic_framing_follows_the_proper_time_to_the_next_surface() {
+        use crate::physics::observer::{Observer, WorldlineParams};
+
+        let metric = KerrSchild::new(1.0, 0.90);
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 500.0));
+        let rp = metric.outer_horizon();
+        let rm = metric.inner_horizon();
+
+        // What the rule is: with the window it returns, the framed surface lands
+        // FRAME_SURFACE_FRACTION of the way up the half-height. The surface r = r_h crosses the
+        // observer's own time axis at xi^0 = (r_h - r) / u^r, so that is the number checked here -
+        // the same expression `LocalFrame::surface_r_const` puts on the canvas.
+        let lands_at = |obs: &Observer, r_h: f64, window: f64| -> f32 {
+            let scale = (rect.width() / window as f32) * 0.45;
+            let xi0 = (r_h - obs.r) / obs.four_velocity(&metric)[1];
+            xi0 as f32 * scale
+        };
+        let wanted_px = FRAME_SURFACE_FRACTION * rect.height() * 0.5;
+
+        // 1. Just above the outer horizon, the next surface is r+ and not the two below it: a
+        //    raindrop at r = 1.5 M is 0.047 M of proper time from r+ and 0.7 M from r-.
+        let mut near = Observer::new_with_phi(
+            &metric, "Bob", 0.0, 1.5, 0.0, 0.0, WorldlineParams::default(),
+        );
+        near.step(&metric, 0.0, 1e-6);
+        let window = SpacetimeCanvas::framed_window(&metric, &near, rect)
+            .expect("a falling observer always has a surface ahead of them");
+        assert!(
+            (lands_at(&near, rp, window) - wanted_px).abs() < 0.5,
+            "r+ landed at {} px, wanted {wanted_px}",
+            lands_at(&near, rp, window)
+        );
+        assert!(
+            lands_at(&near, rm, window) > wanted_px,
+            "r- is further ahead than r+ and must be framed looser, not tighter"
+        );
+
+        // 2. Far out, where nothing is close, the framing stands at the view's default: it only
+        //    ever tightens, so the picture the app opens on is the one it has always opened on.
+        let mut far = Observer::new_with_phi(
+            &metric, "Bob", 0.0, 4.5, 0.0, 0.0, WorldlineParams::default(),
+        );
+        far.step(&metric, 0.0, 1e-6);
+        assert_eq!(
+            SpacetimeCanvas::framed_window(&metric, &far, rect),
+            Some(FRAME_MAX_R_DEFAULT)
+        );
+
+        // 3. The case it exists for. E = 1, L = 2.2 at a = 0.90 has E - Omega_- L < 0, so this
+        //    worldline never crosses r-: it freezes onto the far branch, and `geodesic::U_T_STALL`
+        //    stops it with the gap at about 1e-10 M. The framing is asked for no special case and
+        //    given none - the same expression that wanted 5.5 M at r = 4.5 wants a window nine
+        //    decades below that here - and at the scale it asks for, the clock ladder's own rule
+        //    picks a rung in femtoseconds.
+        let mut falling = Observer::new_with_phi(
+            &metric, "Bob", 0.0, 4.5, 0.0, 0.0, WorldlineParams::new(1.0, 2.2, false),
+        );
+        let mut guard = 0;
+        while !falling.has_ended() && guard < 20_000 {
+            guard += 1;
+            falling.step(&metric, 0.0, 0.05);
+        }
+        assert!(falling.has_ended(), "the worldline must reach the freeze; r = {}", falling.r);
+        let gap = falling.r - rm;
+        let u = falling.four_velocity(&metric);
+        let tau_left = gap / u[1].abs();
+        let window = SpacetimeCanvas::framed_window(&metric, &falling, rect)
+            .expect("the frozen worldline still has r- ahead of it");
+        let scale = (rect.width() / window as f32) * 0.45;
+        let rung = distant_clock_grid_step(u[0], scale, TEN_SOLAR_SECONDS_PER_M, 1.0);
+        println!(
+            "frozen at r - r- = {gap:.3e} M with u^t = {:.3e}, dr/dtau = {:.3}: {tau_left:.3e} M of \
+             Bob's own time left ({:.2e} s for a ten solar-mass hole); the framing asks for a \
+             {window:.3e} M window, {scale:.3e} px/M, and the ladder answers {}",
+            u[0],
+            u[1],
+            tau_left * TEN_SOLAR_SECONDS_PER_M,
+            rung.label
+        );
+        assert!(
+            (lands_at(&falling, rm, window) - wanted_px).abs() < 0.5,
+            "r- landed at {} px, wanted {wanted_px}",
+            lands_at(&falling, rm, window)
+        );
+        assert!(
+            window < 1e-8,
+            "the last moments need a window nine decades below the default, got {window:e}"
+        );
+        assert!(
+            rung.label.ends_with(" fs"),
+            "at the framed scale the grid is a femtosecond ruler, got {}",
+            rung.label
+        );
+    }
+
+    #[test]
     fn test_a_distant_clock_label_names_the_offset_in_its_own_unit_with_a_sign() {
         // The label on one line: which way it is from the observer's now, and how far in the
         // largest unit that leaves a number worth reading.
         assert_eq!(distant_clock_offset_label(0.0), "now");
+        assert_eq!(distant_clock_offset_label(2e-15), "+2 fs");
+        assert_eq!(distant_clock_offset_label(-5e-13), "-500 fs");
+        assert_eq!(distant_clock_offset_label(2e-11), "+20 ps");
+        assert_eq!(distant_clock_offset_label(1e-7), "+100 ns");
         assert_eq!(distant_clock_offset_label(5e-5), "+50 \u{b5}s");
         assert_eq!(distant_clock_offset_label(-2e-3), "-2 ms");
         assert_eq!(distant_clock_offset_label(3.0), "+3 s");
