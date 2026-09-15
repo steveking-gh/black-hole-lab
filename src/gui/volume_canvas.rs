@@ -8,8 +8,9 @@ use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::Observer;
 use crate::physics::tetrad::light_cone_generators;
-use crate::physics::wavefront::SignalField;
+use crate::physics::wavefront::{NullRay, SignalField};
 use egui::{Color32, Pos2, Stroke, Vec2};
+use std::time::{Duration, Instant};
 
 /// How close to 0 or to +/-1 a basis component has to be before it is taken to *be* 0 or +/-1.
 ///
@@ -377,6 +378,119 @@ const CONE_SAMPLES: usize = 36;
 /// reads as a gradient and coarse enough that a long infall is not a thousand shapes.
 const WORLDLINE_RUN: usize = 32;
 
+/// How many null generators the *exact* past cone is integrated on. The same 36 as the local cone,
+/// so that the curved surface and the straight fan at its apex are two drawings of one set of null
+/// directions rather than two different samplings of it.
+const PAST_CONE_RAYS: usize = 36;
+
+/// M of coordinate time between consecutive samples of a past-cone generator.
+///
+/// It is the spacing of the drawn polyline, not the integrator's step: `NullRay::step_back`
+/// substeps each of these intervals by what the ray is actually doing inside it, so this number
+/// buys resolution in the picture and not accuracy in the geodesic. At 0.05 M a 10 M window is
+/// 200 samples a generator, which draws a surface whose seams are well under a pixel at the zoom
+/// the view opens on.
+const PAST_CONE_DT: f64 = 0.05;
+
+/// While the focus event keeps moving, at most one rebuild of the past cone per this many
+/// milliseconds.
+///
+/// This is what keeps play smooth. A build is a few ms of integration - 36 rays times a couple of
+/// hundred steps - which is nothing once and is the whole frame budget sixty times a second. So a
+/// cone whose key has gone stale but which was built less than this ago is drawn again as it
+/// stands, and the frame asks for a repaint after the throttle expires so the fresh one arrives
+/// without the user having to touch anything. Paused, the key is stable and it builds exactly once.
+const PAST_CONE_REBUILD_MS: u128 = 150;
+
+/// How many sample rows of the past cone's surface go into one mesh.
+///
+/// One mesh per quad would put ~7000 primitives through the depth sort for one cone; one mesh for
+/// the whole surface would be a single primitive sorted at one depth and would interleave wrongly
+/// with the pipes it passes through. Eight rows is the compromise: a few hundred meshes, each
+/// short enough that its own centroid is a fair place to sort it.
+const PAST_CONE_CHUNK: usize = 8;
+
+/// What a built past cone belongs to. If any of it changes the cone is a cone of a different event
+/// in a different spacetime and has to be integrated again; if none of it changes the cached rays
+/// are still exactly right, however the camera has been dragged.
+#[derive(Clone, PartialEq, Debug)]
+struct PastConeKey {
+    name: String,
+    t: f64,
+    r: f64,
+    phi: f64,
+    m: f64,
+    a: f64,
+    t_min: f64,
+}
+
+/// The exact past light cone of one event: the null geodesics through it, run backwards.
+struct PastCone {
+    key: PastConeKey,
+    /// Per generator, the (t, r, phi) samples of that geodesic: the event itself first, then
+    /// earlier and earlier. Kept in coordinates rather than projected, so that a camera move
+    /// redraws the same integration.
+    rays: Vec<Vec<[f64; 3]>>,
+    /// When this cone was integrated, for the rebuild throttle.
+    built: Instant,
+}
+
+/// Integrate the past light cone of the observer's current event down to `t_min`.
+///
+/// The past cone of an event *is* the set of null geodesics through it, run the other way:
+/// `ray_rhs` is autonomous in t, so `NullRay::step_back` integrates the same curve backwards
+/// rather than solving a different problem, and what comes back is the exact locus of everything
+/// whose signals reach this event - not a cone drawn at some opening angle. That is the picture
+/// the app's central claim needs: as the focus observer closes on the far branch of r-, this
+/// surface's footprint at another observer's radius climbs without bound, so every ingoing photon
+/// from any later time still gets to them.
+///
+/// The generators are taken in the *raindrop* frame at the event rather than in the observer's
+/// own, for the reason `light_cone_generators` gives: the set of null directions is a property of
+/// the event and does not depend on the frame, but where along the rim the 36 samples fall does,
+/// and at u^t ~ 1e10 on the approach to r- the observer's own frame aberrates all of them into one
+/// point and leaves the rest of the cone undrawn. The raindrop congruence exists at every radius,
+/// both horizons included, so the rim is evenly sampled everywhere the view can be looked at.
+///
+/// A generator that dies is one that came out of the ring: run backwards it reached R_STOP, where
+/// the chart's equation is left alone, so its history stops there and its share of the surface
+/// simply ends. Its dead state is not recorded, because a dead `NullRay` is carried on the field
+/// clock without moving and its (t, r, phi) would claim the ray sat at the ring for the rest of the
+/// window. A generator whose past hugs a horizon needs no special case at all: its dr/dt decays to
+/// zero and the steps get cheap.
+fn build_past_cone(metric: &KerrSchild, obs: &Observer, t_min: f64) -> PastCone {
+    let tetrad = Observer::raindrop_tetrad(metric, obs.r);
+    let u = tetrad.e0;
+    let mut rays = Vec::with_capacity(PAST_CONE_RAYS);
+    for i in 0..PAST_CONE_RAYS {
+        let alpha = std::f64::consts::TAU * (i as f64) / (PAST_CONE_RAYS as f64);
+        let mut ray =
+            NullRay::from_local_direction(metric, obs.t, obs.r, obs.phi, &tetrad, alpha, &u);
+        let mut samples = vec![[ray.t, ray.r, ray.phi]];
+        while ray.alive() && ray.t > t_min {
+            ray.step_back(metric, PAST_CONE_DT);
+            if !ray.alive() {
+                break;
+            }
+            samples.push([ray.t, ray.r, ray.phi]);
+        }
+        rays.push(samples);
+    }
+    PastCone {
+        key: PastConeKey {
+            name: obs.name.clone(),
+            t: obs.t,
+            r: obs.r,
+            phi: obs.phi,
+            m: metric.m,
+            a: metric.a,
+            t_min,
+        },
+        rays,
+        built: Instant::now(),
+    }
+}
+
 /// The 2D+1 volume: the equatorial plane laid out as a floor and ingoing Kerr-Schild time t drawn
 /// as height, with the present at the floor and the past below it.
 ///
@@ -407,6 +521,14 @@ pub struct VolumeCanvas {
     /// Off by default: a dozen translucent fans stacked down a worldline is the picture of how the
     /// cones tip over, and it is also, on a first look at the view, a mess.
     show_ghost_cones: bool,
+    /// Draw the exact past light cone of the focus observer's current event: the null geodesics
+    /// through it integrated backwards to the bottom of the window, as a surface. On by default,
+    /// because it is the one thing this view can show that no other picture in the app can.
+    show_past_cone: bool,
+    /// That surface, held between frames. Integrating it is the only work in this view that a
+    /// camera drag must not repeat, so it is cached against the event it belongs to; see
+    /// `PastConeKey` and `PAST_CONE_REBUILD_MS`.
+    past_cone: Option<PastCone>,
     /// Where the user has dragged each observer's info box on this canvas.
     pub telemetry: TelemetryBoxes,
     /// The screen offset of the focus observer's floor point as the last frame projected it.
@@ -429,6 +551,8 @@ impl Default for VolumeCanvas {
             time_offset: 0.0,
             centred_on: None,
             show_ghost_cones: false,
+            show_past_cone: true,
+            past_cone: None,
             telemetry: TelemetryBoxes::pinning(),
             focus_offset: Vec2::ZERO,
         }
@@ -791,6 +915,117 @@ impl VolumeCanvas {
             }
         }
 
+        // 7. The exact past light cone of the focus event, as a surface.
+        //
+        // Section 6 draws a *local* cone at every observer: the null directions at the event, run
+        // straight for a fraction of the window, which says which way light can go and nothing
+        // about where it has been. This says where it has been. Every generator is integrated
+        // backwards to the bottom of the window, so the surface is the true locus of the events
+        // whose light reaches the focus observer now - the boundary of everything they can
+        // currently see. Near the far branch of r- it is the whole argument in one picture: the
+        // surface stops climbing away from r- and instead sweeps up the pipe, so it crosses another
+        // observer's worldline at later and later t without bound.
+        //
+        // The focus is whoever the view is anchored on, falling back to Bob and then Alice, so the
+        // cone is drawn in the global foliation too - it is a fact about an event, not about a
+        // choice of frame, and the view drawn from nobody's rest frame is the one where that is
+        // easiest to say.
+        let cone_focus = self.show_past_cone.then(|| focus.or(bob).or(alice)).flatten();
+        if let Some(obs) = cone_focus {
+            let key = PastConeKey {
+                name: obs.name.clone(),
+                t: obs.t,
+                r: obs.r,
+                phi: obs.phi,
+                m: metric.m,
+                a: metric.a,
+                t_min,
+            };
+            if self.past_cone.as_ref().map(|c| &c.key) != Some(&key) {
+                // Stale - but a rebuild is a few ms, and doing one on every frame of a played
+                // infall would cost more than everything else this view draws put together. So a
+                // cone built inside the throttle is drawn again as it stands and the fresh one is
+                // asked for by a timed repaint, which arrives whether or not the user touches
+                // anything. Paused, the key stops changing and the first build is the only one.
+                match self.past_cone.as_ref().map(|c| c.built.elapsed()) {
+                    Some(since) if since.as_millis() < PAST_CONE_REBUILD_MS => {
+                        let throttle = Duration::from_millis(PAST_CONE_REBUILD_MS as u64);
+                        ui.ctx().request_repaint_after(throttle.saturating_sub(since));
+                    }
+                    _ => self.past_cone = Some(build_past_cone(metric, obs, t_min)),
+                }
+            }
+            if let Some(cone) = &self.past_cone {
+                // Half the density of the local cone's fill: this is a surface hundreds of rows
+                // deep rather than a single fan, and at the fan's alpha the overlap where it folds
+                // back on itself paints solid.
+                let (_, past_fill, edge) =
+                    Theme::cone_colours_at(&obs.name, Theme::VOLUME_CONE_FILL_ALPHA / 2);
+                let to_world = |s: [f64; 3]| {
+                    let (x, y) = metric.cartesian_position(s[1], s[2]);
+                    [x, y, z_of(s[0])]
+                };
+                let n = cone.rays.len();
+                for (i, a) in cone.rays.iter().enumerate() {
+                    // Consecutive generators, closing the last back onto the first: the strip
+                    // between them is the piece of the cone's surface they bound.
+                    let b = &cone.rays[(i + 1) % n];
+                    // Only rows that exist on both. Where one of the two died at the ring the
+                    // surface simply ends there rather than being stretched to meet its neighbour.
+                    let rows = a.len().min(b.len());
+                    let mut k0 = 0;
+                    while k0 + 1 < rows {
+                        let k1 = (k0 + PAST_CONE_CHUNK).min(rows - 1);
+                        let mut mesh = egui::Mesh::default();
+                        let mut corners: Vec<[f64; 3]> = Vec::with_capacity(4 * (k1 - k0));
+                        for k in k0..k1 {
+                            let quad = [
+                                to_world(a[k]),
+                                to_world(b[k]),
+                                to_world(b[k + 1]),
+                                to_world(a[k + 1]),
+                            ];
+                            let base = mesh.vertices.len() as u32;
+                            for c in quad {
+                                mesh.colored_vertex(project(c).0, past_fill);
+                                corners.push(c);
+                            }
+                            // The same diagonal split as `quad_mesh`, with the corners given in
+                            // order around the quad.
+                            mesh.add_triangle(base, base + 1, base + 2);
+                            mesh.add_triangle(base, base + 2, base + 3);
+                        }
+                        let depth = centroid_depth(&camera, centre, corners.into_iter());
+                        buf.push(Layer::Below, depth, Prim::Mesh(mesh));
+                        // One row of overlap, so the chunks meet instead of leaving a gap.
+                        k0 = k1;
+                    }
+                }
+                // Every fourth generator drawn as a line, so the eye can follow one photon's
+                // history across a surface that is otherwise a wash. Nine of them: enough to read
+                // the twist frame dragging puts into the cone, few enough not to fill it in.
+                for i in (0..n).step_by(4) {
+                    let points: Vec<[f64; 3]> = cone.rays[i].iter().map(|s| to_world(*s)).collect();
+                    let mut start = 0;
+                    while start + 1 < points.len() {
+                        let end = (start + WORLDLINE_RUN).min(points.len());
+                        let run = &points[start..end];
+                        let depth = centroid_depth(&camera, centre, run.iter().copied());
+                        buf.push(
+                            Layer::Below,
+                            depth,
+                            Prim::Line {
+                                points: run.iter().map(|p| project(*p).0).collect(),
+                                stroke: Stroke::new(0.8, edge),
+                                closed: false,
+                            },
+                        );
+                        start = end - 1;
+                    }
+                }
+            }
+        }
+
         // The scene is complete, so the painter's algorithm can run: everything below the floor
         // farthest first, then the floor, then everything above it. Nothing is painted before this
         // point, because the scene is built surface by surface and observer by observer rather
@@ -933,6 +1168,12 @@ impl VolumeCanvas {
             if ui.checkbox(&mut self.show_ghost_cones, "Ghost cones along the trail").changed() {
                 ui.close();
             }
+            if ui
+                .checkbox(&mut self.show_past_cone, "Exact past cone of the focus event")
+                .changed()
+            {
+                ui.close();
+            }
             ui.separator();
             for (label, preset) in
                 [("Top", Preset::Top), ("Side", Preset::Side), ("3/4", Preset::ThreeQuarter)]
@@ -1005,13 +1246,20 @@ impl VolumeCanvas {
                  drag: orbit  shift-drag: pan  wheel: zoom  ctrl-wheel: time scale  \
                  right-click: menu\n\
                  below the floor: the past · above: the future · pipes: r = const · cones: exact \
-                 null generators",
+                 null generators{}",
                 camera.yaw.to_degrees(),
                 camera.pitch.to_degrees(),
                 camera.scale,
                 t_scale,
                 t_min,
                 t_max,
+                // Terse, on the end of the line that says what the other shapes are, and only when
+                // the surface is actually on screen to be named.
+                if self.show_past_cone {
+                    "\npast cone: the event's null geodesics run backwards"
+                } else {
+                    ""
+                },
             ),
             legend_font.clone(),
             Theme::TEXT_MUTED,
@@ -1124,6 +1372,10 @@ mod tests {
     }
 
     /// The same, with the cones along the trail turned on as the right-click menu turns them on.
+    ///
+    /// The exact past cone is off in both, and turned on only by the tests that are about it: it
+    /// is the one thing in this view whose cost is an integration rather than a projection, and
+    /// the tests that sweep every region and both presets draw dozens of frames apiece.
     fn volume_frame_with(
         metric: &KerrSchild,
         bob: Option<&Observer>,
@@ -1132,13 +1384,27 @@ mod tests {
         show_distant_clock_grid: bool,
         ghosts: bool,
     ) -> Vec<Painted> {
-        let ctx = egui::Context::default();
-        ctx.set_fonts(egui::FontDefinitions::empty());
         let mut canvas = VolumeCanvas {
             camera: Camera::preset(preset, 48.0, Vec2::ZERO, 1.0),
             show_ghost_cones: ghosts,
+            show_past_cone: false,
             ..Default::default()
         };
+        volume_frame_on(&mut canvas, metric, bob, frame_of_ref, show_distant_clock_grid)
+    }
+
+    /// One frame drawn into a canvas the caller owns, so that a test can ask what the frame left
+    /// behind on it - the past cone's cache being the one piece of scene state this canvas keeps
+    /// from one frame to the next.
+    fn volume_frame_on(
+        canvas: &mut VolumeCanvas,
+        metric: &KerrSchild,
+        bob: Option<&Observer>,
+        frame_of_ref: ReferenceFrame,
+        show_distant_clock_grid: bool,
+    ) -> Vec<Painted> {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
         let signal = SignalField::default();
         // Every worldline stands at the simulation clock, so the floor is the observer's own now.
         let clock = bob.map_or(0.0, |obs| obs.t);
@@ -1161,6 +1427,26 @@ mod tests {
         let shapes = painted(&output);
         output.drop_without_applying_deltas();
         shapes
+    }
+
+    /// One frame with the exact past cone switched as the right-click menu switches it.
+    fn volume_frame_past_cone(
+        metric: &KerrSchild,
+        bob: &Observer,
+        show_past_cone: bool,
+    ) -> Vec<Painted> {
+        let mut canvas = VolumeCanvas {
+            camera: Camera::preset(Preset::ThreeQuarter, 48.0, Vec2::ZERO, 1.0),
+            show_past_cone,
+            ..Default::default()
+        };
+        volume_frame_on(
+            &mut canvas,
+            metric,
+            Some(bob),
+            ReferenceFrame::DistantObserver,
+            false,
+        )
     }
 
     /// The same frame from the equatorial view, which the Top preset has to reproduce.
@@ -1388,6 +1674,237 @@ mod tests {
             );
             println!("{half} half: {} vertices, apex at {:?}", found.0, found.1);
         }
+    }
+
+    #[test]
+    fn test_the_past_cone_rays_retrace_forward_onto_the_focus_event() {
+        // The claim the surface makes is that every point of it is joined to the focus event by a
+        // null geodesic. Nothing about the drawing checks that - it would look exactly the same if
+        // the backwards integration had quietly wandered onto some other curve - so the test walks
+        // each generator back the way `build_past_cone` walked it and then forwards again by the
+        // same steps, and asks to be put back on the event it started from. 1e-6 is the tolerance
+        // `test_ray_step_back_retraces_the_forward_path` measures the scheme's own asymmetry
+        // against in `wavefront`; the two directions do not cut the interval in the same places,
+        // and that difference is all that is allowed to be left over.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let bob = bob_at(&metric, 3.0);
+        let t_min = bob.t - 5.0;
+
+        let started = Instant::now();
+        let cone = build_past_cone(&metric, &bob, t_min);
+        println!(
+            "build_past_cone over {:.1} M at {PAST_CONE_RAYS} rays and dt = {PAST_CONE_DT}: {:?}",
+            bob.t - t_min,
+            started.elapsed()
+        );
+        let long = build_past_cone(&metric, &bob, bob.t - 10.0);
+        println!(
+            "and over 10 M: {:?} ({} samples on the longest generator)",
+            started.elapsed(),
+            long.rays.iter().map(Vec::len).max().unwrap_or(0)
+        );
+        assert_eq!(cone.rays.len(), PAST_CONE_RAYS, "one generator per sampled local direction");
+
+        let tetrad = Observer::raindrop_tetrad(&metric, bob.r);
+        let u = tetrad.e0;
+        let mut worst = 0.0f64;
+        for (i, samples) in cone.rays.iter().enumerate() {
+            assert!(
+                samples.len() >= 2,
+                "generator {i} has no past at all: {} samples over a 5 M window",
+                samples.len()
+            );
+            assert_eq!(
+                [samples[0][1], samples[0][2]],
+                [bob.r, bob.phi],
+                "generator {i} starts at the focus event itself"
+            );
+            for w in samples.windows(2) {
+                assert!(
+                    w[1][0] < w[0][0],
+                    "generator {i} runs into the past, so its samples are strictly earlier and \
+                     earlier - but t went from {} to {}",
+                    w[0][0],
+                    w[1][0]
+                );
+            }
+
+            let alpha = std::f64::consts::TAU * (i as f64) / (PAST_CONE_RAYS as f64);
+            let mut ray = NullRay::from_local_direction(
+                &metric, bob.t, bob.r, bob.phi, &tetrad, alpha, &u,
+            );
+            let n = samples.len() - 1;
+            for _ in 0..n {
+                ray.step_back(&metric, PAST_CONE_DT);
+            }
+            for _ in 0..n {
+                ray.step(&metric, PAST_CONE_DT);
+            }
+            assert!(ray.alive(), "the retrace brings generator {i} back to life: {ray:?}");
+            let err = (ray.r - bob.r).abs().max((ray.phi - bob.phi).abs());
+            worst = worst.max(err);
+            assert!(
+                err < 1e-6,
+                "generator {i} was run {n} steps back and {n} forward and came home to \
+                 (r = {}, phi = {}) instead of the event (r = {}, phi = {})",
+                ray.r,
+                ray.phi,
+                bob.r,
+                bob.phi
+            );
+        }
+        println!("worst round trip over the whole cone: {worst:e}");
+    }
+
+    #[test]
+    fn test_no_past_ray_of_an_event_between_the_horizons_comes_from_below_it() {
+        // Inside r+ every future-directed null ray moves inward - that is what makes the region
+        // trapped - so run backwards every one of them moves outward, and nothing in the past of an
+        // event there sits at a smaller radius than the event. It is the sharpest statement the
+        // surface makes about region II, and it is a statement about the integration rather than
+        // about the drawing, so it is asked of the samples themselves.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let (rp, rm) = (metric.outer_horizon(), metric.inner_horizon());
+        let bob = bob_at(&metric, 0.5 * (rp + rm));
+        let cone = build_past_cone(&metric, &bob, bob.t - 5.0);
+
+        let mut highest = bob.r;
+        for (i, samples) in cone.rays.iter().enumerate() {
+            for s in samples {
+                highest = highest.max(s[1]);
+                assert!(
+                    s[1] >= bob.r - 1e-9,
+                    "generator {i} of an event at r = {} inside r+ = {rp} reached back to \
+                     r = {} at t = {}, which would be a ray that climbed out of the trapped \
+                     region",
+                    bob.r,
+                    s[1],
+                    s[0]
+                );
+            }
+        }
+        println!(
+            "event at r = {:.4} between r- = {rm:.4} and r+ = {rp:.4}: its whole past cone lies \
+             outward of it, out to r = {highest:.3}",
+            bob.r
+        );
+    }
+
+    #[test]
+    fn test_the_frozen_observers_past_cone_climbs_out_of_region_ii() {
+        // The frozen worldline's event sits a hair above the far branch of r-, and the surface of
+        // everything it can see is not a small cone around it: run backwards the generators leave
+        // r- exponentially fast and cross r+ inside the window. That is the other half of the
+        // freeze - he is cut off from his own future, not from his past - and it is the reason the
+        // exact cone is drawn at all rather than a local fan.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let frozen = Observer::frozen_bob(&metric);
+        let (rp, rm) = (metric.outer_horizon(), metric.inner_horizon());
+        let cone = build_past_cone(&metric, &frozen, frozen.t - 10.0);
+        let highest = cone
+            .rays
+            .iter()
+            .flatten()
+            .map(|s| s[1])
+            .fold(f64::NEG_INFINITY, f64::max);
+        println!(
+            "frozen at r = {:.9} (r- = {rm:.6}), t = {:.2}: his past cone reaches out to \
+             r = {highest:.3} against r+ = {rp:.4}",
+            frozen.r, frozen.t
+        );
+        assert!(
+            highest > rp,
+            "the past of an event on r- is not confined to region II - its generators climb out \
+             through r+ = {rp} - but the cone got no further than r = {highest}"
+        );
+    }
+
+    #[test]
+    fn test_the_past_cone_is_rebuilt_only_when_the_event_moves() {
+        // The surface is the only thing in this view that costs an integration rather than a
+        // projection, so it is cached against the event it belongs to: a camera drag, a resize or
+        // a paused frame must redraw the same rays rather than integrate them again. When the
+        // event does move the cache has to let go, or the picture would be the past cone of where
+        // the observer used to be.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let mut bob = bob_at(&metric, 4.0);
+        let mut canvas = VolumeCanvas {
+            camera: Camera::preset(Preset::ThreeQuarter, 48.0, Vec2::ZERO, 1.0),
+            ..Default::default()
+        };
+
+        volume_frame_on(&mut canvas, &metric, Some(&bob), ReferenceFrame::DistantObserver, false);
+        let first = canvas.past_cone.as_ref().expect("the first frame builds the cone").built;
+        volume_frame_on(&mut canvas, &metric, Some(&bob), ReferenceFrame::DistantObserver, false);
+        let second = canvas.past_cone.as_ref().expect("and the second keeps it").built;
+        assert_eq!(
+            second, first,
+            "nothing about the event changed between the two frames, so the second must have drawn \
+             the cone the first integrated"
+        );
+
+        // Move him, and wind the build clock back past the throttle rather than sleeping through
+        // it: the throttle is a wall-clock rule and a test has no business waiting on one.
+        bob.step(&metric, bob.t + 0.5, 0.5);
+        canvas.past_cone.as_mut().unwrap().built -= Duration::from_secs(1);
+        volume_frame_on(&mut canvas, &metric, Some(&bob), ReferenceFrame::DistantObserver, false);
+        let cone = canvas.past_cone.as_ref().expect("and the third rebuilds it");
+        println!(
+            "Bob stepped to t = {:.3}, r = {:.4}; the cone's key followed to t = {:.3}, r = {:.4}",
+            bob.t, bob.r, cone.key.t, cone.key.r
+        );
+        assert!(
+            cone.built > first,
+            "the event moved, so the cone belongs to the new one and must have been integrated \
+             again"
+        );
+        assert_eq!(cone.key.t, bob.t, "and it is the cone of the event Bob is standing on now");
+        assert_eq!(cone.key.r, bob.r);
+    }
+
+    #[test]
+    fn test_the_focus_observers_past_cone_is_drawn_as_a_surface_below_the_floor() {
+        // The whole surface is in the past, so every piece of it belongs under the floor, which is
+        // the present: a chunk painted over the floor would be a claim that some of what Bob can
+        // already see has not happened yet. And it is drawn only when it is asked for, since it is
+        // the most expensive thing in the scene.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let bob = bob_at(&metric, 3.0);
+        let fill = Theme::cone_colours_at("Bob", Theme::VOLUME_CONE_FILL_ALPHA / 2).1;
+
+        let shapes = volume_frame_past_cone(&metric, &bob, true);
+        let floor = shapes
+            .iter()
+            .position(
+                |s| matches!(s, Painted::Path { fill, .. } if *fill == Theme::SINGULARITY_FILL),
+            )
+            .expect("the ring's fill is the innermost of the floor's discs");
+        let surface: Vec<usize> = shapes
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| matches!(s, Painted::Mesh { colour: Some(c), .. } if *c == fill))
+            .map(|(i, _)| i)
+            .collect();
+        println!(
+            "{} chunks of past-cone surface, the last at shape {:?}, against a floor at {floor}",
+            surface.len(),
+            surface.last()
+        );
+        assert!(
+            !surface.is_empty(),
+            "the focus observer's past cone is painted as a surface in his own past fill {fill:?}"
+        );
+        assert!(
+            surface.iter().all(|i| *i < floor),
+            "every piece of the past cone is under the floor, but one was painted at shape {:?}",
+            surface.iter().rfind(|i| **i > floor)
+        );
+
+        let off = volume_frame_past_cone(&metric, &bob, false);
+        assert!(
+            !off.iter().any(|s| matches!(s, Painted::Mesh { colour: Some(c), .. } if *c == fill)),
+            "and with the past cone switched off nothing is drawn in that fill"
+        );
     }
 
     #[test]
