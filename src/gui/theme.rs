@@ -63,6 +63,10 @@ impl Theme {
     // the same hue at an alpha that still reads over the region shading.
     pub const CONE_FILL_ALPHA: u8 = 26;
     pub const CONE_EDGE_ALPHA: u8 = 150;
+    /// The fill of a cone in the 2D+1 volume, three times the flat diagram's. There the cone is
+    /// a fan seen through the glass of a horizon pipe and over a floor full of fronts, and at the
+    /// diagram's alpha it vanished into both; this is the lowest value at which its tilt reads.
+    pub const VOLUME_CONE_FILL_ALPHA: u8 = 80;
 
     pub const BOB_CONE_FUTURE_RGB: [u8; 3] = [140, 200, 255]; // light blue
     pub const BOB_CONE_PAST_RGB: [u8; 3] = [190, 160, 255]; // light purple
@@ -75,14 +79,21 @@ impl Theme {
     /// The (future fill, past fill, edge) triple belonging to an observer, by name. Anything that
     /// is not Alice draws in Bob's blue/purple.
     pub fn cone_colours(name: &str) -> (Color32, Color32, Color32) {
+        Self::cone_colours_at(name, Self::CONE_FILL_ALPHA)
+    }
+
+    /// The same triple with the two fills at a chosen alpha: the volume view draws the cone as a
+    /// surface rather than as a wedge and needs it denser, but in the same hues, so that a cone
+    /// keeps its identity between the two pictures.
+    pub fn cone_colours_at(name: &str, fill_alpha: u8) -> (Color32, Color32, Color32) {
         let (future, past, edge) = if name == "Alice" {
             (Self::ALICE_CONE_FUTURE_RGB, Self::ALICE_CONE_PAST_RGB, Self::ALICE_CONE_EDGE_RGB)
         } else {
             (Self::BOB_CONE_FUTURE_RGB, Self::BOB_CONE_PAST_RGB, Self::BOB_CONE_EDGE_RGB)
         };
         (
-            Color32::from_rgba_unmultiplied(future[0], future[1], future[2], Self::CONE_FILL_ALPHA),
-            Color32::from_rgba_unmultiplied(past[0], past[1], past[2], Self::CONE_FILL_ALPHA),
+            Color32::from_rgba_unmultiplied(future[0], future[1], future[2], fill_alpha),
+            Color32::from_rgba_unmultiplied(past[0], past[1], past[2], fill_alpha),
             Color32::from_rgba_unmultiplied(edge[0], edge[1], edge[2], Self::CONE_EDGE_ALPHA),
         )
     }

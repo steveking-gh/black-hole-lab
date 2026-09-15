@@ -657,9 +657,12 @@ impl VolumeCanvas {
         };
         let span = (current_time - t_min).max(1e-9);
         for (obs, who) in present.iter().copied() {
+            // Heavier than the shadow on the floor: the worldline is seen through the glass of
+            // whichever pipes stand between it and the eye, and at the floor's weight it was lost
+            // behind them.
             let width = match who {
-                Who::Alice => 1.2,
-                Who::Bob => 1.5,
+                Who::Alice => 1.8,
+                Who::Bob => 2.2,
             };
             let points: Vec<(f64, [f64; 3])> = obs
                 .trail
@@ -677,7 +680,7 @@ impl VolumeCanvas {
                 // Older is fainter, so the eye reads the worldline's direction off it without an
                 // arrowhead: the bright end is the end the observer is at now.
                 let t_mid = 0.5 * (run[0].0 + run[run.len() - 1].0);
-                let fade = (0.25 + 0.75 * ((t_mid - t_min) / span)).clamp(0.0, 1.0) as f32;
+                let fade = (0.45 + 0.55 * ((t_mid - t_min) / span)).clamp(0.0, 1.0) as f32;
                 let depth = centroid_depth(&camera, centre, run.iter().map(|(_, p)| *p));
                 buf.push(
                     Layer::Below,
@@ -752,7 +755,8 @@ impl VolumeCanvas {
             }
         };
         for (obs, _) in present.iter().copied() {
-            let (future_fill, past_fill, edge) = Theme::cone_colours(&obs.name);
+            let (future_fill, past_fill, edge) =
+                Theme::cone_colours_at(&obs.name, Theme::VOLUME_CONE_FILL_ALPHA);
             push_cone(&mut buf, obs.r, obs.phi, 0.0, (future_fill, past_fill, edge), false);
             if self.show_ghost_cones {
                 let k_lo = t_min.ceil() as i64;
@@ -1358,7 +1362,8 @@ mod tests {
         let shapes =
             volume_frame(&metric, Some(&bob), Preset::ThreeQuarter, ReferenceFrame::DistantObserver, false);
         let at = marker_of(&shapes);
-        let (future_fill, past_fill, _) = Theme::cone_colours("Bob");
+        let (future_fill, past_fill, _) =
+            Theme::cone_colours_at("Bob", Theme::VOLUME_CONE_FILL_ALPHA);
 
         for (half, fill) in [("future", future_fill), ("past", past_fill)] {
             let found = shapes
