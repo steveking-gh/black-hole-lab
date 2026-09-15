@@ -8,7 +8,7 @@ use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::Observer;
 use crate::physics::tetrad::light_cone_generators;
-use crate::physics::wavefront::{NullRay, SignalField};
+use crate::physics::wavefront::{NullRay, RaySample, SignalField};
 use egui::{Color32, Pos2, Stroke, Vec2};
 use std::time::{Duration, Instant};
 
@@ -410,6 +410,24 @@ const PAST_CONE_REBUILD_MS: u128 = 150;
 /// short enough that its own centroid is a fair place to sort it.
 const PAST_CONE_CHUNK: usize = 8;
 
+/// Opacity of one quad of a tagged pulse's light-cone surface.
+///
+/// Low, and it has to be: a pulse's surface folds back on itself wherever the front does, the
+/// frozen family piles a dozen rows of it into the width of the r- pipe, and two transmissions are
+/// drawn at once. At the fronts' own `Theme::SHIFT_ALPHA` the overlap paints solid and buries the
+/// worldlines the surface is there to be read against. At 40 a single sheet is a tint and the
+/// places where the sheet stacks on itself are exactly the places that read as bright, which is
+/// the right thing for it to say: that is where the light is piling up.
+const FRONT_SURFACE_ALPHA: u8 = 40;
+
+/// How many rows of one ray pair's strip of pulse surface go into one mesh.
+///
+/// `PAST_CONE_CHUNK`'s reason, in the same words: one mesh per quad is thousands of primitives
+/// through the depth sort, one mesh per strip is a single primitive sorted at one depth that
+/// interleaves wrongly with everything it passes through, and eight rows is short enough that its
+/// own centroid is a fair place to sort it.
+const PULSE_SURFACE_CHUNK: usize = 8;
+
 /// What a built past cone belongs to. If any of it changes the cone is a cone of a different event
 /// in a different spacetime and has to be integrated again; if none of it changes the cached rays
 /// are still exactly right, however the camera has been dragged.
@@ -529,6 +547,11 @@ pub struct VolumeCanvas {
     /// camera drag must not repeat, so it is cached against the event it belongs to; see
     /// `PastConeKey` and `PAST_CONE_REBUILD_MS`.
     past_cone: Option<PastCone>,
+    /// Draw the light cone of every tagged pulse as a surface: the ring history the physics keeps
+    /// on every `HISTORY_PULSE_STRIDE`-th pulse, swept up in t and coloured by gain. On by default,
+    /// because it is the one place in the app where the split between the frozen family and the
+    /// crossing family is a shape rather than an inference: the sheet tears in two on r-.
+    show_pulse_surfaces: bool,
     /// Where the user has dragged each observer's info box on this canvas.
     pub telemetry: TelemetryBoxes,
     /// The screen offset of the focus observer's floor point as the last frame projected it.
@@ -553,6 +576,7 @@ impl Default for VolumeCanvas {
             show_ghost_cones: false,
             show_past_cone: true,
             past_cone: None,
+            show_pulse_surfaces: true,
             telemetry: TelemetryBoxes::pinning(),
             focus_offset: Vec2::ZERO,
         }
@@ -1026,13 +1050,109 @@ impl VolumeCanvas {
             }
         }
 
+        // 8. The light cone of every tagged pulse, as a surface.
+        //
+        // Section 7 draws one observer's past cone; this draws the *future* cones of the emission
+        // events, and it draws them from the geodesics the simulation actually integrated rather
+        // than from a second integration of its own. Every eighth pulse keeps a `RingHistory` - the
+        // sampled front at every `HISTORY_MIN_DT` of coordinate time - and the rows of one history
+        // stacked in t are that pulse's light cone. What the picture then shows is the split the
+        // wavefront module derives: the arc of each sheet with E - Omega_- L < 0 wraps onto the r-
+        // pipe and stops there, running up the gain ramp into blue and violet as it waits, while
+        // the rest of the sheet falls straight through and on to the ring. The tear between the two
+        // is drawn, not asserted.
+        //
+        // Colour is the gain, on the same ramp and from the same numbers the equatorial view
+        // colours its fronts with, so a sheet's colour here and the front's colour on the floor are
+        // one measurement drawn twice. The emitter is told apart by where the surface starts, not
+        // by its colour: a gain ramp that meant Alice on one sheet and Bob on another would mean
+        // nothing on either.
+        //
+        // The cost is bounded by the physics module's own caps and by the window: at most
+        // `MAX_PULSES / HISTORY_PULSE_STRIDE` = 8 tagged pulses per field, 24 kept rays each and
+        // `HISTORY_MAX_ROWS` = 256 rows, so 8 x 24 x 255 x 2 = 98 k triangles per field and under
+        // 200 k for both - the worst case the caps allow, against a typical window holding a
+        // hundred rows of two or three tagged pulses.
+        if self.show_pulse_surfaces {
+            let to_world = |t: f64, s: &RaySample| {
+                let (x, y) = metric.cartesian_position(f64::from(s.r), f64::from(s.phi));
+                [x, y, z_of(t)]
+            };
+            for field in [signals.bob, signals.alice] {
+                for pulse in field.pulses.iter() {
+                    let Some(history) = pulse.history() else {
+                        continue;
+                    };
+                    // Rows are stored oldest first, so the window is a suffix: everything older
+                    // than the bottom of the volume is below the floor's floor and is not drawn.
+                    let Some(first) = history.rows.iter().position(|row| row.t >= t_min) else {
+                        continue;
+                    };
+                    let rows = &history.rows[first..];
+                    let n = rows[0].samples.len();
+                    if rows.len() < 2 || n < 2 {
+                        continue;
+                    }
+                    for i in 0..n {
+                        // Consecutive kept rays, the last closing back onto the first: the front is
+                        // a closed curve, so the strip between them is a piece of its surface like
+                        // any other.
+                        let j = (i + 1) % n;
+                        let mut k0 = 0;
+                        while k0 + 1 < rows.len() {
+                            let k1 = (k0 + PULSE_SURFACE_CHUNK).min(rows.len() - 1);
+                            let mut mesh = egui::Mesh::default();
+                            let mut corners: Vec<[f64; 3]> = Vec::with_capacity(4 * (k1 - k0));
+                            for k in k0..k1 {
+                                let (lo, hi) = (&rows[k], &rows[k + 1]);
+                                let quad = [
+                                    (lo.t, &lo.samples[i]),
+                                    (lo.t, &lo.samples[j]),
+                                    (hi.t, &hi.samples[j]),
+                                    (hi.t, &hi.samples[i]),
+                                ];
+                                // A NaN radius is a ray that was already dead at that row. The
+                                // surface ends where the ray did rather than being stretched over
+                                // the event it died at, exactly as the past cone's strips end where
+                                // a generator ran out.
+                                if quad.iter().any(|(_, s)| s.r.is_nan()) {
+                                    continue;
+                                }
+                                let base = mesh.vertices.len() as u32;
+                                for (t, s) in quad {
+                                    let c = to_world(t, s);
+                                    mesh.colored_vertex(
+                                        project(c).0,
+                                        Theme::front_colour(f64::from(s.gain), FRONT_SURFACE_ALPHA),
+                                    );
+                                    corners.push(c);
+                                }
+                                // The same diagonal split as `quad_mesh`, with the corners given in
+                                // order around the quad.
+                                mesh.add_triangle(base, base + 1, base + 2);
+                                mesh.add_triangle(base, base + 2, base + 3);
+                            }
+                            if !mesh.is_empty() {
+                                let depth = centroid_depth(&camera, centre, corners.into_iter());
+                                // Every row is at t <= now, so the whole surface is below the
+                                // floor.
+                                buf.push(Layer::Below, depth, Prim::Mesh(mesh));
+                            }
+                            // One row of overlap, so the chunks meet instead of leaving a gap.
+                            k0 = k1;
+                        }
+                    }
+                }
+            }
+        }
+
         // The scene is complete, so the painter's algorithm can run: everything below the floor
         // farthest first, then the floor, then everything above it. Nothing is painted before this
         // point, because the scene is built surface by surface and observer by observer rather
         // than in depth order - which is the whole reason `PrimBuffer` holds it.
         buf.paint(Layer::Below, &painter);
 
-        // 8. The floor: the equatorial view's own picture of the present, laid flat in the volume.
+        // 9. The floor: the equatorial view's own picture of the present, laid flat in the volume.
         // It is painted straight onto the painter between the two layers rather than through the
         // buffer, because it *is* the sorting plane - the one surface whose place in the order is
         // known without a depth - and because the fronts and the trails come from the equatorial
@@ -1075,7 +1195,7 @@ impl VolumeCanvas {
 
         buf.paint(Layer::Above, &painter);
 
-        // 9. Every arrival, on the receiver's worldline at the height of the crossing, in the
+        // 10. Every arrival, on the receiver's worldline at the height of the crossing, in the
         // sender's colour: the same pairing the equatorial view draws, lifted off the floor onto
         // the event it happened at. Inside r+ these bunch onto the r- pipe, and in the volume the
         // bunch is legible as a stack up the wall rather than as a knot of triangles on a circle.
@@ -1100,7 +1220,7 @@ impl VolumeCanvas {
             ticks(signals.alice, Theme::ALICE_COLOR);
         }
 
-        // 10. The observers, on the floor, because the floor is now.
+        // 11. The observers, on the floor, because the floor is now.
         let mut markers: Vec<(Who, Pos2)> = Vec::new();
         for (obs, who) in present.iter().copied() {
             let (x, y) = obs.cartesian_position(metric);
@@ -1133,7 +1253,7 @@ impl VolumeCanvas {
             );
         }
 
-        // 11. The canvas's right-click menu: where to look, what to go on looking at, and where the
+        // 12. The canvas's right-click menu: where to look, what to go on looking at, and where the
         // eye stands. Registered after the markers are drawn and before the telemetry boxes, which
         // take their drags last.
         response.context_menu(|ui| {
@@ -1170,6 +1290,15 @@ impl VolumeCanvas {
             }
             if ui
                 .checkbox(&mut self.show_past_cone, "Exact past cone of the focus event")
+                .changed()
+            {
+                ui.close();
+            }
+            if ui
+                .checkbox(
+                    &mut self.show_pulse_surfaces,
+                    "Light-cone surfaces of every 8th pulse",
+                )
                 .changed()
             {
                 ui.close();
@@ -1228,7 +1357,7 @@ impl VolumeCanvas {
             }
         }
 
-        // 12. The legend: what the picture is, where the eye is standing, and what the vertical
+        // 13. The legend: what the picture is, where the eye is standing, and what the vertical
         // axis means, since a viewer arriving at a 3D diagram has no way to know any of the three.
         painter.text(
             rect.left_top() + Vec2::new(10.0, 6.0),
@@ -1246,7 +1375,7 @@ impl VolumeCanvas {
                  drag: orbit  shift-drag: pan  wheel: zoom  ctrl-wheel: time scale  \
                  right-click: menu\n\
                  below the floor: the past · above: the future · pipes: r = const · cones: exact \
-                 null generators{}",
+                 null generators{}{}",
                 camera.yaw.to_degrees(),
                 camera.pitch.to_degrees(),
                 camera.scale,
@@ -1260,6 +1389,11 @@ impl VolumeCanvas {
                 } else {
                     ""
                 },
+                if self.show_pulse_surfaces {
+                    "\npulse surfaces: every 8th pulse's light cone, coloured by gain"
+                } else {
+                    ""
+                },
             ),
             legend_font.clone(),
             Theme::TEXT_MUTED,
@@ -1267,7 +1401,7 @@ impl VolumeCanvas {
 
         buf.paint_labels(&painter, legend_font);
 
-        // 13. Draggable info boxes, registered last so they take the drag instead of the canvas.
+        // 14. Draggable info boxes, registered last so they take the drag instead of the canvas.
         for (obs, who) in present {
             let Some((_, at)) = markers.iter().copied().find(|(w, _)| *w == who) else {
                 continue;
@@ -1300,8 +1434,9 @@ mod tests {
     enum Painted {
         /// A translucent surface: a pipe strip has four vertices, a cone half its apex plus its 36
         /// rim points. The colour is Some only when every vertex carries the same one, which is
-        /// what both of this canvas's meshes do.
-        Mesh { vertices: usize, colour: Option<Color32>, first: Pos2 },
+        /// what the pipes and the cones do; a pulse surface is shaded per vertex by the gain, so
+        /// it is None there and `colours` is what a test about it has to read.
+        Mesh { vertices: usize, colour: Option<Color32>, colours: Vec<Color32>, first: Pos2 },
         /// A filled polygon or a stroked polyline. The fill is `Color32::TRANSPARENT` on a
         /// polyline and the stroke is None on a fill.
         Path { fill: Color32, stroke: Option<Color32>, points: Vec<Pos2> },
@@ -1325,7 +1460,13 @@ mod tests {
                     let colour = mesh.vertices.first().map(|v| v.color).filter(|c| {
                         mesh.vertices.iter().all(|v| v.color == *c)
                     });
-                    out.push(Painted::Mesh { vertices: mesh.vertices.len(), colour, first });
+                    let colours = mesh.vertices.iter().map(|v| v.color).collect();
+                    out.push(Painted::Mesh {
+                        vertices: mesh.vertices.len(),
+                        colour,
+                        colours,
+                        first,
+                    });
                 }
                 egui::Shape::Path(path) => {
                     let stroke = match path.stroke.color {
@@ -1403,9 +1544,32 @@ mod tests {
         frame_of_ref: ReferenceFrame,
         show_distant_clock_grid: bool,
     ) -> Vec<Painted> {
+        let signal = SignalField::default();
+        volume_frame_signals(
+            canvas,
+            metric,
+            bob,
+            frame_of_ref,
+            show_distant_clock_grid,
+            &signal,
+            &signal,
+        )
+    }
+
+    /// The same, over two transmissions the caller owns, for the tests that are about what the
+    /// signal fields put in the volume rather than about the geometry around them.
+    #[allow(clippy::too_many_arguments)]
+    fn volume_frame_signals(
+        canvas: &mut VolumeCanvas,
+        metric: &KerrSchild,
+        bob: Option<&Observer>,
+        frame_of_ref: ReferenceFrame,
+        show_distant_clock_grid: bool,
+        alice_field: &SignalField,
+        bob_field: &SignalField,
+    ) -> Vec<Painted> {
         let ctx = egui::Context::default();
         ctx.set_fonts(egui::FontDefinitions::empty());
-        let signal = SignalField::default();
         // Every worldline stands at the simulation clock, so the floor is the observer's own now.
         let clock = bob.map_or(0.0, |obs| obs.t);
         let output = ctx.clone().run_ui(input(), |ui| {
@@ -1419,7 +1583,7 @@ mod tests {
                 false,
                 frame_of_ref,
                 1.0,
-                SignalViews { alice: &signal, bob: &signal },
+                SignalViews { alice: alice_field, bob: bob_field },
                 show_distant_clock_grid,
                 FrontStyle { arcs: true, hide_wound: true },
             );
@@ -1655,7 +1819,7 @@ mod tests {
             let found = shapes
                 .iter()
                 .find_map(|s| match s {
-                    Painted::Mesh { vertices, colour: Some(c), first } if *c == fill => {
+                    Painted::Mesh { vertices, colour: Some(c), first, .. } if *c == fill => {
                         Some((*vertices, *first))
                     }
                     _ => None,
@@ -2257,6 +2421,127 @@ mod tests {
         assert!(
             (silhouette - 1.0).abs() < 1e-6,
             "the wall on the silhouette should be at full weight 1, not {silhouette}"
+        );
+    }
+
+    /// A transmission with a few of the emitter's pulses in flight, the first of them tagged, and
+    /// the emitter themselves standing where the run left them.
+    ///
+    /// Short on purpose: twelve steps of 0.1 M is eleven pulses, which is more than one
+    /// `HISTORY_PULSE_STRIDE`, and every one of their rays is an exact null geodesic that has to be
+    /// integrated. The drawing does not care how deep the histories are.
+    fn emitting_field(metric: &KerrSchild) -> (SignalField, Observer) {
+        let mut emitter = Observer::new_with_phi(
+            metric,
+            "Bob",
+            0.0,
+            4.0,
+            0.0,
+            0.0,
+            crate::physics::observer::WorldlineParams::new(1.0, 2.2, false),
+        );
+        let mut field = SignalField::default();
+        let dt = 0.1;
+        for i in 0..12 {
+            let t = ((i + 1) as f64) * dt;
+            emitter.step(metric, t, dt);
+            field.advance(metric, dt);
+            field.emit_if_due(metric, &emitter);
+        }
+        (field, emitter)
+    }
+
+    /// Every colour the wavefront ramp can produce at one opacity, swept finely enough in
+    /// log10(gain) that no rounded stop between two of the ramp's knots is missed.
+    fn front_ramp(alpha: u8) -> std::collections::HashSet<[u8; 4]> {
+        let steps = 60_000;
+        (0..=steps)
+            .map(|i| {
+                let log = Theme::FRONT_LOG_MIN
+                    + (Theme::FRONT_LOG_MAX - Theme::FRONT_LOG_MIN) * (i as f64) / (steps as f64);
+                Theme::front_colour(10.0_f64.powf(log), alpha).to_array()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_a_tagged_pulses_light_cone_is_drawn_as_a_gain_coloured_surface() {
+        // The one picture in the app where the two families of a pulse can be seen parting company:
+        // the sampled front of every eighth pulse, swept up in t, is that pulse's light cone, and
+        // the sheet is coloured by the gain each ray carries rather than by whose transmission it
+        // is. So the claim is about two things at once - that a surface is drawn at all, and that
+        // its colours are the wavefront ramp's own, varying across the sheet. A mesh of one flat
+        // colour would be a pipe or a cone; a mesh of colours off the ramp would be a decoration.
+        let metric = KerrSchild::new(1.0, 0.65);
+        let (field, emitter) = emitting_field(&metric);
+        assert!(
+            field.pulses.iter().any(|p| p.history().is_some()),
+            "the run must leave a tagged pulse in flight to draw"
+        );
+        let idle = SignalField::default();
+        let ramp = front_ramp(FRONT_SURFACE_ALPHA);
+        let alpha = Theme::front_colour(1.0, FRONT_SURFACE_ALPHA).a();
+
+        let frame = |on: bool| {
+            let mut canvas = VolumeCanvas {
+                camera: Camera::preset(Preset::ThreeQuarter, 48.0, Vec2::ZERO, 1.0),
+                show_past_cone: false,
+                show_pulse_surfaces: on,
+                ..Default::default()
+            };
+            volume_frame_signals(
+                &mut canvas,
+                &metric,
+                Some(&emitter),
+                ReferenceFrame::DistantObserver,
+                false,
+                &idle,
+                &field,
+            )
+        };
+
+        let on = frame(true);
+        let surfaces: Vec<&Vec<Color32>> = on
+            .iter()
+            .filter_map(|s| match s {
+                Painted::Mesh { colours, .. }
+                    if colours.iter().all(|c| c.a() == alpha)
+                        && colours.iter().any(|c| *c != colours[0]) =>
+                {
+                    Some(colours)
+                }
+                _ => None,
+            })
+            .collect();
+        println!(
+            "{} pulse-surface chunks out of {} shapes, the first carrying {} vertices",
+            surfaces.len(),
+            on.len(),
+            surfaces.first().map_or(0, |c| c.len())
+        );
+        assert!(
+            !surfaces.is_empty(),
+            "a tagged pulse's light cone is painted as a surface shaded per vertex"
+        );
+        for colours in surfaces.iter() {
+            for c in colours.iter() {
+                assert!(
+                    ramp.contains(&c.to_array()),
+                    "every vertex of a pulse surface is a wavefront gain colour at alpha \
+                     {FRONT_SURFACE_ALPHA}, but one is {c:?}"
+                );
+            }
+        }
+
+        let off = frame(false);
+        assert!(
+            !off.iter().any(|s| matches!(
+                s,
+                Painted::Mesh { colours, .. }
+                    if colours.iter().all(|c| c.a() == alpha)
+                        && colours.iter().any(|c| *c != colours[0])
+            )),
+            "and with the surfaces switched off nothing is drawn in the gain ramp"
         );
     }
 }

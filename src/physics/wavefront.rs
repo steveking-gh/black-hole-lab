@@ -111,8 +111,21 @@
 //! of the interval its rays arrive over. A worldline inside a wedge is only in *range* of the
 //! pulse; whether the pulse reaches it is a question about azimuth, which the projection has thrown
 //! away and only the per-sheet crossing test of `Pulse::scan` answers.
+//!
+//! The 2D+1 volume view wants the other projection - the whole front, azimuths and all, swept up in
+//! t - and that is a surface rather than a curve, so it is not kept for every pulse. A pulse whose
+//! index is a multiple of `HISTORY_PULSE_STRIDE` is *tagged* and carries a `RingHistory`: a sampled
+//! ring of every sixth ray, recorded on the same cadence rule the extent track uses, each sample
+//! being the (r, phi) that ray stood at and the gain it would have been coloured by on the
+//! equatorial view at that moment. Stacked, the rows are the pulse's light cone as a surface, and
+//! the split the module header derives is visible in it directly: the rows of the frozen family,
+//! E - Omega_- L < 0, wrap onto the r- pipe and run up the gain ramp while the rest of the sheet
+//! falls through. The memory is bounded on both axes - `HISTORY_MAX_ROWS` rows, thinned like the
+//! track rather than stopped, and `MAX_PULSES / HISTORY_PULSE_STRIDE` tagged pulses in flight - and
+//! a dead ray records r = NaN rather than the radius it was left standing at, so nothing draws a
+//! piece of front that is not there.
 
-use crate::physics::geodesic::{R_STOP, geodesic_accel};
+use crate::physics::geodesic::{GeodesicState, R_STOP, geodesic_accel};
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::Observer;
 use crate::physics::tetrad::Tetrad;
@@ -211,6 +224,44 @@ const TRACK_MIN_DT: f64 = 0.02;
 /// `TRACK_MIN_DT` this is 80 M of coordinate time before the first thinning, which is more than a
 /// whole infall, and the spacing doubles at each one after that.
 const TRACK_MAX_POINTS: usize = 4000;
+
+/// Every `HISTORY_PULSE_STRIDE`-th pulse of a field keeps a `RingHistory`: pulses whose `index` is
+/// a multiple of this one are *tagged*, the rest carry nothing.
+///
+/// A history is a surface rather than a curve, so keeping one for every pulse would be forty of
+/// them stacked on top of each other in the volume view - unreadable as well as expensive. At this
+/// stride the `MAX_PULSES` cap allows at most eight in flight per field, which is one sheet every
+/// 0.8 M of the emitter's proper time at `EMISSION_INTERVAL_TAU`: enough of them to read the
+/// stack building against r-, few enough that each is a surface the eye can follow.
+pub const HISTORY_PULSE_STRIDE: usize = 8;
+
+/// Rays a tagged pulse aims to keep in each history row. The stride is `rays.len() / this`, floored
+/// at one, so a pulse at the default `RAYS_PER_PULSE` keeps every sixth of its 144 rays and any
+/// other count keeps about this many too.
+///
+/// A drawn surface needs far less azimuthal resolution than a drawn front: the front is one curve
+/// whose folds and windings have to be resolved ray by ray, while the surface is read for its shape
+/// and its colour. Twenty-four samples is fifteen degrees of the emission cone, the same order as
+/// the 36 generators the exact past cone is drawn on.
+const HISTORY_RAY_SAMPLES: usize = 24;
+
+/// Smallest coordinate-time spacing between rows of a ring history, before any thinning.
+///
+/// Five times `TRACK_MIN_DT`: the track has to resolve the step at which the front's inner edge
+/// arrives at the ring, and this has to resolve nothing sharper than the curvature of a light cone,
+/// which at the volume view's default window is a row every hundredth of the drawn height.
+const HISTORY_MIN_DT: f64 = 0.1;
+
+/// Rows past which a history is thinned rather than stopped, exactly as `TRACK_MAX_POINTS` thins
+/// the extent track: every other row is dropped and `RingHistory::history_dt` doubles.
+///
+/// This is what bounds the memory. A row is `HISTORY_RAY_SAMPLES` samples of 12 bytes plus its own
+/// time and slice header, so a full history is 24 x 12 x 256 = 74 KB of samples and about 80 KB
+/// all told, at most eight of them in flight per field and two fields in the app: about 1.3 MB in
+/// the worst case the caps allow. At
+/// `HISTORY_MIN_DT` the first thinning is 25.6 M of coordinate time away, which is longer than an
+/// infall, and the spacing doubles at each one after that.
+const HISTORY_MAX_ROWS: usize = 256;
 
 /// State vector of a ray in coordinate time: y = (r, phi, v^r, v^phi).
 type RayState = [f64; 4];
@@ -1092,6 +1143,123 @@ pub struct Delivery {
     pub received_t: f64,
 }
 
+/// One kept ray of a tagged pulse at one recorded time: where it stood, and the gain it would have
+/// been coloured by there.
+///
+/// Held in f32 because it is display data and nothing is computed from it: the history is read by
+/// the volume view to build a surface, and a vertex position that is right to seven digits is right
+/// to well under a pixel at any zoom the view offers. Twelve bytes a sample is what makes the
+/// memory bound of `HISTORY_MAX_ROWS` worth having.
+#[derive(Debug, Clone, Copy)]
+pub struct RaySample {
+    /// Radius of the ray's event at that time, or NaN if the ray was already dead.
+    ///
+    /// A dead `NullRay` is carried on the field clock without moving, so recording the radius it
+    /// was left standing at would draw a piece of front sitting on the ring for the rest of the
+    /// run. NaN says "there is no front here", and the drawer skips any quad with a NaN corner -
+    /// the same treatment the exact past cone gives a generator that ran out.
+    pub r: f32,
+    /// Azimuth of the ray's event, unwrapped exactly as `NullRay::phi` is.
+    pub phi: f32,
+    /// The gain `NullRay::gain_between` gives between the raindrop passing the emission event and
+    /// the raindrop at this ray's event: the number `Theme::front_colour` turns into the colour the
+    /// equatorial view draws this piece of front in. 1 on every sample of the emission row.
+    pub gain: f32,
+}
+
+/// One recorded time of a tagged pulse: the whole kept ring at that moment.
+#[derive(Debug, Clone)]
+pub struct RingRow {
+    /// Coordinate time of the row, which is the field clock the rays were standing on.
+    ///
+    /// The one number here that is not f32, and it has to be. There is one of it per row rather
+    /// than per sample, so the full precision costs four bytes in a row of nearly three hundred;
+    /// and both of its readers need it. The cadence test below compares it against the field clock
+    /// at a slack of a part in 1e9, which an f32 round-trip at t = 100 already exceeds by two
+    /// orders of magnitude, so rows would be dropped at irregular intervals; and the volume view
+    /// turns it into a height as (t - t_now) * t_scale, where near the Cauchy horizon the
+    /// interesting times differ from t_now by parts in 1e7 of t_now itself and an f32 difference
+    /// would quantise the whole late fall onto one height.
+    pub t: f64,
+    /// One sample per kept ray, in ray order - rays 0, stride, 2 * stride, ... - so consecutive
+    /// samples are consecutive kept rays and the last closes back onto the first, the front being
+    /// a closed curve.
+    pub samples: Box<[RaySample]>,
+}
+
+/// Sampled history of the front of a tagged pulse, for the volume view.
+///
+/// The extent track is what a (t, r) diagram can show of a pulse: the radial interval, with the
+/// azimuths projected away. This is the rest of it. Each row is the front itself at one time, and
+/// the rows stacked in t are the pulse's light cone as a surface - the one picture in which the
+/// two families the module header separates can be seen being separated, the frozen arc wrapping
+/// onto the r- pipe while the rest of the sheet falls past it.
+///
+/// Both axes are bounded: `HISTORY_RAY_SAMPLES` samples across and `HISTORY_MAX_ROWS` rows deep,
+/// the rows thinned by halving rather than stopped, so a history that has been running for an hour
+/// costs exactly what one a minute old costs and covers the same span at half the resolution.
+#[derive(Debug, Clone)]
+pub struct RingHistory {
+    /// The rows, oldest first, starting with the emission event itself and never emptied below it.
+    pub rows: Vec<RingRow>,
+    /// Coordinate-time spacing the rows are currently stored at: `HISTORY_MIN_DT`, doubled once for
+    /// each thinning `HISTORY_MAX_ROWS` has forced. The same rule, and the same reason, as
+    /// `Pulse::track_dt`.
+    history_dt: f64,
+    /// Every this-th ray of the pulse is sampled. Kept so that a reader can say which rays a row's
+    /// samples belong to; the drawing does not need it, since consecutive samples are consecutive
+    /// kept rays whatever the stride is.
+    stride: usize,
+}
+
+impl RingHistory {
+    /// A history seeded with its emission row: every kept ray at the emission event, at gain 1.
+    ///
+    /// Gain 1 is not an approximation there. `NullRay::gain_between` at the emission event is the
+    /// same `f_factor` computed twice - same radius, same direction, same observer - so a fresh
+    /// front is exactly 1 on every ray whatever the emitter was doing, which is what
+    /// `test_a_fresh_front_has_gain_one_on_every_ray_whatever_the_emitter_is_doing` measures.
+    fn seeded(rays: usize, t: f64, r: f64, phi: f64) -> Self {
+        let stride = (rays / HISTORY_RAY_SAMPLES).max(1);
+        let kept = rays.div_ceil(stride);
+        let sample = RaySample { r: r as f32, phi: phi as f32, gain: 1.0 };
+        Self {
+            rows: vec![RingRow { t, samples: vec![sample; kept].into_boxed_slice() }],
+            history_dt: HISTORY_MIN_DT,
+            stride,
+        }
+    }
+
+    /// Every this-th ray of the pulse is the one a row's samples were taken from, sample 0 being
+    /// ray 0 - the emitter's own outward radial leg, as it is for every pulse at every count.
+    #[allow(dead_code)] // the volume view reads consecutive samples as consecutive kept rays and
+    // never needs the stride; this is here so that anything wanting to name the rays a row belongs
+    // to can, and the tests are its caller
+    pub fn ray_stride(&self) -> usize {
+        self.stride
+    }
+
+    /// Append a row, thinning first if the cap has been reached.
+    ///
+    /// The thinning is `Pulse::extend_track`'s, for the same reason and with the same two
+    /// exceptions: the emission row is index zero and survives every halving, and the newest row
+    /// is kept too, so the spacing coming out of a thinning is the new one everywhere rather than
+    /// one and a half of it across the join.
+    fn push(&mut self, row: RingRow) {
+        if self.rows.len() >= HISTORY_MAX_ROWS {
+            let newest = self.rows.len() - 1;
+            let mut index = 0;
+            self.rows.retain(|_| {
+                let keep = index % 2 == 0 || index == newest;
+                index += 1;
+                keep
+            });
+            self.history_dt *= 2.0;
+        }
+        self.rows.push(row);
+    }
+}
+
 /// One emission event of the emitter's, and the wavefront it launched.
 #[allow(dead_code)] // the emission event is recorded in full: the drawing needs the rays and the
 // extent track, and the tests need the event itself to check the kappa_- law pulse by pulse
@@ -1161,6 +1329,14 @@ pub struct Pulse {
     /// Coordinate-time spacing the track is currently stored at: `TRACK_MIN_DT`, doubled once for
     /// each thinning `TRACK_MAX_POINTS` has forced. See `Pulse::extend_track`.
     track_dt: f64,
+    /// The sampled front of this pulse swept up in coordinate time, for the volume view, or None
+    /// on the pulses that do not carry one.
+    ///
+    /// Only every `HISTORY_PULSE_STRIDE`-th pulse is tagged, which is what bounds the cost of
+    /// keeping a surface rather than a curve; see `RingHistory`. It is seeded at emission with the
+    /// emission event, extended at every `SignalField::advance` by `Pulse::extend_history`, and cut
+    /// back by `SignalField::step_back` alongside the extent track.
+    history: Option<RingHistory>,
     /// One entry per sheet of the front that stood across the receiver's azimuth on the previous
     /// detection pass, carrying the side they were on and the event they were at. A sheet is
     /// identified from pass to pass by where it sits along the ray loop rather than by which
@@ -1336,6 +1512,66 @@ impl Pulse {
             self.track_dt *= 2.0;
         }
         self.extent_track.push((t, r_min, r_max));
+    }
+
+    /// This pulse's ring history, or None if it is not one of the tagged pulses.
+    pub fn history(&self) -> Option<&RingHistory> {
+        self.history.as_ref()
+    }
+
+    /// Record the whole kept ring at the field time `t`, unless the last stored row is less than
+    /// `RingHistory::history_dt` behind it or this pulse is not tagged.
+    ///
+    /// The cadence rule is `extend_track`'s, measured against the last stored row rather than
+    /// accumulated per call, so the surface the volume view draws does not depend on the frame
+    /// rate; and the same relative slack of a part in 1e9 is allowed, so a caller whose own step
+    /// *is* the spacing does not lose every other row to the accumulated clock landing a fraction
+    /// of an ulp short.
+    ///
+    /// The gain on each sample is exactly what the equatorial view colours that ray by:
+    /// `NullRay::gain_between` from the raindrop passing the emission event to the raindrop at the
+    /// ray's own event, with `Pulse::emitted_r` supplying the radius the ray does not carry. The
+    /// caller hands in the one raindrop the whole field shares, because `GeodesicState::derivatives`
+    /// reads only (E, L) off the state and takes the radius as an argument - the same reason
+    /// `draw_signal_field` builds one instance for every ray of every pulse it draws.
+    ///
+    /// A dead ray records r = NaN. Its state is still standing at its death event, and copying that
+    /// radius into every later row would draw a piece of front resting on the ring or on `R_ESCAPE`
+    /// for the rest of the run; the surface has to end where the ray did.
+    fn extend_history(&mut self, metric: &KerrSchild, t: f64, raindrop: &GeodesicState) {
+        let Some(history) = self.history.as_ref() else {
+            return;
+        };
+        let Some(last) = history.rows.last() else {
+            return;
+        };
+        if t < last.t + history.history_dt * (1.0 - 1e-9) {
+            return;
+        }
+        let stride = history.stride;
+        // The drop that was passing the emitter as this pulse left: one per pulse, because every
+        // ray of a pulse left the same event.
+        let u_emit = {
+            let (ut, ur, up) = raindrop.derivatives(metric, self.emitted_r);
+            [ut, ur, up]
+        };
+        let samples: Box<[RaySample]> = self
+            .rays
+            .iter()
+            .step_by(stride)
+            .map(|ray| {
+                if !ray.alive() {
+                    return RaySample { r: f32::NAN, phi: ray.phi as f32, gain: 1.0 };
+                }
+                let (ut, ur, up) = raindrop.derivatives(metric, ray.r);
+                let gain = ray.gain_between(metric, self.emitted_r, &u_emit, &[ut, ur, up]);
+                RaySample { r: ray.r as f32, phi: ray.phi as f32, gain: gain as f32 }
+            })
+            .collect();
+        let row = RingRow { t, samples };
+        if let Some(history) = self.history.as_mut() {
+            history.push(row);
+        }
     }
 
     /// Record every crossing of the receiver's worldline by this wavefront on this pass.
@@ -1795,6 +2031,13 @@ impl SignalField {
             rays,
             extent_track: vec![(emitter.t, emitter.r, emitter.r)],
             track_dt: TRACK_MIN_DT,
+            // Every eighth pulse carries a surface as well as a wedge. The stride is taken on the
+            // serial number rather than on the position in the field, so which pulses are tagged
+            // does not shift as the `MAX_PULSES` cap evicts the oldest.
+            history: self
+                .next_index
+                .is_multiple_of(HISTORY_PULSE_STRIDE)
+                .then(|| RingHistory::seeded(n, emitter.t, emitter.r, emitter.phi)),
             sheets: Vec::new(),
             receptions: Vec::new(),
         });
@@ -1818,14 +2061,23 @@ impl SignalField {
         self.t += dt;
         let t = self.t;
         let mut exhausted = 0;
+        // One instance of the raindrop congruence for the whole field, as `draw_signal_field`
+        // builds one for the whole frame and for the same reason: `GeodesicState::derivatives`
+        // reads only (E, L) off the state and takes the radius as an argument, so the radius it is
+        // constructed at is immaterial and 12 M is the one the drawing uses. Only the tagged pulses
+        // read it; constructing it is a handful of arithmetic against tens of thousands of ray
+        // substeps, so it is not made conditional.
+        let raindrop = GeodesicState::new_infall(metric, 0.0, 12.0, 1.0, 0.0);
         for pulse in self.pulses.iter_mut() {
             for ray in pulse.rays.iter_mut() {
                 if ray.step(metric, dt) == RayStep::BudgetExhausted {
                     exhausted += 1;
                 }
             }
-            // After the rays and never before: the extent is read off where they now stand.
+            // After the rays and never before: the extent is read off where they now stand, and so
+            // is the ring.
             pulse.extend_track(metric, t);
+            pulse.extend_history(metric, t, &raindrop);
         }
         self.budget_exhausted += exhausted;
     }
@@ -1882,6 +2134,18 @@ impl SignalField {
                 .count()
                 .max(1);
             pulse.extent_track.truncate(keep);
+            // The history is cut on the same rule and with the same tolerance: a row recorded after
+            // the target was recorded off rays that have just been integrated back out of it, and
+            // the emission row is never cut away.
+            if let Some(history) = pulse.history.as_mut() {
+                let keep = history
+                    .rows
+                    .iter()
+                    .take_while(|row| row.t <= target_t + 1e-9)
+                    .count()
+                    .max(1);
+                history.rows.truncate(keep);
+            }
             pulse.receptions.retain(|rec| rec.t <= target_t);
             pulse.sheets.clear();
         }
@@ -3160,6 +3424,7 @@ mod tests {
             rays,
             extent_track: vec![(0.0, r0, r0)],
             track_dt: TRACK_MIN_DT,
+            history: None,
             sheets: Vec::new(),
             receptions: Vec::new(),
         };
@@ -3368,6 +3633,7 @@ mod tests {
             rays,
             extent_track: vec![(0.0, r0, r0)],
             track_dt: TRACK_MIN_DT,
+            history: None,
             sheets: Vec::new(),
             receptions: Vec::new(),
         };
@@ -3912,6 +4178,7 @@ mod tests {
             rays,
             extent_track: vec![(0.0, r_receiver, r_receiver)],
             track_dt: TRACK_MIN_DT,
+            history: None,
             sheets: Vec::new(),
             receptions: Vec::new(),
         };
@@ -4018,6 +4285,7 @@ mod tests {
             rays,
             extent_track: vec![(0.0, r_receiver, r_receiver)],
             track_dt: TRACK_MIN_DT,
+            history: None,
             sheets: Vec::new(),
             receptions: Vec::new(),
         };
@@ -4112,6 +4380,7 @@ mod tests {
             rays,
             extent_track: vec![(0.0, r_receiver, r_receiver)],
             track_dt: TRACK_MIN_DT,
+            history: None,
             sheets: Vec::new(),
             receptions: Vec::new(),
         };
@@ -5599,6 +5868,235 @@ mod tests {
             smallest_frozen > 100.0,
             "every frozen ray must have climbed well up the ramp in 30 M: the dimmest is at \
              {smallest_frozen}"
+        );
+    }
+
+    #[test]
+    fn test_only_every_eighth_pulse_keeps_a_ring_history_and_it_is_bounded() {
+        // A ring history is a surface rather than a curve, so it is kept on a stride and it is
+        // capped on both axes. What a reader of one is entitled to assume is checked here: that the
+        // tagged pulses are exactly the ones whose serial number is a multiple of the stride, that
+        // a history starts on its own emission event, that its rows march forward in time, that
+        // every row is the same set of kept rays, and that none of it grows without bound.
+        let metric = KerrSchild::new(1.0, 0.65);
+        let field = run_field_to(&metric, 4.0, 0.02);
+        let tagged = field.pulses.iter().filter(|p| p.history().is_some()).count();
+        assert!(
+            field.pulses.len() > 16,
+            "the run must put more than two strides of pulses on the wire: {}",
+            field.pulses.len()
+        );
+
+        for pulse in field.pulses.iter() {
+            let expected = pulse.index.is_multiple_of(HISTORY_PULSE_STRIDE);
+            assert_eq!(
+                pulse.history().is_some(),
+                expected,
+                "pulse {} carries a history: {}, expected {expected}",
+                pulse.index,
+                pulse.history().is_some()
+            );
+            let Some(history) = pulse.history() else {
+                continue;
+            };
+            assert!(
+                history.rows.len() <= HISTORY_MAX_ROWS,
+                "pulse {} has {} rows, over the cap of {HISTORY_MAX_ROWS}",
+                pulse.index,
+                history.rows.len()
+            );
+            assert_eq!(
+                history.rows[0].t,
+                pulse.emitted_t,
+                "the history of pulse {} starts on its own emission event",
+                pulse.index
+            );
+            let kept = pulse.rays.len().div_ceil(history.ray_stride());
+            for pair in history.rows.windows(2) {
+                assert!(
+                    pair[1].t > pair[0].t,
+                    "the rows of pulse {} must march forward: {} then {}",
+                    pulse.index,
+                    pair[0].t,
+                    pair[1].t
+                );
+            }
+            for row in history.rows.iter() {
+                assert_eq!(
+                    row.samples.len(),
+                    kept,
+                    "every row of pulse {} is the same {kept} kept rays",
+                    pulse.index
+                );
+            }
+        }
+        let histories = || field.pulses.iter().filter_map(|p| p.history());
+        let widest = histories().map(|h| h.rows.len()).max().unwrap_or(0);
+        let stride = histories().map(|h| h.ray_stride()).max().unwrap_or(0);
+        println!(
+            "{} pulses in flight, {tagged} of them tagged at a stride of {HISTORY_PULSE_STRIDE}; \
+             the deepest history is {widest} rows of every {stride}th ray",
+            field.pulses.len()
+        );
+        assert!(tagged > 2, "more than two strides of pulses must give more than two histories");
+    }
+
+    #[test]
+    fn test_a_ring_history_is_cut_by_step_back_with_the_extent_track() {
+        // The history is part of the field's state, so the field's reversibility has to include it.
+        // A row recorded after the time being wound back to was recorded off rays that have just
+        // been integrated back out of it; leaving it standing would draw a piece of a light cone
+        // out of a future the field no longer has. Stepping forward again rebuilds it.
+        let metric = KerrSchild::new(1.0, 0.65);
+        let dt = 0.02;
+        let mut field = run_field_to(&metric, 3.0, dt);
+        let before: Vec<usize> =
+            field.pulses.iter().filter_map(|p| p.history()).map(|h| h.rows.len()).collect();
+        assert!(
+            before.iter().any(|n| *n > 4),
+            "the histories must have something to lose: {before:?}"
+        );
+
+        for _ in 0..50 {
+            field.step_back(&metric, dt);
+        }
+        let mut cut = 0;
+        for pulse in field.pulses.iter() {
+            let Some(history) = pulse.history() else {
+                continue;
+            };
+            cut += 1;
+            for row in history.rows.iter() {
+                assert!(
+                    row.t <= field.t + 1e-6,
+                    "pulse {} kept a row at t = {} after the field was wound back to {}",
+                    pulse.index,
+                    row.t,
+                    field.t
+                );
+            }
+        }
+        let after: Vec<usize> =
+            field.pulses.iter().filter_map(|p| p.history()).map(|h| h.rows.len()).collect();
+        assert!(cut > 0, "the wound-back field must still hold a tagged pulse");
+
+        for _ in 0..50 {
+            field.advance(&metric, dt);
+        }
+        let regrown: Vec<usize> =
+            field.pulses.iter().filter_map(|p| p.history()).map(|h| h.rows.len()).collect();
+        println!(
+            "histories {before:?} rows before the rewind, {after:?} after it, {regrown:?} once the \
+             same interval is played again"
+        );
+        assert!(
+            regrown.iter().zip(after.iter()).all(|(a, b)| a > b),
+            "stepping forward again must rebuild the rows the rewind cut"
+        );
+    }
+
+    #[test]
+    fn test_a_history_row_carries_the_gain_the_front_is_drawn_with() {
+        // The colour of a pulse surface in the volume has to be the colour of the same front on the
+        // equatorial view, or the two pictures are measuring different things. Both come from
+        // `NullRay::gain_between` between the raindrop at the emission event and the raindrop at
+        // the ray's own event, which is what `ray_gain` assembles here and what the field records;
+        // the stored sample is the f32 of that number and nothing else has been done to it.
+        let metric = KerrSchild::new(1.0, 0.65);
+        let params = WorldlineParams::default();
+        let emitter = Observer::new_with_phi(&metric, "Alice", 0.0, 4.5, 0.0, 0.0, params);
+        let mut field = SignalField::default();
+        field.emit_if_due(&metric, &emitter);
+        {
+            let pulse = field.pulses.first().expect("the first call emits");
+            let history = pulse.history().expect("pulse zero is tagged");
+            for sample in history.rows[0].samples.iter() {
+                assert!(
+                    (f64::from(sample.gain) - 1.0).abs() < 1e-6,
+                    "a fresh front is gain 1 on every sample: {}",
+                    sample.gain
+                );
+            }
+        }
+
+        let dt = 0.05;
+        for _ in 0..12 {
+            field.advance(&metric, dt);
+        }
+        let pulse = field.pulses.first().expect("the pulse is still in flight");
+        let history = pulse.history().expect("and it is still tagged");
+        let stride = history.ray_stride();
+        let row = history.rows.last().expect("a row was appended");
+        assert!(
+            history.rows.len() > 4,
+            "twelve steps of {dt} M is several rows: {}",
+            history.rows.len()
+        );
+        let mut worst = 0.0f64;
+        let mut live = 0;
+        for (i, sample) in row.samples.iter().enumerate() {
+            let ray = &pulse.rays[i * stride];
+            if !ray.alive() {
+                assert!(sample.r.is_nan(), "a dead ray records no radius: {}", sample.r);
+                continue;
+            }
+            live += 1;
+            let expected = ray_gain(&metric, pulse, ray);
+            assert_eq!(
+                sample.gain,
+                expected as f32,
+                "sample {i} carries {} where the drawing would colour that ray by {expected}",
+                sample.gain
+            );
+            worst = worst.max((f64::from(sample.gain) - expected).abs() / expected.abs());
+        }
+        println!(
+            "row at t = {}: {live} live samples, the stored f32 gain differing from the drawn f64 \
+             by at most {worst:.3e} relative",
+            row.t
+        );
+        assert!(live > 0, "the front must still have rays on it");
+        assert!(worst < 1e-6, "an f32 of the gain is the gain to seven digits: {worst}");
+    }
+
+    #[test]
+    fn test_a_history_is_thinned_rather_than_stopped() {
+        // The same degradation the extent track has, for the same reason: a history that stopped
+        // recording would end a drawn light cone in mid-air at a time that depended on how long the
+        // app had been running. Halving the rows buys the same span again at half the resolution,
+        // and the emission row - which is where the cone's apex is - survives every halving.
+        let mut history = RingHistory::seeded(144, 0.0, 4.5, 0.0);
+        assert_eq!(history.history_dt, HISTORY_MIN_DT);
+        assert_eq!(history.ray_stride(), 144 / HISTORY_RAY_SAMPLES);
+        let row_of = |t: f64| RingRow {
+            t,
+            samples: vec![RaySample { r: 4.0, phi: 0.0, gain: 1.0 }; HISTORY_RAY_SAMPLES]
+                .into_boxed_slice(),
+        };
+        for k in 1..HISTORY_MAX_ROWS {
+            history.push(row_of(k as f64 * HISTORY_MIN_DT));
+        }
+        assert_eq!(history.rows.len(), HISTORY_MAX_ROWS, "the cap is reached but not passed");
+        assert_eq!(history.history_dt, HISTORY_MIN_DT, "and nothing is thinned before it");
+
+        let newest = HISTORY_MAX_ROWS as f64 * HISTORY_MIN_DT;
+        history.push(row_of(newest));
+        println!(
+            "{HISTORY_MAX_ROWS} rows at dt = {HISTORY_MIN_DT} thinned to {} at dt = {}",
+            history.rows.len(),
+            history.history_dt
+        );
+        assert!(
+            history.rows.len() <= HISTORY_MAX_ROWS / 2 + 2,
+            "the thinning must halve the rows: {}",
+            history.rows.len()
+        );
+        assert_eq!(history.history_dt, 2.0 * HISTORY_MIN_DT, "and double the spacing");
+        assert_eq!(history.rows[0].t, 0.0, "the emission row survives the thinning");
+        assert_eq!(
+            history.rows.last().expect("rows").t,
+            newest,
+            "and so does the row that has just been pushed"
         );
     }
 }
