@@ -1,13 +1,15 @@
 use crate::gui::controls::{ReferenceFrame, SignalViews};
-use crate::gui::spacetime_canvas::TelemetryBoxes;
+use crate::gui::spacetime_canvas::{
+    TelemetryBoxes, distant_clock_grid_step, distant_clock_offset_label,
+};
 use crate::gui::spatial_canvas::{
-    CENTRED_RING_GAP, FrontStyle, Who, draw_reception_tick, draw_signal_field, draw_spatial_trail,
-    frame_focus,
+    CENTRED_RING_GAP, FrontStyle, RING_DROP_FLOOR, Who, draw_reception_tick, draw_signal_field,
+    draw_spatial_trail, frame_focus,
 };
 use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
+use crate::physics::local_frame::LocalFrame;
 use crate::physics::observer::Observer;
-use crate::physics::tetrad::light_cone_generators;
 use crate::physics::wavefront::{NullRay, RaySample, SignalField};
 use egui::{Color32, Pos2, Stroke, Vec2};
 use std::time::{Duration, Instant};
@@ -338,12 +340,24 @@ fn centroid_depth(
 /// stays visible through the front wall while the tube still reads as a tube. The square sharpens
 /// the rim: a linear falloff leaves the front wall too bright to see through.
 pub fn rim_weight(n_xy: (f32, f32), view: [f32; 3]) -> f32 {
-    let len = (n_xy.0 * n_xy.0 + n_xy.1 * n_xy.1).sqrt();
-    if len <= 0.0 {
+    face_weight([n_xy.0, n_xy.1, 0.0], view)
+}
+
+/// The same weight for a surface whose normal is not horizontal: (1 - |n_hat . d|)^2 from the
+/// Euclidean-unit normal in world axes.
+///
+/// A pipe wall is vertical and its normal has no z component, which is why `rim_weight` takes two
+/// numbers; a tangent plane of the local chart leans in every direction there is, so the rest-frame
+/// picture needs the three-component question. It is the one shading rule in the view, and having
+/// the two callers share it is what keeps a plane and a pipe reading as the same kind of glass.
+pub fn face_weight(n: [f32; 3], view: [f32; 3]) -> f32 {
+    let len = dot(n, n).sqrt();
+    #[allow(clippy::neg_cmp_op_on_partial_ord)] // a NaN component has to take this branch too
+    if !(len > 0.0) {
         return 0.0;
     }
-    let n = [n_xy.0 / len, n_xy.1 / len, 0.0];
-    let facing = dot(n, view).abs().min(1.0);
+    let unit = [n[0] / len, n[1] / len, n[2] / len];
+    let facing = dot(unit, view).abs().min(1.0);
     (1.0 - facing) * (1.0 - facing)
 }
 
@@ -358,6 +372,193 @@ pub fn glass(colour: Color32, base_alpha: u8, weight: f32) -> Color32 {
     Color32::from_rgba_unmultiplied(colour.r(), colour.g(), colour.b(), base_alpha)
         .gamma_multiply(0.15 + 0.85 * weight.clamp(0.0, 1.0))
 }
+
+/// Where an event (t, r, phi) is drawn in the volume: the one map the whole scene is routed
+/// through, chosen by the frame-of-reference selector.
+///
+/// `Global` is the Kerr-Schild chart the view has always drawn - the equatorial embedding laid out
+/// as a floor with coordinate time as height - and the picture it gives is the same for everybody,
+/// which is what makes it the right place to read a horizon off. `Local` is the focus observer's
+/// own first-order inertial chart, the same one `gui::spacetime_canvas::render_observer_frame`
+/// draws in two dimensions, lifted into three: the dual tetrad xi^a = e^a_mu Delta x^mu of
+/// `LocalFrame`, with the drawn axes (xi^1, xi^2, xi^0 t_scale).
+///
+/// Everything the two charts disagree about follows from the map being linear and the tetrad being
+/// orthonormal. In `Local` the focus observer's worldline is the vertical axis, their light cone is
+/// the exact 45 degree circular cone, a surface r = const is a *plane* whose tilt is its causal
+/// character, and the distant clock's slices are a stack of planes that crowd into the past cone as
+/// u^t runs away. In `Global` a surface r = const is a pipe and a cone leans over instead. Neither
+/// is a drawing rule: both come out of the same geometry read in two charts.
+///
+/// It is a first-order chart. The orientations at the focus observer's own event - the tilt of
+/// every cone, the causal character of every surface - are exact; finite offsets are the linearised
+/// answer. The legend says so.
+enum Chart {
+    Global {
+        /// The simulation clock the floor stands at, so that height is t - t_now.
+        t_now: f64,
+    },
+    Local {
+        frame: LocalFrame,
+        t0: f64,
+        r0: f64,
+        phi0: f64,
+    },
+}
+
+impl Chart {
+    /// The world point an event is drawn at.
+    fn world(&self, metric: &KerrSchild, t: f64, r: f64, phi: f64, t_scale: f64) -> [f64; 3] {
+        match self {
+            Self::Global { t_now } => {
+                let (x, y) = metric.cartesian_position(r, phi);
+                [x, y, (t - t_now) * t_scale]
+            }
+            Self::Local { frame, t0, r0, phi0 } => {
+                // The azimuth is a difference on a circle: an observer three turns round the hole
+                // from the focus is not three turns' worth of local distance away, they are next
+                // door, and the shortest offset is the one the chart is linearised about.
+                let xi = frame.to_local(&[t - t0, r - r0, wrap_pi(phi - phi0)]);
+                [xi[1], xi[2], xi[0] * t_scale]
+            }
+        }
+    }
+
+    /// Where a coordinate vector k^mu carried at the event (r, phi) points, as a world direction
+    /// scaled so that its vertical component is exactly `t_scale`: one unit of the chart's own time
+    /// per unit of the parameter, which is what makes `apex + span * direction` a rim at `span` of
+    /// that time.
+    ///
+    /// In `Global` this is `KerrSchild::cartesian_velocity` of the coordinate slopes, which is the
+    /// composition `light_cone_generators` performs. In `Local` it is the same linear map `world`
+    /// uses, applied to a vector rather than to a displacement - so a null k stays null, and the rim
+    /// of the cone it generates is the unit circle at 45 degrees.
+    ///
+    /// `None` when any component came out non-finite: at u^t ~ 1e10 a mapped vector can overflow
+    /// what an f32 projection can carry, and a primitive with a non-finite corner is dropped rather
+    /// than drawn.
+    fn direction(
+        &self,
+        metric: &KerrSchild,
+        r: f64,
+        phi: f64,
+        k: &[f64; 3],
+        t_scale: f64,
+    ) -> Option<[f64; 3]> {
+        let d = match self {
+            Self::Global { .. } => {
+                let (vx, vy) = metric.cartesian_velocity(r, phi, k[1] / k[0], k[2] / k[0]);
+                [vx, vy, t_scale]
+            }
+            Self::Local { frame, .. } => {
+                let v = frame.vector_to_local(k);
+                [v[1] / v[0], v[2] / v[0], t_scale]
+            }
+        };
+        finite3(d).then_some(d)
+    }
+
+    fn is_local(&self) -> bool {
+        matches!(self, Self::Local { .. })
+    }
+}
+
+/// The shortest signed azimuthal offset, in (-pi, pi].
+fn wrap_pi(d_phi: f64) -> f64 {
+    use std::f64::consts::{PI, TAU};
+    (d_phi + PI).rem_euclid(TAU) - PI
+}
+
+/// Whether a world point can be projected at all. A frozen observer's frame carries u^t ~ 1e10, and
+/// a displacement mapped through it can be enormous or not a number; `Camera::project` rounds to
+/// f32, so the scene drops such a primitive rather than pushing an infinity into a mesh.
+fn finite3(p: [f64; 3]) -> bool {
+    p[0].is_finite() && p[1].is_finite() && p[2].is_finite()
+}
+
+/// One tangent plane of the local chart, ready to be drawn as a square patch.
+///
+/// A surface of the spacetime maps to the affine plane n_a xi^a = d under the dual tetrad, with the
+/// normal read off the tetrad legs - n_a = e_a^r for a surface r = const, n_a = e_a^t for a slice of
+/// the distant clock. That is the whole content of the drawing: the numbers come from the geometry
+/// and the patch is only how much of an infinite plane fits on the screen.
+struct LocalPlane {
+    /// Euclidean-unit normal in chart axes (xi^0, xi^1, xi^2). Euclidean, because this is the
+    /// geometry of the *picture* - which way the patch faces the eye, where its nearest point is -
+    /// and not of the spacetime; the Minkowski norm of the same normal is what says whether the
+    /// plane is timelike, and that is read elsewhere.
+    unit: [f64; 3],
+    /// The point of the plane nearest the chart's origin - nearest the focus observer's own event.
+    /// The patch is centred there and a label hung off it.
+    nearest: [f64; 3],
+    /// Two orthonormal legs spanning the plane, in the same axes.
+    legs: [[f64; 3]; 2],
+}
+
+/// The plane n_a xi^a = `d` of the local chart, or `None` when the normal has no Euclidean length
+/// and there is no plane to speak of.
+fn local_plane(n: [f64; 3], d: f64) -> Option<LocalPlane> {
+    let len_sq = n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
+    #[allow(clippy::neg_cmp_op_on_partial_ord)] // a NaN normal has to take this branch too
+    if !(len_sq > 0.0) || !len_sq.is_finite() || !d.is_finite() {
+        return None;
+    }
+    let len = len_sq.sqrt();
+    let unit = [n[0] / len, n[1] / len, n[2] / len];
+    let nearest = [n[0] * d / len_sq, n[1] * d / len_sq, n[2] * d / len_sq];
+    // Any axis that is not nearly parallel to the normal gives a first leg; crossing twice gives
+    // the second. The choice of seed rotates the patch about its own normal and nothing else.
+    let seed = if unit[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
+    let first = cross3(seed, unit);
+    let first_len = (first[0] * first[0] + first[1] * first[1] + first[2] * first[2]).sqrt();
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    if !(first_len > 0.0) {
+        return None;
+    }
+    let u = [first[0] / first_len, first[1] / first_len, first[2] / first_len];
+    let v = cross3(unit, u);
+    Some(LocalPlane { unit, nearest, legs: [u, v] })
+}
+
+fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+/// How many quads a tangent plane's patch is cut into along each side.
+///
+/// A plane cannot be one mesh: it runs from the bottom of the window to the top, so a single
+/// primitive sorted at one depth would interleave wrongly with every worldline and cone it passes
+/// through, and its centroid would place the whole surface in one layer when half of it is in the
+/// observer's past and half in their future. Eight a side is 64 pieces, each short enough that its
+/// own centroid is a fair place to sort and to layer it, and cheap enough that four surfaces cost
+/// less than one pipe's 72 strips did.
+const PLANE_CELLS: usize = 8;
+
+/// The same for one slice of the distant clock. Coarser, because there are many of them and each is
+/// a faint wash rather than a surface to be read against.
+const CLOCK_PLANE_CELLS: usize = 4;
+
+/// Opacity of one slice of the distant clock drawn as a plane.
+const CLOCK_PLANE_ALPHA: u8 = 30;
+
+/// At most this many slices of the distant clock, either side of the observer's own now.
+///
+/// The bound that actually decides the count is geometric - a plane whose nearest point is further
+/// from the origin than the patch is wide has nothing on screen - and this is the backstop for the
+/// case where the step has collapsed relative to the window.
+const CLOCK_PLANE_MAX_K: i64 = 100;
+
+/// How close two neighbouring slices of the distant clock may be drawn, in pixels, before their
+/// labels are dropped.
+///
+/// The planes themselves stay: a wall of them piling into the past cone *is* the picture on the
+/// approach to the far branch of r-. What cannot survive it is the text, which at that spacing is a
+/// solid block of overlapping glyphs, so the labels go and the geometry stays.
+const CLOCK_LABEL_MIN_PX: f32 = 14.0;
 
 /// How many segments a pipe wall, a floor ring and a tick ring are each cut into. Seventy-two is
 /// five degrees a segment: at the zoom the view opens on, a chord of five degrees departs from the
@@ -678,11 +879,42 @@ impl VolumeCanvas {
         // the right-click menu takes `&mut self` while they are still alive.
         let camera = self.camera;
         let t_scale = camera.t_scale;
+        let window = self.time_window;
         let focus = frame_focus(self.centred_on, frame_of_ref, bob, alice);
-        let offset = focus.map_or(Vec2::ZERO, |obs| {
-            let (x, y) = obs.cartesian_position(metric);
-            camera.project(Pos2::ZERO, [x, y, 0.0]).0 - Pos2::ZERO
-        });
+        // Which chart the scene is drawn in. The selector names an observer; if that observer is
+        // not in the run there is no frame to build and the view falls back to the global
+        // foliation, exactly as `frame_focus` falls back to following nobody.
+        let frame_obs = match frame_of_ref {
+            ReferenceFrame::Bob => bob,
+            ReferenceFrame::Alice => alice,
+            ReferenceFrame::DistantObserver => None,
+        };
+        let chart = frame_obs
+            .and_then(|obs| {
+                // A rest frame is built on a 4-velocity, and an observer placed where their own
+                // (E, L) has no real radial root has none: u comes back as NaN and there is no
+                // frame at that event to draw. The view says so by drawing the global chart rather
+                // than by filling the canvas with nothing.
+                let u = obs.four_velocity(metric);
+                finite3(u).then(|| Chart::Local {
+                    frame: LocalFrame::for_observer(metric, obs.r, &u),
+                    t0: obs.t,
+                    r0: obs.r,
+                    phi0: obs.phi,
+                })
+            })
+            .unwrap_or(Chart::Global { t_now: current_time });
+        // In a rest frame the focus observer *is* the origin of the chart, so there is nothing to
+        // follow: the offset that keeps them in the middle is zero, and the view is anchored on
+        // them by construction rather than by a pan.
+        let offset = if chart.is_local() {
+            Vec2::ZERO
+        } else {
+            focus.map_or(Vec2::ZERO, |obs| {
+                let (x, y) = obs.cartesian_position(metric);
+                camera.project(Pos2::ZERO, [x, y, 0.0]).0 - Pos2::ZERO
+            })
+        };
         self.focus_offset = offset;
         let centre = rect.center() + camera.pan - offset;
 
@@ -691,7 +923,19 @@ impl VolumeCanvas {
         // The floor map is exactly the `Fn((f64, f64)) -> Pos2` the equatorial view's drawing
         // helpers take, which is what lets the fronts, the trails and the arrival ticks be the same
         // code here as there rather than a second implementation that could disagree with it.
-        let floor = |(x, y): (f64, f64)| camera.project(centre, [x, y, 0.0]).0;
+        //
+        // In a rest frame the floor is no longer a slice of constant t, so a Cartesian point of the
+        // equatorial plane cannot simply be dropped onto z = 0: it is inverted back to the chart
+        // point (r, phi) it stands for and then placed, as the event (t_now, r, phi), by the same
+        // map everything else goes through. That lands the fronts on the tilted slice t = t_now
+        // exactly, which is where they actually are.
+        let floor = |(x, y): (f64, f64)| match &chart {
+            Chart::Global { .. } => camera.project(centre, [x, y, 0.0]).0,
+            Chart::Local { .. } => {
+                let (r, phi) = metric.chart_point(x, y, RING_DROP_FLOOR);
+                camera.project(centre, chart.world(metric, current_time, r, phi, t_scale)).0
+            }
+        };
         // Height is a coordinate-time difference in M, kept in f64 the whole way into `project`,
         // which takes the one rounding to f32 it needs. Near r- the interesting times differ from
         // t_now by parts in 1e7 of t_now itself, and taking the difference in f32 would quantise
@@ -714,25 +958,203 @@ impl VolumeCanvas {
                 .collect()
         };
 
+        // A world point from a chart point, and the drawer for one tangent plane: both live here,
+        // where the camera and the view direction are, and both are used by the surfaces of
+        // constant r and by the distant clock's slices alike.
+        let xi_to_world = |xi: [f64; 3]| [xi[1], xi[2], xi[0] * t_scale];
+        let push_plane = |buf: &mut PrimBuffer,
+                          plane: &LocalPlane,
+                          half_width: f64,
+                          cells: usize,
+                          colour: Color32,
+                          alphas: (u8, u8)|
+         -> Option<[Pos2; 2]> {
+            // The Fresnel weight a pipe's wall is shaded by, asked of a plane: the surface
+            // n_0 xi^0 + n_1 xi^1 + n_2 xi^2 = d is n_1 X + n_2 Y + (n_0 / t_scale) Z = d once the
+            // world axes are (xi^1, xi^2, xi^0 t_scale), so that is the normal the eye sees it by.
+            let weight = face_weight(
+                [
+                    plane.unit[1] as f32,
+                    plane.unit[2] as f32,
+                    (plane.unit[0] / t_scale) as f32,
+                ],
+                view_d,
+            );
+            let at = |s: f64, t: f64| -> [f64; 3] {
+                core::array::from_fn(|i| {
+                    plane.nearest[i] + half_width * (s * plane.legs[0][i] + t * plane.legs[1][i])
+                })
+            };
+            let n = cells as f64;
+            for i in 0..cells {
+                for j in 0..cells {
+                    let s0 = -1.0 + 2.0 * (i as f64) / n;
+                    let s1 = -1.0 + 2.0 * ((i + 1) as f64) / n;
+                    let t0 = -1.0 + 2.0 * (j as f64) / n;
+                    let t1 = -1.0 + 2.0 * ((j + 1) as f64) / n;
+                    let xi = [at(s0, t0), at(s1, t0), at(s1, t1), at(s0, t1)];
+                    let corners = xi.map(xi_to_world);
+                    if !corners.iter().all(|c| finite3(*c)) {
+                        continue;
+                    }
+                    // Each piece is placed by its own centroid: the half of a plane that lies in
+                    // the observer's future goes over the floor and at half the opacity, so the
+                    // past stays the louder of the two exactly as it does for the pipes.
+                    let mid = 0.25 * (xi[0][0] + xi[1][0] + xi[2][0] + xi[3][0]);
+                    let (layer, alpha) = if mid > 0.0 {
+                        (Layer::Above, alphas.1)
+                    } else {
+                        (Layer::Below, alphas.0)
+                    };
+                    let (mesh, depth) =
+                        quad_mesh(&camera, centre, corners, glass(colour, alpha, weight));
+                    buf.push(layer, depth, Prim::Mesh(mesh));
+                }
+            }
+            // Where the plane cuts the floor xi^0 = 0, as the segment joining the two edges of the
+            // patch it crosses. xi^0 is affine over the patch, so the crossing on an edge is one
+            // linear interpolation and nothing has to be sampled.
+            let square = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+            let mut hits: Vec<[f64; 3]> = Vec::new();
+            for e in 0..4 {
+                let (s0, t0) = square[e];
+                let (s1, t1) = square[(e + 1) % 4];
+                let (a, b) = (at(s0, t0)[0], at(s1, t1)[0]);
+                if !a.is_finite() || !b.is_finite() || (a > 0.0) == (b > 0.0) {
+                    continue;
+                }
+                let f = a / (a - b);
+                hits.push(at(s0 + f * (s1 - s0), t0 + f * (t1 - t0)));
+            }
+            if hits.len() < 2 {
+                return None;
+            }
+            let ends = [xi_to_world(hits[0]), xi_to_world(hits[hits.len() - 1])];
+            if !ends.iter().all(|c| finite3(*c)) {
+                return None;
+            }
+            Some(ends.map(|p| camera.project(centre, p).0))
+        };
+
         let mut buf = PrimBuffer::default();
 
-        // 4. The surfaces of constant r, as glass pipes below the floor and as rings on it.
+        // 4. The surfaces of constant r: glass pipes in the global chart, tangent planes in a rest
+        // frame, and in both a mark on the floor where they cross it.
         //
-        // A pipe is the honest picture of what r = const is in this chart: not a circle a worldline
-        // happens to cross, but a wall standing in time, so that "Bob went through r+" is a
-        // worldline entering a tube and never leaving it. The wall is only drawn below the floor,
+        // A pipe is the honest picture of what r = const is in the *global* chart: not a circle a
+        // worldline happens to cross, but a wall standing in time, so that "Bob went through r+" is
+        // a worldline entering a tube and never leaving it. The wall is only drawn below the floor,
         // over the past the simulation has actually integrated; above it there are rings alone,
         // because the future of a horizon is not something this run has computed and a solid wall
         // up there would claim it had.
+        //
+        // In a rest frame the same surface is a plane, because the chart is linear: the condition
+        // for a displacement to stay on it is n_a xi^a = r_h - r_obs with n_a = e_a^r, the
+        // r-components of the tetrad legs (see `LocalFrame::surface_r_const`, which is this plane's
+        // two-dimensional slice). Its tilt is then its causal character and not a drawing rule:
+        // steeper than 45 degrees where g^rr > 0 and the surface can be hovered at, exactly 45 on
+        // either horizon, flatter where it is spacelike and lies wholly in a future or a past. The
+        // trace it leaves on the floor is drawn in the full ring colour, so the eye still finds the
+        // surfaces without having to read the glass.
         let z_bottom = z_of(t_min);
         let tick_r = if metric.cartesian_radius(rm) > 0.0 { rm } else { rp };
-        let mut floor_rings: Vec<(Vec<Pos2>, Stroke)> = Vec::new();
-        for (r, colour, base_alpha, width) in [
+        let mut floor_rings: Vec<(Vec<Pos2>, Stroke, bool)> = Vec::new();
+        let surfaces = [
             (0.0, Theme::SINGULARITY_LINE, 70u8, 2.0f32),
             (rm, Theme::HORIZON_CAUCHY, 60, 2.0),
             (rp, Theme::HORIZON_OUTER, 60, 2.5),
             (re, Theme::ERGOSPHERE_LINE, 35, 1.5),
-        ] {
+        ];
+        if let Chart::Local { frame, r0, .. } = &chart {
+            let tetrad = *frame.tetrad();
+            // n_a = e_a^r, in the chart's own (xi^0, xi^1, xi^2) order.
+            let n = [tetrad.e0[1], tetrad.e1[1], tetrad.e2[1]];
+            for (r_h, colour, base_alpha, width) in surfaces {
+                let Some(plane) = local_plane(n, r_h - r0) else {
+                    continue;
+                };
+                let trace = push_plane(
+                    &mut buf,
+                    &plane,
+                    window,
+                    PLANE_CELLS,
+                    colour,
+                    (base_alpha, base_alpha / 2),
+                );
+                if let Some(ends) = trace {
+                    floor_rings.push((ends.to_vec(), Stroke::new(width, colour), false));
+                }
+            }
+
+            // The distant observer's clock, as a stack of planes rather than as rungs on one pipe.
+            //
+            // A slice t = const of the chart's Killing time is the set of events that far-away
+            // clock labels with one reading, and in this frame it is the plane e_a^t xi^a = dt. The
+            // step between neighbours is picked by the same rule the flat rest-frame diagram uses -
+            // a round unit of the observer's *own* clock, carried across by u^t - so the grid keeps
+            // a constant pixel pitch while the outside clock runs away. On the approach to the far
+            // branch of r- u^t grows like exp(kappa_- t), and what that does to this picture is the
+            // whole point of drawing it: the planes crowd into the observer's past cone without
+            // limit, so infinitely many of the distant clock's moments are crossed in a finite
+            // amount of their own time. Every one of these planes is flatter than 45 degrees, in
+            // every region, because dt is timelike everywhere in this chart.
+            if show_distant_clock_grid {
+                let n_t = [tetrad.e0[0], tetrad.e1[0], tetrad.e2[0]];
+                let n_len = (n_t[0] * n_t[0] + n_t[1] * n_t[1] + n_t[2] * n_t[2]).sqrt();
+                let seconds_per_m = metric.t_grav_seconds() / metric.m.max(1e-12);
+                let step =
+                    distant_clock_grid_step(tetrad.e0[0], camera.scale, seconds_per_m, font_scale)
+                        .step_m;
+                if step.is_finite() && step > 0.0 && n_len.is_finite() && n_len > 0.0 {
+                    // A plane whose nearest point is further from the origin than the patch is wide
+                    // has nothing on screen: |k step| / |n| > W. That is the bound, and the count
+                    // cap behind it is only a backstop.
+                    let reach = window * n_len / step;
+                    let k_max = if reach.is_finite() {
+                        (reach.floor() as i64).clamp(0, CLOCK_PLANE_MAX_K)
+                    } else {
+                        CLOCK_PLANE_MAX_K
+                    };
+                    // How far apart two neighbouring slices land on the screen, measured between
+                    // the nearest points of k = 0 and k = 1. Below a glyph's width the labels are a
+                    // solid block, so they are dropped and the planes go on without them.
+                    let label = local_plane(n_t, step).is_some_and(|one| {
+                        let a = camera.project(centre, xi_to_world([0.0, 0.0, 0.0])).0;
+                        let b = camera.project(centre, xi_to_world(one.nearest)).0;
+                        a.distance(b) >= CLOCK_LABEL_MIN_PX * font_scale
+                    });
+                    for k in -k_max..=k_max {
+                        let dt = (k as f64) * step;
+                        let Some(plane) = local_plane(n_t, dt) else {
+                            continue;
+                        };
+                        push_plane(
+                            &mut buf,
+                            &plane,
+                            window,
+                            CLOCK_PLANE_CELLS,
+                            Theme::GRID_LINE,
+                            (CLOCK_PLANE_ALPHA, CLOCK_PLANE_ALPHA),
+                        );
+                        if !label {
+                            continue;
+                        }
+                        let at = xi_to_world(plane.nearest);
+                        if !finite3(at) {
+                            continue;
+                        }
+                        buf.label(
+                            camera.project(centre, at).0,
+                            egui::Align2::LEFT_CENTER,
+                            distant_clock_offset_label(dt * seconds_per_m),
+                            Theme::TEXT_MUTED,
+                        );
+                    }
+                }
+            }
+        }
+        let pipes: &[(f64, Color32, u8, f32)] = if chart.is_local() { &[] } else { &surfaces };
+        for (r, colour, base_alpha, width) in pipes.iter().copied() {
             // A surface of constant r is the circle of Cartesian radius sqrt(r^2 + a^2); r = 0 is
             // the ring, at rho = |a|, and a hole with no spin has no ring and so no pipe there.
             let rho = metric.cartesian_radius(r);
@@ -753,7 +1175,7 @@ impl VolumeCanvas {
                 );
                 buf.push(Layer::Below, depth, Prim::Mesh(mesh));
             }
-            floor_rings.push((ring_points(rho, 0.0), Stroke::new(width, colour)));
+            floor_rings.push((ring_points(rho, 0.0), Stroke::new(width, colour), true));
 
             // The distant observer's clock, as rungs on one pipe: one ring per whole M of t. On
             // r-, because that is the pipe a frozen worldline winds up, one turn of helix per
@@ -816,10 +1238,11 @@ impl VolumeCanvas {
                 .trail
                 .iter()
                 .filter(|p| p.t >= t_min && p.t <= current_time)
-                .map(|p| {
-                    let (x, y) = metric.cartesian_position(p.r, p.phi);
-                    (p.t, [x, y, z_of(p.t)])
-                })
+                .map(|p| (p.t, chart.world(metric, p.t, p.r, p.phi, t_scale)))
+                // A trail point that maps to an infinity is a point of the linearised chart that
+                // has run off the far end of f32, and it is dropped rather than drawn: the rest of
+                // the worldline is still the worldline.
+                .filter(|(_, p)| finite3(*p))
                 .collect();
             let mut start = 0;
             while start + 1 < points.len() {
@@ -855,28 +1278,47 @@ impl VolumeCanvas {
         // frame crowds all 36 samples into one point of the rim and leaves the rest undrawn.
         let cone_span = (self.time_window * 0.12).clamp(1e-4, 1.8);
         let push_cone = |buf: &mut PrimBuffer,
+                             t_at: f64,
                              r: f64,
                              phi: f64,
-                             z0: f64,
                              fills: (Color32, Color32, Color32),
                              ghost: bool| {
             let tetrad = Observer::raindrop_tetrad(metric, r);
-            let gens = light_cone_generators(metric, r, phi, &tetrad, CONE_SAMPLES);
-            if gens.is_empty() {
+            let apex = chart.world(metric, t_at, r, phi, t_scale);
+            if !finite3(apex) {
                 return;
             }
-            let (x, y) = metric.cartesian_position(r, phi);
-            let apex = [x, y, z0];
+            // The rim is the 36 null directions at the event, each carried a fixed span of the
+            // chart's own time by the map the rest of the scene is drawn with. In the global chart
+            // that is `light_cone_generators`' own composition and the cone leans over as the
+            // geometry says; in a rest frame the same null vectors stay null under a linear map,
+            // so the rim comes out as the unit circle and the cone is at exactly 45 degrees.
+            let mut future: Vec<[f64; 3]> = Vec::with_capacity(CONE_SAMPLES);
+            for i in 0..CONE_SAMPLES {
+                let alpha = std::f64::consts::TAU * (i as f64) / (CONE_SAMPLES as f64);
+                let Some(d) = chart.direction(metric, r, phi, &tetrad.null_direction(alpha), t_scale)
+                else {
+                    return;
+                };
+                let p = [
+                    apex[0] + cone_span * d[0],
+                    apex[1] + cone_span * d[1],
+                    apex[2] + cone_span * d[2],
+                ];
+                if !finite3(p) {
+                    return;
+                }
+                future.push(p);
+            }
             let rise = cone_span * t_scale;
-            let future: Vec<[f64; 3]> = gens
-                .iter()
-                .map(|(gx, gy)| [x + cone_span * gx, y + cone_span * gy, z0 + rise])
-                .collect();
+            let z0 = apex[2];
             // The past half is the future half reflected through the apex, which is what the past
             // cone of an event is: the same null directions run backwards.
-            let past: Vec<[f64; 3]> =
-                future.iter().map(|p| [2.0 * x - p[0], 2.0 * y - p[1], 2.0 * z0 - p[2]]).collect();
-            let n = gens.len() as f64;
+            let past: Vec<[f64; 3]> = future
+                .iter()
+                .map(|p| [2.0 * apex[0] - p[0], 2.0 * apex[1] - p[1], 2.0 * z0 - p[2]])
+                .collect();
+            let n = future.len() as f64;
             for (rim, fill, mean_z, fixed) in [
                 (&future, fills.0, (z0 + n * (z0 + rise)) / (n + 1.0), Layer::Above),
                 (&past, fills.1, (z0 + n * (z0 - rise)) / (n + 1.0), Layer::Below),
@@ -905,7 +1347,7 @@ impl VolumeCanvas {
         for (obs, _) in present.iter().copied() {
             let (future_fill, past_fill, edge) =
                 Theme::cone_colours_at(&obs.name, Theme::VOLUME_CONE_FILL_ALPHA);
-            push_cone(&mut buf, obs.r, obs.phi, 0.0, (future_fill, past_fill, edge), false);
+            push_cone(&mut buf, current_time, obs.r, obs.phi, (future_fill, past_fill, edge), false);
             if self.show_ghost_cones {
                 let k_lo = t_min.ceil() as i64;
                 let k_hi = current_time.ceil() as i64 - 1;
@@ -925,9 +1367,9 @@ impl VolumeCanvas {
                     };
                     push_cone(
                         &mut buf,
+                        p.t,
                         p.r,
                         p.phi,
-                        z_of(p.t),
                         (
                             future_fill.gamma_multiply(0.4),
                             past_fill.gamma_multiply(0.4),
@@ -985,10 +1427,7 @@ impl VolumeCanvas {
                 // back on itself paints solid.
                 let (_, past_fill, edge) =
                     Theme::cone_colours_at(&obs.name, Theme::VOLUME_CONE_FILL_ALPHA / 2);
-                let to_world = |s: [f64; 3]| {
-                    let (x, y) = metric.cartesian_position(s[1], s[2]);
-                    [x, y, z_of(s[0])]
-                };
+                let to_world = |s: [f64; 3]| chart.world(metric, s[0], s[1], s[2], t_scale);
                 let n = cone.rays.len();
                 for (i, a) in cone.rays.iter().enumerate() {
                     // Consecutive generators, closing the last back onto the first: the strip
@@ -1009,6 +1448,11 @@ impl VolumeCanvas {
                                 to_world(b[k + 1]),
                                 to_world(a[k + 1]),
                             ];
+                            // A corner the linearised chart has thrown off the end of f32 ends the
+                            // surface there, exactly as a generator that died at the ring does.
+                            if !quad.iter().all(|c| finite3(*c)) {
+                                continue;
+                            }
                             let base = mesh.vertices.len() as u32;
                             for c in quad {
                                 mesh.colored_vertex(project(c).0, past_fill);
@@ -1019,8 +1463,10 @@ impl VolumeCanvas {
                             mesh.add_triangle(base, base + 1, base + 2);
                             mesh.add_triangle(base, base + 2, base + 3);
                         }
-                        let depth = centroid_depth(&camera, centre, corners.into_iter());
-                        buf.push(Layer::Below, depth, Prim::Mesh(mesh));
+                        if !mesh.is_empty() {
+                            let depth = centroid_depth(&camera, centre, corners.into_iter());
+                            buf.push(Layer::Below, depth, Prim::Mesh(mesh));
+                        }
                         // One row of overlap, so the chunks meet instead of leaving a gap.
                         k0 = k1;
                     }
@@ -1029,7 +1475,11 @@ impl VolumeCanvas {
                 // history across a surface that is otherwise a wash. Nine of them: enough to read
                 // the twist frame dragging puts into the cone, few enough not to fill it in.
                 for i in (0..n).step_by(4) {
-                    let points: Vec<[f64; 3]> = cone.rays[i].iter().map(|s| to_world(*s)).collect();
+                    let points: Vec<[f64; 3]> = cone.rays[i]
+                        .iter()
+                        .map(|s| to_world(*s))
+                        .filter(|p| finite3(*p))
+                        .collect();
                     let mut start = 0;
                     while start + 1 < points.len() {
                         let end = (start + WORLDLINE_RUN).min(points.len());
@@ -1075,8 +1525,7 @@ impl VolumeCanvas {
         // hundred rows of two or three tagged pulses.
         if self.show_pulse_surfaces {
             let to_world = |t: f64, s: &RaySample| {
-                let (x, y) = metric.cartesian_position(f64::from(s.r), f64::from(s.phi));
-                [x, y, z_of(t)]
+                chart.world(metric, t, f64::from(s.r), f64::from(s.phi), t_scale)
             };
             for field in [signals.bob, signals.alice] {
                 for pulse in field.pulses.iter() {
@@ -1118,9 +1567,13 @@ impl VolumeCanvas {
                                 if quad.iter().any(|(_, s)| s.r.is_nan()) {
                                     continue;
                                 }
+                                let corner: Vec<[f64; 3]> =
+                                    quad.iter().map(|(t, s)| to_world(*t, s)).collect();
+                                if !corner.iter().all(|c| finite3(*c)) {
+                                    continue;
+                                }
                                 let base = mesh.vertices.len() as u32;
-                                for (t, s) in quad {
-                                    let c = to_world(t, s);
+                                for ((_, s), c) in quad.into_iter().zip(corner) {
                                     mesh.colored_vertex(
                                         project(c).0,
                                         Theme::front_colour(f64::from(s.gain), FRONT_SURFACE_ALPHA),
@@ -1157,17 +1610,29 @@ impl VolumeCanvas {
         // buffer, because it *is* the sorting plane - the one surface whose place in the order is
         // known without a depth - and because the fronts and the trails come from the equatorial
         // view's helpers, which paint rather than return shapes.
-        let ring_rho = metric.cartesian_radius(0.0).max(2.0 / f64::from(camera.scale));
-        for (rho, fill) in [
-            (metric.cartesian_radius(re), Theme::ERGOSPHERE_FILL),
-            (metric.cartesian_radius(rp), Theme::REGION_II_FILL),
-            (metric.cartesian_radius(rm), Theme::REGION_III_FILL),
-            (ring_rho, Theme::SINGULARITY_FILL),
-        ] {
-            painter.add(egui::Shape::convex_polygon(ring_points(rho, 0.0), fill, Stroke::NONE));
+        //
+        // The region fills are a picture of one slice t = const, and in a rest frame the floor
+        // xi^0 = 0 is not one: it is the observer's own local space, tilted against every slice of
+        // the chart's time there is. Painting the equatorial regions on it would be drawing one
+        // slicing on another, so in a rest frame the floor carries only what belongs to it - the
+        // traces of the tangent planes, and the fronts, which are placed event by event.
+        if !chart.is_local() {
+            let ring_rho = metric.cartesian_radius(0.0).max(2.0 / f64::from(camera.scale));
+            for (rho, fill) in [
+                (metric.cartesian_radius(re), Theme::ERGOSPHERE_FILL),
+                (metric.cartesian_radius(rp), Theme::REGION_II_FILL),
+                (metric.cartesian_radius(rm), Theme::REGION_III_FILL),
+                (ring_rho, Theme::SINGULARITY_FILL),
+            ] {
+                painter.add(egui::Shape::convex_polygon(ring_points(rho, 0.0), fill, Stroke::NONE));
+            }
         }
-        for (points, stroke) in floor_rings {
-            painter.add(egui::Shape::closed_line(points, stroke));
+        for (points, stroke, closed) in floor_rings {
+            painter.add(if closed {
+                egui::Shape::closed_line(points, stroke)
+            } else {
+                egui::Shape::line(points, stroke)
+            });
         }
         // The two transmissions, Bob's first and at half the stroke width, exactly as the
         // equatorial view lays them down, so that where the two overlap it is the heavier field
@@ -1186,11 +1651,16 @@ impl VolumeCanvas {
         // from, with the time thrown away. It is what ties the two pictures together - the curve on
         // the floor is what the equatorial view draws, and the curve above it is that curve given
         // its time back.
-        if let Some(al) = alice {
-            draw_spatial_trail(&painter, metric, al, Theme::ALICE_COLOR, 1.2, &floor);
-        }
-        if let Some(b) = bob {
-            draw_spatial_trail(&painter, metric, b, Theme::BOB_COLOR, 1.5, &floor);
+        // Only in the global chart: the shadow is the worldline with its time thrown away, and
+        // that is a picture of the slice t = t_now. The rest frame's floor is not that slice, so a
+        // shadow cast onto it would be a curve of no events at all.
+        if !chart.is_local() {
+            if let Some(al) = alice {
+                draw_spatial_trail(&painter, metric, al, Theme::ALICE_COLOR, 1.2, &floor);
+            }
+            if let Some(b) = bob {
+                draw_spatial_trail(&painter, metric, b, Theme::BOB_COLOR, 1.5, &floor);
+            }
         }
 
         buf.paint(Layer::Above, &painter);
@@ -1204,8 +1674,12 @@ impl VolumeCanvas {
                 if reception.t < t_min || reception.t > current_time {
                     continue;
                 }
-                let (x, y) = metric.cartesian_position(reception.r, reception.phi);
-                let at = project([x, y, z_of(reception.t)]).0;
+                let world =
+                    chart.world(metric, reception.t, reception.r, reception.phi, t_scale);
+                if !finite3(world) {
+                    continue;
+                }
+                let at = project(world).0;
                 if rect.contains(at) {
                     draw_reception_tick(&painter, at, sender);
                 }
@@ -1223,8 +1697,13 @@ impl VolumeCanvas {
         // 11. The observers, on the floor, because the floor is now.
         let mut markers: Vec<(Who, Pos2)> = Vec::new();
         for (obs, who) in present.iter().copied() {
-            let (x, y) = obs.cartesian_position(metric);
-            let at = project([x, y, 0.0]).0;
+            // In a rest frame the focus observer's own marker is the origin of the chart, which is
+            // the one place in the picture that needs no calculation at all.
+            let world = chart.world(metric, current_time, obs.r, obs.phi, t_scale);
+            if !finite3(world) {
+                continue;
+            }
+            let at = project(world).0;
             painter.circle_filled(at, who.marker_radius(), colour_of(who));
             markers.push((who, at));
             // A worldline frozen on the far branch of r- has not stopped: it is riding the
@@ -1279,7 +1758,10 @@ impl VolumeCanvas {
                 };
                 let mut centred = self.centred_on == Some(who);
                 let label = format!("Keep {} Centered", who.name());
-                if ui.add_enabled(in_run, egui::Checkbox::new(&mut centred, label)).changed() {
+                // Drawn in somebody's rest frame the view is already anchored on them - they are
+                // the origin - so there is nothing for a standing request to do.
+                let can_centre = in_run && !chart.is_local();
+                if ui.add_enabled(can_centre, egui::Checkbox::new(&mut centred, label)).changed() {
                     self.centred_on = centred.then_some(who);
                     ui.close();
                 }
@@ -1359,10 +1841,19 @@ impl VolumeCanvas {
 
         // 13. The legend: what the picture is, where the eye is standing, and what the vertical
         // axis means, since a viewer arriving at a 3D diagram has no way to know any of the three.
+        // Whose chart this is, if it is anybody's. A viewer arriving at a 3D diagram has no way to
+        // tell the global foliation from a rest frame by looking at it, and the two say different
+        // things about every shape in the picture. It is read off the chart actually drawn, not
+        // off the selector: when the selected observer has no frame to build the picture fell back
+        // to the global foliation, and the title has to say what is on the canvas.
+        let chart_name = chart.is_local().then(|| frame_obs.map(|obs| obs.name.as_str())).flatten();
         painter.text(
             rect.left_top() + Vec2::new(10.0, 6.0),
             egui::Align2::LEFT_TOP,
-            "2D+1 Volume (x, y, t)",
+            match chart_name {
+                Some(name) => format!("2D+1 Volume, {name}'s rest frame (ξ¹, ξ², ξ⁰)"),
+                None => "2D+1 Volume (x, y, t)".to_string(),
+            },
             legend_font.clone(),
             Theme::TEXT_BRIGHT,
         );
@@ -1371,10 +1862,10 @@ impl VolumeCanvas {
             egui::Align2::LEFT_TOP,
             format!(
                 "yaw {:.0}°  pitch {:.0}°  {:.0} px/M  t×{:.2}\n\
-                 window {:.1} … {:.1} M  (floor = now)\n\
+                 window {:.1} … {:.1} M  (floor = now){}\n\
                  drag: orbit  shift-drag: pan  wheel: zoom  ctrl-wheel: time scale  \
                  right-click: menu\n\
-                 below the floor: the past · above: the future · pipes: r = const · cones: exact \
+                 below the floor: the past · above: the future · {}: r = const · cones: exact \
                  null generators{}{}",
                 camera.yaw.to_degrees(),
                 camera.pitch.to_degrees(),
@@ -1382,6 +1873,18 @@ impl VolumeCanvas {
                 t_scale,
                 t_min,
                 t_max,
+                // The one claim the rest-frame picture has to make about itself: the tetrad is
+                // exact at the observer's own event, so every orientation there - the 45 degree
+                // cone, the tilt of each surface - is exact, and everything at a finite offset is
+                // the linearised answer.
+                match chart_name {
+                    Some(name) => format!(
+                        "\nfirst-order local inertial chart, exact at {name}'s event; surfaces \
+                         are their tangent planes there"
+                    ),
+                    None => String::new(),
+                },
+                if chart_name.is_some() { "planes" } else { "pipes" },
                 // Terse, on the end of the line that says what the other shapes are, and only when
                 // the surface is actually on screen to be named.
                 if self.show_past_cone {
@@ -1730,7 +2233,14 @@ mod tests {
         for (name, bob) in cases {
             for grid in [false, true] {
                 for preset in [Preset::Top, Preset::ThreeQuarter] {
-                    for frame in [ReferenceFrame::DistantObserver, ReferenceFrame::Bob] {
+                    // Alice is not in any of these runs, so her selector has no observer to
+                    // build a frame on and the view has to fall back to the global chart rather
+                    // than draw nothing.
+                    for frame in [
+                        ReferenceFrame::DistantObserver,
+                        ReferenceFrame::Bob,
+                        ReferenceFrame::Alice,
+                    ] {
                         let shapes = volume_frame(&metric, Some(&bob), preset, frame, grid);
                         let text = text_of(&shapes);
                         assert!(
@@ -2152,6 +2662,299 @@ mod tests {
             held.distance(hole) < 0.5,
             "in Bob's own rest frame the view is anchored on him, so his marker is the middle of \
              the canvas - but it is at {held:?} against a middle of {hole:?}"
+        );
+    }
+
+    /// The r-components of the tetrad legs: the normal n_a = e_a^r of every surface r = const in
+    /// this observer's chart, in the (xi^0, xi^1, xi^2) order the plane drawer takes it.
+    fn radial_normal(frame: &LocalFrame) -> [f64; 3] {
+        let tetrad = frame.tetrad();
+        [tetrad.e0[1], tetrad.e1[1], tetrad.e2[1]]
+    }
+
+    /// The chart the volume draws in this observer's rest frame.
+    fn rest_chart(metric: &KerrSchild, obs: &Observer) -> (LocalFrame, Chart) {
+        let frame = LocalFrame::for_observer(metric, obs.r, &obs.four_velocity(metric));
+        (frame, Chart::Local { frame, t0: obs.t, r0: obs.r, phi0: obs.phi })
+    }
+
+    #[test]
+    fn test_in_the_rest_frame_volume_the_focus_cone_is_the_45_degree_circle() {
+        // The one thing a rest frame is for. The chart is the dual tetrad, which is linear and
+        // orthonormal, so a null vector stays null under it: whatever the null direction and
+        // whoever's frame it was written down in, the world direction it maps to rises exactly as
+        // fast as it spreads. `hypot(d_1, d_2) = d_0` is the statement "the rim of the cone is the
+        // unit circle", i.e. 45 degrees, and nothing in the drawing puts that in by hand - it is
+        // what an orthonormal frame *is*.
+        //
+        // Both of the frame's own generators and the raindrop congruence's are checked, because
+        // the drawer takes the raindrop's: the set of null directions belongs to the event and not
+        // to a frame, so the rim has to come out at 45 degrees either way.
+        let metric = KerrSchild::new(1.0, 0.9);
+        for (name, bob) in [
+            ("r = 3", bob_at(&metric, 3.0)),
+            ("frozen on r-", Observer::frozen_bob(&metric)),
+        ] {
+            let (frame, chart) = rest_chart(&metric, &bob);
+            let raindrop = Observer::raindrop_tetrad(&metric, bob.r);
+            let mut worst = [0.0f64; 2];
+            for i in 0..CONE_SAMPLES {
+                let alpha = std::f64::consts::TAU * (i as f64) / (CONE_SAMPLES as f64);
+                for (j, k) in
+                    [frame.tetrad().null_direction(alpha), raindrop.null_direction(alpha)]
+                        .into_iter()
+                        .enumerate()
+                {
+                    let d = chart
+                        .direction(&metric, bob.r, bob.phi, &k, 1.0)
+                        .expect("a null direction maps to a finite world direction");
+                    worst[j] = worst[j].max((d[0].hypot(d[1]) - d[2]).abs());
+                }
+            }
+            let u_t = frame.tetrad().e0[0];
+            println!(
+                "{name} (u^t = {u_t:.4e}): the rim is the unit circle to {:e} from his own \
+                 generators and to {:e} from the raindrop's",
+                worst[0],
+                worst[1]
+            );
+            // The raindrop's are the ones the drawer takes, at every radius and at every u^t, and
+            // they are exact to the last few bits either way.
+            assert!(
+                worst[1] < 1e-9,
+                "{name}: a generator taken in the raindrop frame - which is the frame the cone is \
+                 actually sampled in - missed 45 degrees by {:e}",
+                worst[1]
+            );
+            // The observer's own generators are the same cone and come out to the same 1e-9 while
+            // the frame is conditioned like one. They cannot at the frozen worldline, and the
+            // reason is not this chart: `Tetrad::null_direction` adds e0 to e1, whose components
+            // are both of order u^t = 1e10, to make a vector whose components are of order 1, so
+            // the cancellation has eaten the digits before `Chart::direction` is ever called. It
+            // is the same fact `light_cone_generators` records when it says an observer's own
+            // frame is the wrong one to sample a rim from - and it is exactly why the drawer takes
+            // the raindrop frame, which exists at every radius and is conditioned like one.
+            if u_t < 1e3 {
+                assert!(
+                    worst[0] < 1e-9,
+                    "{name}: a generator taken in his own frame missed 45 degrees by {:e}",
+                    worst[0]
+                );
+            } else {
+                println!(
+                    "  (his own generators are {:e} off at u^t = {u_t:.4e}: that is the \
+                     cancellation inside `null_direction` at a boost of 1e10, not the chart, and \
+                     it is why the drawer samples the raindrop frame instead)",
+                    worst[0]
+                );
+                assert!(worst[0].is_finite(), "{name}: his own generators still map somewhere");
+            }
+        }
+    }
+
+    #[test]
+    fn test_in_the_rest_frame_volume_the_focus_worldline_is_the_vertical_axis() {
+        // The observer is at rest at the origin of their own chart, so their worldline is the
+        // vertical through it. Only two statements of that are exact - the chart is first order,
+        // and a trail point one M back is placed by a linearisation, not by a claim that the
+        // worldline is straight - so those two are what is asserted: their current event *is* the
+        // origin, and their 4-velocity points straight up it.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let mut bob = bob_at(&metric, 4.0);
+        for k in 1..=5 {
+            let t = (k as f64) * 0.2;
+            bob.step(&metric, t, 0.2);
+        }
+        assert!(bob.trail.len() > 1, "the walk has to leave a trail to draw");
+
+        let t_scale = 1.5;
+        let u = bob.four_velocity(&metric);
+        let (_, chart) = rest_chart(&metric, &bob);
+        let here = chart.world(&metric, bob.t, bob.r, bob.phi, t_scale);
+        assert!(
+            here.iter().all(|c| c.abs() < 1e-12),
+            "his own event is the origin of his own chart, but it was drawn at {here:?}"
+        );
+        let d = chart
+            .direction(&metric, bob.r, bob.phi, &u, t_scale)
+            .expect("a timelike 4-velocity maps to a finite direction");
+        println!(
+            "Bob at t = {:.2}, r = {:.4}: his event maps to {here:?} and his 4-velocity to {d:?}",
+            bob.t, bob.r
+        );
+        assert!(
+            d[0].abs() < 1e-9 && d[1].abs() < 1e-9 && (d[2] - t_scale).abs() < 1e-9,
+            "his own worldline is the vertical axis, so his 4-velocity maps to [0, 0, {t_scale}] \
+             - but it maps to {d:?}"
+        );
+    }
+
+    #[test]
+    fn test_the_horizon_planes_pass_through_the_mapped_radial_offset() {
+        // What makes a surface r = const a plane here: a displacement stays on it exactly when its
+        // r-component is r_h - r_obs, and under the dual tetrad that condition is the affine
+        // equation n_a xi^a = r_h - r_obs with n_a = e_a^r. So the point the drawer centres its
+        // patch on, the legs it spans it with and the mapped radial offset itself all have to
+        // satisfy the same equation - otherwise the patch is a plane somewhere else.
+        let metric = KerrSchild::new(1.0, 0.9);
+        for &r in &[8.0, 3.0, metric.outer_horizon()] {
+            let bob = bob_at(&metric, r);
+            let (frame, _) = rest_chart(&metric, &bob);
+            let n = radial_normal(&frame);
+            for r_h in [
+                metric.inner_horizon(),
+                metric.outer_horizon(),
+                metric.ergosphere_equatorial(),
+            ] {
+                let d = r_h - bob.r;
+                let plane = local_plane(n, d).expect("a radial normal has a length");
+                let dot = |p: [f64; 3]| n[0] * p[0] + n[1] * p[1] + n[2] * p[2];
+                let tol = 1e-9 * (1.0 + d.abs());
+                assert!(
+                    (dot(plane.nearest) - d).abs() < tol,
+                    "the patch is centred off its own plane at r = {r}, r_h = {r_h}: \
+                     n . xi = {} against {d}",
+                    dot(plane.nearest)
+                );
+                let xi = frame.to_local(&[0.0, d, 0.0]);
+                assert!(
+                    (dot(xi) - d).abs() < tol,
+                    "the mapped radial offset is off the plane at r = {r}, r_h = {r_h}: \
+                     n . xi = {} against {d}",
+                    dot(xi)
+                );
+                for (i, leg) in plane.legs.iter().enumerate() {
+                    assert!(
+                        dot(*leg).abs() < 1e-9,
+                        "leg {i} of the patch leaves the plane: n . leg = {}",
+                        dot(*leg)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_on_a_horizon_the_plane_is_null_in_the_rest_frame() {
+        // The tilt of the plane is its causal character and nothing else. The Minkowski norm of its
+        // normal is eta^{ab} n_a n_b = g^rr, so on either horizon, where Delta = 0, the normal is a
+        // null covector and the plane stands at exactly 45 degrees - the surface the observer is
+        // crossing is the light cone's own wall. Outside, g^rr > 0, the normal is spacelike and the
+        // plane is steeper than 45 degrees: a surface that can still be hovered at.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let rp = metric.outer_horizon();
+        let minkowski = |n: [f64; 3]| -n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
+
+        let on = bob_at(&metric, rp);
+        let (frame, _) = rest_chart(&metric, &on);
+        let n = radial_normal(&frame);
+        let norm = minkowski(n);
+        println!(
+            "at r = r+ = {rp:.6}: n = {n:?}, eta(n, n) = {norm:e} against g^rr = {:e}",
+            metric.g_upper_rr(rp)
+        );
+        assert!(
+            norm.abs() < 1e-9,
+            "on r+ the surface r = r+ is null, so its normal is a null covector - but \
+             eta(n, n) = {norm}"
+        );
+
+        let out = bob_at(&metric, 3.0);
+        let (frame, _) = rest_chart(&metric, &out);
+        let n = radial_normal(&frame);
+        let norm = minkowski(n);
+        println!("at r = 3: n = {n:?}, eta(n, n) = {norm:e} against g^rr = {:e}", metric.g_upper_rr(3.0));
+        assert!(
+            norm > 1e-6,
+            "outside r+ the surface r = r+ is timelike, so its normal is spacelike and the plane \
+             is steeper than 45 degrees - but eta(n, n) = {norm}"
+        );
+        assert!(
+            (norm - metric.g_upper_rr(3.0)).abs() < 1e-9,
+            "and that norm is g^rr exactly: {norm} against {}",
+            metric.g_upper_rr(3.0)
+        );
+    }
+
+    #[test]
+    fn test_the_rest_frame_volume_names_its_first_order_chart() {
+        // The chart is exact at the observer's event and linearised away from it, and a viewer has
+        // no way to tell that by looking at the picture. So the legend says it - and says it only
+        // when it is true, because in the global foliation nothing is linearised.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let bob = bob_at(&metric, 3.0);
+        for (frame, local) in [
+            (ReferenceFrame::DistantObserver, false),
+            (ReferenceFrame::Bob, true),
+            // Alice is not in this run, so her selector falls back to the global chart.
+            (ReferenceFrame::Alice, false),
+        ] {
+            let text =
+                text_of(&volume_frame(&metric, Some(&bob), Preset::ThreeQuarter, frame, false));
+            assert!(text.contains("2D+1 Volume"), "{frame:?} drew no volume view");
+            assert_eq!(
+                text.contains("first-order"),
+                local,
+                "{frame:?}: the first-order banner should be there only in a rest frame, and the \
+                 legend reads:\n{text}"
+            );
+            if local {
+                assert!(
+                    text.contains("Bob's rest frame"),
+                    "and it says whose frame it is: {text}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_in_the_rest_frame_the_distant_clocks_slices_are_drawn_as_planes() {
+        // In the global chart the distant clock is a ladder of rings up one pipe. In a rest frame
+        // it is what it actually is: a stack of planes, e_a^t xi^a = k * step, each of them the set
+        // of events the far-away clock gives one reading. They are drawn as glass quads like every
+        // other surface here, so the claim is a count - turning the grid on adds at least one whole
+        // slice's worth of four-cornered meshes - together with the label on the slice through the
+        // observer's own now.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let bob = bob_at(&metric, 3.0);
+        let frame = |grid| {
+            volume_frame(&metric, Some(&bob), Preset::ThreeQuarter, ReferenceFrame::Bob, grid)
+        };
+        let quads = |shapes: &[Painted]| {
+            shapes.iter().filter(|s| matches!(s, Painted::Mesh { vertices: 4, .. })).count()
+        };
+
+        let off = frame(false);
+        let on = frame(true);
+        let (n_off, n_on) = (quads(&off), quads(&on));
+        println!(
+            "four-cornered meshes in Bob's rest frame: {n_off} with the distant clock off, \
+             {n_on} with it on ({} per slice)",
+            CLOCK_PLANE_CELLS * CLOCK_PLANE_CELLS
+        );
+        assert!(
+            n_off >= PLANE_CELLS * PLANE_CELLS,
+            "the surfaces r = const are drawn as tessellated planes even with the clock off, but \
+             only {n_off} quads were painted"
+        );
+        assert!(
+            n_on >= n_off + CLOCK_PLANE_CELLS * CLOCK_PLANE_CELLS,
+            "turning the distant clock on has to add at least one slice of {} quads, but the \
+             count went from {n_off} to {n_on}",
+            CLOCK_PLANE_CELLS * CLOCK_PLANE_CELLS
+        );
+        // The slice through the observer's own event reads "now", on a line of its own; the
+        // legend's "(floor = now)" is a different line and is there either way.
+        let labelled = |shapes: &[Painted]| text_of(shapes).lines().any(|l| l == "now");
+        assert!(
+            labelled(&on),
+            "the slice through the observer's own event is labelled: {}",
+            text_of(&on)
+        );
+        assert!(
+            !labelled(&off),
+            "and with the clock off there are no slice labels: {}",
+            text_of(&off)
         );
     }
 

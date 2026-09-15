@@ -57,7 +57,7 @@ impl Who {
 /// How close to the ring a drag may put an observer. The ring is the curvature singularity and
 /// the end of every worldline that reaches it, so a drop onto r = 0 is a drop onto nothing there is
 /// a frame at.
-const RING_DROP_FLOOR: f64 = 0.04;
+pub(crate) const RING_DROP_FLOOR: f64 = 0.04;
 
 /// A marker drag in progress: whose it is, and the Motion they were on when it started.
 ///

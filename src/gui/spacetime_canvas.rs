@@ -235,7 +235,7 @@ pub fn distant_clock_grid_step(
 /// A compact, signed reading of the distant clock `seconds` away from the observer's now: the label
 /// on one line of the grid. "+5 min", "-2 h", "+1e6 yr", "+20 fs", and "now" for the slice through
 /// the observer's own event.
-fn distant_clock_offset_label(seconds: f64) -> String {
+pub(crate) fn distant_clock_offset_label(seconds: f64) -> String {
     if seconds == 0.0 || !seconds.is_finite() {
         return "now".to_string();
     }

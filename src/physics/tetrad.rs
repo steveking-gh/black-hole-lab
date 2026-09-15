@@ -28,6 +28,10 @@ pub fn inner(metric: &KerrSchild, r: f64, a: &[f64; 3], b: &[f64; 3]) -> f64 {
 /// n samples fall, since aberration bunches them towards the boost. That is why the caller picks
 /// the frame: at u^t ~ 1e10, on the approach to the far branch of r-, the observer's own frame
 /// crowds every sample into one point of the rim and leaves the rest of the curve undrawn.
+// The volume view now routes its generators through `Chart::direction`, which is this same
+// composition applied one null vector at a time, so nothing outside the tests calls this; it is
+// kept because it is the named construction the cone drawing is written against.
+#[allow(dead_code)]
 pub fn light_cone_generators(
     metric: &KerrSchild,
     r: f64,
