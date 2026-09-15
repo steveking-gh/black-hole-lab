@@ -1894,13 +1894,20 @@ Tick Enable Observer on Alice's or Bob's card",
             font_scale,
         );
 
-        // Centred line by line, from the middle outwards, which keeps the head clear of the grid's
-        // own line labels down the left edge.
+        // The comparison is centred, which keeps it clear of the grid's own line labels down the
+        // left edge. Every row under it is left-aligned to where that line starts rather than
+        // centred on its own width: centred it would sit on the observer's clock ticks, which run
+        // up the middle of the canvas beside his axis, and pushed out to the margin it would sit on
+        // the distant grid's labels, which run down the left edge.
         let mut y = rect.top() + 4.0;
-        for line in head_lines {
+        let mut left = rect.left() + 8.0;
+        for (row, line) in head_lines.into_iter().enumerate() {
             let total: f32 = line.iter().map(|g| g.rect.width()).sum();
             let height = line.iter().map(|g| g.rect.height()).fold(0.0, f32::max);
-            let mut x = (rect.center().x - total * 0.5).max(rect.left() + 4.0);
+            if row == 0 {
+                left = (rect.center().x - total * 0.5).max(rect.left() + 4.0);
+            }
+            let mut x = left;
             for galley in line {
                 let width = galley.rect.width();
                 painter.galley(Pos2::new(x, y), galley, Color32::WHITE);
