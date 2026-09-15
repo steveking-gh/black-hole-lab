@@ -1,0 +1,42 @@
+src/physics/geodesic.rs
+  s_22e554e1e2b438::t_e9e59b58a7406c 465-518
+  s_5e464e0dde83ec::t_d51f0b5f922a96 833-839,841,846,848-849,853
+  s_5e464e0dde83ec::t_3f09a24398d717 762,778-794,796-810,822-832,840,842-845,850-852,854-858
+  s_5e464e0dde83ec::t_2c51ad6cf1e0e1 763-777,795,811-821
+  s_22e554e1e2b438::t_0eeae5558700ba 521-539,859-860
+  s_5e464e0dde83ec::t_3e6005ba2a18f3 847
+  s_22e554e1e2b438::t_3606f2900b2e93 861
+src/physics/kerr_schild.rs
+  s_5e464e0dde83ec::t_bea5e2bfe33655 196-206
+src/physics/local_frame.rs
+  s_22e554e1e2b438::t_0eeae5558700ba 348-367,369,371,374-381,383-391,393
+  s_22e554e1e2b438::t_9e5189fba541e2 373
+  s_22e554e1e2b438::t_d56637ebefc2d2 304-309,315,321-322,325
+  s_22e554e1e2b438::t_0f34ef7a63aebf 347,368,370,372,382,392,394
+  s_22e554e1e2b438::t_0c8c992127b273 295-298,326
+  s_22e554e1e2b438::t_e1008a843b0da5 246-294,299-303,310-314,316-320,323-324,327-344
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "4e74415da32e18c3246c1232462648a10f9613cc",
+  "prompts": {},
+  "sessions": {
+    "s_22e554e1e2b438": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "73ca998b-05dd-4f56-b0bb-6ea4390c0f3a",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    },
+    "s_5e464e0dde83ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc7a846d-d13c-4554-b9bf-dc2dee2f30eb",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
