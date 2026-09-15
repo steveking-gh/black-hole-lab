@@ -131,6 +131,17 @@ impl Theme {
     pub const TEXT_BRIGHT: Color32 = Color32::from_rgb(230, 240, 255);
     pub const TEXT_MUTED: Color32 = Color32::from_rgb(130, 145, 170);
 
+    /// Outline on the panel's chip buttons: the quick picks that set the slider beside them, and
+    /// the small choices - a motion, a release, a step mode - that egui draws as bare text until
+    /// they are the selected one. A dimmed blue rather than the headings' full cyan: a dozen of
+    /// them sit in a row, and at full saturation a row of them reads as a row of alarms rather
+    /// than as a row of choices.
+    pub const CHIP_OUTLINE: Color32 = Color32::from_rgb(52, 96, 160);
+
+    /// Outline on the chip that is currently the selected one. The fill already says which it is;
+    /// this makes it say so from across the panel.
+    pub const CHIP_OUTLINE_ACTIVE: Color32 = Color32::from_rgb(0, 230, 255);
+
     // Blueshift / Warning Gradient
     pub const WARNING_RED: Color32 = Color32::from_rgb(255, 50, 80);
     pub const BLUESHIFT_BLUE: Color32 = Color32::from_rgb(60, 140, 255);

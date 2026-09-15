@@ -4,6 +4,27 @@ use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::{Observer, ObserverMode, ObserverPair, Release, WorldlineParams};
 use crate::physics::wavefront::{Endpoint, RAYS_PER_PULSE, SignalField, SignalPair};
 
+/// One of the panel's chip buttons: a quick pick that sets the slider beside it, or one arm of a
+/// small choice - a motion, a release, a step mode. `Ui::selectable_label` and
+/// `Ui::selectable_value` draw these with no frame at all until they are the selected one, which
+/// leaves a row of them looking like a caption that has been broken into words rather than like a
+/// row of things to press. The outline says they can be pressed; the fill still says which one is
+/// on, and a brighter outline says it again.
+fn chip(ui: &mut egui::Ui, selected: bool, label: &str) -> egui::Response {
+    let (fill, stroke) = if selected {
+        (ui.visuals().selection.bg_fill, Theme::CHIP_OUTLINE_ACTIVE)
+    } else {
+        (egui::Color32::TRANSPARENT, Theme::CHIP_OUTLINE)
+    };
+    ui.add(
+        egui::Button::selectable(selected, label)
+            .frame_when_inactive(true)
+            .fill(fill)
+            .stroke(egui::Stroke::new(1.0, stroke))
+            .corner_radius(6.0),
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReferenceFrame {
     DistantObserver,
@@ -469,12 +490,15 @@ impl ObserverCard {
 
             ui.horizontal(|ui| {
                 ui.label("Motion:");
-                ui.selectable_value(&mut obs.mode, ObserverMode::FreeFall, "Free Fall")
-                    .on_hover_text(FREE_FALL_TIP);
-                ui.selectable_value(&mut obs.mode, ObserverMode::Static, "Static")
-                    .on_hover_text(STATIC_TIP);
-                ui.selectable_value(&mut obs.mode, ObserverMode::Zamo, "ZAMO")
-                    .on_hover_text(ZAMO_TIP);
+                for (mode, label, tip) in [
+                    (ObserverMode::FreeFall, "Free Fall", FREE_FALL_TIP),
+                    (ObserverMode::Static, "Static", STATIC_TIP),
+                    (ObserverMode::Zamo, "ZAMO", ZAMO_TIP),
+                ] {
+                    if chip(ui, obs.mode == mode, label).on_hover_text(tip).clicked() {
+                        obs.mode = mode;
+                    }
+                }
             });
 
             // A static observer needs r > 2M (timelike d/dt); a ZAMO needs r > r+ (a fixed-r
@@ -541,10 +565,14 @@ impl ObserverCard {
             // How they are let go of, which is what fixes E.
             ui.horizontal(|ui| {
                 ui.label("Release:");
-                ui.selectable_value(&mut settings.release, Release::AtRest, "At rest here")
-                    .on_hover_text(AT_REST_TIP);
-                ui.selectable_value(&mut settings.release, Release::FromInfinity, "From rest at ∞")
-                    .on_hover_text(FROM_INFINITY_TIP);
+                for (release, label, tip) in [
+                    (Release::AtRest, "At rest here", AT_REST_TIP),
+                    (Release::FromInfinity, "From rest at ∞", FROM_INFINITY_TIP),
+                ] {
+                    if chip(ui, settings.release == release, label).on_hover_text(tip).clicked() {
+                        settings.release = release;
+                    }
+                }
             });
 
             ui.add(
@@ -960,8 +988,12 @@ impl AppControls {
 
             ui.horizontal(|ui| {
                 ui.label("Step Mode:");
-                ui.selectable_value(&mut self.step_mode, StepMode::Time, "⏱ Time (Δt)");
-                ui.selectable_value(&mut self.step_mode, StepMode::Distance, "📏 Distance (Δr)");
+                if chip(ui, self.step_mode == StepMode::Time, "⏱ Time (Δt)").clicked() {
+                    self.step_mode = StepMode::Time;
+                }
+                if chip(ui, self.step_mode == StepMode::Distance, "📏 Distance (Δr)").clicked() {
+                    self.step_mode = StepMode::Distance;
+                }
             });
 
             match self.step_mode {
@@ -990,7 +1022,7 @@ impl AppControls {
                     ui.horizontal(|ui| {
                         for (label, km) in STEP_DISTANCE_PRESETS {
                             let active = same_to_a_millionth(self.step_distance_km, km);
-                            if ui.selectable_label(active, label).clicked() {
+                            if chip(ui, active, label).clicked() {
                                 self.step_distance_km = km;
                             }
                         }
@@ -1066,7 +1098,7 @@ impl AppControls {
                 let mut preset_changed = false;
                 let highlighted = active_preset(metric);
                 for (label, m, a_star, m_solar) in PRESETS {
-                    if ui.selectable_label(highlighted == Some(label), label).clicked() {
+                    if chip(ui, highlighted == Some(label), label).clicked() {
                         *metric = KerrSchild::with_solar_mass(m, a_star * m, m_solar);
                         preset_changed = true;
                     }
