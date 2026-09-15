@@ -193,8 +193,17 @@ impl KerrSchild {
         }
     }
 
-    /// Differential tidal acceleration stretching force across height_m in units of Earth g's (9.81 m/s^2).
-    /// a_tidal = (2 * G * M / r^3) * height_m
+    /// Differential tidal acceleration stretching force across height_m in units of Earth g's
+    /// (9.81 m/s^2), from the Newtonian radial expression
+    ///
+    ///     a_tidal = (2 G M / r^3) * height_m
+    ///
+    /// evaluated at the observer's radius. Two things it is not. It carries no dependence on the
+    /// spin - it is the field of a hole of this mass, not the equatorial tidal tensor of Kerr - and
+    /// none on the observer's motion. And it is the *background* field only: the perturbation that
+    /// makes the Cauchy horizon singular, whose tidal force diverges on the approach to r- while
+    /// this expression stays finite, is not in it. See `TELEMETRY_HOVER_TIP` for what that costs
+    /// the reading near r-.
     pub fn tidal_acceleration_g(&self, r: f64, height_m: f64) -> f64 {
         let r_m = (r / self.m).max(0.01) * self.r_grav_km() * 1000.0;
         let g_const = 6.67430e-11;

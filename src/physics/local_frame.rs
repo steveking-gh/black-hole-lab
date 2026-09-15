@@ -243,8 +243,155 @@ impl LocalFrame {
     }
 }
 
+/// Steps taken across the gap by `ruler_distance`. The integrator advances r by a fixed fraction of
+/// the gap per step and shortens the last one to land on the surface, so this sets the resolution
+/// of the answer rather than capping the work.
+const RULER_STEPS: usize = 2048;
+
+/// One RK4 derivative of the state (r, v^t, v^r, v^phi) against arclength.
+fn ruler_deriv(metric: &KerrSchild, y: &[f64; 4]) -> [f64; 4] {
+    let v = [y[1], y[2], y[3]];
+    let a = crate::physics::geodesic::geodesic_accel(metric, y[0], &v);
+    [y[2], a[0], a[1], a[2]]
+}
+
+/// Proper distance from an observer's event to the surface r = `r_target`, measured the way that
+/// observer measures it: the arclength of the spacelike geodesic that leaves the event along their
+/// own radial leg e1 and runs until it meets the surface. It is the radial coordinate of Fermi
+/// normal coordinates built on their tetrad, and to first order in the gap it agrees with the
+/// `xi^1` intercept `surface_r_const` draws, which is the same construction linearised.
+///
+/// This *is* the length contraction, done exactly: the observer's own rest space is tilted against
+/// the static observers' by their relative boost, and integrating in it accounts for the tilt, for
+/// the way their Lorentz factor varies along the path, and for the curvature, in one pass. It is
+/// not the static chain of rulers `int dr / sqrt(g^rr)` divided by a Lorentz factor; that rescales
+/// somebody else's ruler and answers a different question. It also survives inside the ergosphere,
+/// where there is no static chain to rescale, because it asks for nothing but the 4-velocity.
+///
+/// What it does not supply is a simultaneity convention - it assumes one. "How far away is that
+/// surface right now" needs a slicing, and this takes the observer's own. The convention-free
+/// answer is radar distance, which for a horizon is infinite, since the ping crosses and nothing
+/// returns. Both are true; they are different questions, and the box says which one it is showing.
+///
+/// `None` when the geodesic never arrives: a turning point in r before the surface, a run into the
+/// ring, or a radial leg with no r-component to travel along. Whether the path *ought* to be asked
+/// for is the caller's business - the integral would run through a Region II where Delta < 0 quite
+/// happily and hand back a number about a curve that has left the observer's rest space, so
+/// `gui::spacetime_canvas` only asks across intervals on which Delta > 0 throughout.
+pub fn ruler_distance(metric: &KerrSchild, r0: f64, u: &[f64; 3], r_target: f64) -> Option<f64> {
+    let r0 = r0.max(1e-4);
+    let gap = r_target - r0;
+    if gap.abs() < 1e-14 {
+        return Some(0.0);
+    }
+    let sign = gap.signum();
+
+    let tetrad = Tetrad::from_four_velocity_axial(metric, r0, u);
+    // e1 is the unit outward leg; take whichever orientation moves r toward the surface.
+    let mut v = tetrad.e1;
+    if v[1] * sign < 0.0 {
+        v = [-v[0], -v[1], -v[2]];
+    }
+    // The negation is the point rather than a way of writing <=: a leg whose r-component has come
+    // out NaN has to take this branch too, and `v[1].abs() <= 1e-12` would let it through. Same
+    // below for the step size.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    if !(v[1].abs() > 1e-12) {
+        return None;
+    }
+
+    let dr_step = (gap / RULER_STEPS as f64).abs();
+    // The last stretch is where the accuracy is won or lost. Where the surface is a horizon the
+    // leg's own radial rate v^r vanishes on it - for a static observer v^r is exactly sqrt(g^rr) -
+    // so the arclength integrand goes like 1 / sqrt(r - r_h): convergent, but no uniform mesh
+    // resolves it. Capping each step at a tenth of what is left grades the mesh into the endpoint
+    // geometrically, which costs a few hundred extra steps and buys the last six digits.
+    let tol = 1e-14 * r_target.abs().max(1.0);
+    let mut y = [r0, v[0], v[1], v[2]];
+    let mut s = 0.0f64;
+
+    for _ in 0..(RULER_STEPS * 4) {
+        let remaining = r_target - y[0];
+        if remaining * sign <= 0.0 || remaining.abs() <= tol {
+            return Some(s);
+        }
+        if !y.iter().all(|c| c.is_finite()) || y[0] <= 2.0e-4 {
+            return None;
+        }
+        // The leg has reversed in r: it curls away before it reaches the surface.
+        if y[2] * sign < 0.0 {
+            return None;
+        }
+        let h = dr_step.min(0.1 * remaining.abs()) / y[2].abs();
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
+        if !(h > 0.0) || !h.is_finite() {
+            return None;
+        }
+        let k1 = ruler_deriv(metric, &y);
+        let ya: [f64; 4] = core::array::from_fn(|i| y[i] + 0.5 * h * k1[i]);
+        let k2 = ruler_deriv(metric, &ya);
+        let yb: [f64; 4] = core::array::from_fn(|i| y[i] + 0.5 * h * k2[i]);
+        let k3 = ruler_deriv(metric, &yb);
+        let yc: [f64; 4] = core::array::from_fn(|i| y[i] + h * k3[i]);
+        let k4 = ruler_deriv(metric, &yc);
+        for i in 0..4 {
+            y[i] += h / 6.0 * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]);
+        }
+        s += h;
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
+
+
+    /// The ruler distance has a closed form for one observer, and this is it: the only check in
+    /// the file that measures the integrator against elementary calculus rather than against
+    /// itself.
+    ///
+    /// The Schwarzschild slice t = const is the fixed-point set of the isometry t -> -t, so it is
+    /// totally geodesic - a spacelike geodesic that starts in it tangent to it stays in it. A
+    /// static observer's radial leg is tangent to it, so `ruler_distance` has to return that
+    /// slice's own radial proper length,
+    ///
+    ///     int dr / sqrt(1 - 2M/r) = sqrt(r (r - 2M)) + 2M ln(sqrt r + sqrt(r - 2M)),
+    ///
+    /// exactly. A sign error in the tetrad, a mis-normalised e1 or a mesh that cannot resolve the
+    /// 1/sqrt(r - r+) endpoint all show up here and nowhere else.
+    ///
+    /// The second half is the reason the function exists. A raindrop at the same radius does *not*
+    /// measure the static chain divided by its own Lorentz factor: at r = 4M that recipe gives
+    /// 3.2465 M and its own rest space gives 2.2548 M. Length contraction in a gravitational field
+    /// is not a rescaling of somebody else's ruler, and a read-out built that way would be wrong by
+    /// most of a gravitational radius here and by a factor of two in the limit.
+    #[test]
+    fn test_ruler_distance_matches_the_static_chain_in_schwarzschild() {
+        let m = KerrSchild::new(1.0, 0.0);
+        let chain = |r: f64| (r * (r - 2.0)).sqrt() + 2.0 * (r.sqrt() + (r - 2.0).sqrt()).ln();
+
+        for &r in &[2.5f64, 3.0, 4.0, 8.0, 20.0] {
+            let u_t = 1.0 / (1.0 - 2.0 / r).sqrt();
+            let got = ruler_distance(&m, r, &[u_t, 0.0, 0.0], 2.0).expect("a static leg reaches r+");
+            let want = chain(r) - chain(2.0);
+            assert!(
+                (got - want).abs() < 1e-6 * want,
+                "ruler distance to r+ from {r} M: {got} vs {want}"
+            );
+        }
+
+        let x = (0.5f64).sqrt(); // sqrt(2M/r) at r = 4M
+        let rain = [(1.0 + x + x * x) / (1.0 + x), -x, 0.0];
+        let got = ruler_distance(&m, 4.0, &rain, 2.0).expect("the raindrop's leg reaches r+");
+        let contracted = (chain(4.0) - chain(2.0)) * (1.0 - 0.5f64).sqrt();
+        assert!((got - 2.2548).abs() < 1e-3, "the raindrop's ruler to r+ = {got}");
+        assert!(
+            (got - contracted).abs() > 0.9,
+            "the raindrop's ruler must not be the static chain contracted: {got} vs {contracted}"
+        );
+    }
+
+
     use super::*;
     use crate::physics::geodesic::GeodesicState;
     use std::f64::consts::PI;

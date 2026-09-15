@@ -462,8 +462,81 @@ impl GeodesicState {
     }
 }
 
+/// Proper time along the (E, L) geodesic between two radii, as a positive magnitude.
+///
+///     dtau = r^2 dr / sqrt(R),    R = P^2 - Delta [r^2 + (L - aE)^2] = r^4 (dr/dtau)^2
+///
+/// the same closed form `GeodesicState::derivatives` takes its radial rate from. Integrating it in
+/// r needs no worldline, no chart and no step history, so it is exact across both horizons and
+/// costs the same whether the crossing is a microsecond or a decade away.
+///
+/// It is also the reason a horizon always has a *time* even where it has no *distance*: R is a
+/// square along any worldline and never changes sign, while the distance integral carries a
+/// sqrt(Delta) that goes imaginary throughout Region II. The two integrands are the whole of the
+/// moment-or-place question, written down.
+///
+/// `None` if R turns non-positive anywhere in the interval: the worldline has a turning point in
+/// there and never covers the ground being asked about.
+pub fn proper_time_between(
+    metric: &KerrSchild,
+    energy: f64,
+    l_ang: f64,
+    r_a: f64,
+    r_b: f64,
+) -> Option<f64> {
+    let lo = r_a.min(r_b).max(R_FLOOR);
+    let hi = r_a.max(r_b).max(R_FLOOR);
+    if hi - lo <= 1e-15 {
+        return Some(0.0);
+    }
+
+    let a = metric.a;
+    let lae = l_ang - a * energy;
+    let integrand = |r: f64| -> Option<f64> {
+        let r2 = r * r;
+        let p = energy * (r2 + a * a) - a * l_ang;
+        let big_r = p * p - metric.delta(r) * (r2 + lae * lae);
+        if big_r <= 0.0 {
+            None
+        } else {
+            Some(r2 / big_r.sqrt())
+        }
+    };
+
+    // Simpson on an even number of panels. The integrand is smooth on any interval the caller has
+    // business asking about - it only misbehaves at a turning point, where R hits zero and the
+    // `None` above fires instead.
+    const PANELS: usize = 2048;
+    let h = (hi - lo) / PANELS as f64;
+    let mut sum = integrand(lo)? + integrand(hi)?;
+    for i in 1..PANELS {
+        let w = if i % 2 == 1 { 4.0 } else { 2.0 };
+        sum += w * integrand(lo + h * i as f64)?;
+    }
+    Some(sum * h / 3.0)
+}
+
 #[cfg(test)]
 mod tests {
+
+    /// `proper_time_between` against the elementary raindrop.
+    ///
+    /// At a = 0, E = 1, L = 0 the radial potential is R = 2 M r^3, so dtau = r^2 dr / sqrt(R)
+    /// integrates to (2/3)(r^{3/2} - r_h^{3/2}) / sqrt(2M) - the Newtonian fall-from-rest-at-
+    /// infinity time, which Painleve-Gullstrand makes exact in general relativity. The quadrature
+    /// is what every horizon countdown in the rest-frame view is read from, so it is worth pinning
+    /// to something that can be differentiated by hand.
+    #[test]
+    fn test_proper_time_between_is_the_raindrop_fall_time() {
+        let m = KerrSchild::new(1.0, 0.0);
+        let closed = |hi: f64, lo: f64| (2.0 / 3.0) * (hi.powf(1.5) - lo.powf(1.5)) / 2.0f64.sqrt();
+        for &(lo, hi) in &[(2.0, 4.0), (0.5, 10.0), (2.0, 30.0)] {
+            let got = proper_time_between(&m, 1.0, 0.0, hi, lo).expect("R > 0 along a raindrop");
+            let want = closed(hi, lo);
+            assert!((got - want).abs() < 1e-9 * want, "tau over {lo}..{hi} M: {got} vs {want}");
+        }
+    }
+
     use super::*;
 
     /// (g(u,u), E = -u_t, L = u_phi) of a 4-velocity at radius r.
@@ -683,6 +756,106 @@ mod tests {
                     geo.r
                 );
             }
+        }
+    }
+
+    /// The three infalling worldlines of Mallary, Khanna and Burko, Phys. Rev. D 98, 104024 (2018)
+    /// (arXiv:1807.06509), as (a/M, E/mu, L/mu, the r- they quote for that spin, where to start the
+    /// integration). The first two are their Fig. 1; the third is the one they carry through the
+    /// oscillator model.
+    ///
+    /// The third starts between the horizons rather than at 6 M because its (E, L) is not allowed
+    /// at 6 M: R(r) = P^2 - Delta [r^2 + (L - aE)^2] turns negative in a band outside r+, so a
+    /// worldline with E = 1 and L = 4 M dropped from far away turns around near 6.7 M and never
+    /// gets in. It exists as an infalling worldline only inside the outer horizon, where Delta < 0
+    /// makes R positive everywhere - which is the portion of it their Fig. 4 draws. The test
+    /// asserts the exclusion rather than taking it on trust.
+    const PUBLISHED_CH_INFALLERS: [(f64, f64, f64, f64, f64); 3] = [
+        (0.8, 1.0, 2.0, 0.4, 6.0),
+        (0.9165, 1.0, 2.0, 0.6, 6.0),
+        (0.995, 1.0, 4.0, 0.9, 1.05),
+    ];
+
+    #[test]
+    fn test_the_published_cauchy_horizon_infallers_all_freeze_on_the_far_branch() {
+        // An outside check on the one piece of this app's behaviour that looks most like a bug:
+        // that some infallers never cross r-. Mallary, Khanna and Burko solve the 2+1-dimensional
+        // Teukolsky equation along timelike geodesics approaching the Cauchy horizon of a perturbed
+        // Kerr hole, and they describe that approach as being to the branch reached at v -> infinity
+        // - the branch an ingoing chart cannot follow a worldline through.
+        //
+        // Every geodesic they publish should therefore land in the class this integrator freezes:
+        // E - Omega_- L < 0, with Omega_- = a / (2 M r-). Nothing here is fitted to them. The
+        // criterion is the one `step_coord_time` has always applied, the geodesics are theirs, and
+        // the agreement is the check.
+        //
+        // The other half of the geometry is checked at the same time: the freeze is in coordinate
+        // time only. Their proper time is defined with tau = 0 at the horizon, so it has to stay
+        // finite and small while t runs away, and it does - a few tens of M against hundreds.
+        for &(a, e, l, rm_quoted, start_r) in &PUBLISHED_CH_INFALLERS {
+            let metric = KerrSchild::new(1.0, a);
+            let rm = metric.inner_horizon();
+            assert!(
+                (rm - rm_quoted).abs() < 5e-4,
+                "r- = {rm} against the {rm_quoted} M quoted at a/M = {a}"
+            );
+
+            let omega_minus = a / (2.0 * metric.m * rm);
+            let e_corot = e - omega_minus * l;
+            assert!(
+                e_corot < 0.0,
+                "E - Omega_- L = {e_corot} at (a, E, L) = ({a}, {e}, {l}): this worldline crosses \
+                 r-, and the paper's does not"
+            );
+
+            if start_r < metric.outer_horizon() {
+                assert!(
+                    GeodesicState::energy_floor(&metric, 6.0, l) > e,
+                    "this (E, L) would be allowed at 6 M after all, so start it there"
+                );
+            }
+            let mut geo = GeodesicState::new_infall(&metric, 0.0, start_r, e, l);
+            assert_eq!(
+                geo.energy, e,
+                "{start_r} M is allowed to this (E, L): nothing may be clamped"
+            );
+            let mut guard = 0;
+            while !geo.stalled && geo.r > R_STOP && guard < 100_000 {
+                guard += 1;
+                geo.step_coord_time(&metric, 0.25);
+            }
+            assert!(geo.stalled, "(a, E, L) = ({a}, {e}, {l}) must freeze, got r = {}", geo.r);
+            assert!(
+                (geo.r - rm).abs() < 1e-3,
+                "it must freeze *at* r- = {rm}, got r = {} (a/M = {a})",
+                geo.r
+            );
+            // Finite on their clock, running away on the chart's: the whole content of the
+            // freeze. The paper sets tau = 0 at the horizon and integrates up to it, so the proper
+            // time has to stay finite - here it is a few M, against a coordinate time several times
+            // larger that is still nowhere near done. And what is left of it is nothing: the
+            // remaining proper time to r- is (r - r-) / |dr/dtau|, which is the quantity the
+            // rest-frame view draws as the crossing of the r- line with the observer's own axis.
+            let tau_left = (geo.r - rm) / geo.u[1].abs();
+            assert!(
+                geo.tau.is_finite() && geo.tau < 50.0 && geo.t > 2.0 * geo.tau,
+                "the freeze is in t alone: tau = {} M, t = {} M",
+                geo.tau,
+                geo.t
+            );
+            assert!(
+                tau_left < 1e-8,
+                "at the freeze r- is a sliver of proper time away, got {tau_left} M"
+            );
+            println!(
+                "a/M = {a}: r- = {rm:.4} M, E - Omega_- L = {e_corot:+.4}, frozen at \
+                 r - r- = {:.3e} M with u^t = {:.3e} after {:.1} M of coordinate time and \
+                 {:.2} M of the faller's own, {tau_left:.2e} M of it left to r-",
+                geo.r - rm,
+                geo.u[0],
+                geo.t,
+                geo.tau
+            );
         }
     }
 
