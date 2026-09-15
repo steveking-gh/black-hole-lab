@@ -1,0 +1,30 @@
+src/gui/volume_canvas.rs
+  s_c8d87c2c7b73cb::t_e82415139787f1 1171-1176
+  s_c8d87c2c7b73cb::t_3ac02bf56eaf77 1450,1679-1909
+  s_c8d87c2c7b73cb::t_6bf02828143a90 381-493
+  s_c8d87c2c7b73cb::t_b90937a05b5e23 918-951,954-981,988-1028
+  s_c8d87c2c7b73cb::t_06676aed9a13c4 952-953
+  s_c8d87c2c7b73cb::t_cb0a92f731155e 982-987
+  s_c8d87c2c7b73cb::t_47bbdde3fb9391 524-531
+  s_c8d87c2c7b73cb::t_10109f444fa8c9 1249,1256-1262
+  s_c8d87c2c7b73cb::t_72fc05006dc8bc 1375-1378,1390,1393-1407,1432-1449
+  s_c8d87c2c7b73cb::t_6a6f5113e86a6e 11,13
+  s_c8d87c2c7b73cb::t_94d8e3f71076c8 554-555
+  s_c8d87c2c7b73cb::t_8165dc12529797 1451
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "2aaadd8d2e5b7fe617d571182130b87509720720",
+  "prompts": {},
+  "sessions": {
+    "s_c8d87c2c7b73cb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "553fc9fe-1b48-463e-a36b-4c33628c4ac8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
