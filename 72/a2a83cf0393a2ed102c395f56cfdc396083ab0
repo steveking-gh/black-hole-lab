@@ -1,0 +1,23 @@
+src/gui/spacetime_canvas.rs
+  s_5e464e0dde83ec::t_7abce3cca3f8b3 1666,2409-2458,2461-2462,2465
+  s_5e464e0dde83ec::t_97d4977110736d 69-73,653-659,664-675,1528-1530,1540,1542,1544,1546,1557,1561-1570,1622-1664
+  s_5e464e0dde83ec::t_12707857625be3 2459-2460
+  s_5e464e0dde83ec::t_ae130549c0df4f 2463-2464
+  s_5e464e0dde83ec::t_d1c987ca77d3e5 1665,1667
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "72a2a83cf0393a2ed102c395f56cfdc396083ab0",
+  "prompts": {},
+  "sessions": {
+    "s_5e464e0dde83ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc7a846d-d13c-4554-b9bf-dc2dee2f30eb",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
