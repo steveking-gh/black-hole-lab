@@ -1,9 +1,10 @@
 use crate::gui::cauchy_effects::CauchyEffects;
 use crate::gui::controls::{
-    AppControls, DISTANT_CLOCK_GRID_TIP, ReferenceFrame, SignalViews, StepMode,
+    AppControls, DISTANT_CLOCK_GRID_TIP, ReferenceFrame, SignalViews, StepMode, VOLUME_VIEW_TIP,
 };
 use crate::gui::spacetime_canvas::{KEEP_SURFACE_FRAMED_TIP, REST_FRAME_TIP, SpacetimeCanvas};
 use crate::gui::spatial_canvas::{FrontStyle, SpatialCanvas};
+use crate::gui::volume_canvas::VolumeCanvas;
 use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::{Observer, ObserverPair};
@@ -23,6 +24,11 @@ pub struct SpacetimeApp {
     bob: Option<Observer>,
     alice: Option<Observer>,
     spacetime_canvas: SpacetimeCanvas,
+    /// The same foliation drawn as a volume: the equatorial plane as a floor and coordinate time
+    /// standing up out of it. It stands in for `spacetime_canvas` in the left column while the
+    /// "2D+1 volume" box is ticked, and keeps its own camera, window and telemetry boxes while it
+    /// is not being drawn, so that switching back and forth does not throw the view away.
+    volume_canvas: VolumeCanvas,
     spatial_canvas: SpatialCanvas,
     /// Alice's signal pulses, which Bob receives. They live here rather than in a canvas because
     /// they are advanced on the simulation clock and read by both diagrams and the HUD.
@@ -69,6 +75,7 @@ impl Default for SpacetimeApp {
             bob,
             alice,
             spacetime_canvas: SpacetimeCanvas::default(),
+            volume_canvas: VolumeCanvas::default(),
             spatial_canvas: SpatialCanvas::default(),
             signal,
             bob_signal,
@@ -324,6 +331,9 @@ impl eframe::App for SpacetimeApp {
         // clock; Reset Zoom in the header is what puts those back.
         if self.controls.take_view_reset() {
             self.spacetime_canvas.time_offset = 0.0;
+            // The volume view is panned in time the same way, by an offset from the same clock, so
+            // it goes back with it whether or not it is the picture currently on screen.
+            self.volume_canvas.time_offset = 0.0;
             // The observers under the pointer have just been replaced by fresh ones, so a drag of
             // the old worldline is not carried into the new run: both markers are pickable again
             // from the moment the reset lands.
@@ -368,9 +378,15 @@ impl eframe::App for SpacetimeApp {
                                 });
                             ui.checkbox(&mut self.controls.show_distant_clock_grid, "Distant clock grid")
                                 .on_hover_text(DISTANT_CLOCK_GRID_TIP);
+                            ui.checkbox(&mut self.controls.show_volume, "2D+1 volume")
+                                .on_hover_text(VOLUME_VIEW_TIP);
                             // Only the rest frames have a window of their own to keep; the
-                            // foliation view's zoom is a window on r that the user pans.
-                            if self.controls.frame_of_ref != ReferenceFrame::DistantObserver {
+                            // foliation view's zoom is a window on r that the user pans. It belongs
+                            // to the flat (t, xi) diagram and to nothing else, so it goes away with
+                            // it: the volume has a camera the user orbits instead.
+                            if !self.controls.show_volume
+                                && self.controls.frame_of_ref != ReferenceFrame::DistantObserver
+                            {
                                 ui.checkbox(
                                     &mut self.spacetime_canvas.keep_surface_framed,
                                     "Auto-zoom",
@@ -378,19 +394,43 @@ impl eframe::App for SpacetimeApp {
                                 .on_hover_text(KEEP_SURFACE_FRAMED_TIP);
                             }
                         });
-                        self.spacetime_canvas.render(
-                            ui,
-                            &self.metric,
-                            self.bob.as_ref(),
-                            self.alice.as_ref(),
-                            self.current_time,
-                            canvas_height,
-                            self.controls.use_km,
-                            self.controls.frame_of_ref,
-                            self.controls.font_scale,
-                            SignalViews { alice: &self.signal, bob: &self.bob_signal },
-                            self.controls.show_distant_clock_grid,
-                        );
+                        // One picture of the foliation or the rest frame at a time: the volume
+                        // replaces the flat diagram rather than being squeezed in beside it, since
+                        // they are the same geometry drawn two ways and the column is only wide
+                        // enough for one of them to be read.
+                        if self.controls.show_volume {
+                            self.volume_canvas.render(
+                                ui,
+                                &self.metric,
+                                self.bob.as_ref(),
+                                self.alice.as_ref(),
+                                self.current_time,
+                                canvas_height,
+                                self.controls.use_km,
+                                self.controls.frame_of_ref,
+                                self.controls.font_scale,
+                                SignalViews { alice: &self.signal, bob: &self.bob_signal },
+                                self.controls.show_distant_clock_grid,
+                                FrontStyle {
+                                    arcs: self.controls.draw_front_arcs,
+                                    hide_wound: self.controls.hide_wound_segments,
+                                },
+                            );
+                        } else {
+                            self.spacetime_canvas.render(
+                                ui,
+                                &self.metric,
+                                self.bob.as_ref(),
+                                self.alice.as_ref(),
+                                self.current_time,
+                                canvas_height,
+                                self.controls.use_km,
+                                self.controls.frame_of_ref,
+                                self.controls.font_scale,
+                                SignalViews { alice: &self.signal, bob: &self.bob_signal },
+                                self.controls.show_distant_clock_grid,
+                            );
+                        }
                     },
                 );
 
@@ -642,6 +682,9 @@ mod tests {
         app.spacetime_canvas.time_offset = 2.0;
         app.spacetime_canvas.r_offset = 1.25;
         app.spacetime_canvas.max_r = 0.05;
+        // The volume view is panned in time by the same kind of offset from the same clock, and it
+        // goes back with it whether or not it is the picture currently on screen.
+        app.volume_canvas.time_offset = 2.0;
 
         // The Reset button's own action, through the panel rather than around it.
         drop_observers(&mut app);
@@ -658,6 +701,7 @@ mod tests {
             app.ui(ui, &mut frame);
         });
         assert_eq!(app.spacetime_canvas.time_offset, 0.0, "the pan in time is back at the start");
+        assert_eq!(app.volume_canvas.time_offset, 0.0, "and so is the volume view's");
         assert!(!app.controls.view_reset_requested, "and the request has been consumed");
         // The radial pan and the zoom are a separate choice and are deliberately left standing.
         assert_eq!(app.spacetime_canvas.r_offset, 1.25);
@@ -671,6 +715,38 @@ mod tests {
             app.ui(ui, &mut frame);
         });
         assert_eq!(app.spacetime_canvas.time_offset, 1.0, "a consumed request does not fire twice");
+    }
+
+    #[test]
+    fn test_the_volume_checkbox_swaps_the_left_canvas() {
+        // The two pictures of the foliation are alternatives rather than neighbours: the column is
+        // only wide enough for one of them to be read, so ticking the box puts the volume where the
+        // (t, r) diagram was rather than beside it. The right-hand column is not part of the
+        // choice and is drawn either way, which is what the third assertion of each pair holds on
+        // to - otherwise "the diagram is gone" would be satisfied by a frame that drew nothing.
+        let mut app = SpacetimeApp::default();
+        app.controls.is_playing = false;
+        assert!(!app.controls.show_volume, "the app opens on the flat diagram");
+
+        let flat = painted_text(&mut app);
+        assert!(
+            flat.contains("Coordinate Time t"),
+            "the (t, r) diagram's own time axis should be drawn with the box unticked"
+        );
+        assert!(!flat.contains("2D+1 Volume"), "and the volume view should not be");
+        assert!(flat.contains("Spatial x"), "the equatorial view is drawn either way");
+
+        app.controls.show_volume = true;
+        let volume = painted_text(&mut app);
+        assert!(
+            volume.contains("2D+1 Volume"),
+            "ticking the box should put the volume view in the left column"
+        );
+        assert!(
+            !volume.contains("Coordinate Time t"),
+            "and take the (t, r) diagram out of it: the two share the column"
+        );
+        assert!(volume.contains("Spatial x"), "the equatorial view is untouched by the swap");
     }
 
     #[test]
@@ -1373,6 +1449,10 @@ mod tests {
         // Both observers are in the run and both are transmitting out of the box.
         assert!(d.alice.enabled && d.alice.transmit);
         assert!(d.bob.enabled && d.bob.transmit);
+        // The left column opens on the flat (t, r) diagram: the volume is the second way of
+        // drawing the same foliation, and every explanation in the app is written against the flat
+        // one.
+        assert!(!d.show_volume, "the 2D+1 volume is off out of the box");
     }
 
     #[test]

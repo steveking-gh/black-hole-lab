@@ -1,5 +1,3 @@
-#![allow(dead_code)] // Step 4 removes this when app.rs draws the canvas.
-
 use crate::gui::controls::{ReferenceFrame, SignalViews};
 use crate::gui::spacetime_canvas::TelemetryBoxes;
 use crate::gui::spatial_canvas::{
@@ -160,23 +158,20 @@ pub enum Layer {
 ///
 /// The variants are the shapes this canvas needs and no more. Everything translucent is a `Mesh`,
 /// because a pipe wall or a cone flank is shaded per vertex and a `Shape` with one fill colour
-/// cannot say that; the flat variants exist so that opaque markers and worldlines do not each pay
-/// for a two-triangle mesh.
+/// cannot say that; `Line` is there so that an opaque worldline, a rim or the edge of a cone does
+/// not pay for a two-triangle mesh. The opaque markers are not among them: they sit on the floor,
+/// which is the sorting plane itself, and are painted after both layers rather than sorted into
+/// one.
 pub enum Prim {
     /// Per-vertex colours, premultiplied.
     Mesh(egui::Mesh),
-    Polygon { points: Vec<Pos2>, fill: Color32 },
     Line { points: Vec<Pos2>, stroke: Stroke, closed: bool },
-    Disc { centre: Pos2, radius: f32, fill: Color32 },
 }
 
 impl Prim {
     fn into_shape(self) -> egui::Shape {
         match self {
             Self::Mesh(mesh) => egui::Shape::mesh(mesh),
-            Self::Polygon { points, fill } => {
-                egui::Shape::convex_polygon(points, fill, Stroke::NONE)
-            }
             Self::Line { points, stroke, closed } => {
                 if closed {
                     egui::Shape::closed_line(points, stroke)
@@ -184,7 +179,6 @@ impl Prim {
                     egui::Shape::line(points, stroke)
                 }
             }
-            Self::Disc { centre, radius, fill } => egui::Shape::circle_filled(centre, radius, fill),
         }
     }
 }
@@ -1621,7 +1615,11 @@ mod tests {
                 buf.push(
                     Layer::Above,
                     depth,
-                    Prim::Disc { centre: Pos2::new(x, 100.0), radius: 4.0, fill: Color32::RED },
+                    Prim::Line {
+                        points: vec![Pos2::new(x, 100.0), Pos2::new(x, 140.0)],
+                        stroke: Stroke::new(1.0, Color32::RED),
+                        closed: false,
+                    },
                 );
             }
             buf.label(Pos2::new(70.0, 100.0), egui::Align2::LEFT_TOP, "r+", Color32::WHITE);
@@ -1630,14 +1628,14 @@ mod tests {
         });
 
         let shapes = flatten(&output);
-        let mut circles = Vec::new();
-        let mut last_circle = None;
+        let mut strokes = Vec::new();
+        let mut last_stroke = None;
         let mut first_text = None;
         for (i, shape) in shapes.iter().enumerate() {
             match shape {
-                egui::Shape::Circle(c) => {
-                    circles.push(c.center.x);
-                    last_circle = Some(i);
+                egui::Shape::Path(path) => {
+                    strokes.push(path.points[0].x);
+                    last_stroke = Some(i);
                 }
                 egui::Shape::Text(_) => {
                     first_text.get_or_insert(i);
@@ -1648,17 +1646,17 @@ mod tests {
         output.drop_without_applying_deltas();
 
         assert_eq!(
-            circles,
+            strokes,
             vec![50.0, 30.0, 10.0],
-            "the discs should be painted farthest first - depths 5, 3, 1, so screen x 50, 30, 10 - \
-             but came out as {circles:?}"
+            "the strokes should be painted farthest first - depths 5, 3, 1, so screen x 50, 30, 10 - \
+             but came out as {strokes:?}"
         );
-        let last_circle = last_circle.expect("the three discs were painted");
+        let last_stroke = last_stroke.expect("the three strokes were painted");
         let first_text = first_text.expect("the label was painted");
         assert!(
-            first_text > last_circle,
+            first_text > last_stroke,
             "every label should follow every primitive, but the first text is shape {first_text} \
-             and the last circle is shape {last_circle}"
+             and the last stroke is shape {last_stroke}"
         );
     }
 
