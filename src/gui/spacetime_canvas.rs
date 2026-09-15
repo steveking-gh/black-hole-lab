@@ -66,10 +66,11 @@ const FRAME_SURFACE_FRACTION: f32 = 0.30;
 /// rate.
 const FRAME_ZOOM_LERP: f64 = 0.15;
 
-/// How many fine zoom steps one held-shift scroll event is worth. egui smooths a notch of the wheel
-/// over a few frames, so twenty per frame works out at about a decade of zoom per notch of the
-/// hand - and the range between the view the app opens on and an observer's last femtoseconds is
-/// eleven decades, which at the fine step alone is a thousand scroll events.
+/// How many fine zoom steps one event of the coarse zoom - ctrl, or command, with the wheel - is
+/// worth. egui smooths a notch of the wheel over a few frames, so twenty per frame works out at
+/// about a decade of zoom per notch of the hand, and the range between the view the app opens on
+/// and an observer's last femtoseconds is eleven decades: at the fine step alone that is a thousand
+/// scroll events.
 const COARSE_ZOOM_STEPS: i32 = 20;
 
 /// Hover gloss on the automatic framing.
@@ -649,15 +650,29 @@ impl SpacetimeCanvas {
             return;
         }
 
-        // Mouse wheel zoom on canvas (smooth 1/8th step size), with shift for the coarse step.
+        // Mouse wheel zoom on canvas, with ctrl (or command) held for the coarse step. That
+        // gesture never arrives as a scroll: egui reads the wheel's modifiers against its own zoom
+        // modifier and turns a match into `zoom_delta` instead, the same number a trackpad pinch
+        // produces. It is read here for its direction only, so one notch of the coarse zoom is
+        // worth exactly `COARSE_ZOOM_STEPS` of the fine one however fast the platform reports the
+        // wheel.
+        //
         // The two views zoom their own windows: the foliation view's is a window on r, and panning
         // it keeps the radius under the pointer where it is, while a rest frame's is a window on
         // the local chart and is centred on the observer by construction.
         if response.hovered() {
-            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-            if scroll.abs() > 0.1 {
-                let steps = if ui.input(|i| i.modifiers.shift) { COARSE_ZOOM_STEPS } else { 1 };
-                let factor = if scroll > 0.0 { 0.975f64.powi(steps) } else { 1.025f64.powi(steps) };
+            let (zoom_delta, scroll) =
+                ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta.y));
+            let (inward, steps) = if (zoom_delta - 1.0).abs() > 1e-4 {
+                (zoom_delta > 1.0, COARSE_ZOOM_STEPS)
+            } else if scroll.abs() > 0.1 {
+                (scroll > 0.0, 1)
+            } else {
+                (false, 0)
+            };
+            if steps > 0 {
+                let factor =
+                    if inward { 0.975f64.powi(steps) } else { 1.025f64.powi(steps) };
                 match frame_of_ref {
                     ReferenceFrame::Bob | ReferenceFrame::Alice => {
                         self.frame_max_r =
@@ -1510,7 +1525,9 @@ Tick Enable Observer on Alice's or Bob's card",
         // held for the whole fall (see `distant_clock_grid_step`); the second is that step times
         // u^t, and is the one that runs away. Their ratio *is* u^t = dt/dtau, exactly - and once
         // the two are in different units, 10 ms against 251 ms or 1 fs against 10 us, no eye
-        // compares them, so the number the picture actually turns on is the one to print.
+        // compares them, so the number the picture actually turns on is the one to print. It is set
+        // in the same size as the pair it stands for, and its two sides carry their colours, so the
+        // eye pairs "1" with the observer's reading and the ratio with the distant one.
         let obs_color =
             if focus_obs.name == "Alice" { Theme::ALICE_COLOR } else { Theme::BOB_COLOR };
         let (head_lines, head_bottom) = if show_distant_clock_grid
@@ -1518,15 +1535,15 @@ Tick Enable Observer on Alice's or Bob's card",
             && clock_proper_step > 0.0
         {
             let font = egui::FontId::proportional(16.0 * font_scale);
-            let small = egui::FontId::proportional(12.0 * font_scale);
             let distant = distant_clock_offset_label(clock_grid.step_m * seconds_per_m);
             let ratio = if !u_t.is_finite() {
-                "1 : ∞   (dt/dτ)".to_string()
+                "∞".to_string()
             } else if u_t < 1e4 {
-                format!("1 : {u_t:.1}   (dt/dτ)")
+                format!("{u_t:.1}")
             } else {
-                format!("1 : {u_t:.2e}   (dt/dτ)")
+                format!("{u_t:.2e}")
             };
+            let font2 = font.clone();
             let lines = vec![
                 vec![
                     painter.layout_no_wrap(
@@ -1537,11 +1554,20 @@ Tick Enable Observer on Alice's or Bob's card",
                     painter.layout_no_wrap("  =  ".to_string(), font.clone(), Theme::TEXT_MUTED),
                     painter.layout_no_wrap(
                         format!("{} on the distant clock", distant.trim_start_matches('+')),
-                        font,
+                        font.clone(),
                         Theme::TEXT_BRIGHT,
                     ),
                 ],
-                vec![painter.layout_no_wrap(ratio, small, Theme::TEXT_MUTED)],
+                vec![
+                    painter.layout_no_wrap("1".to_string(), font2.clone(), obs_color),
+                    painter.layout_no_wrap(" : ".to_string(), font2.clone(), Theme::TEXT_MUTED),
+                    painter.layout_no_wrap(ratio, font2.clone(), Theme::TEXT_BRIGHT),
+                    painter.layout_no_wrap(
+                        "   (dt/dτ)".to_string(),
+                        font2,
+                        Theme::TEXT_MUTED,
+                    ),
+                ],
             ];
             let height: f32 = lines
                 .iter()
@@ -1590,6 +1616,52 @@ Tick Enable Observer on Alice's or Bob's card",
                     egui::FontId::monospace(9.0 * font_scale),
                     label_colour,
                 );
+            }
+        }
+
+        // 2b. The observer's own clock, ticked up his own worldline.
+        //
+        // The surface t = t_obs + k * step_m crosses xi^1 = 0 at xi^0 = k * step_m / u^t - set
+        // xi^1 = 0 in the line `LocalFrame::surface_t_const` returns and everything else cancels -
+        // so the grid's own lines cut this axis at exact multiples of the round step the rung was
+        // chosen to be, and the axis can be ticked with the same numbers the grid is spaced by.
+        // They are the reading the grid's labels give, taken on the other clock: at the scale the
+        // automatic framing settles on near r- they are in femtoseconds, and the r- line's crossing
+        // of this same axis - at Delta r / u^r, the proper time left before it - is then read
+        // straight off them.
+        //
+        // Drawn whether or not the distant grid is, because this is the observer's own clock rather
+        // than the distant one's, and each label names its own unit.
+        if clock_proper_step.is_finite() && clock_proper_step > 0.0 {
+            let spacing_px = (clock_proper_step as f32) * scale;
+            if spacing_px >= 1.0 {
+                let k_max = ((rect.height() * 0.5 / spacing_px).ceil() as i64).clamp(0, 512);
+                let label_every = ((CLOCK_LABEL_MIN_PX * font_scale / spacing_px).ceil() as i64).max(1);
+                for k in -k_max..=k_max {
+                    // k = 0 is the observer's own event, which is already a dot with their name
+                    // beside it.
+                    if k == 0 {
+                        continue;
+                    }
+                    let y = center.y - (k as f32) * spacing_px;
+                    if y < rect.top() + 2.0 || y > rect.bottom() - 2.0 {
+                        continue;
+                    }
+                    painter.line_segment(
+                        [Pos2::new(center.x - 4.0, y), Pos2::new(center.x + 4.0, y)],
+                        Stroke::new(1.2, obs_color),
+                    );
+                    if k % label_every != 0 {
+                        continue;
+                    }
+                    painter.text(
+                        Pos2::new(center.x + 7.0, y),
+                        egui::Align2::LEFT_CENTER,
+                        distant_clock_offset_label((k as f64) * clock_proper_step * seconds_per_m),
+                        egui::FontId::monospace(9.0 * font_scale),
+                        obs_color,
+                    );
+                }
             }
         }
 
@@ -2334,6 +2406,63 @@ mod canvas_tests {
             "and what the same line is worth on a clock at rest at infinity: {on_text}"
         );
         assert!(on_text.contains("now"), "the slice through the observer's own event is labelled");
+        // Bob's own clock is ticked up his own worldline whether or not the distant grid is shown:
+        // it is his clock, not the distant one's, and each tick names its own unit. Nothing else in
+        // the view writes a signed number at the head of a line.
+        assert!(
+            off_text
+                .lines()
+                .any(|l| l.starts_with(['+', '-']) && l[1..].starts_with(|c: char| c.is_ascii_digit())),
+            "the observer's own clock axis goes on being ticked with the grid off: {off_text}"
+        );
+    }
+
+    #[test]
+    fn test_the_distant_clocks_slices_cut_the_observers_own_axis_at_his_round_step() {
+        // What lets the observer's own time axis be ticked with the grid's own spacing. The surface
+        // t = t_obs + k * step_m meets xi^1 = 0 at xi^0 = k * step_m / u^t exactly - the same
+        // proper-time step `distant_clock_grid_step` chose the rung to be - so the ticks up the
+        // axis and the lines across the canvas are one set of events, read on the two clocks.
+        //
+        // Checked on a worldline deep in the runaway, u^t = 1e5, where the step in t and the step
+        // in proper time are five decades apart and any confusion between them would be loud.
+        use crate::physics::local_frame::LocalFrame;
+        use crate::physics::observer::{Observer, WorldlineParams};
+
+        let metric = KerrSchild::new(1.0, 0.90);
+        let mut bob = Observer::new_with_phi(
+            &metric, "Bob", 0.0, 4.5, 0.0, 0.0, WorldlineParams::new(1.0, 2.2, false),
+        );
+        let mut guard = 0;
+        while bob.four_velocity(&metric)[0] < 1e5 && !bob.has_ended() && guard < 20_000 {
+            guard += 1;
+            bob.step(&metric, 0.0, 0.05);
+        }
+        let u = bob.four_velocity(&metric);
+        assert!(u[0] >= 1e5, "the sample wants a runaway u^t, got {}", u[0]);
+
+        let frame = LocalFrame::for_observer(&metric, bob.r, &u);
+        let step = distant_clock_grid_step(u[0], 3.0e5, TEN_SOLAR_SECONDS_PER_M, 1.0);
+        let proper_step = step.step_m / u[0];
+        for k in 1..=5 {
+            let xi0 = frame
+                .surface_t_const((k as f64) * step.step_m)
+                .xi0_at_axis()
+                .expect("a t = const slice is never parallel to the observer's own axis");
+            let wanted = (k as f64) * proper_step;
+            assert!(
+                (xi0 - wanted).abs() <= 1e-9 * wanted.abs(),
+                "slice {k} cuts the axis at {xi0} M, wanted {wanted} M"
+            );
+        }
+        println!(
+            "at u^t = {:.3e} the grid puts {} of Bob's own time between lines, which is {:.3e} M of \
+             the chart's t, or {:.3e} s on the distant clock of a ten solar-mass hole",
+            u[0],
+            step.label,
+            step.step_m,
+            step.step_m * TEN_SOLAR_SECONDS_PER_M
+        );
     }
 
     #[test]
