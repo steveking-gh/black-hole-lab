@@ -362,25 +362,25 @@ impl SpatialCanvas {
                 let px_x = center.x + offset_px;
                 if px_x <= rect.right() - 5.0 && center.y >= rect.top() && center.y <= rect.bottom() {
                     painter.line_segment([Pos2::new(px_x, center.y - 3.0), Pos2::new(px_x, center.y + 3.0)], axis_stroke);
-                    painter.text(Pos2::new(px_x, center.y + 5.0), egui::Align2::CENTER_TOP, format!("+{}", km_str), egui::FontId::monospace(9.0 * font_scale), Theme::TEXT_MUTED);
+                    painter.text(Pos2::new(px_x, center.y + 5.0), egui::Align2::CENTER_TOP, format!("+{}", km_str), egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::TEXT_MUTED);
                 }
                 // -X tick
                 let px_neg_x = center.x - offset_px;
                 if px_neg_x >= rect.left() + 5.0 && center.y >= rect.top() && center.y <= rect.bottom() {
                     painter.line_segment([Pos2::new(px_neg_x, center.y - 3.0), Pos2::new(px_neg_x, center.y + 3.0)], axis_stroke);
-                    painter.text(Pos2::new(px_neg_x, center.y + 5.0), egui::Align2::CENTER_TOP, format!("-{}", km_str), egui::FontId::monospace(9.0 * font_scale), Theme::TEXT_MUTED);
+                    painter.text(Pos2::new(px_neg_x, center.y + 5.0), egui::Align2::CENTER_TOP, format!("-{}", km_str), egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::TEXT_MUTED);
                 }
                 // +Y tick
                 let py_pos = center.y - offset_px;
                 if py_pos >= rect.top() + 5.0 && center.x >= rect.left() && center.x <= rect.right() {
                     painter.line_segment([Pos2::new(center.x - 3.0, py_pos), Pos2::new(center.x + 3.0, py_pos)], axis_stroke);
-                    painter.text(Pos2::new(center.x + 5.0, py_pos), egui::Align2::LEFT_CENTER, format!("+{}", km_str), egui::FontId::monospace(9.0 * font_scale), Theme::TEXT_MUTED);
+                    painter.text(Pos2::new(center.x + 5.0, py_pos), egui::Align2::LEFT_CENTER, format!("+{}", km_str), egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::TEXT_MUTED);
                 }
                 // -Y tick
                 let py_neg = center.y + offset_px;
                 if py_neg <= rect.bottom() - 5.0 && center.x >= rect.left() && center.x <= rect.right() {
                     painter.line_segment([Pos2::new(center.x - 3.0, py_neg), Pos2::new(center.x + 3.0, py_neg)], axis_stroke);
-                    painter.text(Pos2::new(center.x + 5.0, py_neg), egui::Align2::LEFT_CENTER, format!("-{}", km_str), egui::FontId::monospace(9.0 * font_scale), Theme::TEXT_MUTED);
+                    painter.text(Pos2::new(center.x + 5.0, py_neg), egui::Align2::LEFT_CENTER, format!("-{}", km_str), egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::TEXT_MUTED);
                 }
                 km += km_step;
             }
@@ -404,25 +404,25 @@ impl SpatialCanvas {
                 let px_x = center.x + offset_px;
                 if px_x <= rect.right() - 5.0 && center.y >= rect.top() && center.y <= rect.bottom() {
                     painter.line_segment([Pos2::new(px_x, center.y - 3.0), Pos2::new(px_x, center.y + 3.0)], axis_stroke);
-                    painter.text(Pos2::new(px_x, center.y + 5.0), egui::Align2::CENTER_TOP, format!("+{}", label), egui::FontId::monospace(9.0 * font_scale), Theme::TEXT_MUTED);
+                    painter.text(Pos2::new(px_x, center.y + 5.0), egui::Align2::CENTER_TOP, format!("+{}", label), egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::TEXT_MUTED);
                 }
                 // -X tick
                 let px_neg_x = center.x - offset_px;
                 if px_neg_x >= rect.left() + 5.0 && center.y >= rect.top() && center.y <= rect.bottom() {
                     painter.line_segment([Pos2::new(px_neg_x, center.y - 3.0), Pos2::new(px_neg_x, center.y + 3.0)], axis_stroke);
-                    painter.text(Pos2::new(px_neg_x, center.y + 5.0), egui::Align2::CENTER_TOP, format!("-{}", label), egui::FontId::monospace(9.0 * font_scale), Theme::TEXT_MUTED);
+                    painter.text(Pos2::new(px_neg_x, center.y + 5.0), egui::Align2::CENTER_TOP, format!("-{}", label), egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::TEXT_MUTED);
                 }
                 // +Y tick
                 let py_pos = center.y - offset_px;
                 if py_pos >= rect.top() + 5.0 && center.x >= rect.left() && center.x <= rect.right() {
                     painter.line_segment([Pos2::new(center.x - 3.0, py_pos), Pos2::new(center.x + 3.0, py_pos)], axis_stroke);
-                    painter.text(Pos2::new(center.x + 5.0, py_pos), egui::Align2::LEFT_CENTER, format!("+{}", label), egui::FontId::monospace(9.0 * font_scale), Theme::TEXT_MUTED);
+                    painter.text(Pos2::new(center.x + 5.0, py_pos), egui::Align2::LEFT_CENTER, format!("+{}", label), egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::TEXT_MUTED);
                 }
                 // -Y tick
                 let py_neg = center.y + offset_px;
                 if py_neg <= rect.bottom() - 5.0 && center.x >= rect.left() && center.x <= rect.right() {
                     painter.line_segment([Pos2::new(center.x - 3.0, py_neg), Pos2::new(center.x + 3.0, py_neg)], axis_stroke);
-                    painter.text(Pos2::new(center.x + 5.0, py_neg), egui::Align2::LEFT_CENTER, format!("-{}", label), egui::FontId::monospace(9.0 * font_scale), Theme::TEXT_MUTED);
+                    painter.text(Pos2::new(center.x + 5.0, py_neg), egui::Align2::LEFT_CENTER, format!("-{}", label), egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::TEXT_MUTED);
                 }
                 s += r_step;
             }
@@ -439,7 +439,7 @@ impl SpatialCanvas {
             Pos2::new(rect.right() - 8.0, rect.bottom() - 4.0),
             egui::Align2::RIGHT_BOTTOM,
             x_title,
-            egui::FontId::proportional(10.0 * font_scale),
+            egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
             Theme::TEXT_BRIGHT,
         );
         let y_title = if use_km {
@@ -451,7 +451,7 @@ impl SpatialCanvas {
             Pos2::new(rect.right() - 8.0, rect.top() + 8.0),
             egui::Align2::RIGHT_TOP,
             y_title,
-            egui::FontId::proportional(10.0 * font_scale),
+            egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
             Theme::TEXT_MUTED,
         );
 
@@ -489,7 +489,7 @@ impl SpatialCanvas {
                 center + Vec2::new(0.0, ring_px + 4.0),
                 egui::Align2::CENTER_TOP,
                 "ring singularity r = 0 (ρ = a)",
-                egui::FontId::monospace(9.0 * font_scale),
+                egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
                 Theme::SINGULARITY_LINE,
             );
         }
@@ -785,7 +785,7 @@ impl SpatialCanvas {
         // The Details button sits just above the block it shows and hides, set in the block's own
         // font so it reads as the block's first line. It is a widget placed over the canvas, so
         // it takes the click instead of the canvas drag.
-        let legend_font = egui::FontId::monospace(11.0 * font_scale);
+        let legend_font = egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale);
         let button_label = if *show_details { "▾ Details" } else { "▸ Details" };
         let button_size = Vec2::new(80.0 * font_scale, 16.0 * font_scale);
         let button_rect = egui::Rect::from_min_size(rect.left_top() + Vec2::new(8.0, 6.0), button_size);

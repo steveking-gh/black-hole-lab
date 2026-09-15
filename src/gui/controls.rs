@@ -4,17 +4,31 @@ use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::{Observer, ObserverMode, ObserverPair, Release, WorldlineParams};
 use crate::physics::wavefront::{Endpoint, RAYS_PER_PULSE, SignalField, SignalPair};
 
+/// Why one M is a mass, a length and a duration at the same time.
+const M_UNITS_TIP: &str =
+"M is the hole's mass, and it is the only unit this app has. General relativity is written with G = c = 1, which makes mass, length and time the same dimension: multiply a mass by G/c² to read it as a length, by G/c³ to read it as a duration. So there is one number here, quoted three ways.
+
+The two conversions differ by exactly one factor of c, which is the whole of it: 1 M of space is the distance light crosses in 1 M of time. On the charts, a horizontal M and a vertical M are the same size for that reason, and a light ray is drawn at 45 degrees.
+
+For the Sun that unit is 1.477 km and 4.927 µs. Every radius and every interval on the charts is quoted in multiples of it, so changing the Mass slider does not change the physics that is drawn - it changes what one tick is worth in kilometres and seconds. The chart's own M is 1 by construction; the slider sets what that 1 means.";
+
 /// One of the panel's chip buttons: a quick pick that sets the slider beside it, or one arm of a
 /// small choice - a motion, a release, a step mode. `Ui::selectable_label` and
 /// `Ui::selectable_value` draw these with no frame at all until they are the selected one, which
 /// leaves a row of them looking like a caption that has been broken into words rather than like a
-/// row of things to press. The outline says they can be pressed; the fill still says which one is
-/// on, and a brighter outline says it again.
+/// row of things to press. The outline is the same colour on every chip, dimmed to three quarters
+/// where the chip is not selected: enough to keep an unpressed chip reading as a thing to press
+/// without competing with the fill, which is what actually says which one is on.
 fn chip(ui: &mut egui::Ui, selected: bool, label: &str) -> egui::Response {
-    let (fill, stroke) = if selected {
-        (ui.visuals().selection.bg_fill, Theme::CHIP_OUTLINE_ACTIVE)
+    let fill = if selected {
+        ui.visuals().selection.bg_fill
     } else {
-        (egui::Color32::TRANSPARENT, Theme::CHIP_OUTLINE)
+        egui::Color32::TRANSPARENT
+    };
+    let stroke = if selected {
+        Theme::CHIP_OUTLINE_ACTIVE
+    } else {
+        Theme::dimmed(Theme::CHIP_OUTLINE_ACTIVE, 0.75)
     };
     ui.add(
         egui::Button::selectable(selected, label)
@@ -293,14 +307,24 @@ impl Default for AppControls {
 /// The black hole presets, as (label, M, a/M, M_solar). One of them is highlighted when the metric
 /// is that preset's, which is read off the metric rather than remembered: nothing can then drift out
 /// of step with the geometry, and moving the mass or spin slider drops the highlight by itself.
-const PRESETS: [(&str, f64, f64, f64); 6] = [
-    ("Schwarzschild (10 M☉)", 1.0, 0.0, 10.0),
-    ("Cygnus X-1 (21.2 M☉)", 1.0, 0.97, 21.2),
-    ("Sagittarius A* (4.15M M☉)", 1.0, 0.90, 4.15e6),
-    ("M87* (6.5B M☉)", 1.0, 0.90, 6.5e9),
-    ("TON 618 (66B M☉)", 1.0, 0.88, 6.6e10),
-    ("Extreme Kerr (a=0.998)", 1.0, 0.998, 10.0),
+/// The mass and spin quick-picks, as (label, M, a/M, solar masses, a note shown on hover or "" for
+/// none). The note is there for a preset that cannot be what it says it is - see Gargantua.
+const PRESETS: [(&str, f64, f64, f64, &str); 7] = [
+    ("Schwarzschild (10 M☉)", 1.0, 0.0, 10.0, ""),
+    ("Cygnus X-1 (21.2 M☉)", 1.0, 0.97, 21.2, ""),
+    ("Sagittarius A* (4.15M M☉)", 1.0, 0.90, 4.15e6, ""),
+    ("M87* (6.5B M☉)", 1.0, 0.90, 6.5e9, ""),
+    ("TON 618 (66B M☉)", 1.0, 0.88, 6.6e10, ""),
+    ("Extreme Kerr (a=0.998)", 1.0, 0.998, 10.0, ""),
+    ("Gargantua (100M M☉)", 1.0, 0.999, 1.0e8, GARGANTUA_NOTE),
 ];
+
+/// Why the Gargantua preset is not Gargantua's spin.
+const GARGANTUA_NOTE: &str = "Kip Thorne's hole from Interstellar, at the mass he gives it: about 10^8 M☉, which is what puts a survivable tidal field at the horizon of something that swallows a solar system.
+
+Its spin is the part this app cannot carry. Thorne needs a/M = 1 - 1.3e-14 for the hour-per-seven-years on Miller's planet, and at that spin r+ - r- = 2 M sqrt(1 - (a/M)^2) is 3.2e-7 M: the two horizons are closer together than a double-precision integrator can keep them apart over a fall, and the Spin slider stops at 0.999 for that reason. What is set here is that 0.999 - a rapidly rotating hole of the right mass, and the right hole to fall into, but not the one on the screen in the film.
+
+Mallary, Khanna & Burko (Phys. Rev. D 98, 104024) study an infaller at a/M = 0.995 with E = 1, L = 4M for the same reason, and say that closeness to extremality is difficult to simulate.";
 
 /// The step-distance quick-picks in Distance step mode, as (label, km).
 const STEP_DISTANCE_PRESETS: [(&str, f64); 4] =
@@ -393,7 +417,7 @@ pub fn impossible_mode_note(obs: &Observer, metric: &KerrSchild) -> Option<&'sta
 pub fn active_preset(metric: &KerrSchild) -> Option<&'static str> {
     PRESETS
         .iter()
-        .find(|&&(_, m, a_star, m_solar)| {
+        .find(|&&(_, m, a_star, m_solar, _)| {
             same_to_a_millionth(metric.m, m)
                 && same_to_a_millionth(metric.a_star(), a_star)
                 && same_to_a_millionth(metric.m_solar, m_solar)
@@ -979,6 +1003,15 @@ impl AppControls {
                     signals.advance(metric, current_step, a, b);
                 }
             });
+        });
+
+        ui.add_space(4.0);
+
+        // 1b. Everything that is a setting rather than a press. The transport above is the handful
+        // of controls a user reaches for constantly; these are the ones they set once and leave, so
+        // they get their own frame and their own heading rather than trailing off the same one.
+        ui.group(|ui| {
+            ui.label(egui::RichText::new("SIMULATION SETTINGS").strong().color(Theme::UI_HEADING));
 
             ui.add(
                 egui::Slider::new(&mut self.play_speed, 0.05..=20.0)
@@ -1065,13 +1098,15 @@ impl AppControls {
             ui.separator();
             ui.label(egui::RichText::new("📐 UNITS & COORDINATE SYSTEM").small().strong().color(Theme::TEXT_BRIGHT));
             ui.checkbox(&mut self.use_km, "📏 Display in Kilometers (km) instead of M");
-            if self.use_km {
-                ui.label(egui::RichText::new(format!("• Scale: 1M = {}", metric.format_physical_distance(1.0))).small().color(Theme::TEXT_MUTED));
-                ui.label(egui::RichText::new(format!("• Time:  1M = {}", metric.format_physical_time(1.0))).small().color(Theme::TEXT_MUTED));
-            } else {
-                ui.label(egui::RichText::new(format!("• 1M [Distance] = GM/c² = {}", metric.format_physical_distance(1.0))).small());
-                ui.label(egui::RichText::new(format!("• 1M [Time]     = GM/c³ = {}", metric.format_physical_time(1.0))).small());
-            }
+            // One pair of lines whichever unit the charts are labelled in. The two branches this
+            // replaces printed the same two numbers under different captions, and only one of them
+            // carried the conversions - which are the part that answers what M actually is. They
+            // are the same brightness as every other control: this is the key to every number on
+            // the screen, not a footnote to them.
+            ui.label(egui::RichText::new(format!("• 1M [Distance] = GM/c² = {}", metric.format_physical_distance(1.0))).small())
+                .on_hover_text(M_UNITS_TIP);
+            ui.label(egui::RichText::new(format!("• 1M [Time]     = GM/c³ = {}", metric.format_physical_time(1.0))).small())
+                .on_hover_text(M_UNITS_TIP);
         });
 
         ui.add_space(4.0);
@@ -1097,8 +1132,10 @@ impl AppControls {
             ui.horizontal_wrapped(|ui| {
                 let mut preset_changed = false;
                 let highlighted = active_preset(metric);
-                for (label, m, a_star, m_solar) in PRESETS {
-                    if chip(ui, highlighted == Some(label), label).clicked() {
+                for (label, m, a_star, m_solar, note) in PRESETS {
+                    let pick = chip(ui, highlighted == Some(label), label);
+                    let pick = if note.is_empty() { pick } else { pick.on_hover_text(note) };
+                    if pick.clicked() {
                         *metric = KerrSchild::with_solar_mass(m, a_star * m, m_solar);
                         preset_changed = true;
                     }

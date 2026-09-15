@@ -1,7 +1,8 @@
 use crate::gui::controls::{impossible_mode_note, ReferenceFrame, SignalViews};
 use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
-use crate::physics::local_frame::{LocalFrame, SurfaceCharacter};
+use crate::physics::geodesic::proper_time_between;
+use crate::physics::local_frame::{ruler_distance, LocalFrame, SurfaceCharacter};
 use crate::physics::observer::{Observer, ObserverMode};
 use crate::physics::wavefront::SignalField;
 use egui::{epaint::PathShape, Color32, Pos2, Rect, Stroke, Vec2};
@@ -19,7 +20,9 @@ dr/dτ — wristwatch speed: kilometres of radius per second on the observer's o
 
 a_prop — proper acceleration in Earth g, the accelerometer reading. Zero means free fall.
 
-Tidal — gravitational acceleration difference across one metre, in g per metre. Curvature sets the value (48M²/r⁶ on the equator); tidal stretch, not infall speed, tears a body apart.
+Tidal (bg) — the *background* tidal field: the gravitational acceleration difference across one metre, in Earth g per metre, from 2GM/r³ at the observer’s radius. It is the Newtonian radial stretch of a hole of this mass, so it carries no dependence on the spin and none on the observer’s motion; it is quoted because tidal stretch, not infall speed, is what tears a body apart, and because it is the part of the answer that is exact in vacuum.
+
+What it leaves out is the part that matters at the Cauchy horizon. A real hole is perturbed — by the radiative tail of its own collapse, if by nothing else — and that perturbation is blueshifted without bound on the approach to r−, where the tidal force an infaller measures grows like (uᵗ)² divided by (ln uᵗ)⁷ while this number stays finite and nearly constant. So near r− this read-out says the ride is gentle, and for exact Kerr it is; for any hole that has ever been disturbed it is not. The singularity there is a weak one in Tipler’s sense — the integrated deformation stays bounded, because the diverging tidal force oscillates with a frequency that runs away too — but the instantaneous force does diverge, and nothing in this app models it. (Mallary, Khanna & Burko, Phys. Rev. D 98, 104024 (2018).)
 
 ν_in/ν_∞ — frequency of ingoing light measured by the observer, divided by the frequency at infinity. Below 1 means redshift; a raindrop measures 1/2 at the Schwarzschild horizon.
 
@@ -237,6 +240,16 @@ fn distant_clock_offset_label(seconds: f64) -> String {
         return "now".to_string();
     }
     let sign = if seconds < 0.0 { "-" } else { "+" };
+    format!("{sign}{}", duration_label(seconds))
+}
+
+/// A duration in seconds, printed in whatever unit reads naturally and with no sign: the same
+/// ladder `distant_clock_offset_label` ticks the grid with, from femtoseconds to years, so a
+/// horizon's countdown and the clock lines beside it are quoted in the same units.
+fn duration_label(seconds: f64) -> String {
+    if !seconds.is_finite() {
+        return "—".to_string();
+    }
     let s = seconds.abs();
     let (value, unit) = if s < 1e-12 {
         (s * 1e15, "fs")
@@ -266,7 +279,33 @@ fn distant_clock_offset_label(seconds: f64) -> String {
     } else {
         format!("{value:.1}")
     };
-    format!("{sign}{number} {unit}")
+    format!("{number} {unit}")
+}
+
+/// A proper distance in units of M, printed in whatever unit reads naturally. The ruler distance
+/// to a horizon spans microns on a stellar-mass hole and light-seconds on a supermassive one, and
+/// `KerrSchild::format_physical_distance` bottoms out at a tenth of a kilometre, so the small end
+/// of the ladder is carried here and everything from a kilometre up is handed back to it.
+fn ruler_distance_label(metric: &KerrSchild, r_in_m: f64) -> String {
+    let km = metric.r_to_km(r_in_m.abs()).abs();
+    if !km.is_finite() {
+        return "—".to_string();
+    }
+    if km >= 1.0 {
+        return metric.format_physical_distance(r_in_m.abs());
+    }
+    let metres = km * 1e3;
+    if metres >= 1.0 {
+        format!("{metres:.2} m")
+    } else if metres >= 1e-3 {
+        format!("{:.2} mm", metres * 1e3)
+    } else if metres >= 1e-6 {
+        format!("{:.2} µm", metres * 1e6)
+    } else if metres >= 1e-9 {
+        format!("{:.2} nm", metres * 1e9)
+    } else {
+        format!("{metres:.2e} m")
+    }
 }
 
 /// Where a telemetry box is kept between frames once the user has moved it.
@@ -351,12 +390,48 @@ impl TelemetryBoxes {
         use_km: bool,
         font_scale: f32,
     ) -> egui::Response {
-        let key = format!("{canvas_tag}:{name}");
-        let previous = self.placements.get(&key).copied();
         let lines = telemetry_lines(name, color, obs, metric, use_km);
         let size = telemetry_box_size(painter, &lines, font_scale);
-
         let anchored = default_badge_pos(canvas_rect, pos, size);
+        self.show_lines(
+            ui,
+            painter,
+            canvas_tag,
+            name,
+            canvas_rect,
+            anchored,
+            &lines,
+            color,
+            font_scale,
+            TELEMETRY_HOVER_TIP,
+        )
+    }
+
+    /// Whether this box has been dragged somewhere and left there.
+    pub fn is_placed(&self, canvas_tag: &str, name: &str) -> bool {
+        self.placements.contains_key(&format!("{canvas_tag}:{name}"))
+    }
+
+    /// Draw one box of arbitrary content at `anchored`, with the drag, the double-click reset and
+    /// the remembered placement every box on these canvases gets. `show` is this with an
+    /// observer's telemetry in it; the surface and horizon boxes are this with theirs.
+    #[allow(clippy::too_many_arguments)]
+    fn show_lines(
+        &mut self,
+        ui: &mut egui::Ui,
+        painter: &egui::Painter,
+        canvas_tag: &str,
+        name: &str,
+        canvas_rect: Rect,
+        anchored: Pos2,
+        lines: &[TelemetryLine],
+        color: Color32,
+        font_scale: f32,
+        tip: &'static str,
+    ) -> egui::Response {
+        let key = format!("{canvas_tag}:{name}");
+        let previous = self.placements.get(&key).copied();
+        let size = telemetry_box_size(painter, lines, font_scale);
         let placed = resolve_placement(previous, anchored, canvas_rect.min);
         let badge_rect = clamp_into(Rect::from_min_size(placed, size), canvas_rect);
 
@@ -388,9 +463,21 @@ impl TelemetryBoxes {
             moved
         };
 
-        paint_telemetry_box(painter, badge_rect, color, &lines, font_scale);
-        response.on_hover_text(TELEMETRY_HOVER_TIP)
+        paint_telemetry_box(painter, badge_rect, color, lines, font_scale);
+        response.on_hover_text(tip)
     }
+}
+
+/// An info box worked out while its subject was being drawn and painted only once everything else
+/// on the canvas is down. Deferring them is what makes the opaque fill mean anything: a box painted
+/// in the middle of the pass gets a worldline, a light cone or a grid line drawn straight across it.
+struct PendingBox {
+    /// Also the key its remembered position is filed under, so it has to be unique per canvas.
+    name: String,
+    anchor: Pos2,
+    lines: Vec<TelemetryLine>,
+    color: Color32,
+    tip: &'static str,
 }
 
 /// One printed line of a telemetry box: the text, its colour and whether it is the title.
@@ -422,10 +509,17 @@ fn clamp_into(rect: Rect, bounds: Rect) -> Rect {
     )
 }
 
+/// Corner radius of every floating info box, in points before the font scale. Large enough that
+/// the rounding reads as a deliberate shape rather than as an anti-aliased square corner.
+const BOX_CORNER_RADIUS: f32 = 8.0;
+
+/// The two sizes a telemetry box prints at. They are now the same size: 10 pt is the floor for
+/// text anywhere in this app, and the title is told apart by colour and position rather than by
+/// being the only legible row.
 fn telemetry_fonts(font_scale: f32) -> (egui::FontId, egui::FontId) {
     (
-        egui::FontId::monospace(10.0 * font_scale),
-        egui::FontId::monospace(9.0 * font_scale),
+        egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
+        egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
     )
 }
 
@@ -463,8 +557,13 @@ fn paint_telemetry_box(
     let pad_y = 6.0 * font_scale;
     let line_spacing = 13.0 * font_scale;
 
-    painter.rect_filled(badge_rect, 4.0 * font_scale, Color32::from_black_alpha(230));
-    painter.rect_stroke(badge_rect, 4.0 * font_scale, Stroke::new(1.2, color), egui::StrokeKind::Inside);
+    painter.rect_filled(badge_rect, BOX_CORNER_RADIUS * font_scale, Color32::from_black_alpha(230));
+    painter.rect_stroke(
+        badge_rect,
+        BOX_CORNER_RADIUS * font_scale,
+        Stroke::new(1.2, color),
+        egui::StrokeKind::Inside,
+    );
 
     for (i, line) in lines.iter().enumerate() {
         let font = if line.is_title { font_title.clone() } else { font_body.clone() };
@@ -477,6 +576,119 @@ fn paint_telemetry_box(
         );
     }
 }
+
+/// One surface drawn across the rest-frame view: its radius, the title of its box, the colour and
+/// width of its line, the colour its box is outlined in, and whether that box is a horizon's - the
+/// two horizons report a place-or-moment reading, the static limit and the ring report the causal
+/// character of the drawn line.
+type DrawnSurface<'a> = (f64, &'a str, Color32, f32, Color32, bool);
+
+/// Hover tip for the two horizon boxes, which name the methodology their third line uses.
+/// Hover tip for the static limit's and the ring's boxes, whose two lines read the drawn line
+/// rather than integrating anything.
+pub const SURFACE_BOX_TIP: &str =
+"What the surface is, read straight off the slope of its line in this frame. Steeper than 45 degrees is timelike - the world-tube of observers holding that radius, something a rocket can stay off. Exactly 45 degrees is null. Flatter than 45 degrees is spacelike: not a place at all but a moment of your history, which arrives whatever you do. Nothing about the tilt is put in by hand; it comes from the sign of g^rr at your own radius through the dual tetrad, so the reading is exact at the dot.
+
+tilt — the angle of the line, quoted so that a 41.8 degree surface is not mistaken for a 45 degree one.
+
+moving at / closing at — for a timelike surface, the speed its world-tube crosses this frame at; for a spacelike one, your speed relative to the observers whose simultaneity slice it is. Both are read off the same slope.
+
+ξ¹ and τ — where the line cuts your axes: how far out the surface is at your own moment, and when it meets your worldline. Both are marked (1st order) because this chart is linear. The tetrad is exact at the dot, so orientations there are exact, but a finite offset is a straight-line extrapolation through curved geometry and reads low - measured against the exact integral it is short by about 7% for an infaller at 4.5M, by 38% for a hoverer at 4M, and by 63% deep inside r₋. The two horizons do not use it: their boxes integrate the geodesic and the worldline instead, and carry no such tag.";
+
+/// The Cauchy box's border. Red rather than the magenta of the r₋ line itself: the line is the
+/// geometry, the box is the warning.
+const HORIZON_BOX_RED: Color32 = Color32::from_rgb(255, 60, 60);
+
+
+pub const HORIZON_BOX_TIP: &str =
+"Whether a horizon is a place or a moment is not a matter of taste: it is whether r is spacelike or timelike between you and it.
+
+Outside r₊ and inside r₋ the metric function Δ = r² − 2Mr + a² is positive, r is an ordinary radial direction, and a surface r = const is a timelike world-tube — something that persists, that you can hold station beside, and that has a distance. Between the horizons Δ < 0, r is timelike, and the surface is a moment of your history instead: it arrives, it cannot be hovered beside, and asking how far away it is has no answer. The read-out flips at each horizon because the geometry does.
+
+Ruler Distance — the arclength of the spacelike geodesic that leaves your event along your own radial axis and runs until it meets the surface: the radial coordinate of Fermi normal coordinates built on your tetrad. That is the length contraction done exactly. It is not the static observers' chain of rulers divided by your Lorentz factor, which rescales somebody else's ruler and answers a different question, and unlike that chain it still exists inside the ergosphere, where nothing can hold station to lay rulers out. It does assume a simultaneity — your own — because \"how far away is it right now\" cannot be asked without one.
+
+Time — the proper time on your own watch between here and the crossing, ∫ r² dr / √R with R = r⁴(dr/dτ)², integrated along the worldline your E and L put you on. R is a square and never changes sign, which is why a horizon has a time even where it has no distance, while the distance integral carries a √Δ that goes imaginary throughout Region II.
+
+\"beyond r₊\" — the path from here to r₋ would have to cross Region II, so no spacelike curve in your rest space reaches it and the integral has nothing to return. It is not on your worldline yet either, and whether it ever will be depends on what you do next.";
+
+/// The three lines of a horizon's box: what the surface is called, whether it is a place or a
+/// moment from where this observer stands, and the one number that reading admits.
+///
+/// The place-or-moment test is region adjacency, not the local causal character the drawn line
+/// carries. `LocalLine::character` reads the tilt of r = const at the *observer's* radius and so
+/// returns the same answer for both horizons; what decides whether a spacelike path from the
+/// observer reaches a particular surface is whether Delta stays positive over the whole interval
+/// between them, i.e. whether that interval avoids Region II. Outside r+ that holds for r+ and
+/// fails for r-; inside r- it holds for r- and fails for r+; in Region II it fails for both, which
+/// is exactly the set of cases where the surface is on the worldline instead.
+fn horizon_box_lines(
+    metric: &KerrSchild,
+    obs: &Observer,
+    obs_name: &str,
+    title: &str,
+    r_h: f64,
+    color: Color32,
+) -> Vec<TelemetryLine> {
+    let rp = metric.outer_horizon();
+    let rm = metric.inner_horizon();
+    let r = obs.r;
+
+    // Delta > 0 over the whole interval: the one condition under which a spacelike path from the
+    // observer's rest space reaches the surface at all.
+    let is_place = (r > rp && r_h >= rp) || (r < rm && r_h <= rm);
+
+    let (kind, detail) = if (r - r_h).abs() < 1e-12 {
+        ("On it".to_string(), "crossing now".to_string())
+    } else if is_place {
+        match ruler_distance(metric, r, &obs.four_velocity(metric), r_h) {
+            Some(d) => (
+                "Place".to_string(),
+                format!("{} from {}", ruler_distance_label(metric, d), obs_name),
+            ),
+            None => (
+                "Place".to_string(),
+                "no spacelike path reaches it from here".to_string(),
+            ),
+        }
+    } else if r > rp {
+        // r- seen from outside r+. The path to it crosses Region II, where the distance integral
+        // goes imaginary, and it is not on this worldline yet either - a static observer never
+        // reaches it at all - so neither number exists.
+        (
+            "Place".to_string(),
+            format!("beyond r₊ — no distance from {obs_name}"),
+        )
+    } else {
+        // Inside r+, so the surface is on this worldline and has a time. Everything inside r+ is
+        // falling, so the surface above the observer is the one already crossed.
+        let past = r_h > r;
+        let frozen = matches!(obs.geodesic, Some(g) if g.stalled);
+        let tau = obs
+            .geodesic
+            .and_then(|g| proper_time_between(metric, g.energy, g.l_ang, r, r_h));
+        let when = match tau {
+            Some(t) => {
+                let secs = (t / metric.m.max(1e-12)) * metric.t_grav_seconds();
+                let tail = if past { "past" } else { "future" };
+                let note = if frozen && !past { " (frozen)" } else { "" };
+                format!("{} in {}'s {}{}", duration_label(secs), obs_name, tail, note)
+            }
+            None => {
+                let tail = if past { "past" } else { "future" };
+                format!("in {}'s {}", obs_name, tail)
+            }
+        };
+        ("Moment, not a place".to_string(), when)
+    };
+
+    vec![
+        TelemetryLine { text: title.to_string(), color, is_title: true },
+        TelemetryLine { text: kind, color: Theme::TEXT_BRIGHT, is_title: false },
+        TelemetryLine { text: detail, color: Theme::TEXT_BRIGHT, is_title: false },
+    ]
+}
+
+
 
 /// The box's contents, one metric per line.
 fn telemetry_lines(
@@ -520,14 +732,18 @@ fn telemetry_lines(
         format!("a_thrust = {:.1}g", a_prop)
     };
 
+    // "bg" for background: this is the vacuum field of the hole alone, and the perturbation it
+    // leaves out is the whole of the Cauchy horizon singularity. The hover tip says so at length;
+    // the label is there so that nobody reads a mild number near r- as a promise. See
+    // `TELEMETRY_HOVER_TIP`.
     let tidal_str = if a_tidal_grad >= 1e6 {
-        format!("Tidal = {:.2e} g/m", a_tidal_grad)
+        format!("Tidal (bg) = {:.2e} g/m", a_tidal_grad)
     } else if a_tidal_grad >= 100.0 {
-        format!("Tidal = {:.0} g/m", a_tidal_grad)
+        format!("Tidal (bg) = {:.0} g/m", a_tidal_grad)
     } else if a_tidal_grad >= 0.01 {
-        format!("Tidal = {:.2} g/m", a_tidal_grad)
+        format!("Tidal (bg) = {:.2} g/m", a_tidal_grad)
     } else {
-        format!("Tidal = {:.2e} g/m", a_tidal_grad)
+        format!("Tidal (bg) = {:.2e} g/m", a_tidal_grad)
     };
 
     // The conserved constants of the worldline actually being integrated, for free-fallers.
@@ -554,13 +770,13 @@ fn telemetry_lines(
     let re = metric.ergosphere_equatorial();
 
     let region_tag = if obs.r > re {
-        "Reg I"
+        "Region I"
     } else if obs.r > rp {
         "Ergo"
     } else if obs.r > rm {
-        "Reg II (Trapped)"
+        "Region II (Trapped)"
     } else {
-        "Reg III (Core)"
+        "Region III (Core)"
     };
 
     let mut lines = vec![
@@ -791,33 +1007,33 @@ Tick Enable Observer on Alice's or Bob's card",
         if line_x_sing >= t_rect.left() && line_x_sing <= t_rect.right() {
             t_painter.line_segment([Pos2::new(line_x_sing + 1.0, t_rect.top()), Pos2::new(line_x_sing + 1.0, t_rect.bottom())], Stroke::new(2.5, Theme::SINGULARITY_LINE));
             if use_km {
-                t_painter.text(Pos2::new(line_x_sing + 2.0, t_rect.bottom() - 3.0), egui::Align2::LEFT_BOTTOM, "r=0 km", egui::FontId::monospace(9.0 * font_scale), Theme::SINGULARITY_LINE);
+                t_painter.text(Pos2::new(line_x_sing + 2.0, t_rect.bottom() - 3.0), egui::Align2::LEFT_BOTTOM, "r=0 km", egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::SINGULARITY_LINE);
             } else {
-                t_painter.text(Pos2::new(line_x_sing + 2.0, t_rect.bottom() - 3.0), egui::Align2::LEFT_BOTTOM, "r=0", egui::FontId::monospace(9.0 * font_scale), Theme::SINGULARITY_LINE);
+                t_painter.text(Pos2::new(line_x_sing + 2.0, t_rect.bottom() - 3.0), egui::Align2::LEFT_BOTTOM, "r=0", egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::SINGULARITY_LINE);
             }
         }
         if line_x_rm >= t_rect.left() && line_x_rm <= t_rect.right() {
             t_painter.line_segment([Pos2::new(line_x_rm, t_rect.top()), Pos2::new(line_x_rm, t_rect.bottom())], Stroke::new(2.5, Theme::HORIZON_CAUCHY));
             if use_km {
-                t_painter.text(Pos2::new(line_x_rm, t_rect.bottom() - 3.0), egui::Align2::CENTER_BOTTOM, format!("r₋={}", metric.format_km(metric.r_to_km(rm))), egui::FontId::monospace(9.0 * font_scale), Theme::HORIZON_CAUCHY);
+                t_painter.text(Pos2::new(line_x_rm, t_rect.bottom() - 3.0), egui::Align2::CENTER_BOTTOM, format!("r₋={}", metric.format_km(metric.r_to_km(rm))), egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::HORIZON_CAUCHY);
             } else {
-                t_painter.text(Pos2::new(line_x_rm, t_rect.bottom() - 3.0), egui::Align2::CENTER_BOTTOM, "Cauchy r₋", egui::FontId::monospace(10.0 * font_scale), Theme::HORIZON_CAUCHY);
+                t_painter.text(Pos2::new(line_x_rm, t_rect.bottom() - 3.0), egui::Align2::CENTER_BOTTOM, "Cauchy r₋", egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::HORIZON_CAUCHY);
             }
         }
         if line_x_rp >= t_rect.left() && line_x_rp <= t_rect.right() {
             t_painter.line_segment([Pos2::new(line_x_rp, t_rect.top()), Pos2::new(line_x_rp, t_rect.bottom())], Stroke::new(2.5, Theme::HORIZON_OUTER));
             if use_km {
-                t_painter.text(Pos2::new(line_x_rp, t_rect.bottom() - 3.0), egui::Align2::CENTER_BOTTOM, format!("r₊={}", metric.format_km(metric.r_to_km(rp))), egui::FontId::monospace(9.0 * font_scale), Theme::HORIZON_OUTER);
+                t_painter.text(Pos2::new(line_x_rp, t_rect.bottom() - 3.0), egui::Align2::CENTER_BOTTOM, format!("r₊={}", metric.format_km(metric.r_to_km(rp))), egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::HORIZON_OUTER);
             } else {
-                t_painter.text(Pos2::new(line_x_rp, t_rect.bottom() - 3.0), egui::Align2::CENTER_BOTTOM, "Outer r₊", egui::FontId::monospace(10.0 * font_scale), Theme::HORIZON_OUTER);
+                t_painter.text(Pos2::new(line_x_rp, t_rect.bottom() - 3.0), egui::Align2::CENTER_BOTTOM, "Outer r₊", egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::HORIZON_OUTER);
             }
         }
         if line_x_re >= t_rect.left() && line_x_re <= t_rect.right() {
             t_painter.line_segment([Pos2::new(line_x_re, t_rect.top()), Pos2::new(line_x_re, t_rect.bottom())], Stroke::new(1.5, Theme::ERGOSPHERE_LINE));
             if use_km {
-                t_painter.text(Pos2::new(line_x_re, t_rect.bottom() - 3.0), egui::Align2::CENTER_BOTTOM, format!("r_E={}", metric.format_km(metric.r_to_km(re))), egui::FontId::monospace(9.0 * font_scale), Theme::ERGOSPHERE_LINE);
+                t_painter.text(Pos2::new(line_x_re, t_rect.bottom() - 3.0), egui::Align2::CENTER_BOTTOM, format!("r_E={}", metric.format_km(metric.r_to_km(re))), egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::ERGOSPHERE_LINE);
             } else {
-                t_painter.text(Pos2::new(line_x_re, t_rect.bottom() - 3.0), egui::Align2::CENTER_BOTTOM, "r_E", egui::FontId::monospace(9.0 * font_scale), Theme::ERGOSPHERE_LINE);
+                t_painter.text(Pos2::new(line_x_re, t_rect.bottom() - 3.0), egui::Align2::CENTER_BOTTOM, "r_E", egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::ERGOSPHERE_LINE);
             }
         }
 
@@ -834,7 +1050,7 @@ Tick Enable Observer on Alice's or Bob's card",
             Pos2::new(t_rect.left() + 6.0, t_rect.top() + 4.0),
             egui::Align2::LEFT_TOP,
             track_badge,
-            egui::FontId::proportional(9.0 * font_scale),
+            egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
             Theme::TEXT_MUTED,
         );
 
@@ -846,7 +1062,7 @@ Tick Enable Observer on Alice's or Bob's card",
         {
             let al_x = track_to_x(al.r);
             t_painter.circle_filled(Pos2::new(al_x, center_y), 6.0, Theme::ALICE_COLOR);
-            t_painter.text(Pos2::new(al_x, center_y - 10.0), egui::Align2::CENTER_BOTTOM, "Alice", egui::FontId::proportional(10.0 * font_scale), Theme::ALICE_COLOR);
+            t_painter.text(Pos2::new(al_x, center_y - 10.0), egui::Align2::CENTER_BOTTOM, "Alice", egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale), Theme::ALICE_COLOR);
         }
 
         // Draw Bob on Track
@@ -854,7 +1070,7 @@ Tick Enable Observer on Alice's or Bob's card",
             let bob_x = track_to_x(bob.r);
             t_painter.circle_filled(Pos2::new(bob_x, center_y), 6.5, Theme::BOB_COLOR);
             t_painter.circle_stroke(Pos2::new(bob_x, center_y), 8.5, Stroke::new(1.0, Color32::WHITE));
-            t_painter.text(Pos2::new(bob_x, center_y + 9.0), egui::Align2::CENTER_TOP, "Bob", egui::FontId::proportional(10.0 * font_scale), Theme::BOB_COLOR);
+            t_painter.text(Pos2::new(bob_x, center_y + 9.0), egui::Align2::CENTER_TOP, "Bob", egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale), Theme::BOB_COLOR);
         }
 
         // Radial separation between Alice and Bob, if both are present
@@ -879,7 +1095,7 @@ Tick Enable Observer on Alice's or Bob's card",
                 Pos2::new(mid_x, t_rect.top() + 4.0),
                 egui::Align2::CENTER_TOP,
                 diff_text,
-                egui::FontId::monospace(9.0 * font_scale),
+                egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
                 Theme::TEXT_BRIGHT,
             );
         }
@@ -1031,7 +1247,7 @@ Tick Enable Observer on Alice's or Bob's card",
                     Pos2::new(rect.left() + 4.0, y - 2.0),
                     egui::Align2::LEFT_BOTTOM,
                     t_label,
-                    egui::FontId::monospace(9.0 * font_scale),
+                    egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
                     Color32::from_rgba_premultiplied(140, 165, 195, 180),
                 );
             }
@@ -1060,7 +1276,7 @@ Tick Enable Observer on Alice's or Bob's card",
                             Pos2::new(x + 3.0, rect.bottom() - 18.0),
                             egui::Align2::LEFT_BOTTOM,
                             metric.format_grid_km(km, km_step),
-                            egui::FontId::monospace(10.0 * font_scale),
+                            egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
                             Theme::TEXT_MUTED,
                         );
                     }
@@ -1089,7 +1305,7 @@ Tick Enable Observer on Alice's or Bob's card",
                             Pos2::new(x + 3.0, rect.bottom() - 18.0),
                             egui::Align2::LEFT_BOTTOM,
                             label,
-                            egui::FontId::monospace(10.0 * font_scale),
+                            egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
                             Theme::TEXT_MUTED,
                         );
                     }
@@ -1112,7 +1328,7 @@ Tick Enable Observer on Alice's or Bob's card",
             Pos2::new(rect.right() - 8.0, rect.bottom() - 4.0),
             egui::Align2::RIGHT_BOTTOM,
             r_axis_title,
-            egui::FontId::proportional(11.0 * font_scale),
+            egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
             Theme::TEXT_BRIGHT,
         );
 
@@ -1126,11 +1342,20 @@ Tick Enable Observer on Alice's or Bob's card",
             Pos2::new(rect.left() + 8.0, rect.top() + 24.0),
             egui::Align2::LEFT_TOP,
             t_axis_title,
-            egui::FontId::proportional(11.0 * font_scale),
+            egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
             Color32::from_rgb(135, 185, 255),
         );
 
         // Boundary lines
+        //
+        // The two horizons carry the same info box the rest-frame view gives them. What a horizon
+        // *is* - a place with a distance, or a moment on somebody's clock - is a statement about an
+        // observer, not about the chart, so the box is drawn against one and every line of it names
+        // whoever it is quoting. Bob if he is on the canvas, otherwise Alice; with neither there is
+        // nothing to read and the plain label stands.
+        let horizon_reader = bob.or(alice);
+        let mut pending_boxes: Vec<PendingBox> = Vec::new();
+
         // Singularity (r = 0)
         let x_sing_actual = to_screen_x(0.0);
         if x_sing_actual >= rect.left() && x_sing_actual <= rect.right() {
@@ -1149,13 +1374,27 @@ Tick Enable Observer on Alice's or Bob's card",
             } else {
                 format!("Cauchy Horizon r₋ = {:.2}M ({})", rm, metric.format_physical_distance(rm))
             };
-            painter.text(
-                Pos2::new(x_rm_actual + 4.0, rect.top() + 42.0),
-                egui::Align2::LEFT_TOP,
-                rm_label,
-                egui::FontId::proportional(11.0 * font_scale),
-                Theme::HORIZON_CAUCHY,
-            );
+            if let Some(obs) = horizon_reader {
+                let box_lines =
+                    horizon_box_lines(metric, obs, &obs.name, &rm_label, rm, HORIZON_BOX_RED);
+                pending_boxes.push(PendingBox {
+                    // A stable key, not the title: the title carries the radius and so changes with
+                    // the Mass and Spin sliders, which would lose a box the user had dragged.
+                    name: "Cauchy Horizon".to_string(),
+                    anchor: Pos2::new(x_rm_actual + 4.0, rect.top() + 42.0),
+                    lines: box_lines,
+                    color: HORIZON_BOX_RED,
+                    tip: HORIZON_BOX_TIP,
+                });
+            } else {
+                painter.text(
+                    Pos2::new(x_rm_actual + 4.0, rect.top() + 42.0),
+                    egui::Align2::LEFT_TOP,
+                    rm_label,
+                    egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
+                    Theme::HORIZON_CAUCHY,
+                );
+            }
         }
 
         // Outer Event Horizon r+
@@ -1167,13 +1406,27 @@ Tick Enable Observer on Alice's or Bob's card",
             } else {
                 format!("Event Horizon r₊ = {:.2}M ({})", rp, metric.format_physical_distance(rp))
             };
-            painter.text(
-                Pos2::new(x_rp_actual + 4.0, rect.top() + 58.0),
-                egui::Align2::LEFT_TOP,
-                rp_label,
-                egui::FontId::proportional(11.0 * font_scale),
-                Theme::HORIZON_OUTER,
-            );
+            if let Some(obs) = horizon_reader {
+                let box_lines =
+                    horizon_box_lines(metric, obs, &obs.name, &rp_label, rp, Theme::HORIZON_OUTER);
+                pending_boxes.push(PendingBox {
+                    // A stable key, not the title: the title carries the radius and so changes with
+                    // the Mass and Spin sliders, which would lose a box the user had dragged.
+                    name: "Outer Horizon".to_string(),
+                    anchor: Pos2::new(x_rp_actual + 4.0, rect.top() + 42.0),
+                    lines: box_lines,
+                    color: Theme::HORIZON_OUTER,
+                    tip: HORIZON_BOX_TIP,
+                });
+            } else {
+                painter.text(
+                    Pos2::new(x_rp_actual + 4.0, rect.top() + 58.0),
+                    egui::Align2::LEFT_TOP,
+                    rp_label,
+                    egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
+                    Theme::HORIZON_OUTER,
+                );
+            }
         }
 
         // Ergosphere boundary line
@@ -1189,7 +1442,7 @@ Tick Enable Observer on Alice's or Bob's card",
                 Pos2::new(x_re_actual + 4.0, rect.top() + 74.0),
                 egui::Align2::LEFT_TOP,
                 re_label,
-                egui::FontId::proportional(11.0 * font_scale),
+                egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
                 Theme::ERGOSPHERE_LINE,
             );
         }
@@ -1365,15 +1618,6 @@ Tick Enable Observer on Alice's or Bob's card",
         painter.circle_filled(apex, bob_radius, Theme::BOB_COLOR);
         painter.circle_stroke(apex, bob_radius + 2.0, Stroke::new(1.5, Color32::WHITE));
 
-        // Zoom hint overlay in top-left
-        painter.text(
-            Pos2::new(rect.left() + 8.0, rect.top() + 8.0),
-            egui::Align2::LEFT_TOP,
-            format!("🔍 Zoom: {:.1}x (Scroll wheel to zoom, drag background to pan time)", 5.5 / self.max_r),
-            egui::FontId::proportional(10.0 * font_scale),
-            Theme::TEXT_MUTED,
-        );
-
         // Light cone slope telemetry box
         let slope_msg = if bob.r > 0.02 {
             let cone = bob.compute_lightcone_polygon(metric, 1.8);
@@ -1388,11 +1632,14 @@ Tick Enable Observer on Alice's or Bob's card",
             Pos2::new(rect.right() - 10.0, rect.top() + 10.0),
             egui::Align2::RIGHT_TOP,
             slope_msg,
-            egui::FontId::monospace(11.0 * font_scale),
+            egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
             Theme::TEXT_BRIGHT,
         );
 
-        // Draggable info boxes, registered after every other interaction on this canvas.
+        // Every info box on this canvas is painted here, after everything else is down, so that
+        // the opaque fill of a box actually blocks out what is behind it.
+        self.flush_pending_boxes(ui, painter, "spacetime", rect, &pending_boxes, font_scale);
+
         if let (Some(al), Some(alice_pos)) = (alice, alice_box) {
             self.telemetry.show(
                 ui, painter, "spacetime", rect, alice_pos, "Alice", Theme::ALICE_COLOR, al, metric, use_km,
@@ -1402,6 +1649,43 @@ Tick Enable Observer on Alice's or Bob's card",
         self.telemetry.show(
             ui, painter, "spacetime", rect, apex, "Bob", Theme::BOB_COLOR, bob, metric, use_km, font_scale,
         );
+    }
+
+    /// Paint every deferred info box, in order, once the rest of the canvas is down.
+    ///
+    /// A box still sitting where it was put is nudged down clear of the ones already placed, so a
+    /// stack of surfaces whose lines all leave by the same corner stays readable. One the user has
+    /// dragged is left exactly where they dragged it, overlap or not: they can see the overlap and
+    /// they chose it.
+    fn flush_pending_boxes(
+        &mut self,
+        ui: &mut egui::Ui,
+        painter: &egui::Painter,
+        canvas_tag: &str,
+        rect: Rect,
+        pending: &[PendingBox],
+        font_scale: f32,
+    ) {
+        let mut occupied: Vec<Rect> = Vec::new();
+        for b in pending {
+            let size = telemetry_box_size(painter, &b.lines, font_scale);
+            let anchor = if self.telemetry.is_placed(canvas_tag, &b.name) {
+                b.anchor
+            } else {
+                let mut r = clamp_into(Rect::from_min_size(b.anchor, size), rect);
+                for _ in 0..8 {
+                    if !occupied.iter().any(|p| p.intersects(r)) {
+                        break;
+                    }
+                    r = clamp_into(r.translate(Vec2::new(0.0, size.y + 6.0)), rect);
+                }
+                r.min
+            };
+            let response = self.telemetry.show_lines(
+                ui, painter, canvas_tag, &b.name, rect, anchor, &b.lines, b.color, font_scale, b.tip,
+            );
+            occupied.push(response.rect);
+        }
     }
 
     /// The rest-frame window that puts the next surface the observer meets `FRAME_SURFACE_FRACTION`
@@ -1613,7 +1897,7 @@ Tick Enable Observer on Alice's or Bob's card",
                     Pos2::new(x, y - 2.0),
                     egui::Align2::LEFT_BOTTOM,
                     distant_clock_offset_label(dt * seconds_per_m),
-                    egui::FontId::monospace(9.0 * font_scale),
+                    egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
                     label_colour,
                 );
             }
@@ -1644,7 +1928,9 @@ Tick Enable Observer on Alice's or Bob's card",
                         continue;
                     }
                     let y = center.y - (k as f32) * spacing_px;
-                    if y < rect.top() + 2.0 || y > rect.bottom() - 2.0 {
+                    // Stop two ticks short of the top edge. The head banner sits there, and a
+                    // label that runs right up to it lands on the banner's own text.
+                    if y < rect.top() + 2.0 + 2.0 * spacing_px || y > rect.bottom() - 2.0 {
                         continue;
                     }
                     painter.line_segment(
@@ -1658,7 +1944,7 @@ Tick Enable Observer on Alice's or Bob's card",
                         Pos2::new(center.x + 7.0, y),
                         egui::Align2::LEFT_CENTER,
                         distant_clock_offset_label((k as f64) * clock_proper_step * seconds_per_m),
-                        egui::FontId::monospace(9.0 * font_scale),
+                        egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
                         obs_color,
                     );
                 }
@@ -1672,14 +1958,49 @@ Tick Enable Observer on Alice's or Bob's card",
             Theme::ERGOSPHERE_LINE.b(),
             80,
         );
-        let surfaces: [(f64, &str, Color32, f32); 4] = [
-            (metric.ergosphere_equatorial(), "Static limit 2M", ergo_faint, 1.4),
-            (metric.outer_horizon(), "Event Horizon r₊", Theme::HORIZON_OUTER, 2.5),
-            (metric.inner_horizon(), "Cauchy Horizon r₋", Theme::HORIZON_CAUCHY, 2.5),
-            (0.0, "Ring Singularity r = 0", Theme::SINGULARITY_LINE, 3.0),
+        // The last field is the info box the surface gets, as (title, border colour). Only the two
+        // horizons have one: they are the surfaces whose reading changes kind when the observer
+        // crosses them. The static limit and the ring keep the plain three-line label, which says
+        // the same things about a surface whose character never flips.
+        let surfaces: [DrawnSurface; 4] = [
+            (
+                metric.ergosphere_equatorial(),
+                "Static Limit 2M",
+                ergo_faint,
+                1.4,
+                Theme::ERGOSPHERE_LINE,
+                false,
+            ),
+            (
+                metric.outer_horizon(),
+                "Outer Horizon r₊",
+                Theme::HORIZON_OUTER,
+                2.5,
+                Theme::HORIZON_OUTER,
+                true,
+            ),
+            (
+                metric.inner_horizon(),
+                "Cauchy Horizon r₋",
+                Theme::HORIZON_CAUCHY,
+                2.5,
+                HORIZON_BOX_RED,
+                true,
+            ),
+            (
+                0.0,
+                "Ring Singularity r = 0",
+                Theme::SINGULARITY_LINE,
+                3.0,
+                Theme::SINGULARITY_LINE,
+                false,
+            ),
         ];
 
-        for (idx, &(r_h, name, color, width)) in surfaces.iter().enumerate() {
+        // Worked out here, where the line geometry is; painted at the end of the pass.
+        let mut pending_boxes: Vec<PendingBox> = Vec::new();
+
+        for (idx, &(r_h, title, color, width, border, is_horizon)) in surfaces.iter().enumerate() {
             let line = frame.surface_r_const(r_h);
             let anchor = to_screen(line.point[0], line.point[1]);
             let dir = Vec2::new(line.dir[0] as f32, -(line.dir[1] as f32));
@@ -1687,6 +2008,19 @@ Tick Enable Observer on Alice's or Bob's card",
                 continue;
             };
             painter.line_segment([end_a, end_b], Stroke::new(width, color));
+
+            let (label_pos, align) = if line.slope().abs() >= 1.0 {
+                // Steep line: hang the label off it, stacked down the top margin.
+                let y = (head_bottom + 8.0 + 36.0 * font_scale * (idx as f32)).min(rect.bottom() - 40.0);
+                let x = segment_x_at_y(end_a, end_b, y)
+                    .clamp(rect.left() + 6.0, rect.right() - 150.0 * font_scale);
+                (Pos2::new(x + 5.0, y), egui::Align2::LEFT_TOP)
+            } else {
+                // Flat line: park the label on it at the right margin.
+                let y = segment_y_at_x(end_a, end_b, rect.right() - 10.0)
+                    .clamp(rect.top() + 24.0, rect.bottom() - 6.0);
+                (Pos2::new(rect.right() - 8.0, y - 3.0), egui::Align2::RIGHT_BOTTOM)
+            };
 
             // The causal character is read straight off the drawn slope: |d xi^0 / d xi^1| > 1 is
             // a timelike surface, = 1 a null one, < 1 a spacelike one. The 2e-3 tolerance is a
@@ -1726,26 +2060,34 @@ Tick Enable Observer on Alice's or Bob's card",
                     format!("tilt {:.1}° • closing at {:.2}c • on your worldline at τ ≈ {:+.2} M (1st order)", tilt_deg, slope_abs, xi0)
                 }
             };
-            let label = format!("{}\n{}\n{}", name, note, detail);
-            let (label_pos, align) = if line.slope().abs() >= 1.0 {
-                // Steep line: hang the label off it, stacked down the top margin.
-                let y = (head_bottom + 8.0 + 36.0 * font_scale * (idx as f32)).min(rect.bottom() - 40.0);
-                let x = segment_x_at_y(end_a, end_b, y)
-                    .clamp(rect.left() + 6.0, rect.right() - 150.0 * font_scale);
-                (Pos2::new(x + 5.0, y), egui::Align2::LEFT_TOP)
+
+            // Every surface answers in a box now. A horizon reports what it is to this observer -
+            // a place with a distance, or a moment on his own clock - and the other two report the
+            // causal character of their line as drawn, which is the same question asked of a
+            // surface whose answer never changes.
+            let box_lines = if is_horizon {
+                horizon_box_lines(metric, focus_obs, &focus_obs.name, title, r_h, border)
             } else {
-                // Flat line: park the label on it at the right margin.
-                let y = segment_y_at_x(end_a, end_b, rect.right() - 10.0)
-                    .clamp(rect.top() + 24.0, rect.bottom() - 6.0);
-                (Pos2::new(rect.right() - 8.0, y - 3.0), egui::Align2::RIGHT_BOTTOM)
+                vec![
+                    TelemetryLine { text: title.to_string(), color: border, is_title: true },
+                    TelemetryLine { text: note.to_string(), color: Theme::TEXT_BRIGHT, is_title: false },
+                    TelemetryLine { text: detail, color: Theme::TEXT_BRIGHT, is_title: false },
+                ]
             };
-            painter.text(
-                label_pos,
-                align,
-                label,
-                egui::FontId::proportional(10.0 * font_scale),
-                color,
-            );
+            // `label_pos` is a corner of the text the box stands in for; make it the box's own.
+            let size = telemetry_box_size(painter, &box_lines, font_scale);
+            let min = if align == egui::Align2::RIGHT_BOTTOM {
+                Pos2::new(label_pos.x - size.x, label_pos.y - size.y)
+            } else {
+                label_pos
+            };
+            pending_boxes.push(PendingBox {
+                name: title.to_string(),
+                anchor: min,
+                lines: box_lines,
+                color: border,
+                tip: if is_horizon { HORIZON_BOX_TIP } else { SURFACE_BOX_TIP },
+            });
         }
 
         // Faint extensions of the observer's own null lines across the whole chart, so that the
@@ -1788,14 +2130,14 @@ Tick Enable Observer on Alice's or Bob's card",
                 p_fut_out + Vec2::new(4.0, -2.0),
                 egui::Align2::LEFT_BOTTOM,
                 "+45° Outgoing",
-                egui::FontId::monospace(9.0 * font_scale),
+                egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
                 focus_edge,
             );
             painter.text(
                 p_fut_in + Vec2::new(-4.0, -2.0),
                 egui::Align2::RIGHT_BOTTOM,
                 "-45° Ingoing",
-                egui::FontId::monospace(9.0 * font_scale),
+                egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
                 focus_edge,
             );
         } else if focus_obs.is_active {
@@ -1805,13 +2147,14 @@ Tick Enable Observer on Alice's or Bob's card",
                 Pos2::new(center.x + 18.0, center.y),
                 egui::Align2::LEFT_CENTER,
                 "💥 SINGULARITY IMPACT\nLight cone terminated at r = 0",
-                egui::FontId::proportional(11.0 * font_scale),
+                egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
                 Theme::WARNING_RED,
             );
         }
 
+        // No outline. A white ring round the dot said nothing the dot did not already say, and the
+        // dot sits on the origin of the axes here, where an extra stroke is only clutter.
         painter.circle_filled(apex, 7.5, obs_color);
-        painter.circle_stroke(apex, 9.5, Stroke::new(1.5, Color32::WHITE));
 
         // 4. The other observer: their event, their worldline direction and their light cone, all
         // from the same linear map. The azimuthal component xi^2 is dropped from the picture and
@@ -1874,7 +2217,7 @@ Tick Enable Observer on Alice's or Bob's card",
                         metric.format_r(xi[2], use_km),
                         v_rel.min(9.999)
                     ),
-                    egui::FontId::monospace(9.0 * font_scale),
+                    egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
                     Theme::TEXT_MUTED,
                 );
 
@@ -1882,17 +2225,6 @@ Tick Enable Observer on Alice's or Bob's card",
             }
         }
 
-        // The info boxes go last so that dragging one wins over the canvas's own drag response.
-        if let Some((other, other_pos, other_color)) = other_box {
-            self.telemetry.show(
-                ui, painter, "restframe", rect, other_pos, &other.name, other_color, other, metric, use_km,
-                font_scale,
-            );
-        }
-        self.telemetry.show(
-            ui, painter, "restframe", rect, apex, &focus_obs.name, obs_color, focus_obs, metric, use_km,
-            font_scale,
-        );
 
         // The comparison is centred, which keeps it clear of the grid's own line labels down the
         // left edge. Every row under it is left-aligned to where that line starts rather than
@@ -1915,6 +2247,21 @@ Tick Enable Observer on Alice's or Bob's card",
             }
             y += height;
         }
+
+        // Every info box on this canvas goes here, after the head banner and everything else, so
+        // that the opaque fill of a box blocks out what is behind it and dragging one wins over
+        // the canvas's own drag response. The surfaces first, the observers over them.
+        self.flush_pending_boxes(ui, painter, "restframe", rect, &pending_boxes, font_scale);
+        if let Some((other, other_pos, other_color)) = other_box {
+            self.telemetry.show(
+                ui, painter, "restframe", rect, other_pos, &other.name, other_color, other, metric, use_km,
+                font_scale,
+            );
+        }
+        self.telemetry.show(
+            ui, painter, "restframe", rect, apex, &focus_obs.name, obs_color, focus_obs, metric, use_km,
+            font_scale,
+        );
     }
 }
 

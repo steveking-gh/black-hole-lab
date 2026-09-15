@@ -128,6 +128,21 @@ impl Theme {
     /// lines are the same kind of thing and now look it.
     pub const GRID_LINE: Color32 = Color32::from_rgba_premultiplied(45, 52, 72, 90);
     pub const GRID_LINE_WIDTH: f32 = 0.8;
+    /// The same colour at `factor` of its brightness, alpha untouched. For a control that has to
+    /// read as the same thing in two states without changing hue between them.
+    pub fn dimmed(c: Color32, factor: f32) -> Color32 {
+        let scale = |v: u8| (v as f32 * factor).round().clamp(0.0, 255.0) as u8;
+        Color32::from_rgba_unmultiplied(scale(c.r()), scale(c.g()), scale(c.b()), c.a())
+    }
+
+    /// The smallest type anywhere in the app, in points before the Font Size slider scales it.
+    ///
+    /// It is a floor, not a size: egui's own styles and every canvas label are clamped up to it,
+    /// so nothing prints smaller than the title of a telemetry box. Twelve rather than ten because
+    /// egui's default Body is 12.5, and a `.small()` caption floored at ten still came out a fifth
+    /// shorter than the labels either side of it on an observer card.
+    pub const MIN_FONT_PT: f32 = 12.0;
+
     pub const TEXT_BRIGHT: Color32 = Color32::from_rgb(230, 240, 255);
     pub const TEXT_MUTED: Color32 = Color32::from_rgb(130, 145, 170);
 

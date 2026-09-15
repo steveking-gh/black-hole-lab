@@ -227,6 +227,28 @@ impl eframe::App for SpacetimeApp {
             ctx.request_repaint();
         }
 
+        // Nothing in the UI prints below the size a telemetry box titles itself at. egui's own
+        // styles are fixed points, so the canvases had grown past them: its default Small is 9 pt
+        // against the 10 pt the boxes now use, and the `.small()` captions on an observer card came
+        // out smaller than anything beside them. The floor tracks the Font Size slider, so raising
+        // that raises the panel with the canvases instead of only half the window.
+        //
+        // Each size is recomputed from egui's defaults rather than clamped in place, or lowering
+        // the slider again would leave every style stuck at its high-water mark.
+        {
+            let floor = Theme::MIN_FONT_PT * self.controls.font_scale;
+            let defaults = egui::Style::default().text_styles;
+            for theme in [egui::Theme::Dark, egui::Theme::Light] {
+                ctx.style_mut_of(theme, |style| {
+                    for (key, font) in style.text_styles.iter_mut() {
+                        if let Some(base) = defaults.get(key) {
+                            font.size = base.size.max(floor);
+                        }
+                    }
+                });
+            }
+        }
+
         // Apply dark relativity theme styling
         let mut visuals = egui::Visuals::dark();
         visuals.override_text_color = Some(Theme::TEXT_BRIGHT);
