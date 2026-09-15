@@ -1,0 +1,39 @@
+src/physics/tetrad.rs
+  s_c8d87c2c7b73cb::t_5ef5f2bc8c37c8 16-30,32-47
+  s_c8d87c2c7b73cb::t_6fcd87217a5d4d 31
+  s_c8d87c2c7b73cb::t_0197a4b8affb08 689-881
+src/physics/observer.rs
+  s_c8d87c2c7b73cb::t_893113e48675a2 417-429
+  s_c8d87c2c7b73cb::t_b206bd634ab5be 430,2361-2441
+  s_c8d87c2c7b73cb::t_c54e13d8621690 432-461
+  s_c8d87c2c7b73cb::t_fdadc717f96fd1 644-649
+  s_c8d87c2c7b73cb::t_32f7d1f69cca31 832-842,844-845,847
+  s_c8d87c2c7b73cb::t_bec5b236a15d14 431
+src/gui/spacetime_canvas.rs
+  s_c8d87c2c7b73cb::t_8ff25cfd2dcc70 665
+src/physics/wavefront.rs
+  s_c8d87c2c7b73cb::t_3deeb3ed68183d 436
+src/physics/kerr_schild.rs
+  s_c8d87c2c7b73cb::t_54a095bdd20edc 263-283
+  s_c8d87c2c7b73cb::t_cf547d095169f9 911-946
+  s_c8d87c2c7b73cb::t_576d97b3f05ca7 910
+src/gui/spatial_canvas.rs
+  s_c8d87c2c7b73cb::t_75ac6d8a7e61aa 570-575
+  s_c8d87c2c7b73cb::t_eda265c6a4664e 576-586,593,603,1559-1646
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e8189520ac9681e367db3a77ed852ec9b9111e85",
+  "prompts": {},
+  "sessions": {
+    "s_c8d87c2c7b73cb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "553fc9fe-1b48-463e-a36b-4c33628c4ac8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
