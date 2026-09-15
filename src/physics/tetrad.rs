@@ -28,7 +28,6 @@ pub fn inner(metric: &KerrSchild, r: f64, a: &[f64; 3], b: &[f64; 3]) -> f64 {
 /// n samples fall, since aberration bunches them towards the boost. That is why the caller picks
 /// the frame: at u^t ~ 1e10, on the approach to the far branch of r-, the observer's own frame
 /// crowds every sample into one point of the rim and leaves the rest of the curve undrawn.
-#[allow(dead_code)] // the cone the canvases draw at an observer's event; the tests pin it meanwhile
 pub fn light_cone_generators(
     metric: &KerrSchild,
     r: f64,

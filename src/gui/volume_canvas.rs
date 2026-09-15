@@ -1,5 +1,16 @@
-#![allow(dead_code)] // Step 3 removes this when VolumeCanvas::render draws with the pieces below.
+#![allow(dead_code)] // Step 4 removes this when app.rs draws the canvas.
 
+use crate::gui::controls::{ReferenceFrame, SignalViews};
+use crate::gui::spacetime_canvas::TelemetryBoxes;
+use crate::gui::spatial_canvas::{
+    CENTRED_RING_GAP, FrontStyle, Who, draw_reception_tick, draw_signal_field, draw_spatial_trail,
+    frame_focus,
+};
+use crate::gui::theme::Theme;
+use crate::physics::kerr_schild::KerrSchild;
+use crate::physics::observer::Observer;
+use crate::physics::tetrad::light_cone_generators;
+use crate::physics::wavefront::SignalField;
 use egui::{Color32, Pos2, Stroke, Vec2};
 
 /// How close to 0 or to +/-1 a basis component has to be before it is taken to *be* 0 or +/-1.
@@ -90,6 +101,15 @@ impl Camera {
         let up = [-sy * sp, cy * sp, cp];
         let d = [-sy * cp, cy * cp, -sp];
         (snap3(right), snap3(up), snap3(d))
+    }
+
+    /// Where the eye is looking, in world coordinates: the `d` of `basis`.
+    ///
+    /// It is the one leg of the frame the scene itself needs. `rim_weight` asks how edge-on a
+    /// vertical wall is, which is a question about the wall's normal against the line of sight and
+    /// about nothing on the screen, so the caller needs `d` and neither of the other two.
+    pub fn view_direction(&self) -> [f32; 3] {
+        self.basis().2
     }
 
     /// Screen position and depth (larger = farther from the eye) of a world point.
@@ -344,10 +364,1116 @@ pub fn glass(colour: Color32, base_alpha: u8, weight: f32) -> Color32 {
         .gamma_multiply(0.15 + 0.85 * weight.clamp(0.0, 1.0))
 }
 
+/// How many segments a pipe wall, a floor ring and a tick ring are each cut into. Seventy-two is
+/// five degrees a segment: at the zoom the view opens on, a chord of five degrees departs from the
+/// circle it stands for by well under a pixel, and the pipe's shading needs one strip per segment
+/// rather than one vertex, so the count is also the mesh budget of every surface in the scene.
+const RING_SEGMENTS: usize = 72;
+
+/// How many null generators the cone at an observer's event is sampled on. Ten degrees apart, which
+/// is enough to show a cone tipping over without making the fan the most expensive thing on screen;
+/// the (t, r) diagram draws the same cone from two generators, because a radial chart has only two.
+const CONE_SAMPLES: usize = 36;
+
+/// Longest run of trail points in one worldline polyline.
+///
+/// The worldline is cut into runs because its colour fades with age and a single `Shape::line` has
+/// one stroke: the fade has to be carried by the number of pieces. Thirty-two points a piece puts
+/// a seam every few M of a trail that holds hundreds of points, which is fine enough that the fade
+/// reads as a gradient and coarse enough that a long infall is not a thousand shapes.
+const WORLDLINE_RUN: usize = 32;
+
+/// The 2D+1 volume: the equatorial plane laid out as a floor and ingoing Kerr-Schild time t drawn
+/// as height, with the present at the floor and the past below it.
+///
+/// It draws the same plane the equatorial canvas draws - same embedding, same fronts, same trails,
+/// on the floor - and adds the one axis that view cannot have. What the extra axis buys is the
+/// light cone: on the floor a cone is a circle whose centre has drifted off the emitter, and in the
+/// volume it is a cone, so "which way can this observer go" is a shape rather than an inference.
+/// Surfaces of constant r become vertical pipes, which is what makes r+ and r- read as *places* - a
+/// wall a worldline goes through and cannot come back out of - and a worldline frozen on the far
+/// branch of r- reads as what it is: a helix wound onto the r- pipe, one turn per 2 pi / Omega_- of
+/// t, riding a generator of the surface it can never cross.
+pub struct VolumeCanvas {
+    pub camera: Camera,
+    /// How much coordinate time the volume holds, in M. The window runs from t_now - 0.7 W to
+    /// t_now + 0.3 W, the same split the (t, r) diagram uses: most of what there is to look at has
+    /// already happened, and the strip of future above the floor is there so that the future half
+    /// of a cone has somewhere to point.
+    pub time_window: f64,
+    /// Slide of that window away from the present, in M. Zero puts the floor at t_now, which is
+    /// what "the floor is now" means; step 4 zeroes it on a view reset alongside the (t, r)
+    /// diagram's own offset.
+    pub time_offset: f64,
+    /// The observer the view is being kept centred on, set from the canvas's right-click menu, on
+    /// the same terms as the equatorial view's: a view setting, and the more particular of the two
+    /// ways of saying where to look.
+    centred_on: Option<Who>,
+    /// Draw a cone at every whole M the trail crosses, not only at the observer's present event.
+    /// Off by default: a dozen translucent fans stacked down a worldline is the picture of how the
+    /// cones tip over, and it is also, on a first look at the view, a mess.
+    show_ghost_cones: bool,
+    /// Where the user has dragged each observer's info box on this canvas.
+    pub telemetry: TelemetryBoxes,
+    /// The screen offset of the focus observer's floor point as the last frame projected it.
+    ///
+    /// `look_at` has to answer "what pan puts this floor point in the middle", and the middle is
+    /// `rect.center() + pan - offset` where the offset is the focus observer's own projection - a
+    /// number that needs the metric, both observers and the frame selector, none of which a menu
+    /// item hands it. The equatorial view recomputes it, because there the projection is `zoom` and
+    /// a multiply; here it is the whole camera, so the frame that has just done the work leaves it
+    /// behind. It is only ever read by `look_at`, and the menu that calls `look_at` is registered
+    /// inside the frame that has just written it.
+    focus_offset: Vec2,
+}
+
+impl Default for VolumeCanvas {
+    fn default() -> Self {
+        Self {
+            camera: Camera::default(),
+            time_window: 14.0,
+            time_offset: 0.0,
+            centred_on: None,
+            show_ghost_cones: false,
+            telemetry: TelemetryBoxes::pinning(),
+            focus_offset: Vec2::ZERO,
+        }
+    }
+}
+
+impl VolumeCanvas {
+    /// Pan the view so that the point `target` of the equatorial plane - Cartesian, in M, as
+    /// `Observer::cartesian_position` gives it - sits in the middle of the canvas, on the floor.
+    ///
+    /// One pan, not a standing request, exactly as on the equatorial view: whoever is there is free
+    /// to move out of the middle again, which is what separates the menu's Goto items from its Keep
+    /// Centered ones. A Goto while somebody is being followed pans away from them without letting
+    /// go, since the pan is measured from whatever the view is tracking.
+    pub fn look_at(&mut self, target: (f64, f64)) {
+        let at = self.camera.project(Pos2::ZERO, [target.0, target.1, 0.0]).0;
+        self.camera.pan = self.focus_offset - (at - Pos2::ZERO);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn render(
+        &mut self,
+        ui: &mut egui::Ui,
+        metric: &KerrSchild,
+        bob: Option<&Observer>,
+        alice: Option<&Observer>,
+        current_time: f64,
+        canvas_height: f32,
+        use_km: bool,
+        frame_of_ref: ReferenceFrame,
+        font_scale: f32,
+        signals: SignalViews<'_>,
+        show_distant_clock_grid: bool,
+        style: FrontStyle,
+    ) {
+        let desired_size = egui::Vec2::new(ui.available_width(), canvas_height);
+        let (response, painter) = ui.allocate_painter(desired_size, egui::Sense::click_and_drag());
+        let rect = response.rect;
+        painter.rect_filled(rect, 4.0, Theme::CANVAS_BG);
+        if rect.width() < 30.0 || rect.height() < 30.0 {
+            return;
+        }
+
+        // 1. The camera, moved before anything is projected, so that this frame draws the view the
+        // pointer has just asked for rather than the previous one. The equatorial view can afford
+        // to defer its pan by a frame because a pan is a translation the eye does not track; an
+        // orbit is not, and a view that lags the drag by a frame feels like it is being dragged
+        // through treacle.
+        let mut moved = false;
+        if response.dragged() {
+            let delta = response.drag_delta();
+            if delta != Vec2::ZERO {
+                if ui.input(|i| i.modifiers.shift) {
+                    self.camera.pan += delta;
+                } else {
+                    self.camera.yaw += delta.x * 0.01;
+                    self.camera.pitch = (self.camera.pitch - delta.y * 0.01)
+                        .clamp(0.05, std::f32::consts::FRAC_PI_2);
+                }
+                moved = true;
+            }
+        }
+        if response.hovered() {
+            // The same step and the same clamp as the equatorial view's wheel, taken about the
+            // cursor in the same way, so that the two canvases zoom at one rate and `scale` goes on
+            // meaning px/M in both. The cursor is held on the point under it only up to the tilt:
+            // the anchor is the nominal centre `rect.center() + pan`, which is where world
+            // (0, 0, 0) lands with nobody being followed.
+            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+            if scroll.abs() > 0.1 {
+                let step = 0.01875;
+                let zoom_mult = if scroll > 0.0 { 1.0 + step } else { 1.0 - step };
+                let old_scale = self.camera.scale;
+                let new_scale = (old_scale * zoom_mult).clamp(8.0, 500_000.0);
+                if let Some(mpos) = response.hover_pos() {
+                    let nominal = rect.center() + self.camera.pan;
+                    self.camera.pan += (mpos - nominal) * (1.0 - new_scale / old_scale);
+                }
+                self.camera.scale = new_scale;
+                moved = true;
+            }
+            // Ctrl-wheel stretches time against space. It is the one control here with no
+            // counterpart on the other canvases: t_scale is the exchange rate between an M of time
+            // and an M of length, and at 1 a far-away light ray rises at 45 degrees, so moving it
+            // off 1 is moving the picture off the one setting where a slope can be read as a speed.
+            let zoom_delta = ui.input(|i| i.zoom_delta());
+            if (zoom_delta - 1.0).abs() > 1e-4 {
+                self.camera.t_scale =
+                    (self.camera.t_scale * f64::from(zoom_delta)).clamp(0.1, 10.0);
+                moved = true;
+            }
+        }
+        if moved {
+            ui.ctx().request_repaint();
+        }
+
+        // 2. Where the view is anchored, and therefore where world (0, 0, 0) lands. In locals
+        // rather than read through `self`, so that the closures below hold no borrow of the canvas:
+        // the right-click menu takes `&mut self` while they are still alive.
+        let camera = self.camera;
+        let t_scale = camera.t_scale;
+        let focus = frame_focus(self.centred_on, frame_of_ref, bob, alice);
+        let offset = focus.map_or(Vec2::ZERO, |obs| {
+            let (x, y) = obs.cartesian_position(metric);
+            camera.project(Pos2::ZERO, [x, y, 0.0]).0 - Pos2::ZERO
+        });
+        self.focus_offset = offset;
+        let centre = rect.center() + camera.pan - offset;
+
+        // 3. The projection, as the three closures the rest of the frame is written in.
+        let project = |p: [f64; 3]| camera.project(centre, p);
+        // The floor map is exactly the `Fn((f64, f64)) -> Pos2` the equatorial view's drawing
+        // helpers take, which is what lets the fronts, the trails and the arrival ticks be the same
+        // code here as there rather than a second implementation that could disagree with it.
+        let floor = |(x, y): (f64, f64)| camera.project(centre, [x, y, 0.0]).0;
+        // Height is a coordinate-time difference in M, kept in f64 the whole way into `project`,
+        // which takes the one rounding to f32 it needs. Near r- the interesting times differ from
+        // t_now by parts in 1e7 of t_now itself, and taking the difference in f32 would quantise
+        // the whole late fall onto one height.
+        let z_of = |t: f64| (t - current_time) * t_scale;
+        let t_min = current_time + self.time_offset - self.time_window * 0.7;
+        let t_max = current_time + self.time_offset + self.time_window * 0.3;
+        let view_d = camera.view_direction();
+
+        let rp = metric.outer_horizon();
+        let rm = metric.inner_horizon();
+        let re = metric.ergosphere_equatorial();
+        let seg_angle = |i: usize| std::f64::consts::TAU * (i as f64) / (RING_SEGMENTS as f64);
+        let ring_points = |rho: f64, z: f64| -> Vec<Pos2> {
+            (0..RING_SEGMENTS)
+                .map(|i| {
+                    let th = seg_angle(i);
+                    project([rho * th.cos(), rho * th.sin(), z]).0
+                })
+                .collect()
+        };
+
+        let mut buf = PrimBuffer::default();
+
+        // 4. The surfaces of constant r, as glass pipes below the floor and as rings on it.
+        //
+        // A pipe is the honest picture of what r = const is in this chart: not a circle a worldline
+        // happens to cross, but a wall standing in time, so that "Bob went through r+" is a
+        // worldline entering a tube and never leaving it. The wall is only drawn below the floor,
+        // over the past the simulation has actually integrated; above it there are rings alone,
+        // because the future of a horizon is not something this run has computed and a solid wall
+        // up there would claim it had.
+        let z_bottom = z_of(t_min);
+        let tick_r = if metric.cartesian_radius(rm) > 0.0 { rm } else { rp };
+        let mut floor_rings: Vec<(Vec<Pos2>, Stroke)> = Vec::new();
+        for (r, colour, base_alpha, width) in [
+            (0.0, Theme::SINGULARITY_LINE, 70u8, 2.0f32),
+            (rm, Theme::HORIZON_CAUCHY, 60, 2.0),
+            (rp, Theme::HORIZON_OUTER, 60, 2.5),
+            (re, Theme::ERGOSPHERE_LINE, 35, 1.5),
+        ] {
+            // A surface of constant r is the circle of Cartesian radius sqrt(r^2 + a^2); r = 0 is
+            // the ring, at rho = |a|, and a hole with no spin has no ring and so no pipe there.
+            let rho = metric.cartesian_radius(r);
+            if rho <= 0.0 {
+                continue;
+            }
+            for i in 0..RING_SEGMENTS {
+                let (th0, th1) = (seg_angle(i), seg_angle(i + 1));
+                let mid = 0.5 * (th0 + th1);
+                let weight = rim_weight((mid.cos() as f32, mid.sin() as f32), view_d);
+                let (c0, s0) = (rho * th0.cos(), rho * th0.sin());
+                let (c1, s1) = (rho * th1.cos(), rho * th1.sin());
+                let (mesh, depth) = quad_mesh(
+                    &camera,
+                    centre,
+                    [[c0, s0, z_bottom], [c0, s0, 0.0], [c1, s1, 0.0], [c1, s1, z_bottom]],
+                    glass(colour, base_alpha, weight),
+                );
+                buf.push(Layer::Below, depth, Prim::Mesh(mesh));
+            }
+            floor_rings.push((ring_points(rho, 0.0), Stroke::new(width, colour)));
+
+            // The distant observer's clock, as rungs on one pipe: one ring per whole M of t. On
+            // r-, because that is the pipe a frozen worldline winds up, one turn of helix per
+            // 2 pi / Omega_- of t, and the rungs are what that pitch is read against; nothing runs
+            // away at r+ in this chart, a faller crosses it at a finite t. The same ladder on all
+            // four pipes would be three ladders saying nothing and one saying that. A hole with no
+            // spin has no r- pipe, and the rungs go on r+ instead.
+            if show_distant_clock_grid && r == tick_r {
+                let k_lo = (t_min - current_time).ceil() as i64;
+                let k_hi = (t_max - current_time).floor() as i64;
+                for k in k_lo..=k_hi {
+                    let z = z_of(current_time + k as f64);
+                    let layer = if z >= 0.0 { Layer::Above } else { Layer::Below };
+                    let depth = project([0.0, 0.0, z]).1;
+                    buf.push(
+                        layer,
+                        depth,
+                        Prim::Line {
+                            points: ring_points(rho, z),
+                            stroke: Stroke::new(Theme::GRID_LINE_WIDTH, Theme::GRID_LINE),
+                            closed: true,
+                        },
+                    );
+                    let text = if use_km {
+                        let sign = if k < 0 { "-" } else { "+" };
+                        format!("t = {sign}{}", metric.format_physical_time(k.abs() as f64))
+                    } else {
+                        format!("t = {k:+} M")
+                    };
+                    buf.label(
+                        project([rho, 0.0, z]).0,
+                        egui::Align2::LEFT_CENTER,
+                        text,
+                        Theme::TEXT_MUTED,
+                    );
+                }
+            }
+        }
+
+        // 5. The worldlines themselves: the trail with its time given back, running up out of the
+        // past to the marker standing on the floor.
+        let present: Vec<(&Observer, Who)> = [(bob, Who::Bob), (alice, Who::Alice)]
+            .into_iter()
+            .filter_map(|(obs, who)| obs.map(|obs| (obs, who)))
+            .collect();
+        let colour_of = |who: Who| match who {
+            Who::Alice => Theme::ALICE_COLOR,
+            Who::Bob => Theme::BOB_COLOR,
+        };
+        let span = (current_time - t_min).max(1e-9);
+        for (obs, who) in present.iter().copied() {
+            let width = match who {
+                Who::Alice => 1.2,
+                Who::Bob => 1.5,
+            };
+            let points: Vec<(f64, [f64; 3])> = obs
+                .trail
+                .iter()
+                .filter(|p| p.t >= t_min && p.t <= current_time)
+                .map(|p| {
+                    let (x, y) = metric.cartesian_position(p.r, p.phi);
+                    (p.t, [x, y, z_of(p.t)])
+                })
+                .collect();
+            let mut start = 0;
+            while start + 1 < points.len() {
+                let end = (start + WORLDLINE_RUN).min(points.len());
+                let run = &points[start..end];
+                // Older is fainter, so the eye reads the worldline's direction off it without an
+                // arrowhead: the bright end is the end the observer is at now.
+                let t_mid = 0.5 * (run[0].0 + run[run.len() - 1].0);
+                let fade = (0.25 + 0.75 * ((t_mid - t_min) / span)).clamp(0.0, 1.0) as f32;
+                let depth = centroid_depth(&camera, centre, run.iter().map(|(_, p)| *p));
+                buf.push(
+                    Layer::Below,
+                    depth,
+                    Prim::Line {
+                        points: run.iter().map(|(_, p)| project(*p).0).collect(),
+                        stroke: Stroke::new(width, colour_of(who).gamma_multiply(fade)),
+                        closed: false,
+                    },
+                );
+                // One point of overlap, so the runs join instead of leaving a gap at every seam.
+                start = end - 1;
+            }
+        }
+
+        // 6. The cone at each observer's present event, which is the reason this view exists.
+        //
+        // Its rim is where the null geodesics leaving the event have got to after `cone_span` of
+        // coordinate time, sampled from the exact generators rather than drawn at a fixed opening
+        // angle, so inside r+ the whole cone leans over until every one of its generators points
+        // inward and the picture says outright why there is no way back. The generators are taken
+        // in the raindrop frame at the event, which exists at every radius including both horizons,
+        // rather than in the observer's own: at u^t ~ 1e10 on the approach to r- an observer's own
+        // frame crowds all 36 samples into one point of the rim and leaves the rest undrawn.
+        let cone_span = (self.time_window * 0.12).clamp(1e-4, 1.8);
+        let push_cone = |buf: &mut PrimBuffer,
+                             r: f64,
+                             phi: f64,
+                             z0: f64,
+                             fills: (Color32, Color32, Color32),
+                             ghost: bool| {
+            let tetrad = Observer::raindrop_tetrad(metric, r);
+            let gens = light_cone_generators(metric, r, phi, &tetrad, CONE_SAMPLES);
+            if gens.is_empty() {
+                return;
+            }
+            let (x, y) = metric.cartesian_position(r, phi);
+            let apex = [x, y, z0];
+            let rise = cone_span * t_scale;
+            let future: Vec<[f64; 3]> = gens
+                .iter()
+                .map(|(gx, gy)| [x + cone_span * gx, y + cone_span * gy, z0 + rise])
+                .collect();
+            // The past half is the future half reflected through the apex, which is what the past
+            // cone of an event is: the same null directions run backwards.
+            let past: Vec<[f64; 3]> =
+                future.iter().map(|p| [2.0 * x - p[0], 2.0 * y - p[1], 2.0 * z0 - p[2]]).collect();
+            let n = gens.len() as f64;
+            for (rim, fill, mean_z, fixed) in [
+                (&future, fills.0, (z0 + n * (z0 + rise)) / (n + 1.0), Layer::Above),
+                (&past, fills.1, (z0 + n * (z0 - rise)) / (n + 1.0), Layer::Below),
+            ] {
+                // A cone at the present event straddles the floor and its two halves are the two
+                // sides of it; a ghost further down the trail may be wholly below, so it is placed
+                // by where it actually is.
+                let layer = if ghost {
+                    if mean_z >= 0.0 { Layer::Above } else { Layer::Below }
+                } else {
+                    fixed
+                };
+                let (mesh, depth) = cone_mesh(&camera, centre, apex, rim, fill);
+                buf.push(layer, depth, Prim::Mesh(mesh));
+                buf.push(
+                    layer,
+                    depth,
+                    Prim::Line {
+                        points: rim.iter().map(|p| project(*p).0).collect(),
+                        stroke: Stroke::new(1.0, fills.2),
+                        closed: true,
+                    },
+                );
+            }
+        };
+        for (obs, _) in present.iter().copied() {
+            let (future_fill, past_fill, edge) = Theme::cone_colours(&obs.name);
+            push_cone(&mut buf, obs.r, obs.phi, 0.0, (future_fill, past_fill, edge), false);
+            if self.show_ghost_cones {
+                let k_lo = t_min.ceil() as i64;
+                let k_hi = current_time.ceil() as i64 - 1;
+                for k in k_lo..=k_hi {
+                    let t = k as f64;
+                    // The nearest recorded event to that whole M. The trail is what the run
+                    // actually integrated, so a ghost stands on a computed event rather than on an
+                    // interpolation between two of them; a whole M the trail does not reach within
+                    // one M gets no cone rather than one dragged over to it.
+                    let nearest = obs
+                        .trail
+                        .iter()
+                        .filter(|p| p.t >= t_min && p.t < current_time)
+                        .min_by(|a, b| (a.t - t).abs().total_cmp(&(b.t - t).abs()));
+                    let Some(p) = nearest.filter(|p| (p.t - t).abs() <= 1.0) else {
+                        continue;
+                    };
+                    push_cone(
+                        &mut buf,
+                        p.r,
+                        p.phi,
+                        z_of(p.t),
+                        (
+                            future_fill.gamma_multiply(0.4),
+                            past_fill.gamma_multiply(0.4),
+                            edge.gamma_multiply(0.4),
+                        ),
+                        true,
+                    );
+                }
+            }
+        }
+
+        // The scene is complete, so the painter's algorithm can run: everything below the floor
+        // farthest first, then the floor, then everything above it. Nothing is painted before this
+        // point, because the scene is built surface by surface and observer by observer rather
+        // than in depth order - which is the whole reason `PrimBuffer` holds it.
+        buf.paint(Layer::Below, &painter);
+
+        // 8. The floor: the equatorial view's own picture of the present, laid flat in the volume.
+        // It is painted straight onto the painter between the two layers rather than through the
+        // buffer, because it *is* the sorting plane - the one surface whose place in the order is
+        // known without a depth - and because the fronts and the trails come from the equatorial
+        // view's helpers, which paint rather than return shapes.
+        let ring_rho = metric.cartesian_radius(0.0).max(2.0 / f64::from(camera.scale));
+        for (rho, fill) in [
+            (metric.cartesian_radius(re), Theme::ERGOSPHERE_FILL),
+            (metric.cartesian_radius(rp), Theme::REGION_II_FILL),
+            (metric.cartesian_radius(rm), Theme::REGION_III_FILL),
+            (ring_rho, Theme::SINGULARITY_FILL),
+        ] {
+            painter.add(egui::Shape::convex_polygon(ring_points(rho, 0.0), fill, Stroke::NONE));
+        }
+        for (points, stroke) in floor_rings {
+            painter.add(egui::Shape::closed_line(points, stroke));
+        }
+        // The two transmissions, Bob's first and at half the stroke width, exactly as the
+        // equatorial view lays them down, so that where the two overlap it is the heavier field
+        // that stays legible.
+        draw_signal_field(
+            &painter,
+            metric,
+            signals.bob,
+            Theme::BOB_COLOR,
+            Theme::SECONDARY_FRONT_WIDTH,
+            style,
+            &floor,
+        );
+        draw_signal_field(&painter, metric, signals.alice, Theme::ALICE_COLOR, 1.0, style, &floor);
+        // Each worldline's shadow on the floor: the same trail the worldline above it is drawn
+        // from, with the time thrown away. It is what ties the two pictures together - the curve on
+        // the floor is what the equatorial view draws, and the curve above it is that curve given
+        // its time back.
+        if let Some(al) = alice {
+            draw_spatial_trail(&painter, metric, al, Theme::ALICE_COLOR, 1.2, &floor);
+        }
+        if let Some(b) = bob {
+            draw_spatial_trail(&painter, metric, b, Theme::BOB_COLOR, 1.5, &floor);
+        }
+
+        buf.paint(Layer::Above, &painter);
+
+        // 9. Every arrival, on the receiver's worldline at the height of the crossing, in the
+        // sender's colour: the same pairing the equatorial view draws, lifted off the floor onto
+        // the event it happened at. Inside r+ these bunch onto the r- pipe, and in the volume the
+        // bunch is legible as a stack up the wall rather than as a knot of triangles on a circle.
+        let ticks = |field: &SignalField, sender: Color32| {
+            for reception in field.receptions() {
+                if reception.t < t_min || reception.t > current_time {
+                    continue;
+                }
+                let (x, y) = metric.cartesian_position(reception.r, reception.phi);
+                let at = project([x, y, z_of(reception.t)]).0;
+                if rect.contains(at) {
+                    draw_reception_tick(&painter, at, sender);
+                }
+            }
+        };
+        // Each tick sits on the receiver's worldline, so it is drawn only while that receiver is in
+        // the simulation: Bob's transmission is received by Alice, and hers by him.
+        if alice.is_some() {
+            ticks(signals.bob, Theme::BOB_COLOR);
+        }
+        if bob.is_some() {
+            ticks(signals.alice, Theme::ALICE_COLOR);
+        }
+
+        // 10. The observers, on the floor, because the floor is now.
+        let mut markers: Vec<(Who, Pos2)> = Vec::new();
+        for (obs, who) in present.iter().copied() {
+            let (x, y) = obs.cartesian_position(metric);
+            let at = project([x, y, 0.0]).0;
+            painter.circle_filled(at, who.marker_radius(), colour_of(who));
+            markers.push((who, at));
+            // A worldline frozen on the far branch of r- has not stopped: it is riding the
+            // horizon's own null generator, so in the volume it is a helix wound onto the r- pipe
+            // while the marker creeps round the ring at Omega_-. The label goes into the
+            // buffer rather than onto the painter so that it paints after every pipe, and no glass
+            // wall standing between the eye and the marker can swallow it.
+            if obs.is_frozen() {
+                buf.label(
+                    at + Vec2::new(6.0, -6.0),
+                    egui::Align2::LEFT_BOTTOM,
+                    "Frozen: gliding on the r₋ generator at Ω₋",
+                    Theme::TEXT_MUTED,
+                );
+            }
+        }
+        // The observer the view is holding on to wears a ring, as on the equatorial view, so that a
+        // picture which is no longer moving under a falling observer says which one it is holding.
+        if let Some(centred) = self.centred_on
+            && let Some((_, at)) = markers.iter().copied().find(|(who, _)| *who == centred)
+        {
+            painter.circle_stroke(
+                at,
+                centred.marker_radius() + CENTRED_RING_GAP,
+                Stroke::new(1.0, colour_of(centred)),
+            );
+        }
+
+        // 11. The canvas's right-click menu: where to look, what to go on looking at, and where the
+        // eye stands. Registered after the markers are drawn and before the telemetry boxes, which
+        // take their drags last.
+        response.context_menu(|ui| {
+            for (label, target) in [
+                ("Goto Bob", bob.map(|o| o.cartesian_position(metric))),
+                ("Goto Alice", alice.map(|o| o.cartesian_position(metric))),
+                // The hole is at the origin of the embedding x + iy = (r + ia)e^{i phi}, which is
+                // the centre of the ring rather than a point of the spacetime.
+                ("Goto Black Hole", Some((0.0, 0.0))),
+            ] {
+                if ui.add_enabled(target.is_some(), egui::Button::new(label)).clicked() {
+                    if let Some(at) = target {
+                        self.look_at(at);
+                    }
+                    ui.close();
+                }
+            }
+            ui.separator();
+            for who in [Who::Bob, Who::Alice] {
+                let in_run = match who {
+                    Who::Alice => alice.is_some(),
+                    Who::Bob => bob.is_some(),
+                };
+                let mut centred = self.centred_on == Some(who);
+                let label = format!("Keep {} Centered", who.name());
+                if ui.add_enabled(in_run, egui::Checkbox::new(&mut centred, label)).changed() {
+                    self.centred_on = centred.then_some(who);
+                    ui.close();
+                }
+            }
+            ui.separator();
+            if ui.checkbox(&mut self.show_ghost_cones, "Ghost cones along the trail").changed() {
+                ui.close();
+            }
+            ui.separator();
+            for (label, preset) in
+                [("Top", Preset::Top), ("Side", Preset::Side), ("3/4", Preset::ThreeQuarter)]
+            {
+                if ui.button(label).clicked() {
+                    self.camera =
+                        Camera::preset(preset, self.camera.scale, self.camera.pan, self.camera.t_scale);
+                    ui.close();
+                }
+            }
+        });
+
+        // The same three camera positions as buttons, because a right-click menu is not
+        // discoverable by looking at a picture, and a fourth that undoes an exploration: Reset puts
+        // the zoom, the pan and the time scale back where `Camera::default` has them and leaves the
+        // eye where the user has moved it, which is the one part of the view they chose on purpose.
+        let legend_font = egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale);
+        let button_size = Vec2::new(40.0 * font_scale, 16.0 * font_scale);
+        let gap = 4.0 * font_scale;
+        let strip = button_size.x * 4.0 + gap * 3.0;
+        for (i, (label, preset)) in [
+            ("Top", Some(Preset::Top)),
+            ("Side", Some(Preset::Side)),
+            ("3/4", Some(Preset::ThreeQuarter)),
+            ("Reset", None),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let min =
+                rect.right_top() + Vec2::new(-8.0 - strip + (button_size.x + gap) * i as f32, 6.0);
+            let button = egui::Button::new(
+                egui::RichText::new(label).font(legend_font.clone()).color(Theme::TEXT_BRIGHT),
+            )
+            .frame(false);
+            if ui.put(egui::Rect::from_min_size(min, button_size), button).clicked() {
+                let default = Camera::default();
+                self.camera = match preset {
+                    Some(p) => Camera::preset(
+                        p,
+                        self.camera.scale,
+                        self.camera.pan,
+                        self.camera.t_scale,
+                    ),
+                    None => Camera {
+                        scale: default.scale,
+                        pan: default.pan,
+                        t_scale: default.t_scale,
+                        ..self.camera
+                    },
+                };
+            }
+        }
+
+        // 12. The legend: what the picture is, where the eye is standing, and what the vertical
+        // axis means, since a viewer arriving at a 3D diagram has no way to know any of the three.
+        painter.text(
+            rect.left_top() + Vec2::new(10.0, 6.0),
+            egui::Align2::LEFT_TOP,
+            "2D+1 Volume (x, y, t)",
+            legend_font.clone(),
+            Theme::TEXT_BRIGHT,
+        );
+        painter.text(
+            rect.left_top() + Vec2::new(10.0, 8.0 + Theme::MIN_FONT_PT * font_scale),
+            egui::Align2::LEFT_TOP,
+            format!(
+                "yaw {:.0}°  pitch {:.0}°  {:.0} px/M  t×{:.2}\n\
+                 window {:.1} … {:.1} M  (floor = now)\n\
+                 drag: orbit  shift-drag: pan  wheel: zoom  ctrl-wheel: time scale  \
+                 right-click: menu\n\
+                 below the floor: the past · above: the future · pipes: r = const · cones: exact \
+                 null generators",
+                camera.yaw.to_degrees(),
+                camera.pitch.to_degrees(),
+                camera.scale,
+                t_scale,
+                t_min,
+                t_max,
+            ),
+            legend_font.clone(),
+            Theme::TEXT_MUTED,
+        );
+
+        buf.paint_labels(&painter, legend_font);
+
+        // 13. Draggable info boxes, registered last so they take the drag instead of the canvas.
+        for (obs, who) in present {
+            let Some((_, at)) = markers.iter().copied().find(|(w, _)| *w == who) else {
+                continue;
+            };
+            self.telemetry.show(
+                ui,
+                &painter,
+                "volume",
+                rect,
+                at,
+                who.name(),
+                colour_of(who),
+                obs,
+                metric,
+                use_km,
+                font_scale,
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gui::theme::Theme;
+
+    /// One shape the painter emitted, reduced to what a test about the scene has to ask of it.
+    /// Kept as owned data because the `FullOutput` the shapes live in has to be dropped before the
+    /// assertions run.
+    #[derive(Clone, Debug)]
+    enum Painted {
+        /// A translucent surface: a pipe strip has four vertices, a cone half its apex plus its 36
+        /// rim points. The colour is Some only when every vertex carries the same one, which is
+        /// what both of this canvas's meshes do.
+        Mesh { vertices: usize, colour: Option<Color32>, first: Pos2 },
+        /// A filled polygon or a stroked polyline. The fill is `Color32::TRANSPARENT` on a
+        /// polyline and the stroke is None on a fill.
+        Path { fill: Color32, stroke: Option<Color32>, points: Vec<Pos2> },
+        Circle { fill: Color32, radius: f32, centre: Pos2 },
+        Text(String),
+        Other,
+    }
+
+    /// Every shape of one frame, in paint order, flattened out of the `Shape::Vec` groups egui
+    /// wraps a layer's shapes in.
+    fn painted(output: &egui::FullOutput) -> Vec<Painted> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<Painted>) {
+            match shape {
+                egui::Shape::Vec(inner) => {
+                    for s in inner {
+                        walk(s, out);
+                    }
+                }
+                egui::Shape::Mesh(mesh) => {
+                    let first = mesh.vertices.first().map_or(Pos2::ZERO, |v| v.pos);
+                    let colour = mesh.vertices.first().map(|v| v.color).filter(|c| {
+                        mesh.vertices.iter().all(|v| v.color == *c)
+                    });
+                    out.push(Painted::Mesh { vertices: mesh.vertices.len(), colour, first });
+                }
+                egui::Shape::Path(path) => {
+                    let stroke = match path.stroke.color {
+                        egui::epaint::ColorMode::Solid(c) if path.stroke.width > 0.0 => Some(c),
+                        _ => None,
+                    };
+                    out.push(Painted::Path {
+                        fill: path.fill,
+                        stroke,
+                        points: path.points.clone(),
+                    });
+                }
+                egui::Shape::Circle(c) => {
+                    out.push(Painted::Circle { fill: c.fill, radius: c.radius, centre: c.center })
+                }
+                egui::Shape::Text(t) => out.push(Painted::Text(t.galley.text().to_string())),
+                _ => out.push(Painted::Other),
+            }
+        }
+        let mut out = Vec::new();
+        for clipped in output.shapes.iter() {
+            walk(&clipped.shape, &mut out);
+        }
+        out
+    }
+
+    /// The canvas both views are measured in: 800 x 700 of screen, 600 px of canvas, no fonts.
+    fn input() -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::Vec2::new(800.0, 700.0))),
+            ..Default::default()
+        }
+    }
+
+    /// One real frame of the volume view, at one camera preset, with Bob alone on it.
+    fn volume_frame(
+        metric: &KerrSchild,
+        bob: Option<&Observer>,
+        preset: Preset,
+        frame_of_ref: ReferenceFrame,
+        show_distant_clock_grid: bool,
+    ) -> Vec<Painted> {
+        volume_frame_with(metric, bob, preset, frame_of_ref, show_distant_clock_grid, false)
+    }
+
+    /// The same, with the cones along the trail turned on as the right-click menu turns them on.
+    fn volume_frame_with(
+        metric: &KerrSchild,
+        bob: Option<&Observer>,
+        preset: Preset,
+        frame_of_ref: ReferenceFrame,
+        show_distant_clock_grid: bool,
+        ghosts: bool,
+    ) -> Vec<Painted> {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let mut canvas = VolumeCanvas {
+            camera: Camera::preset(preset, 48.0, Vec2::ZERO, 1.0),
+            show_ghost_cones: ghosts,
+            ..Default::default()
+        };
+        let signal = SignalField::default();
+        // Every worldline stands at the simulation clock, so the floor is the observer's own now.
+        let clock = bob.map_or(0.0, |obs| obs.t);
+        let output = ctx.clone().run_ui(input(), |ui| {
+            canvas.render(
+                ui,
+                metric,
+                bob,
+                None,
+                clock,
+                600.0,
+                false,
+                frame_of_ref,
+                1.0,
+                SignalViews { alice: &signal, bob: &signal },
+                show_distant_clock_grid,
+                FrontStyle { arcs: true, hide_wound: true },
+            );
+        });
+        let shapes = painted(&output);
+        output.drop_without_applying_deltas();
+        shapes
+    }
+
+    /// The same frame from the equatorial view, which the Top preset has to reproduce.
+    fn spatial_frame(metric: &KerrSchild, bob: Observer) -> Vec<Painted> {
+        use crate::gui::spatial_canvas::SpatialCanvas;
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let mut canvas = SpatialCanvas::default();
+        let signal = SignalField::default();
+        let mut details = true;
+        let clock = bob.t;
+        let mut bob = Some(bob);
+        let mut alice: Option<Observer> = None;
+        let output = ctx.clone().run_ui(input(), |ui| {
+            canvas.render(
+                ui,
+                metric,
+                &mut bob,
+                &mut alice,
+                clock,
+                false,
+                SignalViews { alice: &signal, bob: &signal },
+                600.0,
+                false,
+                ReferenceFrame::DistantObserver,
+                1.0,
+                FrontStyle { arcs: true, hide_wound: true },
+                &mut details,
+            );
+        });
+        let shapes = painted(&output);
+        output.drop_without_applying_deltas();
+        shapes
+    }
+
+    /// Where Bob's own marker was painted: the filled mint disc at his marker radius.
+    fn marker_of(shapes: &[Painted]) -> Pos2 {
+        shapes
+            .iter()
+            .find_map(|s| match s {
+                Painted::Circle { fill, radius, centre }
+                    if *fill == Theme::BOB_COLOR
+                        && (*radius - Who::Bob.marker_radius()).abs() < 1e-6 =>
+                {
+                    Some(*centre)
+                }
+                _ => None,
+            })
+            .expect("Bob's marker is painted")
+    }
+
+    /// Everything the frame wrote, as one string.
+    fn text_of(shapes: &[Painted]) -> String {
+        let mut out = String::new();
+        for s in shapes {
+            if let Painted::Text(t) = s {
+                out.push_str(t);
+                out.push('\n');
+            }
+        }
+        out
+    }
+
+    /// Bob on an ordinary released worldline at radius r, at the azimuth the focus tests need.
+    fn bob_at(metric: &KerrSchild, r: f64) -> Observer {
+        Observer::new_with_phi(
+            metric,
+            "Bob",
+            0.0,
+            r,
+            0.0,
+            0.7,
+            crate::physics::observer::WorldlineParams::new(1.0, 2.2, false),
+        )
+    }
+
+    #[test]
+    fn test_the_top_preset_of_the_volume_view_is_the_equatorial_view() {
+        // The volume view earns its floor by being the equatorial view when it is looked at from
+        // straight above: same embedding, same pixels per M, same place on the canvas. If the two
+        // disagree by so much as a marker's width then one of them is drawing a different plane,
+        // and a user switching between them would see the hole jump.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let flat = spatial_frame(&metric, bob_at(&metric, 4.0));
+        let volume = volume_frame(
+            &metric,
+            Some(&bob_at(&metric, 4.0)),
+            Preset::Top,
+            ReferenceFrame::DistantObserver,
+            false,
+        );
+        let (a, b) = (marker_of(&flat), marker_of(&volume));
+        println!("Bob's marker: equatorial at {a:?}, volume Top preset at {b:?}");
+        assert!(
+            a.distance(b) < 0.5,
+            "seen from straight above the volume view is the equatorial view, but it put Bob at \
+             {b:?} where the equatorial view puts him at {a:?}"
+        );
+    }
+
+    #[test]
+    fn test_the_volume_view_renders_in_every_region_including_the_frozen_worldline() {
+        // Region I, the ergosphere, the horizon itself, region II, the Cauchy horizon and region
+        // III, plus the worldline that never leaves r-. Every one of them puts the observer, his
+        // cone and his pipes somewhere different in the volume, and the one thing they all have to
+        // do is come out as a frame rather than as a panic: `raindrop_tetrad` and
+        // `light_cone_generators` are asked for a frame at radii where the coordinate r = const
+        // surfaces are spacelike and where u^t has run away to 1e10.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let (rp, rm) = (metric.outer_horizon(), metric.inner_horizon());
+        let mut cases: Vec<(String, Observer)> = Vec::new();
+        for r in [9.0, 3.0, rp, 0.5 * (rp + rm), rm, 0.3] {
+            cases.push((format!("r = {r:.3}"), bob_at(&metric, r)));
+        }
+        cases.push(("frozen on r-".to_string(), Observer::frozen_bob(&metric)));
+
+        for (name, bob) in cases {
+            for grid in [false, true] {
+                for preset in [Preset::Top, Preset::ThreeQuarter] {
+                    for frame in [ReferenceFrame::DistantObserver, ReferenceFrame::Bob] {
+                        let shapes = volume_frame(&metric, Some(&bob), preset, frame, grid);
+                        let text = text_of(&shapes);
+                        assert!(
+                            text.contains("2D+1 Volume"),
+                            "{name} at {preset:?} in {frame:?} (grid {grid}) drew no volume view"
+                        );
+                    }
+                }
+            }
+            // And with a cone at every whole M the trail crossed, which walks the recorded trail
+            // and builds a fan from the generators at each of those events: the one path that
+            // asks `light_cone_generators` for a frame at a radius the observer has already left.
+            let ghosted = text_of(&volume_frame_with(
+                &metric,
+                Some(&bob),
+                Preset::ThreeQuarter,
+                ReferenceFrame::DistantObserver,
+                false,
+                true,
+            ));
+            assert!(ghosted.contains("2D+1 Volume"), "{name} drew no volume view with ghost cones");
+            println!("{name}: drawn at both presets, both frames, grid and ghost cones on and off");
+        }
+    }
+
+    #[test]
+    fn test_the_pipes_are_glass_below_the_floor_and_rings_above_it() {
+        // The whole point of the layer split: a pipe wall is the past of a surface of constant r,
+        // so it belongs under the floor where the past is, and the floor - which is the present,
+        // and is the equatorial view's own picture - paints over it. Above the floor a surface of
+        // constant r is left as a ring, because nothing up there has been integrated.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let bob = bob_at(&metric, 3.0);
+        let shapes =
+            volume_frame(&metric, Some(&bob), Preset::ThreeQuarter, ReferenceFrame::DistantObserver, true);
+
+        let floor = shapes
+            .iter()
+            .position(|s| matches!(s, Painted::Path { fill, .. } if *fill == Theme::SINGULARITY_FILL))
+            .expect("the ring's fill is the innermost of the floor's discs");
+        // A pipe strip is the four-cornered mesh; a cone half is the 37-vertex fan, and its future
+        // half is deliberately above the floor, so the claim is about the strips.
+        let strips: Vec<usize> = shapes
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| matches!(s, Painted::Mesh { vertices: 4, .. }))
+            .map(|(i, _)| i)
+            .collect();
+        assert!(!strips.is_empty(), "the pipes are drawn as strips of glass");
+        assert!(
+            strips.iter().all(|i| *i < floor),
+            "every pipe wall belongs under the floor, but one was painted at shape {:?} against a \
+             floor at {floor}",
+            strips.iter().rfind(|i| **i > floor)
+        );
+
+        let tick = shapes.iter().skip(floor).position(
+            |s| matches!(s, Painted::Path { stroke: Some(c), .. } if *c == Theme::GRID_LINE),
+        );
+        println!(
+            "{} pipe strips under the floor at shape {floor}, and a tick ring over it at {:?}",
+            strips.len(),
+            tick.map(|i| i + floor)
+        );
+        assert!(
+            tick.is_some(),
+            "a whole M of the distant observer's clock in the future is a ring over the floor"
+        );
+    }
+
+    #[test]
+    fn test_the_light_cone_at_the_observers_event_has_a_future_and_a_past_half() {
+        // The cone is two fans sharing an apex, and the apex is the event the observer is standing
+        // at - so it is the marker, to the pixel. A cone drawn anywhere else is a cone belonging to
+        // some other event, and the one thing the volume view is for is reading this observer's
+        // future off this observer's position.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let bob = bob_at(&metric, 3.0);
+        let shapes =
+            volume_frame(&metric, Some(&bob), Preset::ThreeQuarter, ReferenceFrame::DistantObserver, false);
+        let at = marker_of(&shapes);
+        let (future_fill, past_fill, _) = Theme::cone_colours("Bob");
+
+        for (half, fill) in [("future", future_fill), ("past", past_fill)] {
+            let found = shapes
+                .iter()
+                .find_map(|s| match s {
+                    Painted::Mesh { vertices, colour: Some(c), first } if *c == fill => {
+                        Some((*vertices, *first))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("the {half} half of Bob's cone is painted"));
+            assert_eq!(
+                found.0,
+                CONE_SAMPLES + 1,
+                "the {half} half is the apex plus its {CONE_SAMPLES} null generators"
+            );
+            assert!(
+                found.1.distance(at) < 0.5,
+                "the {half} half's apex is Bob's own event, but it is at {:?} where his marker is \
+                 at {at:?}",
+                found.1
+            );
+            println!("{half} half: {} vertices, apex at {:?}", found.0, found.1);
+        }
+    }
+
+    #[test]
+    fn test_a_frozen_observer_is_labelled_frozen_in_the_volume() {
+        // In the volume a frozen worldline is a helix wound onto the r- pipe at a steady pitch,
+        // which is a picture that could equally be read as an observer in a tidy orbit. He is not
+        // orbiting - his radius and his own clock have stopped, and he is being carried along the
+        // horizon's own null generator at Omega_- - so the marker says so, and only when it is true.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let frozen = Observer::frozen_bob(&metric);
+        let text = text_of(&volume_frame(
+            &metric,
+            Some(&frozen),
+            Preset::ThreeQuarter,
+            ReferenceFrame::DistantObserver,
+            false,
+        ));
+        println!("frozen at r = {:.9}, t = {:.3}", frozen.r, frozen.t);
+        assert!(
+            text.contains("Frozen"),
+            "a worldline riding the r- generator says so in the volume: {text}"
+        );
+
+        let falling = bob_at(&metric, 3.0);
+        let text = text_of(&volume_frame(
+            &metric,
+            Some(&falling),
+            Preset::ThreeQuarter,
+            ReferenceFrame::DistantObserver,
+            false,
+        ));
+        assert!(
+            !text.contains("Frozen"),
+            "and a Bob who is still falling is not labelled frozen: {text}"
+        );
+    }
+
+    #[test]
+    fn test_the_volume_follows_the_focus_observer() {
+        // Drawn in an observer's rest frame the view is anchored on them, exactly as the equatorial
+        // view is: the pan is measured from their floor point, so their marker is the middle of the
+        // canvas whatever the camera is doing. In the global foliation with nobody centred the
+        // anchor is the hole instead, and an observer at r = 4 is nowhere near the middle.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let bob = bob_at(&metric, 4.0);
+        let global = volume_frame(
+            &metric,
+            Some(&bob),
+            Preset::ThreeQuarter,
+            ReferenceFrame::DistantObserver,
+            false,
+        );
+        // With nobody followed and no pan, world (0, 0, 0) lands on the middle of the canvas, and
+        // the ring's fill is the 72-gon drawn about it: its own centre is that middle. So the test
+        // finds the middle in the picture rather than being told the layout.
+        let hole = global
+            .iter()
+            .find_map(|s| match s {
+                Painted::Path { fill, points, .. } if *fill == Theme::SINGULARITY_FILL => {
+                    let n = points.len() as f32;
+                    Some(Pos2::new(
+                        points.iter().map(|p| p.x).sum::<f32>() / n,
+                        points.iter().map(|p| p.y).sum::<f32>() / n,
+                    ))
+                }
+                _ => None,
+            })
+            .expect("the ring's fill is drawn about the middle of the canvas");
+        let free = marker_of(&global);
+        assert!(
+            free.distance(hole) > 1.0,
+            "in the global foliation the view is anchored on the hole, so Bob at r = 4 is not in \
+             the middle - but his marker is at {free:?} against a middle of {hole:?}"
+        );
+
+        let followed =
+            volume_frame(&metric, Some(&bob), Preset::ThreeQuarter, ReferenceFrame::Bob, false);
+        let held = marker_of(&followed);
+        println!("Bob's marker: {free:?} unfollowed, {held:?} followed, middle {hole:?}");
+        assert!(
+            held.distance(hole) < 0.5,
+            "in Bob's own rest frame the view is anchored on him, so his marker is the middle of \
+             the canvas - but it is at {held:?} against a middle of {hole:?}"
+        );
+    }
 
     const CENTRE: Pos2 = Pos2::new(400.0, 300.0);
 

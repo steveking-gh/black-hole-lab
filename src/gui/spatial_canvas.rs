@@ -37,7 +37,7 @@ pub enum Who {
 }
 
 impl Who {
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Alice => "Alice",
             Self::Bob => "Bob",
@@ -46,7 +46,7 @@ impl Who {
 
     /// The drawn radius of this observer's marker on the equatorial view, which also sets how
     /// close the pointer has to come to open their menu.
-    fn marker_radius(self) -> f32 {
+    pub(crate) fn marker_radius(self) -> f32 {
         match self {
             Self::Alice => 5.0,
             Self::Bob => 7.0,
@@ -215,20 +215,19 @@ impl SpatialCanvas {
         alice: &'a Option<Observer>,
         frame_of_ref: ReferenceFrame,
     ) -> Option<&'a Observer> {
-        let observer = |who: Who| match who {
-            Who::Alice => alice.as_ref(),
-            Who::Bob => bob.as_ref(),
-        };
         // A drag of the observer the view is holding on to suspends the hold: otherwise the pan
         // compensates for every pixel the pointer moves them, the marker sits pinned to the middle
         // of the canvas, and the drag looks like it is doing nothing at all. It resumes the moment
-        // the pointer lets go, with the view re-centring on wherever they were put.
+        // the pointer lets go, with the view re-centring on wherever they were put. That clause is
+        // this canvas's alone - it is about the marker drag, which only this canvas offers - so it
+        // is applied here and the rest of the rule is `frame_focus`, shared with the volume view.
         let held = self.dragging.map(|drag| drag.who);
-        self.centred_on.filter(|who| held != Some(*who)).and_then(observer).or(match frame_of_ref {
-            ReferenceFrame::Bob => bob.as_ref(),
-            ReferenceFrame::Alice => alice.as_ref(),
-            ReferenceFrame::DistantObserver => None,
-        })
+        frame_focus(
+            self.centred_on.filter(|who| held != Some(*who)),
+            frame_of_ref,
+            bob.as_ref(),
+            alice.as_ref(),
+        )
     }
 
     /// Pan the view so that the point `target` of the equatorial plane - Cartesian, in M, as
@@ -846,6 +845,32 @@ impl SpatialCanvas {
     }
 }
 
+/// Which observer a canvas is anchored to, given a standing request to keep one centred and the
+/// Frame of Reference selector: the rule both the equatorial view and the volume view follow.
+///
+/// Following an observer who is not in the simulation is following nobody, so the caller is handed
+/// None and the view stays on the hole rather than on a remembered position. A standing request is
+/// answered first, and the selector's own tracking is what is left when there is no such request or
+/// the observer it names has gone. Where the two disagree the standing request wins, being the more
+/// particular of the two: it can keep Bob in the middle of a view drawn in the global foliation,
+/// which the selector cannot say.
+pub(crate) fn frame_focus<'a>(
+    centred: Option<Who>,
+    frame: ReferenceFrame,
+    bob: Option<&'a Observer>,
+    alice: Option<&'a Observer>,
+) -> Option<&'a Observer> {
+    let observer = |who: Who| match who {
+        Who::Alice => alice,
+        Who::Bob => bob,
+    };
+    centred.and_then(observer).or(match frame {
+        ReferenceFrame::Bob => bob,
+        ReferenceFrame::Alice => alice,
+        ReferenceFrame::DistantObserver => None,
+    })
+}
+
 /// Three quarters of a turn of arrow inside the ring, pointing the way the hole rotates.
 ///
 /// The disc rho < a is not part of this sheet of the equatorial plane at all - it is the hole of
@@ -1101,7 +1126,7 @@ const FRONT_POINT_RADIUS: f32 = 1.6;
 const RING_ARROW_MIN_PX: f32 = 14.0;
 
 /// How far outside their own marker the ring around a centred observer is drawn.
-const CENTRED_RING_GAP: f32 = 5.0;
+pub(crate) const CENTRED_RING_GAP: f32 = 5.0;
 
 /// How much of the gain ramp one flat-coloured band of a segment may cover, in decades of gain.
 ///
@@ -1183,7 +1208,7 @@ fn banded_segment(arc: Vec<Pos2>, gain_from: f64, gain_to: f64) -> Vec<(Vec<Pos2
         .collect()
 }
 
-fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
+pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
     painter: &egui::Painter,
     metric: &KerrSchild,
     signal: &SignalField,
@@ -1341,7 +1366,7 @@ fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
 /// this projection could draw honestly.
 const RECEPTION_TICK_RADIUS: f32 = 4.0;
 
-fn draw_reception_tick(painter: &egui::Painter, at: Pos2, colour: Color32) {
+pub(crate) fn draw_reception_tick(painter: &egui::Painter, at: Pos2, colour: Color32) {
     let (h, w) = (RECEPTION_TICK_RADIUS, RECEPTION_TICK_RADIUS * 0.866);
     painter.add(egui::Shape::convex_polygon(
         vec![
@@ -1357,7 +1382,7 @@ fn draw_reception_tick(painter: &egui::Painter, at: Pos2, colour: Color32) {
 /// Faint spatial trajectory of an observer: the recorded (t, r, phi) trail pushed through the
 /// Kerr-Schild embedding x + i y = (r + i a) e^{i phi}. With E = 1, L = 0 the curve spirals in and,
 /// for a spinning hole, terminates on the ring rho = a rather than at the origin.
-fn draw_spatial_trail<F: Fn((f64, f64)) -> Pos2>(
+pub(crate) fn draw_spatial_trail<F: Fn((f64, f64)) -> Pos2>(
     painter: &egui::Painter,
     metric: &KerrSchild,
     obs: &Observer,
