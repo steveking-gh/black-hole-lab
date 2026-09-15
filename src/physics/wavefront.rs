@@ -433,9 +433,7 @@ impl NullRay {
     /// A hole with no spin has r- = 0 and a = 0, so xi degenerates to d_t and Omega_- is taken as
     /// zero: there is no inner horizon to freeze onto and every ray crosses.
     pub fn inner_horizon_energy(&self, metric: &KerrSchild) -> f64 {
-        let rm = metric.inner_horizon();
-        let denom = rm * rm + metric.a * metric.a;
-        let omega_minus = if denom > 0.0 { metric.a / denom } else { 0.0 };
+        let omega_minus = metric.inner_horizon_omega();
         let g = metric.metric_components(self.r);
         let v = self.direction();
         let e = -(g[0][0] * v[0] + g[0][1] * v[1] + g[0][2] * v[2]);

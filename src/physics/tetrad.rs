@@ -13,6 +13,38 @@ pub fn inner(metric: &KerrSchild, r: f64, a: &[f64; 3], b: &[f64; 3]) -> f64 {
     sum
 }
 
+/// The n generators of the null cone at the equatorial event (r, phi), as Cartesian velocities
+/// (dx/dt, dy/dt) of the Kerr-Schild embedding x + i y = (r + i a) e^{i phi}.
+///
+/// Each sample is one future-directed null direction of `Tetrad::null_direction`, turned into the
+/// coordinate slopes (dr/dt, dphi/dt) that light actually leaves the event on and then pushed
+/// through `KerrSchild::cartesian_velocity`. Appending dz/dt = 1 to each makes it a generator of
+/// the 3-dimensional cone in (x, y, t), so the returned polygon is the section that cone cuts out
+/// of the slice t = 1: in flat space, far from the hole, it is the unit circle.
+///
+/// The *set* is a property of the event alone. Any observer at that event sees the same cone -
+/// the null directions are the light through the event, not a choice of frame - so a boosted
+/// tetrad returns the same closed curve; what the tetrad decides is only where along the rim the
+/// n samples fall, since aberration bunches them towards the boost. That is why the caller picks
+/// the frame: at u^t ~ 1e10, on the approach to the far branch of r-, the observer's own frame
+/// crowds every sample into one point of the rim and leaves the rest of the curve undrawn.
+#[allow(dead_code)] // the cone the canvases draw at an observer's event; the tests pin it meanwhile
+pub fn light_cone_generators(
+    metric: &KerrSchild,
+    r: f64,
+    phi: f64,
+    tetrad: &Tetrad,
+    n: usize,
+) -> Vec<(f64, f64)> {
+    (0..n)
+        .map(|i| {
+            let alpha = std::f64::consts::TAU * (i as f64) / (n as f64);
+            let (dr_dt, dphi_dt) = tetrad.coordinate_velocity(&tetrad.null_direction(alpha));
+            metric.cartesian_velocity(r, phi, dr_dt, dphi_dt)
+        })
+        .collect()
+}
+
 /// Determinant of a 3 x 3 matrix given by rows.
 fn det3(m: &[[f64; 3]; 3]) -> f64 {
     m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
@@ -653,5 +685,198 @@ mod tests {
         );
         assert!(geo.stalled, "the walk must reach the stall, got u^t = {}", geo.u[0]);
         assert!(geo.u[0] > 1e9, "and it must be the runaway that stopped it: {}", geo.u[0]);
+    }
+
+    /// The chart slopes (dr/dt, dphi/dt) a Cartesian generator came from: the exact inverse of
+    /// `KerrSchild::cartesian_velocity`, which rotates by the chart angle phi and mixes the spin
+    /// into the radial part, (dx + i dy)/dt = (dr/dt - a dphi/dt + i r dphi/dt) e^{i phi}. Going
+    /// back this way means the tests below read the numbers `light_cone_generators` actually
+    /// returned rather than recomputing the slopes it was built from.
+    fn chart_slopes(metric: &KerrSchild, r: f64, phi: f64, v: (f64, f64)) -> (f64, f64) {
+        let (s, c) = phi.sin_cos();
+        let radial = v.0 * c + v.1 * s;
+        let tangential = -v.0 * s + v.1 * c;
+        let dphi_dt = tangential / r;
+        (radial + metric.a * dphi_dt, dphi_dt)
+    }
+
+    /// Distance from a point to a closed polyline, measured to the nearest point of the nearest
+    /// segment rather than to the nearest vertex: two samplings of the same curve put their
+    /// vertices in different places, so a vertex-to-vertex distance would be measuring the
+    /// sampling and not the curve.
+    fn distance_to_polyline(p: (f64, f64), poly: &[(f64, f64)]) -> f64 {
+        let mut best = f64::INFINITY;
+        for i in 0..poly.len() {
+            let q = poly[i];
+            let s = poly[(i + 1) % poly.len()];
+            let (dx, dy) = (s.0 - q.0, s.1 - q.1);
+            let len2 = dx * dx + dy * dy;
+            let t = if len2 > 0.0 {
+                (((p.0 - q.0) * dx + (p.1 - q.1) * dy) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let (cx, cy) = (q.0 + t * dx, q.1 + t * dy);
+            best = best.min(((p.0 - cx).powi(2) + (p.1 - cy).powi(2)).sqrt());
+        }
+        best
+    }
+
+    #[test]
+    fn test_the_light_cone_generators_are_null_at_every_radius() {
+        // Every point of the drawn cone must be light. The generators come back as Cartesian
+        // velocities of the embedding, so the check inverts the embedding and asks the metric:
+        // the tangent (1, dr/dt, dphi/dt) has to be null at the radius it was taken at, in all
+        // three regions and for a hole with and without spin. The tolerance carries |v|^2 because
+        // g(v, v) is a sum of terms of that size and inside r- the azimuthal slope is large.
+        for &a in &[0.9, 0.0] {
+            let metric = KerrSchild::new(1.0, a);
+            let rp = metric.outer_horizon();
+            let rm = metric.inner_horizon().max(0.05);
+            let phi = 0.7;
+            for &r in &[9.0, 3.0, rp, 0.5 * (rp + rm), rm, 0.3] {
+                let frame = Tetrad::from_four_velocity(&metric, r, &raindrop(&metric, r));
+                let n = 64;
+                let generators = light_cone_generators(&metric, r, phi, &frame, n);
+                assert_eq!(generators.len(), n, "one generator per sample");
+                for (i, &g) in generators.iter().enumerate() {
+                    let (dr_dt, dphi_dt) = chart_slopes(&metric, r, phi, g);
+                    let v = [1.0, dr_dt, dphi_dt];
+                    let scale = 1.0 + v.iter().fold(0.0f64, |m, c| m.max(c.abs())).powi(2);
+                    let null = metric.norm(r, &v);
+                    assert!(
+                        null.abs() < 1e-9 * scale,
+                        "g(v, v) = {null} for generator {i} = {g:?} at r={r} (a={a})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_the_cone_section_is_the_same_in_every_frame() {
+        // The null cone is the light through an event, so the curve it cuts out of dt = 1 is a
+        // property of the event and of nothing else. Two observers passing through the same event
+        // at 0.67 c relative to one another must therefore hand back the same closed curve; what
+        // the boost changes is only where along the rim the samples land, which is aberration and
+        // is why the comparison is curve-to-curve rather than sample-to-sample.
+        //
+        // The second radius is inside r-, where the wedge has reopened outward, so the claim is
+        // being made in a region as well as outside one.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let phi = 0.4;
+        let n = 720;
+        for &r in &[3.0, 0.8] {
+            let rain = Tetrad::from_four_velocity(&metric, r, &raindrop(&metric, r));
+            let boosted = Tetrad::from_four_velocity(&metric, r, &rain.boost(0.6, -0.3));
+            let from_rain = light_cone_generators(&metric, r, phi, &rain, n);
+            let from_boost = light_cone_generators(&metric, r, phi, &boosted, n);
+            let mut worst = 0.0f64;
+            for &p in from_rain.iter() {
+                worst = worst.max(distance_to_polyline(p, &from_boost));
+            }
+            for &p in from_boost.iter() {
+                worst = worst.max(distance_to_polyline(p, &from_rain));
+            }
+            assert!(
+                worst < 1e-3,
+                "the two frames' cone sections part by {worst} at r={r}"
+            );
+
+            // And the curve is the one the (t, r) diagram draws its wedge from: the extreme
+            // radial slopes over the samples are `KerrSchild::null_wedge`, which is derived
+            // independently, by extremising dr/dt over the null condition.
+            let wedge = metric.null_wedge(r);
+            let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+            for &p in from_rain.iter() {
+                let (dr_dt, _) = chart_slopes(&metric, r, phi, p);
+                lo = lo.min(dr_dt);
+                hi = hi.max(dr_dt);
+            }
+            println!(
+                "r = {r}: the two frames' sections agree to {worst:.2e}; dr/dt runs over \
+                 [{lo:.6}, {hi:.6}] against the wedge [{:.6}, {:.6}]",
+                wedge.dr_dt_in, wedge.dr_dt_out
+            );
+            assert!(
+                (lo - wedge.dr_dt_in).abs() < 1e-4,
+                "min dr/dt = {lo} vs wedge {} at r={r}",
+                wedge.dr_dt_in
+            );
+            assert!(
+                (hi - wedge.dr_dt_out).abs() < 1e-4,
+                "max dr/dt = {hi} vs wedge {} at r={r}",
+                wedge.dr_dt_out
+            );
+        }
+    }
+
+    #[test]
+    fn test_the_outermost_generator_stands_still_in_r_on_either_horizon() {
+        // What makes a horizon a horizon, read off the drawn cone. On r+ and again on r- the
+        // outward edge of the cone has dr/dt = 0 exactly - `null_wedge` puts the wedge edge at
+        // D(0) = Delta, which vanishes on both - so not one generator gets out and the best of
+        // them holds station. The cone is tipped, but only just: a sample either side of the
+        // horizon would show it closing inward or reopening outward.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let phi = 1.1;
+        let n = 3600;
+        for (name, r) in [("r+", metric.outer_horizon()), ("r-", metric.inner_horizon())] {
+            let frame = Tetrad::from_four_velocity(&metric, r, &raindrop(&metric, r));
+            let mut hi = f64::NEG_INFINITY;
+            for &p in light_cone_generators(&metric, r, phi, &frame, n).iter() {
+                let (dr_dt, _) = chart_slopes(&metric, r, phi, p);
+                assert!(
+                    dr_dt <= 1e-6,
+                    "a generator escapes {name}: dr/dt = {dr_dt} at r={r}"
+                );
+                hi = hi.max(dr_dt);
+            }
+            println!("on {name} = {r:.6} the outermost of {n} generators has dr/dt = {hi:.3e}");
+            assert!(
+                hi > -1e-6,
+                "and one of them must reach dr/dt = 0 on {name}: the best is {hi} at r={r}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_far_from_the_hole_the_cone_section_is_the_unit_circle() {
+        // The chart is asymptotically Minkowski, so a long way out the cone has to be the flat
+        // one: every generator moves at c through the drawn plane and the rim is centred on the
+        // emitter. Both halves are checked, but on different frames, and that is the aberration
+        // the doc comment warns about. The circle itself is the event's, so the raindrop sees the
+        // same rim; but the raindrop at r = 1e4 is falling at beta = sqrt(2M/r) = 1.4e-2, and
+        // uniform sampling in its frame crowds the rim forward by enough to shift the mean of the
+        // samples by beta/2 - a hundredfold over the tolerance here, and a statement about where
+        // the samples fall rather than about where the curve is. The ZAMO out there is the
+        // coordinate frame to one part in 1e4, so its samples are the evenly spaced ones.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let (r, phi) = (1e4, 2.0);
+        let n = 256;
+        for (name, u) in [("raindrop", raindrop(&metric, r)), ("ZAMO", zamo(&metric, r))] {
+            let frame = Tetrad::from_four_velocity(&metric, r, &u);
+            let generators = light_cone_generators(&metric, r, phi, &frame, n);
+            let mut worst = 0.0f64;
+            for &(dx, dy) in generators.iter() {
+                worst = worst.max((dx.hypot(dy) - 1.0).abs());
+            }
+            assert!(
+                worst < 1e-3,
+                "{name}: a generator moves at {} c at r={r}",
+                worst + 1.0
+            );
+            if name == "ZAMO" {
+                let mean = generators.iter().fold((0.0, 0.0), |acc, g| {
+                    (acc.0 + g.0 / n as f64, acc.1 + g.1 / n as f64)
+                });
+                let off = mean.0.hypot(mean.1);
+                println!(
+                    "at r = {r:.0} M the {n} generators sit on the unit circle to {worst:.2e}, \
+                     centred to {off:.2e}"
+                );
+                assert!(off < 1e-3, "the rim is off centre by {off} at r={r}");
+            }
+        }
     }
 }

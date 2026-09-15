@@ -567,12 +567,30 @@ impl SpatialCanvas {
         // null cone is not drawn as a fan of stubs any more: he broadcasts the same pulses Alice
         // does, and a whole light cone integrated as exact null geodesics says everything the
         // twenty-four stubs said and keeps saying it as the light travels.
+
+        // A worldline frozen on the far branch of r- has not stopped: it is riding the horizon's
+        // own null generator, so its marker goes on creeping round the r- circle at Omega_- while
+        // the radius and the observer's own clock stand still. Drawn, that is a dot moving
+        // steadily along a circle, which is exactly what an ordinary orbit looks like from here.
+        // The label is what tells the two apart, and it says which motion is left.
+        let mark_if_frozen = |obs: &Observer, at: Pos2| {
+            if obs.is_frozen() {
+                painter.text(
+                    Pos2::new(at.x + 6.0, at.y - 6.0),
+                    egui::Align2::LEFT_BOTTOM,
+                    "Frozen: gliding on the r₋ generator at Ω₋",
+                    egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
+                    Theme::TEXT_MUTED,
+                );
+            }
+        };
         let mut alice_box: Option<Pos2> = None;
         if let Some(al) = alice
             && al.is_active
         {
             let al_pos = to_screen(al.cartesian_position(metric));
             painter.circle_filled(al_pos, Who::Alice.marker_radius(), Theme::ALICE_COLOR);
+            mark_if_frozen(al, al_pos);
             alice_box = Some(al_pos);
         }
         let bob_box = bob.as_ref().map(|b| {
@@ -582,6 +600,7 @@ impl SpatialCanvas {
             // liveries for no reason. The colour and the radius tell them apart.
             let bob_pos = to_screen(b.cartesian_position(metric));
             painter.circle_filled(bob_pos, Who::Bob.marker_radius(), Theme::BOB_COLOR);
+            mark_if_frozen(b, bob_pos);
             bob_pos
         });
 
@@ -1535,6 +1554,94 @@ mod tests {
             .find(|(fill, r, _)| *fill == colour && (*r - who.marker_radius()).abs() < 1e-6)
             .map(|(_, _, at)| *at)
             .unwrap_or_else(|| panic!("{}'s marker is painted", who.name()))
+    }
+
+    /// The text of every galley the equatorial view painted for one frame with this observer on
+    /// it. Fonts are left empty, as they are everywhere else a frame is run in a test: a galley
+    /// carries its string whether or not there are glyphs to draw it with.
+    fn spatial_frame_text(metric: &KerrSchild, bob: &mut Option<Observer>) -> String {
+        use crate::physics::wavefront::SignalField;
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let mut canvas = SpatialCanvas::default();
+        let signal = SignalField::default();
+        let mut details = true;
+        let mut alice: Option<Observer> = None;
+        let clock = bob.as_ref().map_or(0.0, |obs| obs.t);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::Vec2::new(800.0, 700.0))),
+            ..Default::default()
+        };
+        let output = ctx.clone().run_ui(input, |ui| {
+            canvas.render(
+                ui,
+                metric,
+                bob,
+                &mut alice,
+                clock,
+                false,
+                SignalViews { alice: &signal, bob: &signal },
+                600.0,
+                false,
+                ReferenceFrame::DistantObserver,
+                1.0,
+                FrontStyle { arcs: true, hide_wound: true },
+                &mut details,
+            );
+        });
+        fn collect(shape: &egui::Shape, out: &mut String) {
+            match shape {
+                egui::Shape::Text(text) => {
+                    out.push_str(text.galley.text());
+                    out.push('\n');
+                }
+                egui::Shape::Vec(inner) => {
+                    for shape in inner {
+                        collect(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut text = String::new();
+        for clipped in output.shapes.iter() {
+            collect(&clipped.shape, &mut text);
+        }
+        output.drop_without_applying_deltas();
+        text
+    }
+
+    #[test]
+    fn test_a_frozen_observer_is_labelled_frozen_on_the_equatorial_view() {
+        // On this view a worldline frozen on the far branch of r- is a dot creeping round a
+        // circle at a steady rate, which is exactly what an ordinary orbit looks like. It is not
+        // one - the radius and the observer's own clock have stopped, and the motion left is the
+        // horizon's null generator carrying him - so the marker has to say so, and only when it
+        // is true: a Bob still falling gets no such label.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let mut frozen = Some(Observer::frozen_bob(&metric));
+        let text = spatial_frame_text(&metric, &mut frozen);
+        assert!(
+            text.contains("Frozen"),
+            "the frozen marker is unlabelled; the view painted:\n{text}"
+        );
+
+        let mut falling = Some(Observer::new_with_phi(
+            &metric,
+            "Bob",
+            0.0,
+            9.0,
+            0.0,
+            0.0,
+            crate::physics::observer::WorldlineParams::new(1.0, 2.2, false),
+        ));
+        falling.as_mut().unwrap().step(&metric, 0.25, 0.25);
+        assert!(!falling.as_ref().unwrap().is_frozen(), "he has only just been let go of");
+        let text = spatial_frame_text(&metric, &mut falling);
+        assert!(
+            !text.contains("Frozen"),
+            "a falling observer is labelled frozen; the view painted:\n{text}"
+        );
     }
 
     #[test]

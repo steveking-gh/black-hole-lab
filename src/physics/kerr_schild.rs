@@ -260,6 +260,27 @@ impl KerrSchild {
         (self.outer_horizon() - rm) / denom
     }
 
+    /// Angular velocity Omega_- = a / (r-^2 + a^2) of the null generator of the inner horizon.
+    ///
+    /// The surface r = r- is a Killing horizon, and the one combination of the two Killing fields
+    /// that goes null on it is chi = d_t + Omega_- d_phi: chi is the tangent to the generators, so
+    /// Omega_- is the rate at which the Cauchy horizon itself turns. Delta(r-) = 0 reads
+    /// r-^2 + a^2 = 2 M r-, so this is equally a / (2 M r-), the inner twin of the familiar
+    /// Omega_+ = a / (2 M r+); the same chi is what `inner_surface_gravity` takes kappa_- from.
+    ///
+    /// It is therefore the rate at which everything that asymptotes to the far branch of r- ends
+    /// up co-rotating. A ray with E - Omega_- L < 0 never crosses that branch and winds onto it at
+    /// Omega_- (`wavefront::NullRay::frozen`), and so does a timelike worldline with the same sign:
+    /// neither can cross a surface whose own generators it is settling onto.
+    ///
+    /// A hole with no spin has r- = 0 and a = 0, so the denominator vanishes. Zero is returned:
+    /// chi degenerates to d_t, and there is no inner horizon to turn.
+    pub fn inner_horizon_omega(&self) -> f64 {
+        let rm = self.inner_horizon();
+        let denom = rm * rm + self.a * self.a;
+        if denom > 0.0 { self.a / denom } else { 0.0 }
+    }
+
     /// Static limit / ergosphere radius on the equatorial plane (theta = pi/2): r_E = 2M.
     pub fn ergosphere_equatorial(&self) -> f64 {
         2.0 * self.m
@@ -884,6 +905,43 @@ mod tests {
         );
         // Without spin there is no inner horizon at all, and the formula diverges.
         assert!(!KerrSchild::new(1.0, 0.0).inner_surface_gravity().is_finite());
+    }
+
+    #[test]
+    fn test_inner_horizon_omega_is_the_generators_angular_velocity() {
+        // Omega_- is defined by what it does, not by the expression that computes it: chi =
+        // d_t + Omega_- d_phi has to be the *null* Killing direction on r = r-, which is checked
+        // here by taking g(chi, chi) with the coded metric at the coded radius. The closed form
+        // a / (2 M r-) is the second statement, and it is a different expression: it leans on
+        // Delta(r-) = 0, i.e. r-^2 + a^2 = 2 M r-, so agreeing with it is a check that the two
+        // horizon radii and this rate are all solving the same Delta.
+        for &a in &[0.0, 0.65, 0.90, 0.998] {
+            let ks = KerrSchild::new(1.0, a);
+            let rm = ks.inner_horizon();
+            let omega = ks.inner_horizon_omega();
+            if a == 0.0 {
+                // No inner horizon: chi degenerates to d_t and there is nothing to co-rotate with.
+                assert_eq!(omega, 0.0, "a hole with no spin has no generator to turn");
+                continue;
+            }
+            let closed = a / (2.0 * ks.m * rm);
+            assert!(
+                (omega - closed).abs() < 1e-12,
+                "Omega_- = {omega} vs a/(2 M r-) = {closed} (a={a})"
+            );
+            let chi = [1.0, 0.0, omega];
+            let null = ks.norm(rm, &chi);
+            assert!(
+                null.abs() < 1e-10,
+                "g(chi, chi) = {null} must vanish on r- = {rm} (a={a})"
+            );
+            // And it is the only such rate: the null condition is a quadratic in Omega with a
+            // double root here, so moving off it by a little makes chi spacelike either way.
+            for &d in &[-1e-3, 1e-3] {
+                let off = ks.norm(rm, &[1.0, 0.0, omega + d]);
+                assert!(off > 0.0, "chi at Omega_- {d:+} is spacelike, got {off} (a={a})");
+            }
+        }
     }
 
     #[test]

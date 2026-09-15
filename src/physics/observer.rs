@@ -414,7 +414,51 @@ impl Observer {
     /// worldline left for a ray to cross: the last signal that did arrive marks, on the emitter's
     /// worldline, the boundary of the causal past of the end of this one.
     pub fn has_ended(&self) -> bool {
-        self.r <= R_STOP || self.geodesic.map(|geo| geo.stalled).unwrap_or(false)
+        self.r <= R_STOP || self.is_frozen()
+    }
+
+    /// Has this worldline frozen onto the far branch of the Cauchy horizon?
+    ///
+    /// The E - Omega_- L < 0 case: the worldline asymptotes to r- as r - r- ~ exp(-kappa_- t),
+    /// reaching it at infinite coordinate time and at a finite proper time it never gets to spend,
+    /// and `geodesic::U_T_STALL` is where the integration is stopped because the chart can no
+    /// longer resolve the gap. From there the observer is not integrated but *carried*: the
+    /// surface's own null generator is what is left of their future in this chart, and `advance`
+    /// slides them along it at Omega_- (`KerrSchild::inner_horizon_omega`).
+    pub fn is_frozen(&self) -> bool {
+        self.geodesic.map(|geo| geo.stalled).unwrap_or(false)
+    }
+
+    /// Bob on the one worldline that freezes onto the far branch of r-, run there: E = 1,
+    /// L = 2.2 at a = 0.90, released at r = 9 M and stepped at dt = 0.25 M until `is_frozen`.
+    ///
+    /// These constants have E - Omega_- L < 0, so he never crosses r-. He asymptotes to it with
+    /// u^t growing like exp(kappa_- t) until `geodesic::U_T_STALL` stops the integration, about
+    /// 7e-10 M above the surface. Several tests need an observer who is *actually* frozen rather
+    /// than one told that he is, and this is the run that produces one, written once.
+    #[cfg(test)]
+    pub(crate) fn frozen_bob(metric: &KerrSchild) -> Observer {
+        let dt = 0.25;
+        let mut bob = Observer::new_with_phi(
+            metric,
+            "Bob",
+            0.0,
+            9.0,
+            0.0,
+            0.0,
+            WorldlineParams::new(1.0, 2.2, false),
+        );
+        let mut t = 0.0;
+        while !bob.is_frozen() && t < 200.0 {
+            t += dt;
+            bob.step(metric, t, dt);
+        }
+        assert!(
+            bob.is_frozen(),
+            "the freeze must happen inside 200 M; at t = {t} Bob is still at r = {}",
+            bob.r
+        );
+        bob
     }
 
     /// Kerr-Schild Cartesian azimuth psi of the observer, x + i y = (r + i a) e^{i phi}, i.e. the
@@ -597,7 +641,12 @@ impl Observer {
     }
 
     /// Orthonormal tetrad of the raindrop (E = 1, L = 0 ingoing geodesic) observer at radius r.
-    fn raindrop_tetrad(metric: &KerrSchild, r: f64) -> Tetrad {
+    ///
+    /// It is public because it is also the frame anything drawn *at* an observer's event should be
+    /// sampled in, whoever is standing there: the raindrop exists at every r > 0 and its u^mu is
+    /// of order 1, while a worldline frozen on r- carries u^t out to `geodesic::U_T_STALL` = 1e10,
+    /// and uniform sampling in a frame boosted that hard is aberrated into a single point.
+    pub fn raindrop_tetrad(metric: &KerrSchild, r: f64) -> Tetrad {
         let raindrop = GeodesicState::new_infall(metric, 0.0, r, 1.0, 0.0);
         let (dt_dtau, dr_dtau, dphi_dtau) = raindrop.derivatives(metric, r);
         Tetrad::from_four_velocity(metric, r, &[dt_dtau, dr_dtau, dphi_dtau])
@@ -780,11 +829,22 @@ impl Observer {
                 self.seed_geodesic_at_current_event(metric);
                 if let Some(ref mut geo) = self.geodesic {
                     if geo.stalled {
-                        // Frozen on r-: the worldline asymptotes to a surface of constant r as
-                        // t -> infinity and its proper time to a finite limit, so only the
-                        // coordinate clock keeps running and the trail climbs vertically.
+                        // Frozen on r-, which is not the same as stopped. r and tau really are
+                        // fixed: the gap r - r- ~ exp(-kappa_- t) is below what a double can
+                        // resolve by the time the stall is declared, and the proper time has its
+                        // finite limit. But the surface is a null surface whose generators turn,
+                        // and the worldline is now riding one of them, so phi keeps winding at
+                        // the generators' own rate Omega_- per unit t. The frozen family of rays
+                        // is already drawn co-rotating this way (`NullRay::frozen`), and an
+                        // observer settling onto the same branch settles onto the same motion:
+                        // anything else would have him drift across the generators of a surface
+                        // he can no longer cross. It is exact to the precision at which the stall
+                        // was declared, the departure from Omega_- falling off with the gap.
                         geo.t += dt;
+                        geo.phi = (geo.phi + metric.inner_horizon_omega() * dt)
+                            .rem_euclid(std::f64::consts::TAU);
                         self.t = geo.t;
+                        self.phi = geo.phi;
                         self.record(TRAIL_MAX_POINTS);
                     } else if geo.r > R_STOP {
                         geo.step_coord_time(metric, dt);
@@ -2297,6 +2357,87 @@ mod tests {
                 assert!(stat.proper_acceleration_g(&metric) > 1.0);
             }
         }
+    }
+
+    /// How far apart two azimuths are, the short way round. `GeodesicState` folds phi into
+    /// [0, 2 pi), so a winding observer's angle wraps and a plain subtraction reads the wrap as a
+    /// jump of a whole turn.
+    fn angle_gap(a: f64, b: f64) -> f64 {
+        let turn = std::f64::consts::TAU;
+        let d = (a - b).rem_euclid(turn);
+        d.min(turn - d)
+    }
+
+    #[test]
+    fn test_a_frozen_worldline_winds_at_omega_minus_on_the_cauchy_horizon() {
+        // A worldline that has frozen onto the far branch of r- has stopped falling, not stopped
+        // moving. The surface it has settled onto is null, and its generators are the orbits of
+        // chi = d_t + Omega_- d_phi, so an observer carried along one of them holds r and tau and
+        // winds in phi at exactly Omega_- per unit t. Anything else would drift him across the
+        // generators of a surface he can no longer cross.
+        //
+        // r and tau are compared for *exact* equality, because nothing is being integrated any
+        // more: the gap r - r- is already below what a double can resolve when the stall is
+        // declared and the proper time has reached its finite limit, so a step that moved either
+        // by one ulp would be the integrator still running after it was stopped.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let omega = metric.inner_horizon_omega();
+        let mut bob = Observer::frozen_bob(&metric);
+        let dt = 0.5;
+        let wind = omega * dt;
+        // Or the check could not tell Omega_- from standing still.
+        let turns = wind / std::f64::consts::TAU;
+        assert!(
+            (turns - turns.round()).abs() * std::f64::consts::TAU > 1e-6,
+            "a step of {dt} M winds {wind} rad, a whole number of turns"
+        );
+
+        let (r0, tau0, phi0, trail0) = (bob.r, bob.tau, bob.phi, bob.trail.len());
+        println!(
+            "frozen at t = {:.2} M, r - r- = {:.3e} M, tau = {tau0:.4} M, after {trail0} recorded \
+             events; Omega_- = {omega:.6}, so {dt} M of coordinate time winds {wind:.6} rad",
+            bob.t,
+            r0 - metric.inner_horizon()
+        );
+
+        let mut t = bob.t;
+        let mut times = Vec::new();
+        let mut phis = Vec::new();
+        for step in 1..=10 {
+            t += dt;
+            bob.step(&metric, t, dt);
+            times.push(t);
+            phis.push(bob.phi);
+            assert_eq!(bob.r, r0, "r moved on step {step} of a frozen worldline");
+            assert_eq!(bob.tau, tau0, "tau moved on step {step} of a frozen worldline");
+            let want = phi0 + wind * f64::from(step);
+            assert!(
+                angle_gap(bob.phi, want) < 1e-12,
+                "after {step} steps phi = {} and the generator is at {want}",
+                bob.phi
+            );
+        }
+        assert_eq!(bob.trail.len(), trail0 + 10, "each step is still a recorded event");
+
+        // And the glide is reversible like any other stretch of worldline: wound back to the
+        // third step and run forward again, the observer lands on the same azimuth.
+        let landed = bob.phi;
+        bob.rewind_to(&metric, times[2]);
+        assert!(
+            angle_gap(bob.phi, phis[2]) < 1e-12,
+            "the rewind landed at phi = {} instead of {}",
+            bob.phi,
+            phis[2]
+        );
+        assert!(bob.is_frozen(), "and it landed inside the frozen segment");
+        for &t in times.iter().skip(3) {
+            bob.step(&metric, t, dt);
+        }
+        assert!(
+            angle_gap(bob.phi, landed) < 1e-12,
+            "re-run from the third step, phi = {} against {landed}",
+            bob.phi
+        );
     }
 }
 

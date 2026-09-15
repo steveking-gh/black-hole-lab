@@ -662,7 +662,7 @@ fn horizon_box_lines(
         // Inside r+, so the surface is on this worldline and has a time. Everything inside r+ is
         // falling, so the surface above the observer is the one already crossed.
         let past = r_h > r;
-        let frozen = matches!(obs.geodesic, Some(g) if g.stalled);
+        let frozen = obs.is_frozen();
         let tau = obs
             .geodesic
             .and_then(|g| proper_time_between(metric, g.energy, g.l_ang, r, r_h));
