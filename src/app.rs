@@ -2,7 +2,7 @@ use crate::gui::cauchy_effects::CauchyEffects;
 use crate::gui::controls::{
     AppControls, DISTANT_CLOCK_GRID_TIP, ReferenceFrame, SignalViews, StepMode,
 };
-use crate::gui::spacetime_canvas::SpacetimeCanvas;
+use crate::gui::spacetime_canvas::{REST_FRAME_TIP, SpacetimeCanvas};
 use crate::gui::spatial_canvas::{FrontStyle, SpatialCanvas};
 use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
@@ -334,7 +334,8 @@ impl eframe::App for SpacetimeApp {
                         // does not, and in a rest frame said nothing the canvas's own banner does
                         // not either.
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("Frame of reference:").small().color(Theme::TEXT_MUTED));
+                            ui.label(egui::RichText::new("Frame of reference:").small().color(Theme::TEXT_MUTED))
+                                .on_hover_text(REST_FRAME_TIP);
                             egui::ComboBox::from_id_salt("frame_of_ref_foliation_combo")
                                 .selected_text(self.controls.frame_of_ref.label())
                                 .width(230.0)
