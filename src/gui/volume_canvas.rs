@@ -1451,7 +1451,8 @@ impl VolumeCanvas {
                              r: f64,
                              phi: f64,
                              fills: (Color32, Color32, Color32),
-                             ghost: bool| {
+                             ghost: bool,
+                             own_chart: bool| {
             let tetrad = Observer::raindrop_tetrad(metric, r);
             let apex = chart.world(metric, t_at, r, phi, t_scale);
             if !finite3(apex) {
@@ -1462,12 +1463,29 @@ impl VolumeCanvas {
             // that is `light_cone_generators`' own composition and the cone leans over as the
             // geometry says; in a rest frame the same null vectors stay null under a linear map,
             // so the rim comes out as the unit circle and the cone is at exactly 45 degrees.
+            //
+            // Where the 36 samples fall on the rim depends on the frame they are spread evenly
+            // in: seen from a frame boosted by gamma against it they bunch towards the boost, and
+            // at the gamma ~ 1e10 of a worldline frozen on r- the raindrop's samples bunch onto a
+            // single point of the rim, so the fan has length and no width. Sampling in the
+            // observer's own tetrad instead does not survive the arithmetic either: its legs are
+            // all of size gamma and nearly parallel, and building a null vector from them and
+            // mapping it back cancels the digits away. So the focus observer's own cone in their
+            // own chart is not computed at all. There the rim is (cos, sin) at height 1 by
+            // construction - the chart is the orthonormal frame the cone is 45 degrees in - which
+            // is the one fact the flat rest-frame diagram draws its cone from too.
             let mut future: Vec<[f64; 3]> = Vec::with_capacity(CONE_SAMPLES);
             for i in 0..CONE_SAMPLES {
                 let alpha = std::f64::consts::TAU * (i as f64) / (CONE_SAMPLES as f64);
-                let Some(d) = chart.direction(metric, r, phi, &tetrad.null_direction(alpha), t_scale)
-                else {
-                    return;
+                let d = if own_chart {
+                    [alpha.cos(), alpha.sin(), t_scale]
+                } else {
+                    let Some(d) =
+                        chart.direction(metric, r, phi, &tetrad.null_direction(alpha), t_scale)
+                    else {
+                        return;
+                    };
+                    d
                 };
                 let p = [
                     apex[0] + cone_span * d[0],
@@ -1521,10 +1539,21 @@ impl VolumeCanvas {
                 );
             }
         };
-        for (obs, _) in present.iter().copied() {
+        for (obs, who) in present.iter().copied() {
             let (future_fill, past_fill, edge) =
                 Theme::cone_colours_at(&obs.name, Theme::VOLUME_CONE_FILL_ALPHA);
-            push_cone(&mut buf, current_time, obs.r, obs.phi, (future_fill, past_fill, edge), false);
+            // The focus observer, drawn in their own chart, is the one cone that is exact by
+            // construction rather than by computation.
+            let own_chart = chart.is_local() && Some(who) == axis_who;
+            push_cone(
+                &mut buf,
+                current_time,
+                obs.r,
+                obs.phi,
+                (future_fill, past_fill, edge),
+                false,
+                own_chart,
+            );
             if self.show_ghost_cones {
                 let k_lo = t_min.ceil() as i64;
                 let k_hi = current_time.ceil() as i64 - 1;
@@ -1553,6 +1582,7 @@ impl VolumeCanvas {
                             edge.gamma_multiply(0.4),
                         ),
                         true,
+                        false,
                     );
                 }
             }
@@ -3384,6 +3414,19 @@ mod tests {
             assert!(
                 radius > 20.0,
                 "and big enough to see: the {half} rim reaches only {radius} px from the apex"
+            );
+            // And a rim, not a sliver. Seen in the app: sampled in the raindrop frame and mapped
+            // into Bob's, all 36 rim points aberrated onto one point at his gamma ~ 1e10, so the
+            // fan had length and no width. Sampled in his own tetrad they spread round the whole
+            // circle, and the rim's own extent has to say so in both directions of the screen.
+            let rim = egui::Rect::from_points(&points[1..]);
+            println!("{half} rim: radius {radius:.0} px, extent {:.0} x {:.0} px", rim.width(), rim.height());
+            assert!(
+                rim.width() > 0.8 * radius && rim.height() > 0.3 * radius,
+                "the {half} rim should spread round the cone, but its extent is {:.0} x {:.0} px \
+                 against a radius of {radius:.0} px",
+                rim.width(),
+                rim.height()
             );
         }
     }
