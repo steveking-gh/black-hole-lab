@@ -485,6 +485,23 @@ struct TelemetryLine {
     text: String,
     color: Color32,
     is_title: bool,
+    /// Set in the bold face, for a line that states a condition rather than reporting a number.
+    bold: bool,
+}
+
+/// The name the bold face is registered under in `main::install_fonts`. A line asked to be bold
+/// is set in it when it is registered and in the body face when it is not - a test context has
+/// no fonts at all, and a family egui has never heard of is a panic, not a fallback.
+pub const BOLD_FAMILY: &str = "bold";
+
+/// The bold face at `size`, or the body face where no bold one is registered.
+fn bold_font(painter: &egui::Painter, size: f32) -> egui::FontId {
+    let family = egui::FontFamily::Name(BOLD_FAMILY.into());
+    if painter.ctx().fonts(|f| f.families().contains(&family)) {
+        egui::FontId::new(size, family)
+    } else {
+        egui::FontId::monospace(size)
+    }
 }
 
 /// The box position the anchor asks for, before the user's drag offset is added.
@@ -530,7 +547,13 @@ fn telemetry_box_size(painter: &egui::Painter, lines: &[TelemetryLine], font_sca
     let max_text_w = lines
         .iter()
         .map(|line| {
-            let font = if line.is_title { font_title.clone() } else { font_body.clone() };
+            let font = if line.bold {
+                bold_font(painter, Theme::MIN_FONT_PT * font_scale)
+            } else if line.is_title {
+                font_title.clone()
+            } else {
+                font_body.clone()
+            };
             painter.layout_no_wrap(line.text.clone(), font, line.color).size().x
         })
         .fold(0.0_f32, f32::max);
@@ -566,7 +589,13 @@ fn paint_telemetry_box(
     );
 
     for (i, line) in lines.iter().enumerate() {
-        let font = if line.is_title { font_title.clone() } else { font_body.clone() };
+        let font = if line.bold {
+            bold_font(painter, Theme::MIN_FONT_PT * font_scale)
+        } else if line.is_title {
+            font_title.clone()
+        } else {
+            font_body.clone()
+        };
         painter.text(
             Pos2::new(badge_rect.left() + pad_x, badge_rect.top() + pad_y + line_spacing * i as f32),
             egui::Align2::LEFT_TOP,
@@ -682,9 +711,9 @@ fn horizon_box_lines(
     };
 
     vec![
-        TelemetryLine { text: title.to_string(), color, is_title: true },
-        TelemetryLine { text: kind, color: Theme::TEXT_BRIGHT, is_title: false },
-        TelemetryLine { text: detail, color: Theme::TEXT_BRIGHT, is_title: false },
+        TelemetryLine { text: title.to_string(), color, is_title: true, bold: false },
+        TelemetryLine { text: kind, color: Theme::TEXT_BRIGHT, is_title: false, bold: false },
+        TelemetryLine { text: detail, color: Theme::TEXT_BRIGHT, is_title: false, bold: false },
     ]
 }
 
@@ -780,19 +809,35 @@ fn telemetry_lines(
     };
 
     let mut lines = vec![
-        TelemetryLine { text: format!("{} [{}]", name, region_tag), color, is_title: true },
-        TelemetryLine { text: v_coord_str, color: Theme::TEXT_BRIGHT, is_title: false },
-        TelemetryLine { text: v_proper_str, color: Theme::TEXT_BRIGHT, is_title: false },
-        TelemetryLine { text: a_str, color: Color32::from_rgb(180, 240, 180), is_title: false },
-        TelemetryLine { text: tidal_str, color: Color32::from_rgb(255, 200, 100), is_title: false },
+        TelemetryLine { text: format!("{} [{}]", name, region_tag), color, is_title: true, bold: false },
+        TelemetryLine { text: v_coord_str, color: Theme::TEXT_BRIGHT, is_title: false, bold: false },
+        TelemetryLine { text: v_proper_str, color: Theme::TEXT_BRIGHT, is_title: false, bold: false },
+        TelemetryLine { text: a_str, color: Color32::from_rgb(180, 240, 180), is_title: false, bold: false },
+        TelemetryLine { text: tidal_str, color: Color32::from_rgb(255, 200, 100), is_title: false, bold: false },
         TelemetryLine {
             text: nu_str,
             color: if nu_ratio > 1.0 { Theme::BLUESHIFT_BLUE } else { Theme::TEXT_MUTED },
             is_title: false,
+            bold: false,
         },
     ];
     if let Some(constants_str) = constants_str {
-        lines.push(TelemetryLine { text: constants_str, color: Theme::TEXT_MUTED, is_title: false });
+        lines.push(TelemetryLine { text: constants_str, color: Theme::TEXT_MUTED, is_title: false, bold: false });
+    }
+    // A worldline frozen on the far branch of r- has not stopped: it is riding the horizon's own
+    // null generator, so on the equatorial view its marker creeps round the r- circle at Omega_-
+    // and in the volume it is a helix on the r- pipe, while the radius and the observer's own
+    // clock stand still. Drawn, that is exactly what an ordinary orbit looks like, and this is the
+    // line that tells the two apart. It is in the box rather than floating at the marker so that
+    // it goes where the box goes and nothing in the picture is painted over it, and it is bold and
+    // white because it is the one line here that is a state rather than a reading.
+    if obs.is_frozen() {
+        lines.push(TelemetryLine {
+            text: "Frozen: gliding on the r₋ generator at Ω₋".to_string(),
+            color: Color32::WHITE,
+            is_title: false,
+            bold: true,
+        });
     }
     lines
 }
@@ -2069,9 +2114,9 @@ Tick Enable Observer on Alice's or Bob's card",
                 horizon_box_lines(metric, focus_obs, &focus_obs.name, title, r_h, border)
             } else {
                 vec![
-                    TelemetryLine { text: title.to_string(), color: border, is_title: true },
-                    TelemetryLine { text: note.to_string(), color: Theme::TEXT_BRIGHT, is_title: false },
-                    TelemetryLine { text: detail, color: Theme::TEXT_BRIGHT, is_title: false },
+                    TelemetryLine { text: title.to_string(), color: border, is_title: true, bold: false },
+                    TelemetryLine { text: note.to_string(), color: Theme::TEXT_BRIGHT, is_title: false, bold: false },
+                    TelemetryLine { text: detail, color: Theme::TEXT_BRIGHT, is_title: false, bold: false },
                 ]
             };
             // `label_pos` is a corner of the text the box stands in for; make it the box's own.
@@ -2406,6 +2451,7 @@ mod tests {
             text: text.to_string(),
             color: Color32::WHITE,
             is_title: false,
+            bold: false,
         };
 
         let six = vec![line("a"), line("b"), line("c"), line("d"), line("e"), line("f")];
@@ -2933,5 +2979,37 @@ mod canvas_tests {
         assert_eq!(distant_clock_offset_label(SECONDS_PER_YEAR * 1e6), "+1e6 yr");
         // A step that lands between two units keeps one decimal rather than lying about being round.
         assert_eq!(distant_clock_offset_label(65.0 * 60.0), "+1.1 h");
+    }
+
+    #[test]
+    fn test_a_frozen_observers_box_carries_the_glide_in_bold_white() {
+        // The one line of an info box that is a state rather than a reading: while a worldline is
+        // frozen on the far branch of r- the box says so, in bold and in white, and while it is
+        // falling the box says nothing of the kind. It lives in the box rather than floating at
+        // the marker, so it goes where the box goes and nothing in either picture paints over it.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let frozen = Observer::frozen_bob(&metric);
+        let lines = telemetry_lines("Bob", Theme::BOB_COLOR, &frozen, &metric, false);
+        let glide = lines.last().expect("the box has lines");
+        assert!(glide.text.starts_with("Frozen"), "the last line is the glide: {}", glide.text);
+        assert!(glide.bold && glide.color == Color32::WHITE, "and it is bold and white");
+        assert_eq!(lines.iter().filter(|l| l.bold).count(), 1, "and it is the only bold line");
+
+        let mut falling = Observer::new_with_phi(
+            &metric,
+            "Bob",
+            0.0,
+            9.0,
+            0.0,
+            0.0,
+            crate::physics::observer::WorldlineParams::new(1.0, 2.2, false),
+        );
+        falling.step(&metric, 0.25, 0.25);
+        let lines = telemetry_lines("Bob", Theme::BOB_COLOR, &falling, &metric, false);
+        assert!(
+            lines.iter().all(|l| !l.bold && !l.text.starts_with("Frozen")),
+            "a falling observer's box has no such line: {:?}",
+            lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>()
+        );
     }
 }

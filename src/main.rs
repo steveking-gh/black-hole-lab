@@ -49,9 +49,19 @@ fn install_fonts(ctx: &egui::Context) {
         "dejavu".to_owned(),
         Arc::new(FontData::from_static(include_bytes!("../assets/fonts/DejaVuSans.ttf"))),
     );
+    fonts.font_data.insert(
+        "atkinson-bold".to_owned(),
+        Arc::new(FontData::from_static(include_bytes!("../assets/fonts/AtkinsonHyperlegible-Bold.ttf"))),
+    );
     let proportional = fonts.families.entry(FontFamily::Proportional).or_default();
     proportional.insert(0, "atkinson".to_owned());
     proportional.insert(1, "dejavu".to_owned());
     fonts.families.entry(FontFamily::Monospace).or_default().push("dejavu".to_owned());
+    // A bold face of its own, for the one line an info box has to shout: see
+    // `gui::spacetime_canvas::BOLD_FAMILY`. DejaVu behind it for the symbols the face lacks.
+    fonts.families.insert(
+        FontFamily::Name(crate::gui::spacetime_canvas::BOLD_FAMILY.into()),
+        vec!["atkinson-bold".to_owned(), "dejavu".to_owned()],
+    );
     ctx.set_fonts(fonts);
 }

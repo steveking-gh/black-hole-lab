@@ -2266,17 +2266,8 @@ impl VolumeCanvas {
             markers.push((who, at));
             // A worldline frozen on the far branch of r- has not stopped: it is riding the
             // horizon's own null generator, so in the volume it is a helix wound onto the r- pipe
-            // while the marker creeps round the ring at Omega_-. The label goes into the
-            // buffer rather than onto the painter so that it paints after every pipe, and no glass
-            // wall standing between the eye and the marker can swallow it.
-            if obs.is_frozen() {
-                buf.label(
-                    at + Vec2::new(6.0, -6.0),
-                    egui::Align2::LEFT_BOTTOM,
-                    "Frozen: gliding on the r₋ generator at Ω₋",
-                    Theme::TEXT_MUTED,
-                );
-            }
+            // while the marker creeps round the ring at Omega_-. The observer's own info box says
+            // so, in bold, while it is true; see `spacetime_canvas::telemetry_lines`.
         }
         // The observer the view is holding on to wears a ring, as on the equatorial view, so that a
         // picture which is no longer moving under a falling observer says which one it is holding.

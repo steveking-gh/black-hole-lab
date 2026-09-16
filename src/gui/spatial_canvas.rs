@@ -571,25 +571,14 @@ impl SpatialCanvas {
         // own null generator, so its marker goes on creeping round the r- circle at Omega_- while
         // the radius and the observer's own clock stand still. Drawn, that is a dot moving
         // steadily along a circle, which is exactly what an ordinary orbit looks like from here.
-        // The label is what tells the two apart, and it says which motion is left.
-        let mark_if_frozen = |obs: &Observer, at: Pos2| {
-            if obs.is_frozen() {
-                painter.text(
-                    Pos2::new(at.x + 6.0, at.y - 6.0),
-                    egui::Align2::LEFT_BOTTOM,
-                    "Frozen: gliding on the r₋ generator at Ω₋",
-                    egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
-                    Theme::TEXT_MUTED,
-                );
-            }
-        };
+        // What tells the two apart is the bold line the observer's own info box carries while
+        // they are frozen; see `telemetry_lines`.
         let mut alice_box: Option<Pos2> = None;
         if let Some(al) = alice
             && al.is_active
         {
             let al_pos = to_screen(al.cartesian_position(metric));
             painter.circle_filled(al_pos, Who::Alice.marker_radius(), Theme::ALICE_COLOR);
-            mark_if_frozen(al, al_pos);
             alice_box = Some(al_pos);
         }
         let bob_box = bob.as_ref().map(|b| {
@@ -599,7 +588,6 @@ impl SpatialCanvas {
             // liveries for no reason. The colour and the radius tell them apart.
             let bob_pos = to_screen(b.cartesian_position(metric));
             painter.circle_filled(bob_pos, Who::Bob.marker_radius(), Theme::BOB_COLOR);
-            mark_if_frozen(b, bob_pos);
             bob_pos
         });
 
