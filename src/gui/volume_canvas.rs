@@ -50,26 +50,37 @@ pub struct Camera {
     pub t_scale: f64,
 }
 
-/// The three camera positions the view offers as buttons.
+/// The camera positions the view offers as buttons.
 ///
 /// `Top` is the equatorial view seen from directly above, which is what the other canvas draws;
 /// `Side` is almost edge-on, where the floor collapses to a line and the picture is a (space, time)
-/// diagram; `ThreeQuarter` is the one that shows a cone as a cone.
+/// diagram; `EdgeOn` is exactly that, the eye in the floor looking along +y; `ThreeQuarter` is the
+/// one that shows a cone as a cone.
+///
+/// `EdgeOn` earns its place in a rest frame. There the drawn axes are (xi^1, xi^2, xi^0) and every
+/// surface r = const is a plane containing the xi^2 direction (the axial gauge of
+/// `Tetrad::from_four_velocity_axial` puts e2^r = 0), so a line of sight along xi^2 lies *in* every
+/// one of those planes and each collapses to a line whose slope is its causal character: the
+/// picture is the flat rest-frame diagram's (xi^1, xi^0) plane, with the light cone at exactly 45
+/// degrees either side of the axis. Any other pitch tilts the planes open into bands.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Preset {
     Top,
     Side,
+    EdgeOn,
     ThreeQuarter,
 }
 
 impl Preset {
     /// The (yaw, pitch) this preset puts the eye at. `Side` is not exactly edge-on: at pitch 0 the
     /// floor is a single line and every worldline crossing the hole lands on top of every other, so
-    /// it is tilted just far enough that near and far are distinguishable.
+    /// it is tilted just far enough that near and far are distinguishable. `EdgeOn` is pitch 0 on
+    /// purpose, for the reason the type's doc gives.
     fn angles(self) -> (f32, f32) {
         match self {
             Self::Top => (0.0, std::f32::consts::FRAC_PI_2),
             Self::Side => (0.0, 0.17),
+            Self::EdgeOn => (0.0, 0.0),
             Self::ThreeQuarter => (0.52, 0.61),
         }
     }
@@ -1408,7 +1419,15 @@ impl VolumeCanvas {
         // in the raindrop frame at the event, which exists at every radius including both horizons,
         // rather than in the observer's own: at u^t ~ 1e10 on the approach to r- an observer's own
         // frame crowds all 36 samples into one point of the rim and leaves the rest undrawn.
-        let cone_span = (self.time_window * 0.12).clamp(1e-4, 1.8);
+        //
+        // The span is a fraction of the time window, capped so that the straight generators stay
+        // a local statement - and capped again by the zoom, so that the rim is on the canvas. At
+        // the 500 000 px/M the automatic framing reaches on the approach to r-, a rim 1.7 M up the
+        // observer's own time is a million pixels off the screen, and what is left on it is the
+        // inside of the fill, a uniform tint no eye can tell from the background. A quarter of the
+        // canvas height keeps the cone a cone at every zoom.
+        let on_canvas = f64::from(rect.height()) * 0.25 / (f64::from(camera.scale) * t_scale);
+        let cone_span = (self.time_window * 0.12).min(on_canvas).clamp(1e-12, 1.8);
         let push_cone = |buf: &mut PrimBuffer,
                              t_at: f64,
                              r: f64,
@@ -1948,9 +1967,12 @@ impl VolumeCanvas {
                 ui.close();
             }
             ui.separator();
-            for (label, preset) in
-                [("Top", Preset::Top), ("Side", Preset::Side), ("3/4", Preset::ThreeQuarter)]
-            {
+            for (label, preset) in [
+                ("Top", Preset::Top),
+                ("Side", Preset::Side),
+                ("Edge-on", Preset::EdgeOn),
+                ("3/4", Preset::ThreeQuarter),
+            ] {
                 if ui.button(label).clicked() {
                     self.camera =
                         Camera::preset(preset, self.camera.scale, self.camera.pan, self.camera.t_scale);
@@ -1959,20 +1981,22 @@ impl VolumeCanvas {
             }
         });
 
-        // The same three camera positions as buttons, because a right-click menu is not
-        // discoverable by looking at a picture, and a fourth that undoes an exploration: Reset puts
-        // the zoom, the pan and the time scale back where `Camera::default` has them and leaves the
-        // eye where the user has moved it, which is the one part of the view they chose on purpose.
+        // The same camera positions as buttons, because a right-click menu is not discoverable by
+        // looking at a picture, and one more that undoes an exploration: Reset puts the zoom, the
+        // pan and the time scale back where `Camera::default` has them and leaves the eye where the
+        // user has moved it, which is the one part of the view they chose on purpose.
         let legend_font = egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale);
-        let button_size = Vec2::new(40.0 * font_scale, 16.0 * font_scale);
-        let gap = 4.0 * font_scale;
-        let strip = button_size.x * 4.0 + gap * 3.0;
-        for (i, (label, preset)) in [
+        let buttons = [
             ("Top", Some(Preset::Top)),
             ("Side", Some(Preset::Side)),
+            ("Edge", Some(Preset::EdgeOn)),
             ("3/4", Some(Preset::ThreeQuarter)),
             ("Reset", None),
-        ]
+        ];
+        let button_size = Vec2::new(40.0 * font_scale, 16.0 * font_scale);
+        let gap = 4.0 * font_scale;
+        let strip = button_size.x * buttons.len() as f32 + gap * (buttons.len() - 1) as f32;
+        for (i, (label, preset)) in buttons
         .into_iter()
         .enumerate()
         {
@@ -2102,7 +2126,13 @@ mod tests {
         /// rim points. The colour is Some only when every vertex carries the same one, which is
         /// what the pipes and the cones do; a pulse surface is shaded per vertex by the gain, so
         /// it is None there and `colours` is what a test about it has to read.
-        Mesh { vertices: usize, colour: Option<Color32>, colours: Vec<Color32>, first: Pos2 },
+        Mesh {
+            vertices: usize,
+            colour: Option<Color32>,
+            colours: Vec<Color32>,
+            first: Pos2,
+            points: Vec<Pos2>,
+        },
         /// A filled polygon or a stroked polyline. The fill is `Color32::TRANSPARENT` on a
         /// polyline and the stroke is None on a fill. `closed` tells a rim - a cone's, a ring's -
         /// from an open run of a worldline.
@@ -2128,11 +2158,13 @@ mod tests {
                         mesh.vertices.iter().all(|v| v.color == *c)
                     });
                     let colours = mesh.vertices.iter().map(|v| v.color).collect();
+                    let points = mesh.vertices.iter().map(|v| v.pos).collect();
                     out.push(Painted::Mesh {
                         vertices: mesh.vertices.len(),
                         colour,
                         colours,
                         first,
+                        points,
                     });
                 }
                 egui::Shape::Path(path) => {
@@ -3219,8 +3251,94 @@ mod tests {
     }
 
     #[test]
+    fn test_the_edge_on_preset_lays_every_tangent_plane_flat() {
+        // The reason the preset exists. In a rest frame every surface r = const is a plane
+        // containing the xi^2 direction, so an eye looking exactly along xi^2 - which is world +y -
+        // sees each of them as a line, and the picture is the flat rest-frame diagram's own
+        // (xi^1, xi^0) plane. That takes pitch exactly 0, which the snapped basis has to deliver
+        // as an exact +y line of sight, and it takes every point of such a plane to land on one
+        // screen line whatever its xi^2.
+        let cam = Camera::preset(Preset::EdgeOn, 48.0, Vec2::ZERO, 1.0);
+        let (right, up, d) = cam.basis();
+        assert_eq!(d, [0.0, 1.0, 0.0], "edge-on looks exactly along +y, the xi^2 axis");
+        assert_eq!(up, [0.0, 0.0, 1.0], "with the observer's time straight up the screen");
+        assert_eq!(right, [1.0, 0.0, 0.0], "and xi^1 across it");
+
+        // A plane n . xi = d with n_2 = 0, tilted at some slope in the (xi^1, xi^0) plane, as
+        // every r = const plane of the axial gauge is.
+        let plane = local_plane([0.8, 0.6, 0.0], 0.7).expect("a plane with a normal");
+        let at = |s: f64, t: f64| -> [f64; 3] {
+            core::array::from_fn(|i| plane.nearest[i] + 3.0 * (s * plane.legs[0][i] + t * plane.legs[1][i]))
+        };
+        let xi_to_world = |xi: [f64; 3]| [xi[1], xi[2], xi[0]];
+        let samples: Vec<Pos2> = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (-1.0, 1.0), (1.0, -1.0)]
+            .into_iter()
+            .map(|(s, t)| cam.project(CENTRE, xi_to_world(at(s, t))).0)
+            .collect();
+        let (a, b) = (samples[0], samples[1]);
+        let dir = if a.distance(b) > 1e-3 { b - a } else { samples[2] - a };
+        for p in &samples {
+            let off = ((p.x - a.x) * dir.y - (p.y - a.y) * dir.x).abs() / dir.length();
+            assert!(
+                off < 1e-3,
+                "edge-on, every point of a tangent plane lies on one screen line, but {p:?} is \
+                 {off} px off the line through {a:?} along {dir:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_the_cone_stays_on_the_canvas_at_the_framing_zoom() {
+        // Seen in the app: with Bob gliding on r- in his own frame the automatic framing runs the
+        // zoom up to its ceiling, and a cone whose rim is a fixed 1.7 M of his time away was a
+        // million pixels off the canvas - the whole picture was the inside of its fill, and the
+        // cone could not be seen at all. The span is now capped by the zoom, so both halves' rims
+        // sit inside the canvas at whatever scale the framing has chosen.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let frozen = Observer::frozen_bob(&metric);
+        let mut canvas = VolumeCanvas {
+            camera: Camera::preset(Preset::ThreeQuarter, 48.0, Vec2::ZERO, 1.0),
+            keep_surface_framed: true,
+            show_past_cone: false,
+            show_pulse_surfaces: false,
+            ..Default::default()
+        };
+        let shapes = volume_frame_on(&mut canvas, &metric, Some(&frozen), ReferenceFrame::Bob, false);
+        println!("framing zoom for the frozen Bob: {} px/M", canvas.camera.scale);
+        assert!(canvas.camera.scale > 1000.0, "the framing has zoomed in hard on the frozen Bob");
+        let (future_fill, past_fill, _) =
+            Theme::cone_colours_at("Bob", Theme::VOLUME_CONE_FILL_ALPHA);
+        let canvas_rect = egui::Rect::from_min_size(Pos2::ZERO, egui::Vec2::new(800.0, 700.0));
+        for (half, fill) in [("future", future_fill), ("past", past_fill)] {
+            let points = shapes
+                .iter()
+                .find_map(|s| match s {
+                    Painted::Mesh { colour: Some(c), points, vertices, .. }
+                        if *c == fill && *vertices == CONE_SAMPLES + 1 =>
+                    {
+                        Some(points.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("the {half} half of Bob's cone is painted"));
+            let outside = points.iter().filter(|p| !canvas_rect.contains(**p)).count();
+            assert_eq!(
+                outside, 0,
+                "the {half} half's rim should be on the canvas at {} px/M, but {outside} of its \
+                 vertices are off it",
+                canvas.camera.scale
+            );
+            let radius = points[1..].iter().map(|p| p.distance(points[0])).fold(0.0f32, f32::max);
+            assert!(
+                radius > 20.0,
+                "and big enough to see: the {half} rim reaches only {radius} px from the apex"
+            );
+        }
+    }
+
+    #[test]
     fn test_the_side_view_puts_later_times_up_the_screen() {
-        // Edge-on exactly, which no preset is: the point is that up the screen is +t there.
+        // Edge-on exactly, as the `EdgeOn` preset is: the point is that up the screen is +t there.
         let edge = Camera { yaw: 0.0, pitch: 0.0, scale: 48.0, pan: Vec2::ZERO, t_scale: 1.0 };
         let (at, _) = edge.project(CENTRE, [0.0, 0.0, 1.0]);
         assert!(
