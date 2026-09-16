@@ -33,7 +33,10 @@ pub struct GeodesicState {
 
 /// Radius at which integration stops (ring singularity at r = 0 on the equator).
 pub const R_STOP: f64 = 0.02;
-const R_FLOOR: f64 = 0.01;
+/// Radius the right-hand sides evaluate the geometry at when the state has dipped below it: the
+/// metric and the connection are read at `r.max(R_FLOOR)` so that a step that has just overshot
+/// the ring is still finite arithmetic rather than a division by zero.
+pub(crate) const R_FLOOR: f64 = 0.01;
 
 /// u^t past which the worldline is declared frozen: a hundredfold below the largest u^t at which
 /// the integration was *measured* to still be faithful.
@@ -130,9 +133,14 @@ fn rhs_coord_time(metric: &KerrSchild, y: &StateVec) -> StateVec {
 /// Gamma^mu_{alpha beta} ~ 1/r^3, so the geodesic equation stiffens by orders of magnitude over
 /// the last decade of radius, and it stiffens again wherever u^t runs away (an approach to r-
 /// that this chart cannot follow). Outside a few tenths of M this cap never binds.
-fn velocity_step_cap(k1: &StateVec, u: &[f64; 3]) -> f64 {
+///
+/// It is stated in terms of the acceleration rather than of a whole state vector because the same
+/// rule governs every curve this crate integrates, timelike or spacelike: `fermi::shoot` fires
+/// spacelike geodesics through the same connection and stiffens in exactly the same places, so it
+/// caps its own step with this function rather than with a second copy of the rule.
+pub(crate) fn velocity_step_cap(accel: &[f64; 3], u: &[f64; 3]) -> f64 {
     let scale = u.iter().fold(1.0f64, |m, v| m.max(v.abs()));
-    let rate = k1[4].abs().max(k1[5].abs()).max(k1[6].abs());
+    let rate = accel[0].abs().max(accel[1].abs()).max(accel[2].abs());
     if rate > 0.0 {
         U_STEP_FRACTION * scale / rate
     } else {
@@ -388,7 +396,7 @@ impl GeodesicState {
             let h = remaining.min(
                 0.05f64
                     .min((0.008 * self.r).max(1e-4))
-                    .min(velocity_step_cap(&k1, &self.u))
+                    .min(velocity_step_cap(&[k1[4], k1[5], k1[6]], &self.u))
                     .max(1e-7),
             );
 
