@@ -85,7 +85,7 @@ pub struct SpatialCanvas {
     ///
     /// It is a view setting, held here with the pan and the zoom rather than on the panel: it says
     /// where the canvas is looking and nothing about the physics, and like the zoom it survives a
-    /// Reset. It is independent of the Frame of Reference selector, which centres the view on
+    /// Reset. It is independent of the View selector, which centres the view on
     /// whoever's rest frame is being drawn; this one can keep Bob in the middle of a view drawn in
     /// the global foliation, which is the case the selector cannot express. Where the two disagree
     /// this one wins, being the more particular request, and it falls back to the selector's
@@ -207,7 +207,7 @@ impl SpatialCanvas {
     ///
     /// Following an observer who is not in the simulation is following nobody, so the view stays on
     /// the hole rather than on a remembered position. A standing request to keep one of them
-    /// centred is answered first, and the Frame of Reference selector's own tracking is what is
+    /// centred is answered first, and the View selector's own tracking is what is
     /// left when there is no such request or the observer it names has gone.
     fn followed<'a>(
         &self,
@@ -308,7 +308,7 @@ impl SpatialCanvas {
         let to_offset = |(x, y): (f64, f64)| Vec2::new(x as f32 * zoom, -(y as f32) * zoom);
         // Following an observer who is not in the simulation is following nobody, so the view
         // stays on the hole rather than jumping to a remembered position. A standing request to
-        // keep one of them centred is answered first, and the Frame of Reference selector's own
+        // keep one of them centred is answered first, and the View selector's own
         // tracking is what is left when there is no such request or the observer it names has
         // gone.
         let followed = self.followed(bob, alice, frame_of_ref);
@@ -881,7 +881,7 @@ pub(crate) fn annulus_mesh(center: Pos2, r_in: f32, r_out: f32, fill: Color32) -
 }
 
 /// Which observer a canvas is anchored to, given a standing request to keep one centred and the
-/// Frame of Reference selector: the rule both the equatorial view and the volume view follow.
+/// View selector: the rule both the equatorial view and the volume view follow.
 ///
 /// Following an observer who is not in the simulation is following nobody, so the caller is handed
 /// None and the view stays on the hole rather than on a remembered position. A standing request is
@@ -902,7 +902,9 @@ pub(crate) fn frame_focus<'a>(
     centred.and_then(observer).or(match frame {
         ReferenceFrame::Bob => bob,
         ReferenceFrame::Alice => alice,
-        ReferenceFrame::DistantObserver => None,
+        // Neither chart of the global foliation is drawn for anybody, so neither names a focus
+        // observer of its own: what is left is whatever standing request there is, or nobody.
+        ReferenceFrame::DistantObserver | ReferenceFrame::GlobalVolume => None,
     })
 }
 
@@ -1711,7 +1713,7 @@ mod tests {
         // with it on, the observer holds still in the middle and the hole - and with it every
         // horizon, the ring and everything else drawn in the geometry - slides past instead. The
         // two are the same picture from a different place, which is the whole content of "keep
-        // this one centred", and it is independent of the Frame of Reference selector: this is
+        // this one centred", and it is independent of the View selector: this is
         // drawn in the global foliation throughout.
         let metric = KerrSchild::new(1.0, 0.65);
         let ctx = egui::Context::default();

@@ -44,23 +44,35 @@ pub enum ReferenceFrame {
     DistantObserver,
     Bob,
     Alice,
+    /// The same global Kerr-Schild foliation, drawn as a 2D+1 volume: the equatorial plane laid out
+    /// as a floor at the present with coordinate time standing up out of it.
+    ///
+    /// It sits beside the other three because it is a choice of *chart*, which is what that
+    /// selector has always been choosing. It is not a frame of reference and is never drawn in
+    /// anybody's rest frame: the picture it gives is the same for everybody, which is what makes it
+    /// the right place to read a horizon off. So everything that names a focus observer - whose
+    /// watch Watch mode keeps, whose rest frame the flat diagram is drawn in - treats it exactly as
+    /// `DistantObserver`.
+    GlobalVolume,
 }
 
 impl ReferenceFrame {
     pub fn label(&self) -> &'static str {
         match self {
-            Self::DistantObserver => "Global Foliation (Kerr-Schild)",
-            Self::Bob => "Bob's Rest Frame (45° Cones)",
-            Self::Alice => "Alice's Rest Frame (45° Cones)",
+            Self::DistantObserver => "Global Foliation Chart 1D+1 (Kerr-Schild)",
+            Self::Bob => "Bob's Frame Of Reference 1D+1",
+            Self::Alice => "Alice's Frame Of Reference 1D+1",
+            Self::GlobalVolume => "Global Foliation Chart 2D+1 (Kerr-Schild)",
         }
     }
 
     /// Whose watch Watch step mode is keeping: the observer this frame is drawn for, by name.
     /// The distant observer has no worldline in the simulation, and their watch is the chart's own
-    /// Killing time, so Watch mode and Time mode are the same thing there.
+    /// Killing time, so Watch mode and Time mode are the same thing there - and the volume is that
+    /// same chart, so it answers the same way.
     pub fn watch_owner(&self) -> &'static str {
         match self {
-            Self::DistantObserver => "The distant observer",
+            Self::DistantObserver | Self::GlobalVolume => "The distant observer",
             Self::Bob => "Bob",
             Self::Alice => "Alice",
         }
@@ -87,7 +99,7 @@ pub struct SignalViews<'a> {
 pub enum StepMode {
     Time,     // Fixed Δt
     Distance, // Fixed Δr (km)
-    /// Fixed Δτ on the focus observer's own watch: the step the *Frame of Reference* selector's
+    /// Fixed Δτ on the focus observer's own watch: the step the *View* selector's
     /// observer measures, converted to the coordinate time the integrators run on by their own
     /// u^t. See `AppControls::watch_step`.
     Watch,
@@ -295,7 +307,7 @@ pub struct AppControls {
     pub show_theory_modal: bool,
     pub use_km: bool,
     pub frame_of_ref: ReferenceFrame,
-    /// Whether the frame-of-reference view draws the distant clock's own slices: the surfaces
+    /// Whether the view in the foliation column draws the distant clock's own moments: the surfaces
     /// t = const of the chart's Killing time, one line per round unit of the distant clock,
     /// labelled with its offset from the observer's now.
     ///
@@ -303,15 +315,6 @@ pub struct AppControls {
     /// view setting and nothing else: the lines are read off `LocalFrame::surface_t_const`, which
     /// takes only the observer's tetrad, so turning it off removes drawing and no physics.
     pub show_distant_clock_grid: bool,
-    /// Whether the left column draws the 2D+1 volume in place of the (t, r) diagram: the same
-    /// foliation, or the same rest frame, with the equatorial plane laid out as a floor at the
-    /// present and coordinate time standing up out of it, so that a light cone can be seen tipping
-    /// over rather than described.
-    ///
-    /// Default off, because the flat diagram is the one every explanation in the app is written
-    /// against. Like every control it is a view setting and is untouched by Reset: it chooses which
-    /// picture of the run is drawn and no part of what is being drawn.
-    pub show_volume: bool,
     pub font_scale: f32,
     /// Standing request from the panel for the (t, r) view to go back to where it starts.
     ///
@@ -354,7 +357,6 @@ impl Default for AppControls {
             use_km: true,
             frame_of_ref: ReferenceFrame::DistantObserver,
             show_distant_clock_grid: true,
-            show_volume: false,
             font_scale: 1.0,
             view_reset_requested: false,
         }
@@ -436,8 +438,12 @@ const HIDE_WOUND_TIP: &str = "Whether the pieces of a front whose two rays have 
 /// The hover tip on the Enable Observer checkbox, the same on both cards.
 pub const DISTANT_CLOCK_GRID_TIP: &str = "Whether the rest-frame view draws the distant clock's own moments. The chart's time t is a Killing time: a difference of t along any static worldline is exactly the proper time a clock at rest at infinity records between the same two moments, so the surfaces t = const are that far-away clock's tick marks, carried inward. Ticked, they are drawn as a muted grid across the observer's local frame, one line per round unit of distant time — 50 µs, 200 ms, 30 min, 5e6 yr — each labelled with its offset from the observer's now, and the legend says which unit it is. The unit is chosen from the observer's u^t and the pixel scale of the view and from nothing else, so as the outside clock runs faster and faster on their screen the grid climbs the ladder from milliseconds through seconds and years rather than collapsing into a solid block. Where each line meets the worldline is exact, not linearised: consecutive lines Δt apart cross it Δt/u^t of the observer's own proper time apart, which is the whole content of the statement that the distant clock runs fast by u^t. Every one of these lines is flatter than 45°, in every region, because dt is timelike everywhere in this chart (g^tt = −(1 + 2M/r) < 0), so unlike a surface r = const they never turn null at a horizon and the grid reads the same way on both sides of r₊. Going through r₊ on the raindrop, or crossing the near branch of r₋, u^t stays finite and the spacing barely moves. Aimed at the far branch of r₋ instead — E − Ω₋L < 0, which at a = 0.90 is where E = 1, L = 2.2 goes — u^t grows like exp(κ₋t) and the lines pile up on the worldline without limit: infinitely many of the distant clock's moments are crossed in a finite amount of the observer's own time, and the grid shows that as the lines bunching against the origin. What it does not show is anything the observer sees. A slice of constant t is a simultaneity convention, a choice of which far-away events to call “now”, and no measurement singles it out; what is actually seen is the light, and the ingoing blueshift ν_in/ν_∞ in the telemetry box diverges on that same approach at the same rate — near the far branch it is u^t times r₋²/(r₋² + a²). The lines are a label on the geometry; the blueshift is the observation. It is a view setting and is kept across ⏮ Reset, as every control on this panel is.";
 
-/// The hover tip on the 2D+1 volume checkbox, which swaps the (t, r) diagram for the volume view.
-pub const VOLUME_VIEW_TIP: &str = "Whether this column draws the 2D+1 volume instead of the (t, r) diagram. The volume is the equatorial plane laid out as a floor at the present with ingoing Kerr-Schild time standing up out of it, so a worldline is a curve rising through the picture, the horizons are pipes of constant r, and the cone at each observer’s event is built from the exact null generators of the metric there rather than from a 45° stencil — which is what lets the eye watch the cones tip over as they fall, the thing the flat diagram can only say in words. It draws the same foliation, or the same rest frame, that the selector to the left names: drag to pan, shift-drag to orbit, the wheel to zoom, ctrl-wheel to zoom twenty notches at a time, shift-wheel for the vertical time scale, and right-click for the menu of camera presets and of who to keep centred.";
+/// The hover tip on the Global Foliation Chart 2D+1 item of the View selector.
+/// The hover text of the View selector's caption: what the four choices are, and the one
+/// distinction that orders them.
+pub const VIEW_TIP: &str = "Which picture of the spacetime the left column draws. The first two are charts of the global Kerr-Schild foliation - the same picture for everybody, as a (t, r) diagram and as a 2D+1 volume - and the last two are one observer's own frame of reference, drawn as a (t, r) diagram about their worldline. A chart places every event where the coordinates put it and makes no claim about distance; a frame of reference is exact at the observer's own event and linearised away from it, which is why there is no 2D+1 frame of reference: at the boosts of a late fall the region it can speak for is smaller than the picture.";
+
+pub const GLOBAL_VOLUME_TIP: &str ="The same global Kerr-Schild foliation the item above it names, drawn as a volume rather than as a (t, r) diagram: the equatorial plane laid out as a floor at the present with ingoing Kerr-Schild time standing up out of it, so a worldline is a curve rising through the picture, the horizons are pipes of constant r, and the cone at each observer’s event is built from the exact null generators of the metric there rather than from a 45° stencil — which is what lets the eye watch the cones tip over as they fall, the thing the flat diagram can only say in words. It is a chart and not a frame of reference: like the foliation above it, it is the same picture for everybody, and it is never drawn in anybody's rest frame. Drag to pan, shift-drag to orbit, the wheel to zoom, ctrl-wheel to zoom twenty notches at a time, shift-wheel for the vertical time scale, and right-click for the menu of camera presets and of who to keep centred.";
 
 const ENABLE_TIP: &str = "Whether this observer is in the simulation at all. Unticked, they are not merely hidden: there is no worldline to step, nothing of them in either view, no telemetry box, no light going out and no arrival coming in, and their transmission is dropped. The other observer's transmission goes on exactly as before — the light already in flight does not care whether anybody is left to hear it — but records no reception, because there is nobody there to make one. Ticking the box back on drops this observer afresh from this card, at r = 4.5M on the clock's current reading, hovering there until their own Release Delay has passed; the rest of the run is left alone, so the other observer is not restarted.";
 
@@ -975,7 +981,7 @@ impl AppControls {
     ///
     /// The conversion is exact and is one number: dτ/dt = 1/u^t along their worldline, so a step
     /// of Δτ of their watch is u^t Δτ of the chart's time. The focus observer is whoever the
-    /// Frame-of-Reference selector names, because that is whose rest frame is being drawn and
+    /// View selector names, because that is whose rest frame is being drawn and
     /// whose cone is the 45 degree one; the distant observer has no worldline here and their watch
     /// *is* t, so Watch mode is Time mode for them and `dt = d_tau` at u^t = 1. A focus observer
     /// who is not in the simulation, or whose u^t is not a finite positive number, falls back the
@@ -993,7 +999,7 @@ impl AppControls {
         d_tau: f64,
     ) -> WatchStep {
         let focus = match self.frame_of_ref {
-            ReferenceFrame::DistantObserver => None,
+            ReferenceFrame::DistantObserver | ReferenceFrame::GlobalVolume => None,
             ReferenceFrame::Bob => bob,
             ReferenceFrame::Alice => alice,
         };
@@ -1216,17 +1222,17 @@ impl AppControls {
                     )
                     .on_hover_text(format!(
                         "How much proper time one step is worth on {}'s own watch - the observer \
-                         the Frame of Reference selector names, whose rest frame the left column \
+                         the View selector names, whose rest frame the left column \
                          is drawn in. The step the app actually takes is Δt = u^t Δτ of \
                          coordinate time, u^t being their time dilation at the event they are at, \
                          so playback runs at the requested rate on their watch rather than on the \
                          distant clock. {}",
                         self.frame_of_ref.watch_owner(),
                         match self.frame_of_ref {
-                            ReferenceFrame::DistantObserver =>
+                            ReferenceFrame::DistantObserver | ReferenceFrame::GlobalVolume =>
                                 "The distant observer's watch is the chart's own Killing time t, \
                                  so here Watch mode is Time mode: u^t = 1 and Δt = Δτ.",
-                            _ =>
+                            ReferenceFrame::Bob | ReferenceFrame::Alice =>
                                 "Deep in the well one tick of that watch is a great many M of the \
                                  outside future, and on the far branch of r₋ it is about 1e10 of \
                                  them; the step is capped at 2 M per frame and the line under the \

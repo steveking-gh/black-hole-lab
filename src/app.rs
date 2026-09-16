@@ -1,6 +1,6 @@
 use crate::gui::cauchy_effects::CauchyEffects;
 use crate::gui::controls::{
-    AppControls, DISTANT_CLOCK_GRID_TIP, ReferenceFrame, SignalViews, StepMode, VOLUME_VIEW_TIP,
+    AppControls, DISTANT_CLOCK_GRID_TIP, GLOBAL_VOLUME_TIP, ReferenceFrame, SignalViews, StepMode, VIEW_TIP,
 };
 use crate::gui::spacetime_canvas::{KEEP_SURFACE_FRAMED_TIP, REST_FRAME_TIP, SpacetimeCanvas};
 use crate::gui::spatial_canvas::{FrontStyle, SpatialCanvas};
@@ -11,9 +11,9 @@ use crate::physics::observer::{Observer, ObserverPair};
 use crate::physics::wavefront::{Endpoint, SignalField, SignalPair};
 use std::time::Instant;
 
-/// The height of the frame-of-reference row that heads the foliation column: one combo box and one
-/// checkbox, plus the spacing egui puts between rows. It is taken out of the canvas height so that
-/// the row is added above the picture rather than pushing the foot of it out of the window.
+/// The height of the View row that heads the foliation column: one combo box and one checkbox,
+/// plus the spacing egui puts between rows. It is taken out of the canvas height so that the row is
+/// added above the picture rather than pushing the foot of it out of the window.
 const FRAME_ROW_HEIGHT: f32 = 26.0;
 
 pub struct SpacetimeApp {
@@ -25,8 +25,8 @@ pub struct SpacetimeApp {
     alice: Option<Observer>,
     spacetime_canvas: SpacetimeCanvas,
     /// The same foliation drawn as a volume: the equatorial plane as a floor and coordinate time
-    /// standing up out of it. It stands in for `spacetime_canvas` in the left column while the
-    /// "2D+1 volume" box is ticked, and keeps its own camera, window and telemetry boxes while it
+    /// standing up out of it. It stands in for `spacetime_canvas` in the left column while the View
+    /// selector names `GlobalVolume`, and keeps its own camera, window and telemetry boxes while it
     /// is not being drawn, so that switching back and forth does not throw the view away.
     volume_canvas: VolumeCanvas,
     spatial_canvas: SpatialCanvas,
@@ -382,51 +382,72 @@ impl eframe::App for SpacetimeApp {
                     egui::Vec2::new(left_width, avail.y),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
-                        // Whose frame the diagram below is drawn in. It sits on the view it
-                        // governs rather than on the control panel: every other thing the choice
-                        // changes - the axes, the light cones, the clock grid - is in this column.
-                        // It is also the only title this column has. There used to be a row under
-                        // it naming the frame again in cyan, which said nothing the selected item
-                        // does not, and in a rest frame said nothing the canvas's own banner does
-                        // not either.
+                        // Which picture of the spacetime this column draws: one of the two charts
+                        // of the global foliation, or one observer's rest frame. It sits on the
+                        // view it governs rather than on the control panel: every other thing the
+                        // choice changes - the axes, the light cones, the clock grid - is in this
+                        // column. It is also the only title this column has. There used to be a row
+                        // under it naming the frame again in cyan, which said nothing the selected
+                        // item does not, and in a rest frame said nothing the canvas's own banner
+                        // does not either.
+                        //
+                        // The two global charts come first and the two rest frames after them,
+                        // because the volume is a chart of the same foliation as the item above it
+                        // and not a frame of reference at all.
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("Frame of reference:").small().color(Theme::TEXT_MUTED))
-                                .on_hover_text(REST_FRAME_TIP);
+                            ui.label(egui::RichText::new("View:").small().color(Theme::TEXT_MUTED))
+                                .on_hover_text(VIEW_TIP);
                             egui::ComboBox::from_id_salt("frame_of_ref_foliation_combo")
                                 .selected_text(self.controls.frame_of_ref.label())
-                                .width(230.0)
+                                // Wide enough for the longest label, "Global Foliation Chart 1D+1
+                                // (Kerr-Schild)", so the selected item is never cut off.
+                                .width(290.0)
                                 .show_ui(ui, |ui| {
-                                    for frame in [ReferenceFrame::DistantObserver, ReferenceFrame::Bob, ReferenceFrame::Alice] {
-                                        ui.selectable_value(&mut self.controls.frame_of_ref, frame, frame.label());
+                                    for frame in [
+                                        ReferenceFrame::DistantObserver,
+                                        ReferenceFrame::GlobalVolume,
+                                        ReferenceFrame::Bob,
+                                        ReferenceFrame::Alice,
+                                    ] {
+                                        let item = ui.selectable_value(
+                                            &mut self.controls.frame_of_ref,
+                                            frame,
+                                            frame.label(),
+                                        );
+                                        match frame {
+                                            ReferenceFrame::GlobalVolume => {
+                                                item.on_hover_text(GLOBAL_VOLUME_TIP);
+                                            }
+                                            ReferenceFrame::Bob | ReferenceFrame::Alice => {
+                                                item.on_hover_text(REST_FRAME_TIP);
+                                            }
+                                            ReferenceFrame::DistantObserver => {}
+                                        }
                                     }
                                 });
                             ui.checkbox(&mut self.controls.show_distant_clock_grid, "Distant clock grid")
                                 .on_hover_text(DISTANT_CLOCK_GRID_TIP);
-                            ui.checkbox(&mut self.controls.show_volume, "2D+1 volume")
-                                .on_hover_text(VOLUME_VIEW_TIP);
-                            // Only the rest frames have a window of their own to keep; the
-                            // foliation view's zoom is a window on r that the user pans, and the
-                            // volume's global chart is a window on x and y with nobody at its
-                            // origin, so in `DistantObserver` there is nothing to frame and the box
-                            // is not offered. Both pictures of a rest frame do have one, and each
-                            // keeps its own flag: the flat diagram's window on xi, and the volume's
-                            // pixels per M. (In the volume's global chart the flag is carried and
-                            // does nothing.)
-                            if self.controls.frame_of_ref != ReferenceFrame::DistantObserver {
-                                let framed = if self.controls.show_volume {
-                                    &mut self.volume_canvas.keep_surface_framed
-                                } else {
-                                    &mut self.spacetime_canvas.keep_surface_framed
-                                };
-                                ui.checkbox(framed, "Auto-zoom")
-                                    .on_hover_text(KEEP_SURFACE_FRAMED_TIP);
+                            // Only the rest frames have a window of their own to keep: the surface
+                            // the observer is about to reach, kept on the canvas. Either global
+                            // chart's zoom is a window the user pans - on r in the (t, r) diagram,
+                            // on x and y in the volume - with nobody at its origin and nothing
+                            // ahead of anybody in particular to frame, so there the box is not
+                            // offered at all.
+                            if matches!(
+                                self.controls.frame_of_ref,
+                                ReferenceFrame::Bob | ReferenceFrame::Alice
+                            ) {
+                                ui.checkbox(
+                                    &mut self.spacetime_canvas.keep_surface_framed,
+                                    "Auto-zoom",
+                                )
+                                .on_hover_text(KEEP_SURFACE_FRAMED_TIP);
                             }
                         });
-                        // One picture of the foliation or the rest frame at a time: the volume
-                        // replaces the flat diagram rather than being squeezed in beside it, since
-                        // they are the same geometry drawn two ways and the column is only wide
-                        // enough for one of them to be read.
-                        if self.controls.show_volume {
+                        // One picture at a time: the volume replaces the flat diagram rather than
+                        // being squeezed in beside it, since they are two charts of the same
+                        // foliation and the column is only wide enough for one of them to be read.
+                        if self.controls.frame_of_ref == ReferenceFrame::GlobalVolume {
                             self.volume_canvas.render(
                                 ui,
                                 &self.metric,
@@ -435,7 +456,6 @@ impl eframe::App for SpacetimeApp {
                                 self.current_time,
                                 canvas_height,
                                 self.controls.use_km,
-                                self.controls.frame_of_ref,
                                 self.controls.font_scale,
                                 SignalViews { alice: &self.signal, bob: &self.bob_signal },
                                 self.controls.show_distant_clock_grid,
@@ -746,29 +766,33 @@ mod tests {
     }
 
     #[test]
-    fn test_the_volume_checkbox_swaps_the_left_canvas() {
-        // The two pictures of the foliation are alternatives rather than neighbours: the column is
-        // only wide enough for one of them to be read, so ticking the box puts the volume where the
-        // (t, r) diagram was rather than beside it. The right-hand column is not part of the
-        // choice and is drawn either way, which is what the third assertion of each pair holds on
-        // to - otherwise "the diagram is gone" would be satisfied by a frame that drew nothing.
+    fn test_choosing_the_2d_plus_1_chart_swaps_the_left_canvas() {
+        // The two charts of the foliation are alternatives rather than neighbours: the column is
+        // only wide enough for one of them to be read, so choosing the 2D+1 chart puts the volume
+        // where the (t, r) diagram was rather than beside it. The right-hand column is not part of
+        // the choice and is drawn either way, which is what the third assertion of each pair holds
+        // on to - otherwise "the diagram is gone" would be satisfied by a frame that drew nothing.
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
-        assert!(!app.controls.show_volume, "the app opens on the flat diagram");
+        assert_eq!(
+            app.controls.frame_of_ref,
+            ReferenceFrame::DistantObserver,
+            "the app opens on the flat diagram"
+        );
 
         let flat = painted_text(&mut app);
         assert!(
             flat.contains("Coordinate Time t"),
-            "the (t, r) diagram's own time axis should be drawn with the box unticked"
+            "the (t, r) diagram's own time axis should be drawn in the 1D+1 chart"
         );
         assert!(!flat.contains("2D+1 Volume"), "and the volume view should not be");
         assert!(flat.contains("Spatial x"), "the equatorial view is drawn either way");
 
-        app.controls.show_volume = true;
+        app.controls.frame_of_ref = ReferenceFrame::GlobalVolume;
         let volume = painted_text(&mut app);
         assert!(
             volume.contains("2D+1 Volume"),
-            "ticking the box should put the volume view in the left column"
+            "choosing the 2D+1 chart should put the volume view in the left column"
         );
         assert!(
             !volume.contains("Coordinate Time t"),
@@ -778,40 +802,36 @@ mod tests {
     }
 
     #[test]
-    fn test_auto_zoom_is_offered_for_the_volume_in_a_rest_frame() {
-        // Both pictures of a rest frame have a zoom that can be derived from the geometry rather
-        // than chosen - the surface the observer is about to reach, kept on the canvas - so the box
-        // that asks for it belongs to the rest frame and not to the flat diagram. It stays out of
-        // the distant observer's foliation, where there is nobody at the origin and nothing ahead
-        // of anybody in particular to frame.
+    fn test_auto_zoom_is_offered_only_in_a_rest_frame() {
+        // A rest frame has a zoom that can be derived from the geometry rather than chosen - the
+        // surface the observer is about to reach, kept on the canvas - so the box that asks for it
+        // belongs to the rest frame. Neither chart of the global foliation has one: there is nobody
+        // at the origin of either and nothing ahead of anybody in particular to frame.
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
 
-        for volume in [false, true] {
-            app.controls.show_volume = volume;
-
-            app.controls.frame_of_ref = ReferenceFrame::DistantObserver;
+        for frame in [ReferenceFrame::DistantObserver, ReferenceFrame::GlobalVolume] {
+            app.controls.frame_of_ref = frame;
             let text = painted_text(&mut app);
             assert!(
                 !text.contains("Auto-zoom"),
-                "the foliation has nothing to frame, volume {volume}"
-            );
-
-            app.controls.frame_of_ref = ReferenceFrame::Bob;
-            let text = painted_text(&mut app);
-            assert!(
-                text.contains("Auto-zoom"),
-                "Bob's rest frame is offered the automatic framing, volume {volume}"
+                "the global foliation has nothing to frame, in {frame:?}"
             );
         }
 
-        // And it is the volume's own flag the box is wired to when the volume is the picture on
-        // screen: the two canvases zoom in different units and each keeps its own.
-        app.volume_canvas.keep_surface_framed = false;
+        for frame in [ReferenceFrame::Bob, ReferenceFrame::Alice] {
+            app.controls.frame_of_ref = frame;
+            let text = painted_text(&mut app);
+            assert!(
+                text.contains("Auto-zoom"),
+                "a rest frame is offered the automatic framing, in {frame:?}"
+            );
+        }
+
+        // And the box is the (t, r) diagram's own flag, which is the only framing there is.
         app.spacetime_canvas.keep_surface_framed = true;
         painted_text(&mut app);
-        assert!(!app.volume_canvas.keep_surface_framed, "the volume's flag is the one shown");
-        assert!(app.spacetime_canvas.keep_surface_framed, "and the flat diagram's is left alone");
+        assert!(app.spacetime_canvas.keep_surface_framed, "the flat diagram's flag is the one shown");
     }
 
     #[test]
@@ -1514,10 +1534,6 @@ mod tests {
         // Both observers are in the run and both are transmitting out of the box.
         assert!(d.alice.enabled && d.alice.transmit);
         assert!(d.bob.enabled && d.bob.transmit);
-        // The left column opens on the flat (t, r) diagram: the volume is the second way of
-        // drawing the same foliation, and every explanation in the app is written against the flat
-        // one.
-        assert!(!d.show_volume, "the 2D+1 volume is off out of the box");
         // Nothing has been played yet, so no frame has a watch rate to report.
         assert_eq!(d.achieved_watch_rate, None);
     }

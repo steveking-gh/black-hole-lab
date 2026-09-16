@@ -943,7 +943,10 @@ impl SpacetimeCanvas {
                         // centered" makes with a drag.
                         self.keep_surface_framed = false;
                     }
-                    ReferenceFrame::DistantObserver => {
+                    // Both charts of the global foliation pan and zoom the same window on r. The
+                    // volume is drawn on its own canvas, so it never reaches this code; the arm
+                    // names it so that the match stays exhaustive rather than swallowing it.
+                    ReferenceFrame::DistantObserver | ReferenceFrame::GlobalVolume => {
                         let new_max_r = (self.max_r * factor).clamp(0.0001, 50.0);
                         if let Some(mpos) = response.hover_pos() {
                             let mouse_frac = ((mpos.x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0) as f64;
@@ -966,7 +969,9 @@ impl SpacetimeCanvas {
                 painter.rect_filled(rect, 4.0, Theme::CANVAS_BG);
                 let (asked, other) = match frame_of_ref {
                     ReferenceFrame::Alice => (alice, bob),
-                    _ => (bob, alice),
+                    ReferenceFrame::Bob
+                    | ReferenceFrame::DistantObserver
+                    | ReferenceFrame::GlobalVolume => (bob, alice),
                 };
                 match (asked, other) {
                     (Some(focus), other) => self.render_observer_frame(
@@ -989,7 +994,10 @@ Tick Enable Observer on Alice's or Bob's card",
                     }
                 }
             }
-            ReferenceFrame::DistantObserver => {
+            // The volume draws the same foliation on its own canvas and the app switches between
+            // them, so this diagram is never asked for it; named rather than left to a wildcard so
+            // that the choice is exhaustive.
+            ReferenceFrame::DistantObserver | ReferenceFrame::GlobalVolume => {
                 self.render_distant_observer(
                     ui,
                     &painter,
