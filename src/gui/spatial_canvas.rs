@@ -90,6 +90,14 @@ pub struct SpatialCanvas {
     /// this one wins, being the more particular request, and it falls back to the selector's
     /// choice while the observer it names is not in the simulation.
     centred_on: Option<Who>,
+    /// A standing request to keep the black hole in the middle of the view: the origin of the
+    /// embedding, the centre of the ring. Like `centred_on` it is about where the canvas is
+    /// looking and survives a Reset, and the two are exclusive - the menu clears one when the
+    /// other is set. It overrides the View selector's tracking of a rest frame's observer, which
+    /// is the case it exists for: a rest frame with the hole held still and the observer falling
+    /// across the picture. While it holds, the pan is pinned at zero, so a drag or a wheel zoom
+    /// about the cursor cannot carry the hole away from the middle; the zoom is about the hole.
+    keep_hole_centred: bool,
     /// The marker drag in progress on this canvas, if any. Cleared when the pointer is released,
     /// when the observer being dragged leaves the simulation, and by `SpatialCanvas::end_drag` when
     /// the run is rebuilt under it.
@@ -104,6 +112,7 @@ impl Default for SpatialCanvas {
             zoom: 48.0, // pixels per M
             pan_offset: Vec2::ZERO,
             centred_on: None,
+            keep_hole_centred: false,
             dragging: None,
             telemetry: TelemetryBoxes::pinning(),
         }
@@ -217,6 +226,9 @@ impl SpatialCanvas {
         // this canvas's alone - it is about the marker drag, which only this canvas offers - so it
         // is applied here and the rest of the rule is `frame_focus`, shared with the volume view.
         let held = self.dragging.map(|drag| drag.who);
+        if self.keep_hole_centred {
+            return None;
+        }
         frame_focus(
             self.centred_on.filter(|who| held != Some(*who)),
             frame_of_ref,
@@ -289,6 +301,9 @@ impl SpatialCanvas {
                 }
                 self.zoom = new_zoom;
             }
+        }
+        if self.keep_hole_centred {
+            self.pan_offset = Vec2::ZERO;
         }
 
         // Center of the canvas with frame of reference tracking
@@ -680,8 +695,18 @@ impl SpatialCanvas {
                 let label = format!("Keep {} Centered", who.name());
                 if ui.add_enabled(present, egui::Checkbox::new(&mut centred, label)).changed() {
                     self.centred_on = centred.then_some(who);
+                    if centred {
+                        self.keep_hole_centred = false;
+                    }
                     ui.close();
                 }
+            }
+            // The hole is always there to be held, and holding it lets go of anybody else.
+            if ui.checkbox(&mut self.keep_hole_centred, "Keep Black Hole Centered").changed() {
+                if self.keep_hole_centred {
+                    self.centred_on = None;
+                }
+                ui.close();
             }
         });
 
@@ -700,22 +725,31 @@ impl SpatialCanvas {
         // What the view is holding on to, and how to ask it to hold on to somebody: a picture
         // that has stopped moving under a falling observer should say why, and the menu that did
         // it is not discoverable by looking at the canvas.
-        let centred_line = match self.centred_on {
-            Some(who) => {
+        let centred_line = match (self.keep_hole_centred, self.centred_on) {
+            (true, _) => {
+                "Keeping the black hole centered (right-click anywhere to change)\n".to_string()
+            }
+            (false, Some(who)) => {
                 format!("Keeping {} centered (right-click anywhere to change)\n", who.name())
             }
-            None => "Right-click anywhere: go to Bob, Alice or the hole, or keep one centered\n"
-                .to_string(),
+            (false, None) => {
+                "Right-click anywhere: go to Bob, Alice or the hole, or keep one centered\n"
+                    .to_string()
+            }
         };
         let legend_text = if !*show_details {
             // Collapsed: the view's name and the one number that changes under the mouse.
-            match self.centred_on {
-                Some(who) => format!(
+            match (self.keep_hole_centred, self.centred_on) {
+                (true, _) => format!(
+                    "Equatorial View (θ = π/2)   🔍 {:.0} px/M   centered on the black hole",
+                    self.zoom
+                ),
+                (false, Some(who)) => format!(
                     "Equatorial View (θ = π/2)   🔍 {:.0} px/M   centered on {}",
                     self.zoom,
                     who.name()
                 ),
-                None => format!("Equatorial View (θ = π/2)   🔍 {:.0} px/M", self.zoom),
+                (false, None) => format!("Equatorial View (θ = π/2)   🔍 {:.0} px/M", self.zoom),
             }
         } else if use_km {
             format!(
@@ -1770,6 +1804,63 @@ mod tests {
 
     /// The pointer events one step of a drag is made of: a move, optionally with the button going
     /// down or coming up.
+    #[test]
+    fn test_keeping_the_black_hole_centred_pins_it_to_the_middle_whatever_else_is_asked() {
+        // The hole's hold is the strongest request the view takes: it overrides a standing hold
+        // on an observer, and it pins the pan, so a view that has been dragged or zoomed about
+        // the cursor puts the hole back in the middle on the next frame and keeps it there.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let mut canvas = SpatialCanvas::default();
+        let params = crate::physics::observer::WorldlineParams::default();
+        let mut alice: Option<Observer> = None;
+        let mut bob = Some(Observer::new_with_phi(&metric, "Bob", 0.0, 6.0, 0.0, 0.0, params));
+
+        // Dragged off to one side, the hole is off centre.
+        canvas.pan_offset = Vec2::new(120.0, -60.0);
+        let (painted, _) = spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
+        let centre = Pos2::new(400.0, 300.0);
+        let off = (hole_of(&painted) - centre).length();
+        assert!(off > 100.0, "the pan carried the hole {off} px from the middle");
+
+        // Held, it is back in the middle and the pan is gone; and a standing hold on Bob, which
+        // would put him in the middle instead, yields to it.
+        canvas.centred_on = Some(Who::Bob);
+        canvas.keep_hole_centred = true;
+        let (held, _) = spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
+        let hole = hole_of(&held);
+        println!("hole held: at {hole:?} against the middle {centre:?}");
+        assert!((hole - centre).length() < 1.0, "the hole is in the middle: {hole:?}");
+        assert_eq!(canvas.pan_offset, Vec2::ZERO, "and the pan is pinned at zero");
+        let bob_at = marker_of(&held, Who::Bob);
+        assert!(
+            (bob_at - centre).length() > 100.0,
+            "Bob, at r = 6, is not in the middle while the hole is: {bob_at:?}"
+        );
+
+        // A drag across the canvas does not move it.
+        let travel = Vec2::new(-90.0, 40.0);
+        let start = centre + Vec2::new(150.0, 150.0);
+        for (pos, pressed) in [(start, Some(true)), (start + travel, None), (start + travel, Some(false))] {
+            spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, pointer(pos, pressed));
+        }
+        let (after, _) = spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
+        assert!(
+            (hole_of(&after) - centre).length() < 1.0,
+            "dragged, the hole stays in the middle: {:?}",
+            hole_of(&after)
+        );
+
+        // Let go, the pan is free again and the hold on Bob is what remains only if it was set
+        // after: here it was cleared by nothing, so the view simply stops holding the hole.
+        canvas.keep_hole_centred = false;
+        canvas.centred_on = None;
+        canvas.pan_offset = Vec2::new(80.0, 0.0);
+        let (free, _) = spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
+        assert!((hole_of(&free) - centre).length() > 50.0, "released, the pan moves it again");
+    }
+
     fn pointer(pos: Pos2, pressed: Option<bool>) -> Vec<egui::Event> {
         let mut events = vec![egui::Event::PointerMoved(pos)];
         if let Some(pressed) = pressed {
