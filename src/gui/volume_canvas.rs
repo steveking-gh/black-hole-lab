@@ -1100,6 +1100,9 @@ struct PastConeKey {
     m: f64,
     a: f64,
     t_min: f64,
+    /// Whether the generators were spread over the observer's *own* sky rather than the
+    /// raindrop's: see `build_past_cone_on`.
+    own_sky: bool,
 }
 
 /// The exact past light cone of one event: the null geodesics through it, run backwards.
@@ -1109,8 +1112,25 @@ struct PastCone {
     /// earlier and earlier. Kept in coordinates rather than projected, so that a camera move
     /// redraws the same integration.
     rays: Vec<Vec<[f64; 3]>>,
+    /// Per generator, per sample, the affine distance down the ray from the apex, normalised so
+    /// that it is the emitting frame's own time at the apex (k . e0 = -1): zero at the event,
+    /// growing into the past. This is the "lookback" coordinate of the observational chart, and
+    /// it is what a rest frame draws the cone in: see section 7 of `VolumeCanvas::render`.
+    lambdas: Vec<Vec<f64>>,
     /// How finely it was integrated, and whether that was the full resolution.
     res: ConeRes,
+}
+
+/// The rate at which affine distance accrues per unit of coordinate time along a null ray, for a
+/// ray whose affine tangent has k_t = -`e_emit`.
+///
+/// k_t is conserved, and k_t = k^t (g_tt + g_tr dr/dt + g_tphi dphi/dt), so the affine tangent's
+/// time component is k^t = -e_emit / (g_tt + g_tr dr/dt + g_tphi dphi/dt) and dlambda/dt = 1/k^t.
+/// The bracket is negative for every future-directed null ray in this chart, which is what makes
+/// the rate positive. Closed form, no new state: the ray carries the two slopes already.
+fn affine_rate(metric: &KerrSchild, ray: &NullRay, e_emit: f64) -> f64 {
+    let g = metric.metric_components(ray.r);
+    -(g[0][0] + g[0][1] * ray.dr_dt + g[0][2] * ray.dphi_dt) / e_emit
 }
 
 /// Integrate the past light cone of the observer's current event down to `t_min`.
@@ -1136,23 +1156,69 @@ struct PastCone {
 /// clock without moving and its (t, r, phi) would claim the ray sat at the ring for the rest of the
 /// window. A generator whose past hugs a horizon needs no special case at all: its dr/dt decays to
 /// zero and the steps get cheap.
+#[cfg(test)]
 fn build_past_cone(metric: &KerrSchild, obs: &Observer, t_min: f64, res: ConeRes) -> PastCone {
-    let tetrad = Observer::raindrop_tetrad(metric, obs.r);
+    build_past_cone_on(metric, obs, t_min, res, false)
+}
+
+/// The same, with a choice of whose sky the generators are spread over.
+///
+/// The cone is a property of the event and the same set of rays whichever frame samples it; the
+/// frame only decides where the samples fall on the rim. The global chart samples in the raindrop
+/// frame, because in the observer's own frame at u^t ~ 1e10 the samples aberrate onto one point.
+/// A rest frame wants the observer's own sky: there the angle alpha *is* the direction the light
+/// arrives from, which is the first coordinate of the observational chart, and the affine
+/// distance normalised to that frame's own time at the apex is the second. If the observer's own
+/// tetrad is not finite - the stall - the raindrop's stands in, and the chart is the raindrop's
+/// sky at that event; the legend does not distinguish the two, and at the stall the difference is
+/// the whole difference, so this is the one place the picture is approximate.
+fn build_past_cone_on(
+    metric: &KerrSchild,
+    obs: &Observer,
+    t_min: f64,
+    res: ConeRes,
+    own_sky: bool,
+) -> PastCone {
+    let raindrop = Observer::raindrop_tetrad(metric, obs.r);
+    let tetrad = if own_sky {
+        let u = obs.four_velocity(metric);
+        if finite3(u) {
+            let own = crate::physics::tetrad::Tetrad::from_four_velocity_axial(metric, obs.r, &u);
+            if finite3(own.e0) && finite3(own.e1) && finite3(own.e2) { own } else { raindrop }
+        } else {
+            raindrop
+        }
+    } else {
+        raindrop
+    };
     let u = tetrad.e0;
+    let g_apex = metric.metric_components(obs.r);
     let mut rays = Vec::with_capacity(res.rays);
+    let mut lambdas = Vec::with_capacity(res.rays);
     for i in 0..res.rays {
         let alpha = std::f64::consts::TAU * (i as f64) / (res.rays as f64);
+        let k = tetrad.null_direction(alpha);
+        // -k_t at the apex, conserved along the ray: the normalisation of its affine parameter.
+        let e_emit = -(g_apex[0][0] * k[0] + g_apex[0][1] * k[1] + g_apex[0][2] * k[2]);
         let mut ray =
             NullRay::from_local_direction(metric, obs.t, obs.r, obs.phi, &tetrad, alpha, &u);
         let mut samples = vec![[ray.t, ray.r, ray.phi]];
+        let mut lambda = vec![0.0f64];
+        let mut rate = affine_rate(metric, &ray, e_emit);
         while ray.alive() && ray.t > t_min {
             ray.step_back(metric, res.dt);
             if !ray.alive() {
                 break;
             }
+            // Trapezoid rule over the step, in the coordinate time the ray was stepped by.
+            let next = affine_rate(metric, &ray, e_emit);
+            let last = *lambda.last().unwrap_or(&0.0);
+            lambda.push(last + 0.5 * (rate + next) * res.dt);
+            rate = next;
             samples.push([ray.t, ray.r, ray.phi]);
         }
         rays.push(samples);
+        lambdas.push(lambda);
     }
     PastCone {
         key: PastConeKey {
@@ -1163,8 +1229,10 @@ fn build_past_cone(metric: &KerrSchild, obs: &Observer, t_min: f64, res: ConeRes
             m: metric.m,
             a: metric.a,
             t_min,
+            own_sky,
         },
         rays,
+        lambdas,
         res,
     }
 }
@@ -2524,6 +2592,7 @@ impl VolumeCanvas {
                 m: metric.m,
                 a: metric.a,
                 t_min,
+                own_sky: chart.is_frame(),
             };
             // The cone follows the event on every frame, and pays for that in resolution rather
             // than in lag. A cone of where the observer was a tenth of a second ago is a cone of
@@ -2536,10 +2605,17 @@ impl VolumeCanvas {
             match self.past_cone.as_ref() {
                 Some(cone) if cone.key == key && cone.res.full => {}
                 Some(cone) if cone.key == key => {
-                    self.past_cone = Some(build_past_cone(metric, obs, t_min, ConeRes::FULL));
+                    self.past_cone =
+                        Some(build_past_cone_on(metric, obs, t_min, ConeRes::FULL, key.own_sky));
                 }
                 _ => {
-                    self.past_cone = Some(build_past_cone(metric, obs, t_min, ConeRes::MOVING));
+                    self.past_cone = Some(build_past_cone_on(
+                        metric,
+                        obs,
+                        t_min,
+                        ConeRes::MOVING,
+                        key.own_sky,
+                    ));
                     ui.ctx().request_repaint();
                 }
             }
@@ -2549,8 +2625,28 @@ impl VolumeCanvas {
                 // back on itself paints solid.
                 let (_, past_fill, edge) =
                     Theme::cone_colours_at(&obs.name, Theme::VOLUME_CONE_FILL_ALPHA / 2);
-                let to_world = |s: [f64; 3]| chart.world(metric, s[0], s[1], s[2], t_scale);
                 let n = cone.rays.len();
+                // Where sample k of generator i is drawn. In the global chart it is the event's
+                // place in the volume, as everything else is. In a rest frame it is the
+                // observational chart: the ray's direction on the observer's sky, alpha, and its
+                // lookback distance down the ray, lambda, laid out as (lambda cos alpha, lambda
+                // sin alpha, -lambda) - which is the 45 degree cone by construction, with
+                // everything on it placed exactly by where the ray met it. No event is pushed
+                // through the linearised chart, so nothing here has a validity radius: a ray
+                // either reached a surface at some distance or it did not. Think of a paper cone,
+                // unrolled to a disc, with direction round the disc and depth along the radius,
+                // painted with what each ray met and folded back up onto the event.
+                let observational = chart.is_frame();
+                let place = |ray: usize, k: usize| -> [f64; 3] {
+                    if observational {
+                        let lambda = cone.lambdas[ray][k];
+                        let alpha = std::f64::consts::TAU * (ray as f64) / (n as f64);
+                        [lambda * alpha.cos(), lambda * alpha.sin(), -lambda * t_scale]
+                    } else {
+                        let s = cone.rays[ray][k];
+                        chart.world(metric, s[0], s[1], s[2], t_scale)
+                    }
+                };
                 for (i, a) in cone.rays.iter().enumerate() {
                     // Consecutive generators, closing the last back onto the first: the strip
                     // between them is the piece of the cone's surface they bound.
@@ -2564,12 +2660,8 @@ impl VolumeCanvas {
                         let mut mesh = egui::Mesh::default();
                         let mut corners: Vec<[f64; 3]> = Vec::with_capacity(4 * (k1 - k0));
                         for k in k0..k1 {
-                            let quad = [
-                                to_world(a[k]),
-                                to_world(b[k]),
-                                to_world(b[k + 1]),
-                                to_world(a[k + 1]),
-                            ];
+                            let j = (i + 1) % n;
+                            let quad = [place(i, k), place(j, k), place(j, k + 1), place(i, k + 1)];
                             // A corner the linearised chart has thrown off the end of f32 ends the
                             // surface there, exactly as a generator that died at the ring does -
                             // and so does one a rest frame has thrown off the stage. A cell with a
@@ -2601,9 +2693,8 @@ impl VolumeCanvas {
                 // history across a surface that is otherwise a wash. Nine of them: enough to read
                 // the twist frame dragging puts into the cone, few enough not to fill it in.
                 for i in (0..n).step_by(4) {
-                    let points: Vec<[f64; 3]> = cone.rays[i]
-                        .iter()
-                        .map(|s| to_world(*s))
+                    let points: Vec<[f64; 3]> = (0..cone.rays[i].len())
+                        .map(|k| place(i, k))
                         .filter(|p| finite3(*p) && placeable(*p))
                         .collect();
                     let mut start = 0;
@@ -2621,6 +2712,81 @@ impl VolumeCanvas {
                             },
                         );
                         start = end - 1;
+                    }
+                }
+                // What the rays met, painted on the cone: in a rest frame, where each generator
+                // crossed the ergosphere, r+ and r-, joined across the generators into a curve in
+                // the surface's own colour. This is the horizon the observer has already crossed,
+                // seen where its light left it - the picture of it in their past - and it is
+                // exact: a crossing is a sign change of r along a ray the integrator walked.
+                // The curve closes only when every generator crossed; the rays that came out of
+                // the past horizon, or died at the ring, leave a gap, which is the truth about
+                // that direction of the sky.
+                if observational {
+                    for (r_h, colour, width) in [
+                        (re, Theme::ERGOSPHERE_LINE, 1.5f32),
+                        (rp, Theme::HORIZON_OUTER, 2.0),
+                        (rm, Theme::HORIZON_CAUCHY, 2.0),
+                    ] {
+                        if metric.cartesian_radius(r_h) <= 0.0 {
+                            continue;
+                        }
+                        let marks: Vec<Option<[f64; 3]>> = (0..n)
+                            .map(|i| {
+                                let ray = &cone.rays[i];
+                                let lam = &cone.lambdas[i];
+                                let k = (0..ray.len().saturating_sub(1)).find(|&k| {
+                                    let (a, b) = (ray[k][1] - r_h, ray[k + 1][1] - r_h);
+                                    a != 0.0 && (a > 0.0) != (b > 0.0)
+                                })?;
+                                let (a, b) = (ray[k][1] - r_h, ray[k + 1][1] - r_h);
+                                let f = a / (a - b);
+                                let lambda = lam[k] + f * (lam[k + 1] - lam[k]);
+                                let alpha = std::f64::consts::TAU * (i as f64) / (n as f64);
+                                let p =
+                                    [lambda * alpha.cos(), lambda * alpha.sin(), -lambda * t_scale];
+                                (finite3(p) && placeable(p)).then_some(p)
+                            })
+                            .collect();
+                        let stroke = Stroke::new(width, colour);
+                        if marks.iter().all(Option::is_some) {
+                            let points: Vec<[f64; 3]> = marks.into_iter().flatten().collect();
+                            buf.push(
+                                Layer::Below,
+                                f32::NEG_INFINITY,
+                                Prim::Line {
+                                    points: points.iter().map(|p| project(*p).0).collect(),
+                                    stroke,
+                                    closed: true,
+                                },
+                            );
+                            continue;
+                        }
+                        // Runs of consecutive marks, started after a gap so that a run wrapping
+                        // round the seam is one run.
+                        let start = (0..n).find(|&i| marks[i].is_none()).unwrap_or(0);
+                        let mut run: Vec<[f64; 3]> = Vec::new();
+                        let mut flush = |run: &mut Vec<[f64; 3]>| {
+                            if run.len() > 1 {
+                                buf.push(
+                                    Layer::Below,
+                                    f32::NEG_INFINITY,
+                                    Prim::Line {
+                                        points: run.iter().map(|p| project(*p).0).collect(),
+                                        stroke,
+                                        closed: false,
+                                    },
+                                );
+                            }
+                            run.clear();
+                        };
+                        for step in 1..=n {
+                            match marks[(start + step) % n] {
+                                Some(p) => run.push(p),
+                                None => flush(&mut run),
+                            }
+                        }
+                        flush(&mut run);
                     }
                 }
             }
@@ -3091,10 +3257,13 @@ impl VolumeCanvas {
                     None => String::new(),
                 },
                 // Terse, on the end of the line that says what the other shapes are.
-                if self.show_past_cone {
-                    "\npast cone: the event's null geodesics run backwards"
-                } else {
-                    ""
+                match (self.show_past_cone, chart_name) {
+                    (false, _) => "",
+                    (true, None) => "\npast cone: the event's null geodesics run backwards",
+                    (true, Some(_)) => {
+                        "\npast cone: observational chart - direction on the observer's sky, \
+                         lookback distance down the ray; horizons where their light left them"
+                    }
                 },
                 if self.show_pulse_surfaces {
                     "\npulse surfaces: every 8th pulse's light cone, coloured by gain"
@@ -3808,6 +3977,75 @@ mod tests {
 
 
     #[test]
+    fn test_the_lookback_distance_grows_down_every_ray_at_the_apex_rate_of_the_observers_clock() {
+        // The second coordinate of the observational chart: the affine distance down each
+        // generator, normalised so that at the apex it runs at the rate of the observer's own
+        // clock (k . e0 = -1, so dlambda/dt = 1/k^t there). It starts at zero, it never stops
+        // growing into the past, and its first step is that rate to within the trapezoid rule.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let bob = bob_at(&metric, 3.0);
+        let cone = build_past_cone_on(&metric, &bob, bob.t - 5.0, ConeRes::FULL, true);
+        assert!(cone.key.own_sky);
+        let u = bob.four_velocity(&metric);
+        let tetrad = crate::physics::tetrad::Tetrad::from_four_velocity_axial(&metric, bob.r, &u);
+        let n = cone.rays.len();
+        for i in 0..n {
+            let lam = &cone.lambdas[i];
+            assert_eq!(lam.len(), cone.rays[i].len(), "one lookback per sample on ray {i}");
+            assert_eq!(lam[0], 0.0, "the apex is at zero lookback");
+            assert!(lam.windows(2).all(|w| w[1] > w[0]), "lookback grows down ray {i}: {lam:?}");
+            let alpha = std::f64::consts::TAU * (i as f64) / (n as f64);
+            let k = tetrad.null_direction(alpha);
+            let first = (lam[1] - lam[0]) / ConeRes::FULL.dt;
+            assert!(
+                (first * k[0] - 1.0).abs() < 0.1,
+                "ray {i}: the first step's dlambda/dt is {first} against 1/k^t = {}",
+                1.0 / k[0]
+            );
+        }
+    }
+
+    #[test]
+    fn test_in_a_rest_frame_the_horizon_the_observer_crossed_is_painted_on_their_past_cone() {
+        // Rule 1 of the rest-frame picture: what has happened to the observer is on their past
+        // cone. An observer inside r+ came through it, so most of their past cone's generators,
+        // run back, cross r+ on their way out - and in the observational chart that crossing is a
+        // mark on the cone in the horizon's colour, joined across the generators into a curve.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let bob = bob_at(&metric, 1.0);
+        let strokes_of = |show_past_cone: bool| {
+            let mut canvas = VolumeCanvas {
+                camera: Camera::preset(Preset::ThreeQuarter, 48.0, Vec2::ZERO, 1.0),
+                show_past_cone,
+                keep_surface_framed: false,
+                ..Default::default()
+            };
+            let shapes =
+                volume_frame_on(&mut canvas, &metric, Some(&bob), ReferenceFrame::Bob, false);
+            let strokes = shapes
+                .iter()
+                .filter(|s| {
+                    matches!(s, Painted::Path { stroke: Some(c), .. } if *c == Theme::HORIZON_OUTER)
+                })
+                .count();
+            (strokes, canvas.past_cone)
+        };
+        let (without, _) = strokes_of(false);
+        let (with, cone) = strokes_of(true);
+        let cone = cone.expect("a rest frame builds the past cone");
+        assert!(cone.key.own_sky, "and builds it over the observer's own sky");
+        let rp = metric.outer_horizon();
+        let crossed = cone.rays.iter().filter(|ray| ray.iter().any(|s| s[1] > rp)).count();
+        println!(
+            "{crossed} of {} generators run back out through r+; {with} r+ strokes with the cone \
+             against {without} without",
+            cone.rays.len()
+        );
+        assert!(crossed * 2 > cone.rays.len(), "most of the past came through r+");
+        assert!(with > without, "and the crossing is painted on the cone in r+'s colour");
+    }
+
+    #[test]
     fn test_the_past_cone_rays_retrace_forward_onto_the_focus_event() {
         // The claim the surface makes is that every point of it is joined to the focus event by a
         // null geodesic. Nothing about the drawing checks that - it would look exactly the same if
@@ -4059,9 +4297,17 @@ mod tests {
         let bob = bob_at(&metric, 3.0);
         let t_min = bob.t - VolumeCanvas::default().time_window;
 
-        let started = Instant::now();
-        let moving = build_past_cone(&metric, &bob, t_min, ConeRes::MOVING);
-        let moving_took = started.elapsed();
+        // The best of three, as a timing test has to be: the suite runs its tests in parallel, and
+        // a build that takes 3 ms on its own can lose a scheduling slice to a neighbour and read
+        // three times that. What is being bounded is the cost of the build, not the luck of the
+        // draw.
+        let mut moving = build_past_cone(&metric, &bob, t_min, ConeRes::MOVING);
+        let mut moving_took = Duration::MAX;
+        for _ in 0..3 {
+            let started = Instant::now();
+            moving = build_past_cone(&metric, &bob, t_min, ConeRes::MOVING);
+            moving_took = moving_took.min(started.elapsed());
+        }
         let started = Instant::now();
         let full = build_past_cone(&metric, &bob, t_min, ConeRes::FULL);
         let full_took = started.elapsed();
