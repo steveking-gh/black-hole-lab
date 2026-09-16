@@ -54,6 +54,17 @@ impl ReferenceFrame {
             Self::Alice => "Alice's Rest Frame (45° Cones)",
         }
     }
+
+    /// Whose watch Watch step mode is keeping: the observer this frame is drawn for, by name.
+    /// The distant observer has no worldline in the simulation, and their watch is the chart's own
+    /// Killing time, so Watch mode and Time mode are the same thing there.
+    pub fn watch_owner(&self) -> &'static str {
+        match self {
+            Self::DistantObserver => "The distant observer",
+            Self::Bob => "Bob",
+            Self::Alice => "Alice",
+        }
+    }
 }
 
 /// The two transmissions a canvas draws: Alice's, which Bob receives, and Bob's, which Alice
@@ -76,6 +87,32 @@ pub struct SignalViews<'a> {
 pub enum StepMode {
     Time,     // Fixed Δt
     Distance, // Fixed Δr (km)
+    /// Fixed Δτ on the focus observer's own watch: the step the *Frame of Reference* selector's
+    /// observer measures, converted to the coordinate time the integrators run on by their own
+    /// u^t. See `AppControls::watch_step`.
+    Watch,
+}
+
+/// The most coordinate time one played frame is allowed to take in Watch mode, in M.
+///
+/// It is not a fudge on the physics: `watch_step` reports what it asked for and what it got, and
+/// the panel says so. It is the integrator's per-call budget. Time mode's fastest playback already
+/// asks for 20 M/s × 0.1 s = 2 M of a single frame, so this is the largest step the rest of the app
+/// is known to take in one go; a deeply time-dilated watch would otherwise ask for 1e10 M of
+/// outside future per tick, which no geodesic or wavefront step can honour.
+pub const WATCH_DT_CAP: f64 = 2.0;
+
+/// What one Watch-mode step is worth, and what it cost: `dt` of coordinate time for the requested
+/// proper interval, whether `WATCH_DT_CAP` bit, and the `u_t` = u^t the conversion used (1 for the
+/// distant observer, whose watch *is* coordinate time).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WatchStep {
+    /// The coordinate-time step to take: min(u^t Δτ, `WATCH_DT_CAP`).
+    pub dt: f64,
+    /// Whether the cap bit, i.e. whether this step is less proper time than was asked for.
+    pub capped: bool,
+    /// The focus observer's u^t at this event, the dilation factor between the two clocks.
+    pub u_t: f64,
 }
 
 /// Everything one OBSERVER card asks for. Two of these hang off `AppControls`, one per observer,
@@ -201,6 +238,15 @@ pub struct AppControls {
     /// Playback rate while playing: coordinate time (units of M) per wall-clock second.
     pub play_speed: f64,
     pub step_distance_km: f64,
+    /// What fraction of the proper time Watch mode asked for the last played frame actually
+    /// carried: `dt / (u^t Δτ)`, which is 1 whenever `WATCH_DT_CAP` did not bite and falls to
+    /// 1e-10 at the stall. `None` unless a frame has just been played in Watch mode.
+    ///
+    /// It is written by the play loop (`SpacetimeApp::ui`) and read by the panel, which prints it
+    /// under the step-mode chips. A readout rather than a control: the honest statement of how far
+    /// the promise "playback runs at 1 s/s of the focus observer's watch" is from being kept at
+    /// the event being drawn, which near the Cauchy horizon is very far indeed.
+    pub achieved_watch_rate: Option<f64>,
     /// How many rays a newly emitted pulse carries: the sampling of the emitter's light cone, at
     /// alpha = 2 pi i / n, and so the resolution of every wavefront sent from now on.
     ///
@@ -290,6 +336,7 @@ impl Default for AppControls {
             step_size: 0.1,
             play_speed: 1.0,
             step_distance_km: 1000.0,
+            achieved_watch_rate: None,
             rays_per_pulse: RAYS_PER_PULSE,
             draw_front_arcs: true,
             hide_wound_segments: true,
@@ -923,6 +970,67 @@ impl AppControls {
         }
     }
 
+    /// What one Watch-mode step of `d_tau` on the focus observer's watch is worth in the
+    /// coordinate time everything in the app is integrated against.
+    ///
+    /// The conversion is exact and is one number: dτ/dt = 1/u^t along their worldline, so a step
+    /// of Δτ of their watch is u^t Δτ of the chart's time. The focus observer is whoever the
+    /// Frame-of-Reference selector names, because that is whose rest frame is being drawn and
+    /// whose cone is the 45 degree one; the distant observer has no worldline here and their watch
+    /// *is* t, so Watch mode is Time mode for them and `dt = d_tau` at u^t = 1. A focus observer
+    /// who is not in the simulation, or whose u^t is not a finite positive number, falls back the
+    /// same way rather than inventing a dilation.
+    ///
+    /// `WATCH_DT_CAP` is the one place the honest answer is refused, and it is refused loudly: an
+    /// observer frozen on the far branch of r₋ has u^t ~ 1e10, so one tick of their watch is more
+    /// of the outside future than any integrator in the app can step through in one call. The
+    /// returned `capped` flag and `u_t` are what the panel's readout says so with.
+    pub fn watch_step(
+        &self,
+        metric: &KerrSchild,
+        bob: Option<&Observer>,
+        alice: Option<&Observer>,
+        d_tau: f64,
+    ) -> WatchStep {
+        let focus = match self.frame_of_ref {
+            ReferenceFrame::DistantObserver => None,
+            ReferenceFrame::Bob => bob,
+            ReferenceFrame::Alice => alice,
+        };
+        let dilation = focus
+            .map(|obs| obs.four_velocity(metric)[0])
+            .filter(|u_t| u_t.is_finite() && *u_t > 0.0);
+        match dilation {
+            Some(u_t) => {
+                let asked = u_t * d_tau;
+                let dt = asked.min(WATCH_DT_CAP);
+                WatchStep { dt, capped: dt < asked, u_t }
+            }
+            None => WatchStep { dt: d_tau, capped: false, u_t: 1.0 },
+        }
+    }
+
+    /// The one description of what a step means, in coordinate time: Time mode takes `base` as it
+    /// stands, Distance mode ignores it for the time the requested Δr costs, and Watch mode reads
+    /// it as proper time on the focus observer's watch.
+    ///
+    /// `base` is the frame's own `dt × play_speed` for the play loop and the Step Size slider for
+    /// the arrow keys and the panel's Step Back / Step Fwd buttons. All three go through here, so
+    /// a keypress, a click and a played frame cannot mean different things by a step.
+    pub fn step_for(
+        &self,
+        metric: &KerrSchild,
+        bob: Option<&Observer>,
+        alice: Option<&Observer>,
+        base: f64,
+    ) -> f64 {
+        match self.step_mode {
+            StepMode::Time => base,
+            StepMode::Distance => self.distance_step(metric, bob, alice),
+            StepMode::Watch => self.watch_step(metric, bob, alice, base).dt,
+        }
+    }
+
     /// The two transmissions as `SignalPair` wants them: who is where, and who is sending.
     fn endpoints<'a>(
         &self,
@@ -971,10 +1079,10 @@ impl AppControls {
                 ) {
                     self.drop_observers(metric, alice, bob, &mut signals, current_time);
                 }
-                let current_step = match self.step_mode {
-                    StepMode::Time => self.step_size,
-                    StepMode::Distance => self.distance_step(metric, bob.as_ref(), alice.as_ref()),
-                };
+                // The same `step_for` the arrow keys and the play loop ask, so the three paths
+                // cannot disagree about what one step is.
+                let current_step =
+                    self.step_for(metric, bob.as_ref(), alice.as_ref(), self.step_size);
                 if transport_button(
                     ui,
                     "←",
@@ -1040,7 +1148,31 @@ impl AppControls {
                 if chip(ui, self.step_mode == StepMode::Distance, "📏 Distance (Δr)").clicked() {
                     self.step_mode = StepMode::Distance;
                 }
+                if chip(ui, self.step_mode == StepMode::Watch, "⌚ Watch (Δτ)").clicked() {
+                    self.step_mode = StepMode::Watch;
+                }
             });
+
+            // What the last played frame actually managed on that watch. Nothing is printed while
+            // the run is paused or in another step mode, because there is then no rate to report:
+            // see `achieved_watch_rate`.
+            if let Some(rate) = self.achieved_watch_rate {
+                let capped = rate < 1.0;
+                let figure =
+                    if rate >= 0.01 { format!("{rate:.2}") } else { format!("{rate:.1e}") };
+                let text = if capped {
+                    format!(
+                        "{}'s watch: {figure} s/s  (Δt capped at {WATCH_DT_CAP:.0} M per frame: \
+                         one tick of the watch here holds more of the outside future than can be \
+                         integrated)",
+                        self.frame_of_ref.watch_owner()
+                    )
+                } else {
+                    format!("{}'s watch: {figure} s/s", self.frame_of_ref.watch_owner())
+                };
+                let colour = if capped { Theme::WARNING_RED } else { Theme::TEXT_MUTED };
+                ui.label(egui::RichText::new(text).small().color(colour));
+            }
 
             match self.step_mode {
                 StepMode::Time => {
@@ -1073,6 +1205,35 @@ impl AppControls {
                             }
                         }
                     });
+                }
+                // The same slider as Time mode, read as proper time instead of coordinate time:
+                // one number for "how big is a step", whichever clock is being kept.
+                StepMode::Watch => {
+                    ui.add(
+                        egui::Slider::new(&mut self.step_size, 0.0005..=0.5)
+                            .logarithmic(true)
+                            .text("Step Size (Δτ, focus watch)"),
+                    )
+                    .on_hover_text(format!(
+                        "How much proper time one step is worth on {}'s own watch - the observer \
+                         the Frame of Reference selector names, whose rest frame the left column \
+                         is drawn in. The step the app actually takes is Δt = u^t Δτ of \
+                         coordinate time, u^t being their time dilation at the event they are at, \
+                         so playback runs at the requested rate on their watch rather than on the \
+                         distant clock. {}",
+                        self.frame_of_ref.watch_owner(),
+                        match self.frame_of_ref {
+                            ReferenceFrame::DistantObserver =>
+                                "The distant observer's watch is the chart's own Killing time t, \
+                                 so here Watch mode is Time mode: u^t = 1 and Δt = Δτ.",
+                            _ =>
+                                "Deep in the well one tick of that watch is a great many M of the \
+                                 outside future, and on the far branch of r₋ it is about 1e10 of \
+                                 them; the step is capped at 2 M per frame and the line under the \
+                                 chips says what fraction of the asked-for tick each played frame \
+                                 carried.",
+                        }
+                    ));
                 }
             }
             ui.add(

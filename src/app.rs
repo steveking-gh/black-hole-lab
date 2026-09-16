@@ -116,23 +116,24 @@ impl SpacetimeApp {
         );
     }
 
-    /// What one press of an arrow key is worth in coordinate time: the Δt slider in Time mode, and
-    /// in Distance mode the time an observer who is moving needs to cover the requested Δr at
-    /// their current coordinate speed.
+    /// What one press of an arrow key is worth in coordinate time: the Δt slider in Time mode, in
+    /// Distance mode the time an observer who is moving needs to cover the requested Δr at their
+    /// current coordinate speed, and in Watch mode the coordinate time the focus observer's own
+    /// watch spends the slider's Δτ over.
     ///
-    /// Which observer that is, and what happens when nobody is moving in r - a hovering Bob, or a
-    /// Static or ZAMO Bob holding his radius, has no time in which he covers Δr, and there is no
-    /// honest number to divide by - is `AppControls::distance_step`. The panel's Step Back and
-    /// Step Fwd buttons ask the same function, so a keypress and a click cannot mean different
-    /// intervals.
+    /// Which observer paces a distance step, and what happens when nobody is moving in r - a
+    /// hovering Bob, or a Static or ZAMO Bob holding his radius, has no time in which he covers
+    /// Δr, and there is no honest number to divide by - is `AppControls::distance_step`; the
+    /// conversion of a watch tick, and the cap on it, is `AppControls::watch_step`. The panel's
+    /// Step Back and Step Fwd buttons and the play loop ask the same `step_for`, so a keypress, a
+    /// click and a played frame cannot mean different intervals.
     fn arrow_step(&self) -> f64 {
-        match self.controls.step_mode {
-            StepMode::Time => self.controls.step_size,
-            StepMode::Distance => {
-                self.controls
-                    .distance_step(&self.metric, self.bob.as_ref(), self.alice.as_ref())
-            }
-        }
+        self.controls.step_for(
+            &self.metric,
+            self.bob.as_ref(),
+            self.alice.as_ref(),
+            self.controls.step_size,
+        )
     }
 
     /// One step forward by hand, in the same order as a played frame.
@@ -191,22 +192,45 @@ impl eframe::App for SpacetimeApp {
         let dt = (now - self.last_update).as_secs_f64().clamp(1.0 / 240.0, 0.1);
         self.last_update = now;
 
+        // Nothing to report about a watch that is not being kept: the readout is written below
+        // only by a frame that is actually played in Watch mode.
+        self.controls.achieved_watch_rate = None;
+
         // Advance simulation if playing
         if self.controls.is_playing {
             // Time mode: frame-rate independent playback at `play_speed` units of M per real second.
             // Distance mode: per-frame step chosen so Bob moves a fixed Δr (normalised to 60 fps).
-            // Nothing throttles the step near r₋: to study the crossing, pause and step by hand.
-            let sim_dt = match self.controls.step_mode {
-                StepMode::Time => dt * self.controls.play_speed,
-                StepMode::Distance => {
-                    let base_step = self.controls.distance_step(
+            // Watch mode: `play_speed` units of M per real second of the *focus observer's* proper
+            // time, so the rest-frame view runs at 1 s/s of the watch it is drawn for.
+            // Nothing throttles the step near r₋ but Watch mode's own cap: to study the crossing,
+            // pause and step by hand.
+            let base = dt * self.controls.play_speed;
+            let mut sim_dt = self.controls.step_for(
+                &self.metric,
+                self.bob.as_ref(),
+                self.alice.as_ref(),
+                base,
+            );
+            match self.controls.step_mode {
+                // A distance step is a fixed Δr however long the frame took, so it is the one
+                // mode whose step does not already carry the frame's own dt: it is normalised to
+                // 60 fps here instead, which is what keeps a slow frame from crawling.
+                StepMode::Distance => sim_dt *= (dt / 0.01667).clamp(0.2, 3.0),
+                // What that step was worth on the watch it was asked for in. The same
+                // `watch_step` `step_for` just used, so the figure reported is the step taken.
+                StepMode::Watch => {
+                    let watch = self.controls.watch_step(
                         &self.metric,
                         self.bob.as_ref(),
                         self.alice.as_ref(),
+                        base,
                     );
-                    (dt / 0.01667).clamp(0.2, 3.0) * base_step
+                    let asked = watch.u_t * base;
+                    self.controls.achieved_watch_rate =
+                        Some(if asked > 0.0 { watch.dt / asked } else { 1.0 });
                 }
-            };
+                StepMode::Time => {}
+            }
 
             self.current_time += sim_dt;
             // The river runs on the simulation clock, not the frame clock, so it freezes when
@@ -534,7 +558,7 @@ impl eframe::App for SpacetimeApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gui::controls::active_preset;
+    use crate::gui::controls::{WATCH_DT_CAP, active_preset};
     use crate::physics::geodesic::GeodesicState;
     use crate::physics::observer::{ObserverMode, Release, WorldlineParams};
     use crate::physics::wavefront::Pulse;
@@ -1494,6 +1518,8 @@ mod tests {
         // drawing the same foliation, and every explanation in the app is written against the flat
         // one.
         assert!(!d.show_volume, "the 2D+1 volume is off out of the box");
+        // Nothing has been played yet, so no frame has a watch rate to report.
+        assert_eq!(d.achieved_watch_rate, None);
     }
 
     #[test]
@@ -1618,6 +1644,123 @@ mod tests {
         assert!(bob.velocity_c(&app.metric) < 0.0, "he is falling, and the step follows him");
         app.bob = Some(bob);
         assert!(app.arrow_step() < 0.1);
+    }
+
+    #[test]
+    fn test_the_watch_step_is_u_t_times_the_proper_step_until_the_cap() {
+        // Watch mode asks for a step of the focus observer's own proper time and converts it with
+        // the one exact factor there is: dτ/dt = 1/u^t along their worldline.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let controls = AppControls {
+            step_mode: StepMode::Watch,
+            frame_of_ref: ReferenceFrame::Bob,
+            ..AppControls::default()
+        };
+
+        // A static Bob well outside the hole. Equatorial Kerr has g_tt = -(1 - 2M/r) exactly as
+        // Schwarzschild does, so his u^t = 1/sqrt(1 - 2M/r) in closed form, and at r = 20 M that
+        // is 1.054: a tenth of his watch is a tenth of a distant M and a bit.
+        let mut bob = Observer::new(&metric, "Bob", 0.0, 20.0, 0.0);
+        bob.mode = ObserverMode::Static;
+        assert!(bob.mode_admissible(&metric), "static is possible at r = 20 M");
+        let u_t = 1.0 / (1.0 - 2.0 / 20.0f64).sqrt();
+        let step = controls.watch_step(&metric, Some(&bob), None, 0.1);
+        assert!((step.u_t - u_t).abs() < 1e-9, "u^t = {} rather than {u_t}", step.u_t);
+        assert!((step.dt - u_t * 0.1).abs() < 1e-9, "Δt = {} rather than {}", step.dt, u_t * 0.1);
+        assert!(!step.capped, "0.105 M is well inside the {WATCH_DT_CAP} M budget");
+        // And the step every path in the app takes is that number.
+        assert_eq!(controls.step_for(&metric, Some(&bob), None, 0.1), step.dt);
+
+        // The frozen worldline is where the honest answer has to be refused. Bob asymptoting to
+        // the far branch of r₋ has u^t of order 1e10, so one tick of his watch is more of the
+        // outside future than any integrator here can step through, and the cap bites instead.
+        let frozen = Observer::frozen_bob(&metric);
+        let stalled = controls.watch_step(&metric, Some(&frozen), None, 0.1);
+        assert!(stalled.u_t > 1e6, "the stall is a huge dilation: u^t = {}", stalled.u_t);
+        assert_eq!(stalled.dt, WATCH_DT_CAP, "the cap, not the 1e9 M that was asked for");
+        assert!(stalled.capped, "and it says so");
+        // Which is what the readout quotes: a rate of 2 M per 1e9 M, not 1 s/s.
+        assert!(stalled.dt / (stalled.u_t * 0.1) < 1e-6);
+    }
+
+    #[test]
+    fn test_the_watch_of_the_distant_observer_is_coordinate_time() {
+        // The distant observer has no worldline in the simulation and their watch is the chart's
+        // own Killing time, so Watch mode and Time mode are the same thing in their frame. The
+        // fallback is stated rather than fallen into: u^t = 1 and Δt = Δτ.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let mut controls = AppControls { step_mode: StepMode::Watch, ..AppControls::default() };
+        assert_eq!(controls.frame_of_ref, ReferenceFrame::DistantObserver, "the default frame");
+
+        // Bob is in the simulation and deep enough for a dilation of 1.7, and none of it is used.
+        let mut bob = Observer::new(&metric, "Bob", 0.0, 3.0, 0.0);
+        bob.mode = ObserverMode::Static;
+        assert!(bob.four_velocity(&metric)[0] > 1.5, "he has a dilation to ignore");
+
+        let step = controls.watch_step(&metric, Some(&bob), None, 0.1);
+        assert_eq!((step.dt, step.u_t, step.capped), (0.1, 1.0, false));
+        controls.step_mode = StepMode::Watch;
+        let watching = controls.step_for(&metric, Some(&bob), None, 0.1);
+        controls.step_mode = StepMode::Time;
+        assert_eq!(watching, controls.step_for(&metric, Some(&bob), None, 0.1));
+
+        // A focus observer whose card is unticked leaves the chain the same way: there is no watch
+        // to keep, so the step is the one that was asked for.
+        controls.step_mode = StepMode::Watch;
+        controls.frame_of_ref = ReferenceFrame::Alice;
+        let orphaned = controls.watch_step(&metric, Some(&bob), None, 0.1);
+        assert_eq!((orphaned.dt, orphaned.u_t, orphaned.capped), (0.1, 1.0, false));
+    }
+
+    #[test]
+    fn test_a_played_watch_frame_sets_the_achieved_rate() {
+        // The readout under the step-mode chips, through the app's own play loop: a frame played
+        // in Watch mode reports what fraction of the asked-for tick it carried, and any other
+        // frame reports nothing at all.
+        let mut app = SpacetimeApp::default();
+        app.controls.frame_of_ref = ReferenceFrame::Bob;
+        app.controls.step_mode = StepMode::Watch;
+        app.controls.is_playing = true;
+        set_free_fall(&mut app);
+
+        let t0 = app.current_time;
+        let tau0 = bob_of(&app).tau;
+        let u_t = bob_of(&app).four_velocity(&app.metric)[0];
+        egui::__run_test_ui(|ui| {
+            let mut frame = eframe::Frame::_new_kittest();
+            app.ui(ui, &mut frame);
+        });
+
+        let rate = app.controls.achieved_watch_rate.expect("a played watch frame reports a rate");
+        assert!(
+            (rate - 1.0).abs() < 1e-12,
+            "nothing is capped at r = 4.5 M, so the watch runs at the rate asked: {rate}"
+        );
+        // And the clock really was advanced on Bob's watch rather than on the distant one: the
+        // coordinate time the frame took is u^t times the proper time he aged over it.
+        let (d_t, d_tau) = (app.current_time - t0, bob_of(&app).tau - tau0);
+        assert!(d_tau > 0.0 && d_t > d_tau, "Δt = {d_t}, Δτ = {d_tau}, u^t = {u_t}");
+        assert!(
+            (d_t / d_tau / u_t - 1.0).abs() < 0.02,
+            "Δt/Δτ = {} rather than u^t = {u_t}",
+            d_t / d_tau
+        );
+
+        // Paused, there is no rate to report, and neither is there in another step mode.
+        app.controls.is_playing = false;
+        egui::__run_test_ui(|ui| {
+            let mut frame = eframe::Frame::_new_kittest();
+            app.ui(ui, &mut frame);
+        });
+        assert_eq!(app.controls.achieved_watch_rate, None, "a paused run keeps no watch");
+
+        app.controls.is_playing = true;
+        app.controls.step_mode = StepMode::Time;
+        egui::__run_test_ui(|ui| {
+            let mut frame = eframe::Frame::_new_kittest();
+            app.ui(ui, &mut frame);
+        });
+        assert_eq!(app.controls.achieved_watch_rate, None, "and neither does Time mode");
     }
 
     /// Is (x, y) inside the closed polygon? Ray casting along +x, counting edge crossings; a point
