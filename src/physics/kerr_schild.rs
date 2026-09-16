@@ -450,6 +450,36 @@ impl KerrSchild {
         (radial * c - tangential * s, radial * s + tangential * c)
     }
 
+    /// The Cartesian displacement (x, y)(r0 + dr, phi0 + dphi) - (x, y)(r0, phi0), computed
+    /// without the cancellation the naive difference suffers.
+    ///
+    /// The embedding is x + iy = (r + ia)e^{i phi}, so the difference factorises exactly:
+    ///
+    ///     Delta(x + iy) = e^{i phi0} [ dr e^{i dphi} + (r0 + i a)(e^{i dphi} - 1) ]
+    ///
+    /// and the one term that cancels, e^{i dphi} - 1, has a closed form that does not:
+    /// -2 sin^2(dphi/2) + i sin dphi. Every factor is then of the size of the answer rather than of
+    /// the size of r0, so a displacement of 1e-10 M comes back to relative precision instead of to
+    /// absolute precision in r0 - which is what a rest frame at a boost of 1e10 needs, since it
+    /// multiplies this displacement by that boost before anything is drawn.
+    ///
+    /// `dphi` is the caller's own offset, and the caller is expected to have wrapped it into
+    /// (-pi, pi]: an observer three turns round the hole is next door, not three turns away. At
+    /// dphi = 2 pi exactly the formula returns (0, 0) all the same, because both sin terms vanish.
+    pub fn cartesian_displacement(&self, r0: f64, phi0: f64, dr: f64, dphi: f64) -> (f64, f64) {
+        let half = 0.5 * dphi;
+        let sh = half.sin();
+        // cos dphi - 1 and sin dphi, neither of them a difference of two nearby numbers.
+        let cm1 = -2.0 * sh * sh;
+        let sd = dphi.sin();
+        let cd = 1.0 + cm1;
+        // dr e^{i dphi} + (r0 + i a)(e^{i dphi} - 1), in the frame that has been rotated by phi0.
+        let u = dr * cd + r0 * cm1 - self.a * sd;
+        let v = dr * sd + r0 * sd + self.a * cm1;
+        let (s0, c0) = phi0.sin_cos();
+        (u * c0 - v * s0, u * s0 + v * c0)
+    }
+
     /// Kerr-Schild scalar function H(r) = M / r on equatorial plane.
     #[inline]
     pub fn h_scalar(&self, r: f64) -> f64 {
@@ -746,6 +776,76 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn test_the_cartesian_displacement_is_the_difference_without_the_cancellation() {
+        // Two claims, and the second is the whole reason the function exists.
+        //
+        // 1. At offsets of order one it *is* the naive difference, to the last few bits: nothing
+        //    about the factorisation changes the answer, only how it is arrived at.
+        // 2. At an offset of 1e-10 the naive difference has subtracted two numbers that agree to
+        //    ten digits and kept six; this keeps all of them. A rest frame at a boost of 1e10
+        //    multiplies the displacement by that boost before drawing it, so the six digits the
+        //    naive difference throws away are the whole picture near the stall.
+        for &a in &[0.0, 0.65, 0.95] {
+            let ks = KerrSchild::new(1.0, a);
+            for &r0 in &[8.0, 2.0, 0.4] {
+                for &phi0 in &[0.0, 0.9, -2.2, 4.8] {
+                    let mut worst = 0.0f64;
+                    for &dr in &[0.0, 0.3, -0.7, 1.5] {
+                        for &dphi in &[0.0, 0.4, -1.1, 3.0] {
+                            let (x0, y0) = ks.cartesian_position(r0, phi0);
+                            let (x1, y1) = ks.cartesian_position(r0 + dr, phi0 + dphi);
+                            let (dx, dy) = ks.cartesian_displacement(r0, phi0, dr, dphi);
+                            worst = worst.max((dx - (x1 - x0)).abs()).max((dy - (y1 - y0)).abs());
+                        }
+                    }
+                    assert!(
+                        worst < 1e-12,
+                        "at r0 = {r0}, phi0 = {phi0}, a = {a} the closed form differs from the \
+                         naive difference by {worst}"
+                    );
+                }
+            }
+        }
+
+        // The small-offset claim, measured against the exact answer in extended precision - which
+        // here is the same closed form evaluated on the leading terms, dr and (r0 + i a) i dphi,
+        // whose own cancellation-free error is of relative order 1e-16.
+        let ks = KerrSchild::new(1.0, 0.9);
+        let (r0, phi0) = (0.4, 1.3);
+        let d = 1e-10;
+        let (dx, dy) = ks.cartesian_displacement(r0, phi0, d, d);
+        // To first order in d: Delta(x + iy) = e^{i phi0} (dr + i (r0 + ia) dphi)
+        //                                    = e^{i phi0} ((dr - a dphi) + i r0 dphi)
+        let (s0, c0) = phi0.sin_cos();
+        let (u, v) = (d - ks.a * d, r0 * d);
+        let (wx, wy) = (u * c0 - v * s0, u * s0 + v * c0);
+        let scale = wx.hypot(wy);
+        let rel = ((dx - wx).hypot(dy - wy)) / scale;
+        // The naive difference, for the record: two positions of order 0.4 M subtracted.
+        let (x0, y0) = ks.cartesian_position(r0, phi0);
+        let (x1, y1) = ks.cartesian_position(r0 + d, phi0 + d);
+        let naive_rel = ((x1 - x0 - wx).hypot(y1 - y0 - wy)) / scale;
+        println!(
+            "a displacement of 1e-10 M at r0 = {r0}: the closed form is {rel:.2e} out, the naive \
+             difference {naive_rel:.2e}"
+        );
+        assert!(rel < 1e-6, "the closed form keeps the digits: {rel:e}");
+
+        // Three whole turns is no displacement at all.
+        for &dr in &[0.0, 0.25] {
+            let (dx, dy) =
+                ks.cartesian_displacement(r0, phi0, dr, 3.0 * std::f64::consts::TAU);
+            let (x1, y1) = ks.cartesian_position(r0 + dr, phi0);
+            let (want_x, want_y) = (x1 - x0, y1 - y0);
+            assert!(
+                (dx - want_x).abs() < 1e-12 && (dy - want_y).abs() < 1e-12,
+                "a whole number of turns is no azimuthal offset: ({dx}, {dy}) against \
+                 ({want_x}, {want_y})"
+            );
+        }
+    }
 
     #[test]
     fn test_cartesian_embedding_radius_and_angle() {
