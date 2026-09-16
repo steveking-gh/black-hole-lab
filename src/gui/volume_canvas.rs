@@ -3045,16 +3045,35 @@ impl VolumeCanvas {
         // The two transmissions, Bob's first and at half the stroke width, exactly as the
         // equatorial view lays them down, so that where the two overlap it is the heavier field
         // that stays legible.
-        draw_signal_field(
-            &painter,
-            metric,
-            signals.bob,
-            Theme::BOB_COLOR,
-            Theme::SECONDARY_FRONT_WIDTH,
-            style,
-            &floor,
-        );
-        draw_signal_field(&painter, metric, signals.alice, Theme::ALICE_COLOR, 1.0, style, &floor);
+        //
+        // In a rest frame the fronts are placed event by event through the linearised chart, and
+        // the helper draws them as whole polylines, so they cannot be faded point by point as the
+        // rest of what the chart places is. They are drawn while the chart's reach covers the
+        // canvas, which is the exterior and the early fall, and not at all once it does not: at a
+        // blueshift of a few hundred a front's points land a canvas apart, and the picture was a
+        // hundred gain-coloured stripes across the whole view, the chart's failure drawn in the
+        // front's colours. What the observer actually receives of those pulses is on their axis
+        // as the reception ticks, and on their past cone.
+        if reach >= canvas_reach_m {
+            draw_signal_field(
+                &painter,
+                metric,
+                signals.bob,
+                Theme::BOB_COLOR,
+                Theme::SECONDARY_FRONT_WIDTH,
+                style,
+                &floor,
+            );
+            draw_signal_field(
+                &painter,
+                metric,
+                signals.alice,
+                Theme::ALICE_COLOR,
+                1.0,
+                style,
+                &floor,
+            );
+        }
         // Each worldline's shadow on the floor: the same trail the worldline above it is drawn
         // from, with the time thrown away. It is what ties the two pictures together - the curve on
         // the floor is what the equatorial view draws, and the curve above it is that curve given
