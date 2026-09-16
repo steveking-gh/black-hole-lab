@@ -16,43 +16,6 @@
 //! -Gamma^mu_{alpha beta} k^alpha k^beta from the connection alone, which knows nothing about the
 //! norm of k, so the same right-hand side that carries a worldline carries a Fermi shot; what
 //! separates them is the initial tangent, unit timelike there and unit spacelike here.
-//!
-//! # Which crossings of a horizon this chart contains
-//!
-//! A ruler aimed into the hole meets a horizon twice, going in and coming out, and the section
-//! drawn from it wants both faces. The ingoing Kerr-Schild chart does not always have them, and
-//! the condition is exact rather than a matter of resolution.
-//!
-//! Take the equatorial crossing at a horizon r_h (Delta = 0, where r_h^2 + a^2 = 2 M r_h). Every
-//! geodesic carries E = -k_t and L = k_phi, and the spacelike radial equation is
-//!
-//!     r^4 (dr/ds)^2 = R_s(r) = P^2 + Delta [r^2 - (L - aE)^2],   P = E (r^2 + a^2) - a L,
-//!
-//! so R_s -> P^2 at the surface and dr/ds -> +/- |P| / r_h^2. The chart change from Boyer-Lindquist
-//! is dt_KS = dt_BL + (2 M r / Delta) dr, which gives
-//!
-//!     r^2 k^t_KS = [ (r^2 + a^2) P + 2 M r (r^2 dr/ds) ] / Delta + a (L - aE)
-//!               -> 2 M r_h ( P +/- |P| ) / Delta + a (L - aE),
-//!
-//! and the 1/Delta pole cancels for exactly one of the two signs: the one with
-//!
-//!     sign(dr/ds) = -sign(P) = -sign(E - Omega_H L),      Omega_H = a / (2 M r_h).
-//!
-//! The other crossing is at t_KS -> -+ infinity. This is the same statement, read for a spacelike
-//! tangent, that `geodesic::GeodesicState::new_with_direction` makes for a timelike one: an
-//! ingoing chart cannot follow an outgoing crossing. For a worldline E - Omega_H L > 0 and the
-//! ingoing crossing is the one that is covered; for a ruler the sign is whatever the direction
-//! beta makes it, and so it is one face or the other - never both.
-//!
-//! That sounds worse for the picture than it is, and the measurement says why. From r = 3 at
-//! a = 0.90, sixteen of seventy-two directions reach r+ and four of them reach it twice. Of the
-//! other twelve, ten die on the ring - on the equator R_s has a simple root at r = 0, so
-//! dr/ds ~ r^{-3/2} there and the ruler arrives at finite length and ends - and two freeze on the
-//! way *in* to r-, which is the Cauchy horizon's own chart limit. Every ruler that comes back out
-//! at all reports its far face, at the surface, through the stall rule in `shoot`. Nothing is lost
-//! to arithmetic: an error-controlled step inside the last 0.05 M of either horizon, halving until
-//! two half steps agree with one whole one to 1e-9 in r, returns exactly the same sixteen and four
-//! and costs thirteen times as much (20.9 ms a row against 1.56 ms).
 
 use crate::physics::geodesic::{R_FLOOR, R_STOP, geodesic_accel, velocity_step_cap};
 use crate::physics::kerr_schild::KerrSchild;
@@ -391,12 +354,6 @@ mod tests {
     use super::*;
     use crate::physics::geodesic::GeodesicState;
 
-    /// (E, L) = (-k_t, k_phi) of a tangent at radius r.
-    fn invariants_of(metric: &KerrSchild, r: f64, k: &[f64; 3]) -> (f64, f64) {
-        let (_, k_t, l) = invariants(metric, r, k);
-        (-k_t, l)
-    }
-
     /// (g(k,k), k_t, k_phi) of a tangent at radius r: the norm and the two constants of the motion
     /// the Killing vectors d_t and d_phi give every geodesic, spacelike ones included.
     fn invariants(metric: &KerrSchild, r: f64, k: &[f64; 3]) -> (f64, f64, f64) {
@@ -678,77 +635,6 @@ mod tests {
     }
 
     #[test]
-    fn test_a_ruler_that_comes_back_reports_its_far_face_and_one_that_does_not_is_gone() {
-        // Why a section drawn from these rulers can be an arc with one face and not two, and why
-        // that is the geometry rather than the integration. See the module doc for the equation.
-        //
-        // The claim is a census. Of the directions from r = 3 that reach r+ at all, every one that
-        // comes back out reports its far face - at the surface, where the chart stops - and every
-        // one that does not has ended somewhere it cannot come back from: on the ring, which is a
-        // simple root of the spacelike radial potential and so is genuinely reached, or frozen on
-        // the way in to r-, which is the Cauchy horizon's own limit and is what the app draws a
-        // frozen worldline against.
-        let metric = KerrSchild::new(1.0, 0.9);
-        let (rp, rm) = (metric.outer_horizon(), metric.inner_horizon());
-        let r0 = 3.0;
-        let u = falling(&metric, r0, 1.0, 2.2);
-        let tetrad = Tetrad::from_four_velocity_axial(&metric, r0, &u);
-        let omega_h = metric.a / (2.0 * metric.m * rp);
-
-        let (mut reach, mut twice, mut ring, mut froze_inner, mut froze_outer) = (0, 0, 0, 0, 0);
-        for i in 0..72 {
-            let beta = std::f64::consts::TAU * (i as f64) / 72.0;
-            let k = spatial_direction(&tetrad, beta);
-            let hit = shoot(&metric, [0.0, r0, 0.0], k, 15.625, &[R_STOP, rm, rp]);
-            if hit.crossings[2].is_empty() {
-                continue;
-            }
-            reach += 1;
-            // Every direction that gets to r+ from outside has E - Omega_H L > 0, so it is the
-            // *ingoing* crossing this chart covers and the outgoing one that it does not.
-            let (e, l) = invariants_of(&metric, r0, &k);
-            assert!(
-                e - omega_h * l > 0.0,
-                "a ruler reaching r+ from r = 3 has E - Omega_H L = {} > 0, so the chart has its \
-                 near face and not its far one",
-                e - omega_h * l
-            );
-            if hit.crossings[2].len() >= 2 {
-                twice += 1;
-                assert!(
-                    (hit.r_end - rp).abs() < 1e-4,
-                    "a ruler with a far face ends on r+, where the chart runs out: r = {}",
-                    hit.r_end
-                );
-                continue;
-            }
-            if hit.r_end < R_STOP {
-                ring += 1;
-            } else if (hit.r_end - rm).abs() < 1e-4 {
-                froze_inner += 1;
-            } else if (hit.r_end - rp).abs() < 1e-4 {
-                froze_outer += 1;
-            } else {
-                panic!(
-                    "a ruler with one face of r+ ended at r = {} for no reason this test knows",
-                    hit.r_end
-                );
-            }
-        }
-        println!(
-            "from r = 3: {reach} of 72 directions reach r+, {twice} of them twice; of the rest \
-             {ring} died on the ring, {froze_inner} froze on the way in to r-, {froze_outer} on r+"
-        );
-        assert!(reach > 0 && twice > 0, "some rulers reach r+, and some come back out");
-        assert_eq!(
-            reach - twice,
-            ring + froze_inner + froze_outer,
-            "every direction with only the near face has an end this test accounted for"
-        );
-        assert!(ring > 0, "and most of them are rulers the ring destroyed");
-    }
-
-    #[test]
     fn test_a_shot_reports_no_crossing_it_did_not_make() {
         // s_max is the canvas's own reach, so a surface further away than the picture is wide has
         // no point on this row at all - and the shot has to say so rather than extrapolate to it.
@@ -794,6 +680,5 @@ mod tests {
         );
     }
 }
-
 
 

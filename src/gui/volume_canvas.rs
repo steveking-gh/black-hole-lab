@@ -1142,11 +1142,10 @@ fn build_past_cone(metric: &KerrSchild, obs: &Observer, t_min: f64, res: ConeRes
 /// One row of the Fermi cache: where each surface r = const stands in the focus observer's own
 /// space at one event of their worldline.
 ///
-/// The sections are held as proper lengths against the directions they were fired in, rather than
-/// as screen points, because a camera drag must not re-shoot anything: the geodesics belong to the
-/// spacetime and to the observer, and the camera is only a way of looking at them. The chart point
-/// of a crossing at proper length s in direction beta is (s cos beta, s sin beta), and nothing
-/// else.
+/// The sections are held as proper lengths rather than as screen points because a camera drag must
+/// not re-shoot anything: the geodesics belong to the spacetime and to the observer, and the
+/// camera is only a way of looking at them. The chart point of a crossing at proper length s in
+/// direction beta is (s cos beta, s sin beta), and nothing else.
 struct FermiRow {
     /// Coordinate time of the event, which is what identifies the row against the trail.
     t: f64,
@@ -1156,26 +1155,15 @@ struct FermiRow {
     tau: f64,
     /// The radius the rulers were laid out from, which is the first interval's inner bound.
     r0: f64,
-    /// The directions the rulers were fired in, ascending, in [0, 2 pi).
-    ///
-    /// Not a grid. The uniform seventy-two are only where the row starts: a section is a polyline
-    /// through these directions, so wherever the polyline is more than half a pixel from the curve
-    /// it stands for, or wherever an arc begins or ends between two of them, the interval is
-    /// bisected and the midpoint shot as well. Seen in the app before that: a surface sixteen of
-    /// the seventy-two directions reached was drawn as a sixteen-sided arc with a corner at each
-    /// end, which is not what a horizon looks like from anywhere.
-    dirs: Vec<f64>,
-    /// Per surface, in the order (ring, r-, r+, r_e), per direction of `dirs`: the proper lengths
-    /// at which that ruler crossed it, in order, `None` past the last of them.
+    /// Per surface, in the order (ring, r-, r+, r_e), per direction beta = 2 pi i / n: the proper
+    /// lengths at which that ruler crossed it, in order, `None` past the last of them.
     ///
     /// More than one is the ordinary case, not an oddity. A surface the observer is outside of is
     /// a closed curve that does not enclose them, so a ruler aimed at it enters through the near
     /// face and leaves through the far one, and both are points of the section: the c = 0 arc is
     /// the near face of the surface and the c = 1 arc the far face, and together they are the
-    /// closed curve. A direction that reaches the surface not at all has `None` throughout, and a
-    /// ruler that went in and never came back - destroyed on the ring, or frozen on the way in to
-    /// r- - has the near face alone. Which of those it is, and why it is geometry rather than
-    /// arithmetic, is the module doc of `physics::fermi`.
+    /// closed curve. A direction that reaches the surface not at all has `None` throughout, and
+    /// that too is a statement - the surface is simply not that way.
     sections: [Vec<[Option<f64>; fermi::CROSSINGS_MAX]>; 4],
     /// Per direction, how far that ruler ran before it stopped, and the radius it stopped at. The
     /// crossings cut a ruler into intervals each lying wholly in one region of the hole, and these
@@ -1184,197 +1172,11 @@ struct FermiRow {
     r_end: Vec<f64>,
 }
 
-/// How many times one interval between directions may be bisected, and how far a section's
-/// polyline may sag from the curve it stands for before it is.
-///
-/// Three levels take the seventy-two base directions down to five eighths of a degree where they
-/// are wanted; the chord test is what decides where they are wanted, and the arc ends are pinned
-/// whether it fires or not. Measured from r = 3 at 85 px/M: the arc ends have already converged
-/// by the third level, the worst interior sag is 3.4 px against 2.9 at five levels, and a row
-/// costs 208 rulers and 13 ms against 388 and 31 ms. Every extra ruler is one aimed into the hole,
-/// the expensive kind, so the levels are the whole cost. Half a pixel is the width of the seam a
-/// polyline would otherwise show, the same number the pipes were once refined to.
-const FERMI_REFINE_LEVELS: u32 = 3;
-const FERMI_CHORD_PX: f64 = 0.5;
-
-/// How many columns of one row's wall go into a single mesh.
-///
-/// `PAST_CONE_CHUNK`'s reason, in the same words. A refined section is a few hundred directions
-/// wide, and a wall between two rows is that many quads; one mesh per quad puts tens of thousands
-/// of primitives through the depth sort for four surfaces over thirty rows - measured, 27 000 of
-/// them and 45 ms a frame at 85 px/M - while one mesh for the whole strip would be a single
-/// primitive sorted at one depth, interleaving wrongly with every worldline and cone it passes
-/// through. Sixteen columns is a patch of one surface at one moment of the observer's clock, short
-/// enough that its own centroid is a fair place to sort it.
-const FERMI_WALL_CHUNK: usize = 16;
-
-/// One ruler of a row while it is being built: the direction it was fired in and what it found.
-#[derive(Clone, Copy)]
-struct FermiRay {
-    beta: f64,
-    /// Per surface, per crossing, the proper length.
-    hits: [[Option<f64>; fermi::CROSSINGS_MAX]; 4],
-    reach: f64,
-    r_end: f64,
-}
-
-impl FermiRay {
-    /// The chart point of one crossing, in M.
-    fn at(&self, surface: usize, crossing: usize) -> Option<[f64; 2]> {
-        let s = self.hits[surface][crossing]?;
-        let (sn, c) = self.beta.sin_cos();
-        Some([s * c, s * sn])
-    }
-
-    /// Whether this ruler found the `crossing`-th crossing of `surface`.
-    fn has(&self, surface: usize, crossing: usize) -> bool {
-        self.hits[surface][crossing].is_some()
-    }
-}
-
-/// Fire one ruler.
-fn fermi_shoot(
-    metric: &KerrSchild,
-    p: &TrailPoint,
-    tetrad: &Tetrad,
-    beta: f64,
-    targets: &[f64; 4],
-    s_max: f64,
-) -> FermiRay {
-    let k = fermi::spatial_direction(tetrad, beta);
-    let shot = fermi::shoot(metric, [p.t, p.r, p.phi], k, s_max, targets);
-    let mut hits = [[None; fermi::CROSSINGS_MAX]; 4];
-    for (surface, crossings) in shot.crossings.iter().enumerate() {
-        for (c, (s, _)) in crossings.iter().enumerate() {
-            hits[surface][c] = Some(*s);
-        }
-    }
-    FermiRay { beta, hits, reach: shot.reach, r_end: shot.r_end }
-}
-
-/// One row: the observer's frame at their event, `FERMI_DIRECTIONS` rulers fired out of it, and
-/// the refinement that turns those into a curve.
-///
-/// The frame is `Tetrad::from_four_velocity_axial`, the same gauge the flat (t, r) diagram builds
-/// its own chart in, so the two pictures place a surface from the same pair of legs. Note what
-/// that gauge is and is not: e1 and e2 are the radial and azimuthal legs *at each event*, chosen
-/// afresh there, and not one frame Fermi-Walker transported along the worldline. Each row is
-/// therefore exact on its own, and the wall between two rows can carry a slow twist that is a
-/// gauge artefact rather than geometry. Transporting the frame is a later refinement; nothing
-/// within one row depends on it.
-///
-/// `px_per_m` is what the chord test is measured against: the refinement is a question about the
-/// picture, so it stops as soon as the polyline is within half a pixel of the curve, and at a
-/// deep zoom that is sooner in angle rather than later.
-///
-/// `None` when the event carries no frame at all - a 4-velocity that is not unit timelike, or a
-/// leg that came out non-finite - and the caller then draws every surface as its tangent plane.
-fn fermi_row(
-    metric: &KerrSchild,
-    p: &TrailPoint,
-    u: &[f64; 3],
-    targets: &[f64; 4],
-    s_max: f64,
-    px_per_m: f64,
-    shots: &mut usize,
-) -> Option<FermiRow> {
-    if !finite3(*u) {
-        return None;
-    }
-    // The tolerance `Tetrad::from_four_velocity_axial` itself asserts on, checked here so that an
-    // event whose 4-velocity is not a 4-velocity is skipped rather than tripping the assertion.
-    let scale = u.iter().fold(1.0f64, |m, v| m.max(v.abs()));
-    if (inner(metric, p.r, u, u) + 1.0).abs() >= 1e-6 + 1e-14 * scale * scale {
-        return None;
-    }
-    let tetrad = Tetrad::from_four_velocity_axial(metric, p.r, u);
-    if !finite3(tetrad.e1) || !finite3(tetrad.e2) {
-        return None;
-    }
-
-    let mut rays: Vec<FermiRay> = Vec::with_capacity(2 * FERMI_DIRECTIONS);
-    for i in 0..FERMI_DIRECTIONS {
-        let beta = std::f64::consts::TAU * (i as f64) / (FERMI_DIRECTIONS as f64);
-        rays.push(fermi_shoot(metric, p, &tetrad, beta, targets, s_max));
-        *shots += 1;
-    }
-
-    // The refinement. An interval between two directions is bisected when either
-    //   (a) one end found a crossing the other did not, so an arc of that surface begins or ends
-    //       somewhere inside the interval and bisecting pins the grazing direction it ends at; or
-    //   (b) both ends found it and the midpoint of the section lies more than half a pixel off the
-    //       chord between them, so the polyline is not yet the curve.
-    // An interval whose two ends share nothing and differ in nothing is two directions that reach
-    // no surface, and there is no section between them to refine - which is most of the circle
-    // seen from outside the hole, and why the refinement costs what it does and no more.
-    let mut queue: Vec<(FermiRay, FermiRay, u32)> = Vec::with_capacity(FERMI_DIRECTIONS);
-    for i in 0..FERMI_DIRECTIONS {
-        let (a, b) = (rays[i], rays[(i + 1) % FERMI_DIRECTIONS]);
-        queue.push((a, b, 0));
-    }
-    while let Some((a, b, level)) = queue.pop() {
-        if level >= FERMI_REFINE_LEVELS {
-            continue;
-        }
-        let mut mismatch = false;
-        let mut shared = false;
-        for surface in 0..4 {
-            for c in 0..fermi::CROSSINGS_MAX {
-                match (a.has(surface, c), b.has(surface, c)) {
-                    (true, true) => shared = true,
-                    (false, false) => {}
-                    _ => mismatch = true,
-                }
-            }
-        }
-        if !mismatch && !shared {
-            continue;
-        }
-        // The two ends of the wrapping interval are 2 pi apart in beta and next to each other on
-        // the circle: bisect the arc, not the number.
-        let span = if b.beta > a.beta { b.beta - a.beta } else { b.beta + std::f64::consts::TAU - a.beta };
-        let mid_beta = (a.beta + 0.5 * span).rem_euclid(std::f64::consts::TAU);
-        let mid = fermi_shoot(metric, p, &tetrad, mid_beta, targets, s_max);
-        *shots += 1;
-        rays.push(mid);
-        // How far the section sagged from its own chord at the midpoint, over every face of every
-        // surface all three rulers found, in pixels.
-        let mut sag = 0.0f64;
-        for surface in 0..4 {
-            for c in 0..fermi::CROSSINGS_MAX {
-                let (Some(pa), Some(pb), Some(pm)) =
-                    (a.at(surface, c), b.at(surface, c), mid.at(surface, c))
-                else {
-                    continue;
-                };
-                let dx = pm[0] - 0.5 * (pa[0] + pb[0]);
-                let dy = pm[1] - 0.5 * (pa[1] + pb[1]);
-                sag = sag.max(dx.hypot(dy));
-            }
-        }
-        if mismatch || sag * px_per_m > FERMI_CHORD_PX {
-            queue.push((a, mid, level + 1));
-            queue.push((mid, b, level + 1));
-        }
-    }
-
-    rays.sort_by(|x, y| x.beta.total_cmp(&y.beta));
-    rays.dedup_by(|x, y| x.beta == y.beta);
-    let n = rays.len();
-    let mut row = FermiRow {
-        t: p.t,
-        tau: p.tau,
-        r0: p.r,
-        dirs: rays.iter().map(|r| r.beta).collect(),
-        sections: core::array::from_fn(|surface| {
-            rays.iter().map(|r| r.hits[surface]).collect::<Vec<_>>()
-        }),
-        reach: rays.iter().map(|r| r.reach).collect(),
-        r_end: rays.iter().map(|r| r.r_end).collect(),
-    };
-    debug_assert_eq!(row.dirs.len(), n);
-    row.reach.truncate(n);
-    Some(row)
+/// The direction beta = 2 pi i / n as (cos, sin).
+fn fermi_direction(i: usize) -> (f64, f64) {
+    let beta = std::f64::consts::TAU * (i as f64) / (FERMI_DIRECTIONS as f64);
+    let (s, c) = beta.sin_cos();
+    (c, s)
 }
 
 impl FermiRow {
@@ -1384,21 +1186,11 @@ impl FermiRow {
         self.sections[surface].iter().any(|c| c[0].is_some())
     }
 
-    /// Did any ruler find this face of this surface?
-    fn any_face(&self, surface: usize, crossing: usize) -> bool {
-        self.sections[surface].iter().any(|c| c[crossing].is_some())
-    }
-
-    /// The world point of a chart distance s in direction `beta`, at this row's height.
-    fn point_at(&self, s: f64, beta: f64, tau_now: f64, t_scale: f64) -> Option<[f64; 3]> {
-        let (sn, c) = beta.sin_cos();
+    /// The world point of a chart distance s in direction i, at this row's height.
+    fn point(&self, s: f64, i: usize, tau_now: f64, t_scale: f64) -> Option<[f64; 3]> {
+        let (c, sn) = fermi_direction(i);
         let w = [s * c, s * sn, (self.tau - tau_now) * t_scale];
         finite3(w).then_some(w)
-    }
-
-    /// The world point of a chart distance s in the row's `i`-th direction.
-    fn point(&self, s: f64, i: usize, tau_now: f64, t_scale: f64) -> Option<[f64; 3]> {
-        self.point_at(s, self.dirs[i], tau_now, t_scale)
     }
 
     /// The world point of one direction's `crossing`-th crossing of one surface.
@@ -1411,48 +1203,6 @@ impl FermiRow {
         t_scale: f64,
     ) -> Option<[f64; 3]> {
         self.point(self.sections[surface][i][crossing]?, i, tau_now, t_scale)
-    }
-
-    /// One face of one section sampled at each of `union`'s directions, by linear interpolation
-    /// along this row's own polyline. `None` wherever the two directions of this row that bracket
-    /// that one did not both find the face.
-    ///
-    /// This is what lets a wall be built between two rows that no longer share a direction list:
-    /// each row is refined where its own section needed it, so the two disagree about where the
-    /// samples are, and the honest way to pair them is to read each one's polyline at the other's
-    /// directions as well as its own. Refusing to extrapolate past the last direction that found
-    /// the face is what keeps the wall's edge on the arc rather than beyond it.
-    fn sample(&self, surface: usize, crossing: usize, union: &[f64]) -> Vec<Option<f64>> {
-        let n = self.dirs.len();
-        let mut out = Vec::with_capacity(union.len());
-        if n == 0 {
-            return vec![None; union.len()];
-        }
-        let mut i = 0usize;
-        for &beta in union {
-            // The row's directions ascend, and so does the union, so the bracket only ever moves
-            // forward; the last interval wraps round the seam.
-            while i + 1 < n && self.dirs[i + 1] <= beta {
-                i += 1;
-            }
-            let (lo, hi) = (i, (i + 1) % n);
-            let (b_lo, b_hi) = if hi == 0 {
-                (self.dirs[lo], self.dirs[0] + std::f64::consts::TAU)
-            } else {
-                (self.dirs[lo], self.dirs[hi])
-            };
-            let beta = if beta < b_lo { beta + std::f64::consts::TAU } else { beta };
-            let (Some(s_lo), Some(s_hi)) =
-                (self.sections[surface][lo][crossing], self.sections[surface][hi][crossing])
-            else {
-                out.push(None);
-                continue;
-            };
-            let span = b_hi - b_lo;
-            let f = if span > 0.0 { ((beta - b_lo) / span).clamp(0.0, 1.0) } else { 0.0 };
-            out.push(Some(s_lo + f * (s_hi - s_lo)));
-        }
-        out
     }
 
     /// The intervals one ruler is cut into by its own crossings, as (s_start, s_end, r_mid).
@@ -1530,6 +1280,64 @@ struct FermiRows {
     rows: Vec<FermiRow>,
 }
 
+/// One row: the observer's frame at their event, and `FERMI_DIRECTIONS` spacelike geodesics fired
+/// out of it.
+///
+/// The frame is `Tetrad::from_four_velocity_axial`, the same gauge the flat (t, r) diagram builds
+/// its own chart in, so the two pictures place a surface from the same pair of legs. Note what
+/// that gauge is and is not: e1 and e2 are the radial and azimuthal legs *at each event*, chosen
+/// afresh there, and not one frame Fermi-Walker transported along the worldline. Each row is
+/// therefore exact on its own, and the wall between two rows can carry a slow twist that is a
+/// gauge artefact rather than geometry. Transporting the frame is a later refinement; nothing
+/// within one row depends on it.
+///
+/// `None` when the event carries no frame at all - a 4-velocity that is not unit timelike, or a
+/// leg that came out non-finite - and the caller then draws every surface as its tangent plane.
+fn fermi_row(
+    metric: &KerrSchild,
+    p: &TrailPoint,
+    u: &[f64; 3],
+    targets: &[f64; 4],
+    s_max: f64,
+) -> Option<FermiRow> {
+    if !finite3(*u) {
+        return None;
+    }
+    // The tolerance `Tetrad::from_four_velocity_axial` itself asserts on, checked here so that an
+    // event whose 4-velocity is not a 4-velocity is skipped rather than tripping the assertion.
+    let scale = u.iter().fold(1.0f64, |m, v| m.max(v.abs()));
+    if (inner(metric, p.r, u, u) + 1.0).abs() >= 1e-6 + 1e-14 * scale * scale {
+        return None;
+    }
+    let tetrad = Tetrad::from_four_velocity_axial(metric, p.r, u);
+    if !finite3(tetrad.e1) || !finite3(tetrad.e2) {
+        return None;
+    }
+    let mut row = FermiRow {
+        t: p.t,
+        tau: p.tau,
+        r0: p.r,
+        sections: core::array::from_fn(|_| {
+            vec![[None; fermi::CROSSINGS_MAX]; FERMI_DIRECTIONS]
+        }),
+        reach: vec![0.0; FERMI_DIRECTIONS],
+        r_end: vec![p.r; FERMI_DIRECTIONS],
+    };
+    for i in 0..FERMI_DIRECTIONS {
+        let beta = std::f64::consts::TAU * (i as f64) / (FERMI_DIRECTIONS as f64);
+        let k = fermi::spatial_direction(&tetrad, beta);
+        let shot = fermi::shoot(metric, [p.t, p.r, p.phi], k, s_max, targets);
+        for (surface, crossings) in shot.crossings.iter().enumerate() {
+            for (c, (s, _)) in crossings.iter().enumerate() {
+                row.sections[surface][i][c] = Some(*s);
+            }
+        }
+        row.reach[i] = shot.reach;
+        row.r_end[i] = shot.r_end;
+    }
+    Some(row)
+}
+
 /// Bring the cache up to the present frame, and report how many shots that cost.
 ///
 /// What is cached and what is not follows from what moves. A row belongs to one event of the
@@ -1543,7 +1351,6 @@ struct FermiRows {
 /// The whole cache is thrown away when it stops belonging to this run: another observer, another
 /// hole, a rewind that has put the worldline behind where the rows were shot, or a zoom that has
 /// moved the canvas's reach by more than a factor of two.
-#[allow(clippy::too_many_arguments)]
 fn update_fermi_rows(
     cache: &mut Option<FermiRows>,
     metric: &KerrSchild,
@@ -1551,7 +1358,6 @@ fn update_fermi_rows(
     t_now: f64,
     t_min: f64,
     s_max: f64,
-    px_per_m: f64,
     targets: &[f64; 4],
 ) -> usize {
     let keep = |c: &FermiRows| {
@@ -1590,16 +1396,17 @@ fn update_fermi_rows(
             rows.push(previous.swap_remove(at));
             continue;
         }
-        if let Some(row) = fermi_row(metric, &p, &p.u(), targets, s_max, px_per_m, &mut shots) {
+        if let Some(row) = fermi_row(metric, &p, &p.u(), targets, s_max) {
+            shots += FERMI_DIRECTIONS;
             rows.push(row);
         }
     }
     // The present event, always shot afresh: the observer has moved since the last frame, and it
     // is this row the floor traces and the region bands are read off.
     let now = TrailPoint::at(obs.t, obs.r, obs.phi, obs.tau);
-    let u_now = obs.four_velocity(metric);
-    match fermi_row(metric, &now, &u_now, targets, s_max, px_per_m, &mut shots) {
+    match fermi_row(metric, &now, &obs.four_velocity(metric), targets, s_max) {
         Some(row) => {
+            shots += FERMI_DIRECTIONS;
             rows.push(row);
             *cache =
                 Some(FermiRows { name: obs.name.clone(), m: metric.m, a: metric.a, s_max, rows });
@@ -2099,7 +1906,6 @@ impl VolumeCanvas {
                 current_time,
                 t_min,
                 canvas_reach_m,
-                f64::from(camera.scale),
                 &fermi_targets,
             ),
             None => {
@@ -2117,26 +1923,6 @@ impl VolumeCanvas {
         // read off; the rows behind it are what the walls are built between.
         let fermi_now = fermi.as_ref().and_then(|f| f.rows.last());
         let tau_now = fermi_now.map_or(0.0, |row| row.tau);
-        // The directions the wall between each consecutive pair of rows is built on: the union of
-        // the two rows' own, since each was refined where its own section needed it. Worked out
-        // once here rather than four times inside the loop over surfaces, because it is a fact
-        // about the rows and not about any one surface.
-        let fermi_unions: Vec<Vec<f64>> = fermi
-            .as_ref()
-            .map(|f| {
-                f.rows
-                    .windows(2)
-                    .map(|pair| {
-                        let mut union = Vec::with_capacity(pair[0].dirs.len() + pair[1].dirs.len());
-                        union.extend_from_slice(&pair[0].dirs);
-                        union.extend_from_slice(&pair[1].dirs);
-                        union.sort_by(f64::total_cmp);
-                        union.dedup();
-                        union
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
 
         // Where a pipe is cut into strips: the boundaries of its segments, as azimuthal offsets
         // running from -pi to +pi, the two ends being the same point of the circle.
@@ -2626,77 +2412,35 @@ impl VolumeCanvas {
             // skipped rather than closed across the gap. Below the floor, because the rows are the
             // past.
             if let Some(rows) = fermi.as_ref().filter(|_| drawn) {
-                for (pair, union) in rows.rows.windows(2).zip(fermi_unions.iter()) {
-                    // The two rows were refined where each one's own section needed it, so they no
-                    // longer agree about where the directions are. The wall is built on the union
-                    // of the two lists, with each row's section read at the other's directions by
-                    // linear interpolation along its own polyline - so the strip's edge follows
-                    // the arc's end that the refinement pinned, instead of the sawtooth a fixed
-                    // grid leaves there.
-                    let n = union.len();
-                    for c_idx in 0..fermi::CROSSINGS_MAX {
-                        if !pair[0].any_face(idx, c_idx) || !pair[1].any_face(idx, c_idx) {
+                for pair in rows.rows.windows(2) {
+                    for (c_idx, i) in (0..fermi::CROSSINGS_MAX).flat_map(|c| {
+                        (0..FERMI_DIRECTIONS).map(move |i| (c, i))
+                    }) {
+                        let j = (i + 1) % FERMI_DIRECTIONS;
+                        let corners: Option<Vec<[f64; 3]>> = [(0usize, i), (1, i), (1, j), (0, j)]
+                            .into_iter()
+                            .map(|(k, d)| {
+                                let w = pair[k].world(idx, c_idx, d, tau_now, t_scale)?;
+                                placeable(w).then_some(w)
+                            })
+                            .collect();
+                        let Some(c) = corners else {
                             continue;
-                        }
-                        let lower = pair[0].sample(idx, c_idx, union);
-                        let upper = pair[1].sample(idx, c_idx, union);
-                        // The columns of this strip, gathered into meshes of `FERMI_WALL_CHUNK`
-                        // rather than one apiece: see that constant.
-                        let mut mesh = egui::Mesh::default();
-                        let mut sum = [0.0f64; 3];
-                        let mut columns = 0usize;
-                        let mut flush = |mesh: &mut egui::Mesh, sum: &mut [f64; 3], n: &mut usize| {
-                            if *n == 0 {
-                                return;
-                            }
-                            let centroid =
-                                [sum[0] / (*n as f64), sum[1] / (*n as f64), sum[2] / (*n as f64)];
-                            let depth = camera.project(centre, centroid).1;
-                            buf.push(Layer::Below, depth, Prim::Mesh(std::mem::take(mesh)));
-                            *sum = [0.0; 3];
-                            *n = 0;
                         };
-                        for i in 0..n {
-                            let j = (i + 1) % n;
-                            let corners: Option<Vec<[f64; 3]>> =
-                                [(0usize, i), (1, i), (1, j), (0, j)]
-                                    .into_iter()
-                                    .map(|(k, d)| {
-                                        let s = if k == 0 { lower[d] } else { upper[d] }?;
-                                        let w = pair[k].point_at(s, union[d], tau_now, t_scale)?;
-                                        placeable(w).then_some(w)
-                                    })
-                                    .collect();
-                            let Some(c) = corners else {
-                                // A gap in the strip ends the chunk: what follows is another piece
-                                // of the same wall somewhere else on the circle.
-                                flush(&mut mesh, &mut sum, &mut columns);
-                                continue;
-                            };
-                            // The Fresnel weight wants the wall's outward horizontal normal, and a
-                            // measured section has no centre to take it from: it is the
-                            // perpendicular of the chord between the strip's two directions, which
-                            // is the same thing for a circle and the right thing for an arc that
-                            // is not one. Its sign does not matter - `face_weight` takes the
-                            // cosine's magnitude.
-                            let (dx, dy) = (c[3][0] - c[0][0], c[3][1] - c[0][1]);
-                            let weight = rim_weight((dy as f32, -dx as f32), view_d);
-                            let fill = glass(colour, base_alpha, weight);
-                            let base = mesh.vertices.len() as u32;
-                            for p in &c {
-                                mesh.colored_vertex(camera.project(centre, *p).0, fill);
-                                for k in 0..3 {
-                                    sum[k] += p[k] * 0.25;
-                                }
-                            }
-                            mesh.add_triangle(base, base + 1, base + 2);
-                            mesh.add_triangle(base, base + 2, base + 3);
-                            columns += 1;
-                            if columns >= FERMI_WALL_CHUNK {
-                                flush(&mut mesh, &mut sum, &mut columns);
-                            }
-                        }
-                        flush(&mut mesh, &mut sum, &mut columns);
+                        // The Fresnel weight wants the wall's outward horizontal normal, and a
+                        // measured section has no centre to take it from: it is the perpendicular
+                        // of the chord between the strip's two directions, which is the same thing
+                        // for a circle and the right thing for an arc that is not one. Its sign
+                        // does not matter - `face_weight` takes the cosine's magnitude.
+                        let (dx, dy) = (c[3][0] - c[0][0], c[3][1] - c[0][1]);
+                        let weight = rim_weight((dy as f32, -dx as f32), view_d);
+                        let (mesh, depth) = quad_mesh(
+                            &camera,
+                            centre,
+                            [c[0], c[1], c[2], c[3]],
+                            glass(colour, base_alpha, weight),
+                        );
+                        buf.push(Layer::Below, depth, Prim::Mesh(mesh));
                     }
                 }
             }
@@ -2704,7 +2448,7 @@ impl VolumeCanvas {
             // consecutive directions that reached it, closed only when all of them did.
             if let Some(row) = fermi_now.filter(|_| drawn) {
                 let placed = |c: usize| -> Vec<Option<Pos2>> {
-                    (0..row.dirs.len())
+                    (0..FERMI_DIRECTIONS)
                         .map(|i| {
                             let w = row.world(idx, c, i, tau_now, t_scale)?;
                             placeable(w).then(|| project(w).0)
@@ -3434,10 +3178,10 @@ impl VolumeCanvas {
                 // surfaces in the same order, which is everywhere but at a tangency, and where
                 // they are not the pair simply has no quad.
                 let cuts: Vec<Vec<(f64, f64, f64)>> =
-                    (0..row.dirs.len()).map(|i| row.intervals(i, &fermi_targets)).collect();
+                    (0..FERMI_DIRECTIONS).map(|i| row.intervals(i, &fermi_targets)).collect();
                 let mut meshes: Vec<(Color32, egui::Mesh)> = Vec::new();
-                for i in 0..row.dirs.len() {
-                    let j = (i + 1) % row.dirs.len();
+                for i in 0..FERMI_DIRECTIONS {
+                    let j = (i + 1) % FERMI_DIRECTIONS;
                     for (k, &(s0, s1, r_mid)) in cuts[i].iter().enumerate() {
                         let Some(&(t0, t1, r_other)) = cuts[j].get(k) else {
                             continue;
@@ -4205,24 +3949,6 @@ mod tests {
                 _ => None,
             })
             .collect()
-    }
-
-    /// How many quads of one surface's glass were painted, whether they went in one to a mesh -
-    /// which is what a tangent plane's patch does - or gathered into chunks, which is what a
-    /// measured wall does. Every such mesh is quads and nothing else, so its vertex count over
-    /// four is the number of them.
-    fn glass_quads(shapes: &[Painted], surface: Color32) -> usize {
-        shapes
-            .iter()
-            .filter_map(|s| match s {
-                Painted::Mesh { vertices, colour: Some(c), .. }
-                    if *vertices % 4 == 0 && hue_of(*c) == hue_of(surface) =>
-                {
-                    Some(vertices / 4)
-                }
-                _ => None,
-            })
-            .sum()
     }
 
     /// A colour's hue, quantised coarsely enough that two cells of one surface's glass compare
@@ -5108,20 +4834,15 @@ mod tests {
                 if *c == Theme::REGION_II_FILL))
             .expect("region II is a band on the floor of a rest frame");
 
-        // r+ is glass, and all of it is under the floor. A wall's columns are gathered into
-        // meshes of `FERMI_WALL_CHUNK`, so what is counted is the meshes, not the quads in them.
+        // r+ is glass, and all of it is under the floor.
         let walls: Vec<usize> = shapes
             .iter()
             .enumerate()
-            .filter(|(_, s)| matches!(s, Painted::Mesh { vertices, colour: Some(c), .. }
-                if *vertices % 4 == 0 && hue_of(*c) == hue_of(Theme::HORIZON_OUTER)))
+            .filter(|(_, s)| matches!(s, Painted::Mesh { vertices: 4, colour: Some(c), .. }
+                if hue_of(*c) == hue_of(Theme::HORIZON_OUTER)))
             .map(|(i, _)| i)
             .collect();
-        println!(
-            "{} meshes of r+ glass, {} quads, against a floor at {floor}",
-            walls.len(),
-            glass_quads(&shapes, Theme::HORIZON_OUTER)
-        );
+        println!("{} strips of r+ glass against a floor at {floor}", walls.len());
         assert!(!walls.is_empty(), "r+ is drawn as a wall of glass in a rest frame");
         assert!(
             walls.iter().all(|i| *i < floor),
@@ -5186,24 +4907,15 @@ mod tests {
 
         let mut cache: Option<FermiRows> = None;
         let shots =
-            update_fermi_rows(&mut cache, &metric, &bob, bob.t, bob.t - 9.8, s_max, 48.0, &targets);
-        assert!(
-            shots >= FERMI_DIRECTIONS,
-            "a standing observer has one row to shoot, plus whatever its refinement asked for:              {shots}"
-        );
+            update_fermi_rows(&mut cache, &metric, &bob, bob.t, bob.t - 9.8, s_max, &targets);
+        assert_eq!(shots, FERMI_DIRECTIONS, "a standing observer has one row to shoot");
         let rows = cache.expect("Bob at r = 3 has a frame and a row");
         let row = rows.rows.last().expect("the present row");
 
-        // 2 is r+ in the order (ring, r-, r+, r_e). The row's directions are its own - the
-        // uniform seventy-two plus wherever the refinement put more - so they are read off it
-        // rather than recomputed from an index.
+        // 2 is r+ in the order (ring, r-, r+, r_e).
         let (mut hits, mut faces) = (0, 0);
-        assert!(
-            row.dirs.len() > FERMI_DIRECTIONS,
-            "the sections from r = 3 need refining, so the row has more than the base directions"
-        );
-        for i in 0..row.dirs.len() {
-            let beta = row.dirs[i];
+        for i in 0..FERMI_DIRECTIONS {
+            let beta = std::f64::consts::TAU * (i as f64) / (FERMI_DIRECTIONS as f64);
             let k = fermi::spatial_direction(&tetrad, beta);
             let shot = fermi::shoot(&metric, [bob.t, bob.r, bob.phi], k, s_max, &targets);
             for c in 0..fermi::CROSSINGS_MAX {
@@ -5279,150 +4991,12 @@ mod tests {
         // The ruler's own reading for r+ is the one the section carries, and it is the larger:
         // the linear chart understates the distance because it extends the observer's own tangent
         // space straight out, and the space itself curves away from that.
-        let straight_in = row
-            .dirs
-            .iter()
-            .position(|b| (b - std::f64::consts::PI).abs() < 1e-12)
-            .expect("beta = pi is one of the base directions");
-        let exact = row.sections[2][straight_in][0].expect("straight at the hole, r+ is reached");
+        let exact = row.sections[2][FERMI_DIRECTIONS / 2][0]
+            .expect("straight at the hole, r+ is reached");
         assert!(
             exact > first_order(metric.outer_horizon()),
             "the measured distance to r+ is {exact} M and the linear one {} M",
             first_order(metric.outer_horizon())
-        );
-    }
-
-    #[test]
-    fn test_a_section_is_refined_where_its_arc_bends_and_where_it_ends() {
-        // A section is a polyline through the directions its row was fired in, and the uniform
-        // seventy-two are not enough for it: from r = 3 only sixteen of them reach r+ at all, so
-        // the arc was a sixteen-sided figure with a corner where each face began and ended. The
-        // refinement bisects an interval when one end found a crossing the other did not - which
-        // pins the grazing direction the arc ends at - or when the midpoint of the section sags
-        // more than half a pixel off the chord between its two ends.
-        //
-        // Both halves of that are checked here, and so is the bound: nothing outside an arc is
-        // ever refined, because two directions that reach nothing have no section between them.
-        let metric = KerrSchild::new(1.0, 0.9);
-        let bob = bob_at(&metric, 3.0);
-        let rect = egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
-        let targets = [
-            R_STOP,
-            metric.inner_horizon(),
-            metric.outer_horizon(),
-            metric.ergosphere_equatorial(),
-        ];
-        let row = |px_per_m: f64| -> (FermiRow, usize) {
-            let mut shots = 0usize;
-            let s_max = patch_half_width(rect, px_per_m as f32);
-            let row = fermi_row(
-                &metric,
-                &TrailPoint::at(bob.t, bob.r, bob.phi, bob.tau),
-                &bob.four_velocity(&metric),
-                &targets,
-                s_max,
-                px_per_m,
-                &mut shots,
-            )
-            .expect("Bob at r = 3 has a frame");
-            (row, shots)
-        };
-
-        let (coarse, coarse_shots) = row(85.0);
-        let (fine, fine_shots) = row(5000.0);
-        println!(
-            "Bob at r = 3: {} directions for {coarse_shots} shots at 85 px/M, {} for \
-             {fine_shots} at the framed 5000 px/M",
-            coarse.dirs.len(),
-            fine.dirs.len()
-        );
-        assert!(
-            coarse.dirs.len() > FERMI_DIRECTIONS,
-            "the arcs at 85 px/M need refining: {} directions",
-            coarse.dirs.len()
-        );
-        assert!(
-            coarse.dirs.len() <= FERMI_DIRECTIONS * (1 << FERMI_REFINE_LEVELS),
-            "and the refinement is bounded by its depth: {} directions",
-            coarse.dirs.len()
-        );
-        assert!(coarse.dirs.windows(2).all(|w| w[0] < w[1]), "the directions stay sorted");
-        assert!(
-            coarse.dirs[0] == 0.0 && *coarse.dirs.last().unwrap() < std::f64::consts::TAU,
-            "and they stay in [0, 2 pi)"
-        );
-
-        // Nothing outside an arc is refined. A direction the refinement added has to sit between
-        // two base directions at least one of which found something, because that is the only
-        // condition under which its interval was ever considered.
-        let base = std::f64::consts::TAU / (FERMI_DIRECTIONS as f64);
-        let base_reaches: Vec<bool> = (0..FERMI_DIRECTIONS)
-            .map(|i| {
-                let beta = base * (i as f64);
-                let at = coarse
-                    .dirs
-                    .iter()
-                    .position(|b| (b - beta).abs() < 1e-12)
-                    .expect("every base direction survives the refinement");
-                (0..4).any(|surface| coarse.sections[surface][at][0].is_some())
-            })
-            .collect();
-        let mut added_outside = 0;
-        for &beta in &coarse.dirs {
-            // Which base interval this direction fell in. The quotient is taken against the
-            // *nearest* multiple rather than the one below it: a base direction's own quotient
-            // comes out a few ulps under its integer, and flooring would file it in the interval
-            // before its own.
-            let q = beta / base;
-            if (q - q.round()).abs() < 1e-9 {
-                continue; // a base direction, not one the refinement added
-            }
-            let i = q.floor() as usize;
-            if !base_reaches[i] && !base_reaches[(i + 1) % FERMI_DIRECTIONS] {
-                added_outside += 1;
-            }
-        }
-        assert_eq!(
-            added_outside, 0,
-            "the refinement only ever looks where an arc is, but {added_outside} directions were \
-             added between two that reach nothing"
-        );
-
-        // The arc's own ends are pinned: every face of every surface has, at each end of each of
-        // its runs, a neighbouring direction closer than the base spacing - the bisection walked
-        // in on the grazing direction rather than stopping at the nearest fifth of a degree.
-        let mut pinned = 0;
-        let n = coarse.dirs.len();
-        for surface in 0..4 {
-            for c in 0..fermi::CROSSINGS_MAX {
-                for i in 0..n {
-                    let j = (i + 1) % n;
-                    let here = coarse.sections[surface][i][c].is_some();
-                    let next = coarse.sections[surface][j][c].is_some();
-                    if here == next {
-                        continue;
-                    }
-                    let gap = (coarse.dirs[j] - coarse.dirs[i]).rem_euclid(std::f64::consts::TAU);
-                    assert!(
-                        gap < base * 0.51,
-                        "an arc of surface {surface} face {c} ends inside a {} degree gap, which \
-                         the refinement should have halved",
-                        gap.to_degrees()
-                    );
-                    pinned += 1;
-                }
-            }
-        }
-        assert!(pinned > 0, "there are arc ends to pin from r = 3");
-        println!("{pinned} arc ends pinned to better than half the base spacing");
-
-        // And the chord test settles: at a deep zoom the ruler is short, the section is small, and
-        // the polyline is within half a pixel of it sooner in angle, not later - so the refinement
-        // is a question about the picture and not about the geometry.
-        println!(
-            "at 5000 px/M the reach is {:.4} M and the row is {} directions",
-            patch_half_width(rect, 5000.0),
-            fine.dirs.len()
         );
     }
 
@@ -5523,7 +5097,7 @@ mod tests {
         let s_max = patch_half_width(rect, 48.0);
         let targets = [R_STOP, rm, rp, re];
         let mut cache: Option<FermiRows> = None;
-        update_fermi_rows(&mut cache, &metric, &bob, bob.t, bob.t - 9.8, s_max, 48.0, &targets);
+        update_fermi_rows(&mut cache, &metric, &bob, bob.t, bob.t - 9.8, s_max, &targets);
         let rows = cache.expect("Bob at r = 3 has a frame and a row");
         let row = rows.rows.last().expect("the present row");
 
@@ -5915,13 +5489,14 @@ mod tests {
             _ => None,
         });
         assert!(trace.is_some(), "the r- surface leaves a trace on the floor at that zoom");
-        let quads = glass_quads(&shapes, Theme::HORIZON_CAUCHY);
+        let cells = glass_cells(&shapes, Theme::HORIZON_CAUCHY);
         println!(
-            "{quads} quads of r- glass at {} px/M, its floor trace at {:?}",
+            "{} cells of r- glass at {} px/M, its floor trace at {:?}",
+            cells.len(),
             canvas.camera.scale,
             trace.as_ref().map(|p| p[0])
         );
-        assert!(quads > 0, "and the surface itself is painted, not just its trace");
+        assert!(!cells.is_empty(), "and the surface itself is painted, not just its trace");
 
         // Whichever picture a thing is drawn in, nothing of it reaches the tessellator off the
         // stage: a corner the chart cannot place is dropped rather than clamped. That holds for
@@ -5985,10 +5560,10 @@ mod tests {
         );
         // r- is on the canvas, and it is on it as a measured wall rather than as a patch: a patch
         // is exactly `PLANE_CELLS` squared cells and a wall is a strip per direction per row.
-        let quads = glass_quads(&shapes, Theme::HORIZON_CAUCHY);
+        let cells = glass_cells(&shapes, Theme::HORIZON_CAUCHY).len();
         assert!(
-            quads > 0 && quads != PLANE_CELLS * PLANE_CELLS,
-            "r- is drawn as its own measured wall, not as a patch of {} cells: {quads}",
+            cells > 0 && cells != PLANE_CELLS * PLANE_CELLS,
+            "r- is drawn as its own measured wall, not as a patch of {} cells: {cells}",
             PLANE_CELLS * PLANE_CELLS
         );
         for (name, colour) in [
@@ -6020,10 +5595,10 @@ mod tests {
             canvas.fallback_planes, canvas.fermi_shots
         );
         assert_eq!(canvas.fallback_planes, 0, "at 48 px/M every surface is measured");
-        let quads = glass_quads(&shapes, Theme::HORIZON_CAUCHY);
+        let cells = glass_cells(&shapes, Theme::HORIZON_CAUCHY).len();
         assert!(
-            quads > 0 && quads != PLANE_CELLS * PLANE_CELLS,
-            "r- is a measured wall there, not a patch of {} plane cells: {quads}",
+            cells > 0 && cells != PLANE_CELLS * PLANE_CELLS,
+            "r- is a measured wall there, not a patch of {} plane cells: {cells}",
             PLANE_CELLS * PLANE_CELLS
         );
     }
@@ -6049,37 +5624,28 @@ mod tests {
         volume_frame_on(&mut canvas, &metric, Some(&bob), ReferenceFrame::Bob, false);
         let (second_shots, second_rows) =
             (canvas.fermi_shots, canvas.fermi.as_ref().map_or(0, |f| f.rows.len()));
-        let present = canvas
-            .fermi
-            .as_ref()
-            .and_then(|f| f.rows.last())
-            .map_or(0, |row| row.dirs.len());
         println!(
             "first frame: {first_rows} rows for {first_shots} shots; second: {second_rows} rows \
-             for {second_shots}, the present row being {present} directions"
+             for {second_shots}"
         );
         assert!(first_rows > 1, "Bob has a past, so there are rows behind the present one");
         assert_eq!(second_rows, first_rows, "and the same rows are there afterwards");
         assert!(
-            first_shots > second_shots * 2,
-            "the first frame shoots every row and the second only one: {first_shots} against \
-             {second_shots}"
+            first_shots > FERMI_DIRECTIONS,
+            "the first frame has to shoot all of them: {first_shots}"
         );
-        // The present row is shot afresh and nothing else is, so the count is exactly the
-        // directions that row ended up with - the base seventy-two plus its own refinement.
         assert_eq!(
-            second_shots, present,
-            "the second frame shoots the present row and no other"
+            second_shots, FERMI_DIRECTIONS,
+            "and the second shoots the present row alone"
         );
-        assert!(second_shots >= FERMI_DIRECTIONS, "which is at least the base directions");
 
-        // A camera move is not a reason to shoot anything else: the rows are chart points, and
+        // A camera move is not a reason to shoot anything either: the rows are chart points, and
         // the camera only looks at them.
         canvas.camera.yaw += 0.3;
         canvas.camera.pitch = 0.4;
         volume_frame_on(&mut canvas, &metric, Some(&bob), ReferenceFrame::Bob, false);
         assert_eq!(
-            canvas.fermi_shots, second_shots,
+            canvas.fermi_shots, FERMI_DIRECTIONS,
             "an orbit re-projects the rows and re-shoots none of them"
         );
     }
