@@ -802,6 +802,31 @@ mod tests {
     }
 
     #[test]
+    fn test_both_charts_say_they_are_charts_and_a_rest_frame_does_not() {
+        // The one line that decides what a viewer may read off the picture: a chart places every
+        // event where the coordinates put it and claims nothing about distance or simultaneity
+        // for anybody, a rest frame claims exactly that about one observer. Both charts of the
+        // foliation carry the line; neither rest frame does, because there it would be false.
+        use crate::gui::spacetime_canvas::CHART_BANNER;
+        let mut app = SpacetimeApp::default();
+        app.controls.is_playing = false;
+        for (view, chart) in [
+            (ReferenceFrame::DistantObserver, true),
+            (ReferenceFrame::GlobalVolume, true),
+            (ReferenceFrame::Bob, false),
+            (ReferenceFrame::Alice, false),
+        ] {
+            app.controls.frame_of_ref = view;
+            let text = painted_text(&mut app);
+            assert_eq!(
+                text.contains(CHART_BANNER),
+                chart,
+                "{view:?}: the banner should be drawn exactly on the two charts"
+            );
+        }
+    }
+
+    #[test]
     fn test_auto_zoom_is_offered_only_in_a_rest_frame() {
         // A rest frame has a zoom that can be derived from the geometry rather than chosen - the
         // surface the observer is about to reach, kept on the canvas - so the box that asks for it
