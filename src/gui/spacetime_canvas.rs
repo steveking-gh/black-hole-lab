@@ -1701,7 +1701,7 @@ Tick Enable Observer on Alice's or Bob's card",
     /// expression asks for a window of M early on and of femtometres of r on the approach to r-,
     /// where the observer's remaining proper time is femtoseconds and the gap is nine decades
     /// below anything the view has ever had to draw.
-    fn framed_window(metric: &KerrSchild, obs: &Observer, rect: Rect) -> Option<f64> {
+    pub(crate) fn framed_window(metric: &KerrSchild, obs: &Observer, rect: Rect) -> Option<f64> {
         let u_r = obs.four_velocity(metric)[1];
         if !u_r.is_finite() || u_r == 0.0 || rect.height() <= 1.0 || rect.width() <= 1.0 {
             return None;

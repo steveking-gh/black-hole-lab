@@ -381,17 +381,21 @@ impl eframe::App for SpacetimeApp {
                             ui.checkbox(&mut self.controls.show_volume, "2D+1 volume")
                                 .on_hover_text(VOLUME_VIEW_TIP);
                             // Only the rest frames have a window of their own to keep; the
-                            // foliation view's zoom is a window on r that the user pans. It belongs
-                            // to the flat (t, xi) diagram and to nothing else, so it goes away with
-                            // it: the volume has a camera the user orbits instead.
-                            if !self.controls.show_volume
-                                && self.controls.frame_of_ref != ReferenceFrame::DistantObserver
-                            {
-                                ui.checkbox(
-                                    &mut self.spacetime_canvas.keep_surface_framed,
-                                    "Auto-zoom",
-                                )
-                                .on_hover_text(KEEP_SURFACE_FRAMED_TIP);
+                            // foliation view's zoom is a window on r that the user pans, and the
+                            // volume's global chart is a window on x and y with nobody at its
+                            // origin, so in `DistantObserver` there is nothing to frame and the box
+                            // is not offered. Both pictures of a rest frame do have one, and each
+                            // keeps its own flag: the flat diagram's window on xi, and the volume's
+                            // pixels per M. (In the volume's global chart the flag is carried and
+                            // does nothing.)
+                            if self.controls.frame_of_ref != ReferenceFrame::DistantObserver {
+                                let framed = if self.controls.show_volume {
+                                    &mut self.volume_canvas.keep_surface_framed
+                                } else {
+                                    &mut self.spacetime_canvas.keep_surface_framed
+                                };
+                                ui.checkbox(framed, "Auto-zoom")
+                                    .on_hover_text(KEEP_SURFACE_FRAMED_TIP);
                             }
                         });
                         // One picture of the foliation or the rest frame at a time: the volume
@@ -747,6 +751,43 @@ mod tests {
             "and take the (t, r) diagram out of it: the two share the column"
         );
         assert!(volume.contains("Spatial x"), "the equatorial view is untouched by the swap");
+    }
+
+    #[test]
+    fn test_auto_zoom_is_offered_for_the_volume_in_a_rest_frame() {
+        // Both pictures of a rest frame have a zoom that can be derived from the geometry rather
+        // than chosen - the surface the observer is about to reach, kept on the canvas - so the box
+        // that asks for it belongs to the rest frame and not to the flat diagram. It stays out of
+        // the distant observer's foliation, where there is nobody at the origin and nothing ahead
+        // of anybody in particular to frame.
+        let mut app = SpacetimeApp::default();
+        app.controls.is_playing = false;
+
+        for volume in [false, true] {
+            app.controls.show_volume = volume;
+
+            app.controls.frame_of_ref = ReferenceFrame::DistantObserver;
+            let text = painted_text(&mut app);
+            assert!(
+                !text.contains("Auto-zoom"),
+                "the foliation has nothing to frame, volume {volume}"
+            );
+
+            app.controls.frame_of_ref = ReferenceFrame::Bob;
+            let text = painted_text(&mut app);
+            assert!(
+                text.contains("Auto-zoom"),
+                "Bob's rest frame is offered the automatic framing, volume {volume}"
+            );
+        }
+
+        // And it is the volume's own flag the box is wired to when the volume is the picture on
+        // screen: the two canvases zoom in different units and each keeps its own.
+        app.volume_canvas.keep_surface_framed = false;
+        app.spacetime_canvas.keep_surface_framed = true;
+        painted_text(&mut app);
+        assert!(!app.volume_canvas.keep_surface_framed, "the volume's flag is the one shown");
+        assert!(app.spacetime_canvas.keep_surface_framed, "and the flat diagram's is left alone");
     }
 
     #[test]

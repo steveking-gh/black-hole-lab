@@ -1,6 +1,6 @@
 use crate::gui::controls::{ReferenceFrame, SignalViews};
 use crate::gui::spacetime_canvas::{
-    TelemetryBoxes, distant_clock_grid_step, distant_clock_offset_label,
+    SpacetimeCanvas, TelemetryBoxes, distant_clock_grid_step, distant_clock_offset_label,
 };
 use crate::gui::spatial_canvas::{
     CENTRED_RING_GAP, FrontStyle, RING_DROP_FLOOR, Who, draw_reception_tick, draw_signal_field,
@@ -538,6 +538,25 @@ fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
 /// less than one pipe's 72 strips did.
 const PLANE_CELLS: usize = 8;
 
+/// How far past the corner of the canvas a tangent plane's patch reaches, as a multiple of the
+/// rect's half-diagonal.
+///
+/// A patch is a square, and a square drawn in a plane the camera is free to spin has no orientation
+/// the canvas can count on: sized to fit, its own corners come into the picture as chevrons and the
+/// surface reads as a lozenge rather than as a plane that goes on. Half the diagonal is the radius
+/// of the disc the canvas is inscribed in, so a patch of that half-width covers the canvas at every
+/// orientation, and half again puts the corners comfortably outside it. The patch is centred on the
+/// plane's nearest point to the origin, which is near the middle of the canvas because the focus
+/// event *is* the origin, so the overscan is measured from there.
+const PATCH_OVERSCAN: f64 = 1.5;
+
+/// Half-width of a tangent plane's patch, in M of the local chart, for a canvas of `rect` at
+/// `scale` pixels per M. See `PATCH_OVERSCAN`.
+fn patch_half_width(rect: egui::Rect, scale: f32) -> f64 {
+    let half_diagonal = f64::from((rect.width() * 0.5).hypot(rect.height() * 0.5));
+    PATCH_OVERSCAN * half_diagonal / f64::from(scale).max(1e-6)
+}
+
 /// The same for one slice of the distant clock. Coarser, because there are many of them and each is
 /// a faint wash rather than a surface to be read against.
 const CLOCK_PLANE_CELLS: usize = 4;
@@ -628,6 +647,13 @@ const FRONT_SURFACE_ALPHA: u8 = 40;
 /// interleaves wrongly with everything it passes through, and eight rows is short enough that its
 /// own centroid is a fair place to sort it.
 const PULSE_SURFACE_CHUNK: usize = 8;
+
+/// Why the two extended surfaces are greyed out in a rest frame.
+const GLOBAL_SURFACES_ONLY_TIP: &str =
+    "Drawn in the global foliation only. Both surfaces are loci of events several M away from the \
+     focus event, and a rest frame places those through a chart that is exact at that event and \
+     linearised everywhere else - at the boosts of a late fall the linearisation of an offset that \
+     size paints as a wash over the whole canvas rather than as a surface.";
 
 /// What a built past cone belongs to. If any of it changes the cone is a cone of a different event
 /// in a different spacetime and has to be integrated again; if none of it changes the cached rays
@@ -753,6 +779,14 @@ pub struct VolumeCanvas {
     /// because it is the one place in the app where the split between the frozen family and the
     /// crossing family is a shape rather than an inference: the sheet tears in two on r-.
     show_pulse_surfaces: bool,
+    /// Keep the next surface the focus observer meets framed, re-deriving `camera.scale` every
+    /// frame from the same rule the flat rest-frame diagram uses. See `KEEP_SURFACE_FRAMED_TIP`
+    /// and `SpacetimeCanvas::framed_window`.
+    ///
+    /// It only does anything in a rest frame. The global foliation's zoom is a window on x and y
+    /// that the user pans, with no observer at its origin and no surface ahead of anybody in
+    /// particular to frame, so in `Chart::Global` this flag is carried and ignored.
+    pub keep_surface_framed: bool,
     /// Where the user has dragged each observer's info box on this canvas.
     pub telemetry: TelemetryBoxes,
     /// The screen offset of the focus observer's floor point as the last frame projected it.
@@ -778,6 +812,7 @@ impl Default for VolumeCanvas {
             show_past_cone: true,
             past_cone: None,
             show_pulse_surfaces: true,
+            keep_surface_framed: true,
             telemetry: TelemetryBoxes::pinning(),
             focus_offset: Vec2::ZERO,
         }
@@ -821,21 +856,35 @@ impl VolumeCanvas {
             return;
         }
 
+        // Which observer's rest frame the view is being asked for, read before anything is drawn
+        // because the automatic framing below needs it. The selector names an observer; if that
+        // observer is not in the run there is no frame to build, and the scene falls back to the
+        // global foliation exactly as `frame_focus` falls back to following nobody.
+        let frame_obs = match frame_of_ref {
+            ReferenceFrame::Bob => bob,
+            ReferenceFrame::Alice => alice,
+            ReferenceFrame::DistantObserver => None,
+        };
+
         // 1. The camera, moved before anything is projected, so that this frame draws the view the
         // pointer has just asked for rather than the previous one. The equatorial view can afford
         // to defer its pan by a frame because a pan is a translation the eye does not track; an
         // orbit is not, and a view that lags the drag by a frame feels like it is being dragged
         // through treacle.
+        //
+        // A plain drag pans, as it does on the equatorial view, and shift holds the drag to the
+        // orbit: the two canvases are looked at one after the other and the commoner gesture has
+        // to mean the same thing on both, which is "move the picture" rather than "move the eye".
         let mut moved = false;
         if response.dragged() {
             let delta = response.drag_delta();
             if delta != Vec2::ZERO {
                 if ui.input(|i| i.modifiers.shift) {
-                    self.camera.pan += delta;
-                } else {
                     self.camera.yaw += delta.x * 0.01;
                     self.camera.pitch = (self.camera.pitch - delta.y * 0.01)
                         .clamp(0.05, std::f32::consts::FRAC_PI_2);
+                } else {
+                    self.camera.pan += delta;
                 }
                 moved = true;
             }
@@ -857,6 +906,12 @@ impl VolumeCanvas {
                     self.camera.pan += (mpos - nominal) * (1.0 - new_scale / old_scale);
                 }
                 self.camera.scale = new_scale;
+                // The user has taken the wheel, so the automatic framing stands down until they
+                // ask for it back - the same bargain the flat rest-frame diagram's own wheel
+                // makes, and for the same reason.
+                if frame_of_ref != ReferenceFrame::DistantObserver {
+                    self.keep_surface_framed = false;
+                }
                 moved = true;
             }
             // Ctrl-wheel stretches time against space. It is the one control here with no
@@ -874,21 +929,33 @@ impl VolumeCanvas {
             ui.ctx().request_repaint();
         }
 
+        // Keep the next surface the focus observer meets on the canvas, if the user has not taken
+        // the wheel. It is the flat rest-frame diagram's own rule, carried across intact: the
+        // surface r = const the observer is about to reach crosses their time axis at a xi^0 that
+        // is exactly the proper time they have left, and `framed_window` turns that into the window
+        // in M the picture has to hold. Here the window is spent on the height of the canvas rather
+        // than on its width, because in the volume the observer's own clock runs up the screen.
+        //
+        // A frame that has no answer - nobody selected, an observer with no radial motion, or one
+        // stalled on the far branch of r- whose u^r has gone to nothing - leaves the scale where it
+        // was rather than moving it to an infinity.
+        if self.keep_surface_framed
+            && let Some(obs) = frame_obs
+            && let Some(window_m) = SpacetimeCanvas::framed_window(metric, obs, rect)
+        {
+            let scale = (f64::from(rect.height()) * 0.4 / window_m) as f32;
+            if scale.is_finite() {
+                self.camera.scale = scale.clamp(8.0, 500_000.0);
+            }
+        }
+
         // 2. Where the view is anchored, and therefore where world (0, 0, 0) lands. In locals
         // rather than read through `self`, so that the closures below hold no borrow of the canvas:
         // the right-click menu takes `&mut self` while they are still alive.
         let camera = self.camera;
         let t_scale = camera.t_scale;
-        let window = self.time_window;
         let focus = frame_focus(self.centred_on, frame_of_ref, bob, alice);
-        // Which chart the scene is drawn in. The selector names an observer; if that observer is
-        // not in the run there is no frame to build and the view falls back to the global
-        // foliation, exactly as `frame_focus` falls back to following nobody.
-        let frame_obs = match frame_of_ref {
-            ReferenceFrame::Bob => bob,
-            ReferenceFrame::Alice => alice,
-            ReferenceFrame::DistantObserver => None,
-        };
+        // Which chart the scene is drawn in, from the observer read off the selector above.
         let chart = frame_obs
             .and_then(|obs| {
                 // A rest frame is built on a 4-velocity, and an observer placed where their own
@@ -1067,6 +1134,18 @@ impl VolumeCanvas {
         ];
         if let Chart::Local { frame, r0, .. } = &chart {
             let tetrad = *frame.tetrad();
+            // How wide a patch has to be to cover the canvas at every orientation the camera can
+            // be spun to. It is a question about the canvas and the zoom and about nothing in the
+            // geometry, which is why it is not `window`: a patch sized to the time window showed
+            // its own corners the moment the eye was moved off the axes.
+            let half = patch_half_width(rect, camera.scale);
+            // Where the legend stands, so that a label of the distant clock's does not pile into
+            // it. The legend is painted last and would win the pixels either way; what is wanted
+            // is for the slice labels not to be under it in the first place.
+            let legend_rect = egui::Rect::from_min_size(
+                rect.left_top(),
+                Vec2::new(rect.width() * 0.6, 7.0 * Theme::MIN_FONT_PT * font_scale),
+            );
             // n_a = e_a^r, in the chart's own (xi^0, xi^1, xi^2) order.
             let n = [tetrad.e0[1], tetrad.e1[1], tetrad.e2[1]];
             for (r_h, colour, base_alpha, width) in surfaces {
@@ -1076,7 +1155,7 @@ impl VolumeCanvas {
                 let trace = push_plane(
                     &mut buf,
                     &plane,
-                    window,
+                    half,
                     PLANE_CELLS,
                     colour,
                     (base_alpha, base_alpha / 2),
@@ -1109,7 +1188,7 @@ impl VolumeCanvas {
                     // A plane whose nearest point is further from the origin than the patch is wide
                     // has nothing on screen: |k step| / |n| > W. That is the bound, and the count
                     // cap behind it is only a backstop.
-                    let reach = window * n_len / step;
+                    let reach = half * n_len / step;
                     let k_max = if reach.is_finite() {
                         (reach.floor() as i64).clamp(0, CLOCK_PLANE_MAX_K)
                     } else {
@@ -1131,7 +1210,7 @@ impl VolumeCanvas {
                         push_plane(
                             &mut buf,
                             &plane,
-                            window,
+                            half,
                             CLOCK_PLANE_CELLS,
                             Theme::GRID_LINE,
                             (CLOCK_PLANE_ALPHA, CLOCK_PLANE_ALPHA),
@@ -1143,8 +1222,16 @@ impl VolumeCanvas {
                         if !finite3(at) {
                             continue;
                         }
+                        // A patch that covers the canvas hangs its label wherever its nearest
+                        // point happens to project to, and that is often off the edge or under
+                        // the legend in the top-left corner. Neither is a caption anybody can
+                        // read, so neither is drawn.
+                        let at = camera.project(centre, at).0;
+                        if !rect.contains(at) || legend_rect.contains(at) {
+                            continue;
+                        }
                         buf.label(
-                            camera.project(centre, at).0,
+                            at,
                             egui::Align2::LEFT_CENTER,
                             distant_clock_offset_label(dt * seconds_per_m),
                             Theme::TEXT_MUTED,
@@ -1226,6 +1313,23 @@ impl VolumeCanvas {
             Who::Bob => Theme::BOB_COLOR,
         };
         let span = (current_time - t_min).max(1e-9);
+        // Whose worldline is the chart's own vertical axis, if anybody's. In a rest frame the focus
+        // observer is at rest at the origin *by construction* - that is what the chart is - so their
+        // worldline is the line xi^1 = xi^2 = 0 and nothing else.
+        //
+        // It cannot be drawn by pushing their trail through the map. A trail point one M back is a
+        // finite coordinate offset, the chart answers for it to first order, and the chord between
+        // two such answers is a straight line that leans: the picture then shows the observer
+        // drifting sideways through their own rest frame, which is the one thing a rest frame says
+        // cannot happen. So the axis is drawn as the axis.
+        let axis_who = chart
+            .is_local()
+            .then_some(match frame_of_ref {
+                ReferenceFrame::Bob => Some(Who::Bob),
+                ReferenceFrame::Alice => Some(Who::Alice),
+                ReferenceFrame::DistantObserver => None,
+            })
+            .flatten();
         for (obs, who) in present.iter().copied() {
             // Heavier than the shadow on the floor: the worldline is seen through the glass of
             // whichever pipes stand between it and the eye, and at the floor's weight it was lost
@@ -1234,6 +1338,34 @@ impl VolumeCanvas {
                 Who::Alice => 1.8,
                 Who::Bob => 2.2,
             };
+            if Some(who) == axis_who {
+                let origin = [0.0, 0.0, 0.0];
+                let foot = [0.0, 0.0, z_bottom];
+                let head = [0.0, 0.0, z_of(t_max)];
+                // The past half at the worldline's own weight, under the floor with every other
+                // past; the future half over it and faint, because the run has not integrated it
+                // and the axis up there is a statement about the chart rather than about anything
+                // that has happened.
+                buf.push(
+                    Layer::Below,
+                    centroid_depth(&camera, centre, [foot, origin].into_iter()),
+                    Prim::Line {
+                        points: vec![project(foot).0, project(origin).0],
+                        stroke: Stroke::new(width, colour_of(who)),
+                        closed: false,
+                    },
+                );
+                buf.push(
+                    Layer::Above,
+                    centroid_depth(&camera, centre, [origin, head].into_iter()),
+                    Prim::Line {
+                        points: vec![project(origin).0, project(head).0],
+                        stroke: Stroke::new(width, colour_of(who).gamma_multiply(0.35)),
+                        closed: false,
+                    },
+                );
+                continue;
+            }
             let points: Vec<(f64, [f64; 3])> = obs
                 .trail
                 .iter()
@@ -1396,7 +1528,18 @@ impl VolumeCanvas {
         // cone is drawn in the global foliation too - it is a fact about an event, not about a
         // choice of frame, and the view drawn from nobody's rest frame is the one where that is
         // easiest to say.
-        let cone_focus = self.show_past_cone.then(|| focus.or(bob).or(alice)).flatten();
+        //
+        // It is drawn *only* there. The surface is a locus of events many M away from the focus
+        // event, and a rest frame places those through a linear map that is exact at that event and
+        // linearised everywhere else; at the u^t ~ 1e5 of a late fall the linearisation of a 10 M
+        // offset is a number with no picture in it, and the surface arrives as a canvas-wide wash
+        // that hides the geometry the rest frame is being looked at for. So in `Chart::Local` the
+        // cone is not drawn - and not built either, since building it is the expensive half.
+        // `past_cone` is left exactly as it stands, so switching back to the global foliation
+        // redraws the cached surface rather than integrating it again.
+        let cone_focus = (self.show_past_cone && !chart.is_local())
+            .then(|| focus.or(bob).or(alice))
+            .flatten();
         if let Some(obs) = cone_focus {
             let key = PastConeKey {
                 name: obs.name.clone(),
@@ -1523,7 +1666,11 @@ impl VolumeCanvas {
         // `HISTORY_MAX_ROWS` = 256 rows, so 8 x 24 x 255 x 2 = 98 k triangles per field and under
         // 200 k for both - the worst case the caps allow, against a typical window holding a
         // hundred rows of two or three tagged pulses.
-        if self.show_pulse_surfaces {
+        //
+        // In the global foliation only, for the reason section 7 gives: every row of a history is
+        // a front several M across, and a rest frame's linear map is trusted at the focus event
+        // rather than out there.
+        if self.show_pulse_surfaces && !chart.is_local() {
             let to_world = |t: f64, s: &RaySample| {
                 chart.world(metric, t, f64::from(s.r), f64::from(s.phi), t_scale)
             };
@@ -1770,17 +1917,32 @@ impl VolumeCanvas {
             if ui.checkbox(&mut self.show_ghost_cones, "Ghost cones along the trail").changed() {
                 ui.close();
             }
+            // Both surfaces are built from coordinate offsets of many M, which a rest frame's
+            // first-order chart cannot place, so both are drawn in the global foliation alone and
+            // the menu says why rather than offering a switch that does nothing.
+            let global_only = !chart.is_local();
             if ui
-                .checkbox(&mut self.show_past_cone, "Exact past cone of the focus event")
+                .add_enabled(
+                    global_only,
+                    egui::Checkbox::new(
+                        &mut self.show_past_cone,
+                        "Exact past cone of the focus event",
+                    ),
+                )
+                .on_disabled_hover_text(GLOBAL_SURFACES_ONLY_TIP)
                 .changed()
             {
                 ui.close();
             }
             if ui
-                .checkbox(
-                    &mut self.show_pulse_surfaces,
-                    "Light-cone surfaces of every 8th pulse",
+                .add_enabled(
+                    global_only,
+                    egui::Checkbox::new(
+                        &mut self.show_pulse_surfaces,
+                        "Light-cone surfaces of every 8th pulse",
+                    ),
                 )
+                .on_disabled_hover_text(GLOBAL_SURFACES_ONLY_TIP)
                 .changed()
             {
                 ui.close();
@@ -1863,7 +2025,7 @@ impl VolumeCanvas {
             format!(
                 "yaw {:.0}°  pitch {:.0}°  {:.0} px/M  t×{:.2}\n\
                  window {:.1} … {:.1} M  (floor = now){}\n\
-                 drag: orbit  shift-drag: pan  wheel: zoom  ctrl-wheel: time scale  \
+                 drag: pan  shift-drag: orbit  wheel: zoom  ctrl-wheel: time scale  \
                  right-click: menu\n\
                  below the floor: the past · above: the future · {}: r = const · cones: exact \
                  null generators{}{}",
@@ -1886,13 +2048,14 @@ impl VolumeCanvas {
                 },
                 if chart_name.is_some() { "planes" } else { "pipes" },
                 // Terse, on the end of the line that says what the other shapes are, and only when
-                // the surface is actually on screen to be named.
-                if self.show_past_cone {
+                // the surface is actually on screen to be named - which in a rest frame neither of
+                // them is.
+                if self.show_past_cone && chart_name.is_none() {
                     "\npast cone: the event's null geodesics run backwards"
                 } else {
                     ""
                 },
-                if self.show_pulse_surfaces {
+                if self.show_pulse_surfaces && chart_name.is_none() {
                     "\npulse surfaces: every 8th pulse's light cone, coloured by gain"
                 } else {
                     ""
@@ -1941,8 +2104,9 @@ mod tests {
         /// it is None there and `colours` is what a test about it has to read.
         Mesh { vertices: usize, colour: Option<Color32>, colours: Vec<Color32>, first: Pos2 },
         /// A filled polygon or a stroked polyline. The fill is `Color32::TRANSPARENT` on a
-        /// polyline and the stroke is None on a fill.
-        Path { fill: Color32, stroke: Option<Color32>, points: Vec<Pos2> },
+        /// polyline and the stroke is None on a fill. `closed` tells a rim - a cone's, a ring's -
+        /// from an open run of a worldline.
+        Path { fill: Color32, stroke: Option<Color32>, points: Vec<Pos2>, closed: bool },
         Circle { fill: Color32, radius: f32, centre: Pos2 },
         Text(String),
         Other,
@@ -1980,6 +2144,7 @@ mod tests {
                         fill: path.fill,
                         stroke,
                         points: path.points.clone(),
+                        closed: path.closed,
                     });
                 }
                 egui::Shape::Circle(c) => {
@@ -2073,9 +2238,47 @@ mod tests {
     ) -> Vec<Painted> {
         let ctx = egui::Context::default();
         ctx.set_fonts(egui::FontDefinitions::empty());
+        volume_frame_raw(
+            canvas,
+            &ctx,
+            metric,
+            bob,
+            frame_of_ref,
+            show_distant_clock_grid,
+            alice_field,
+            bob_field,
+            input(),
+        )
+        .0
+    }
+
+    /// The frame every other helper is built on: one render into a context the caller owns, driven
+    /// by a raw input the caller has filled in.
+    ///
+    /// The context is a parameter because a drag is not one frame - the button goes down on one and
+    /// the pointer moves on the next - and egui carries that state on the context. The rect comes
+    /// back with the shapes because the framing rules in this view are measured against the canvas
+    /// the frame actually allocated, and a test that wants to predict the zoom has to be measuring
+    /// the same rectangle.
+    #[allow(clippy::too_many_arguments)]
+    fn volume_frame_raw(
+        canvas: &mut VolumeCanvas,
+        ctx: &egui::Context,
+        metric: &KerrSchild,
+        bob: Option<&Observer>,
+        frame_of_ref: ReferenceFrame,
+        show_distant_clock_grid: bool,
+        alice_field: &SignalField,
+        bob_field: &SignalField,
+        raw: egui::RawInput,
+    ) -> (Vec<Painted>, egui::Rect) {
         // Every worldline stands at the simulation clock, so the floor is the observer's own now.
         let clock = bob.map_or(0.0, |obs| obs.t);
-        let output = ctx.clone().run_ui(input(), |ui| {
+        let mut rect = egui::Rect::ZERO;
+        let output = ctx.clone().run_ui(raw, |ui| {
+            // The same size `render` is about to allocate: the width it is given and the canvas
+            // height it is passed.
+            rect = egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(ui.available_width(), 600.0));
             canvas.render(
                 ui,
                 metric,
@@ -2093,7 +2296,7 @@ mod tests {
         });
         let shapes = painted(&output);
         output.drop_without_applying_deltas();
-        shapes
+        (shapes, rect)
     }
 
     /// One frame with the exact past cone switched as the right-click menu switches it.
@@ -3265,6 +3468,348 @@ mod tests {
                 Theme::front_colour(10.0_f64.powf(log), alpha).to_array()
             })
             .collect()
+    }
+
+    /// Whether a stroke is one of Bob's own.
+    ///
+    /// `BOB_COLOR` is opaque, so every fade of it is a `gamma_multiply` of the whole premultiplied
+    /// colour: the red channel stays at zero and the green-to-blue ratio is held at 200/255. That
+    /// identifies it whatever the alpha, and it tells his mint apart from the only other red-free
+    /// stroke in the picture, the outer horizon's cyan at 255/230.
+    fn is_bob_stroke(c: Color32) -> bool {
+        c.r() == 0 && c.g() > 0 && (f32::from(c.b()) / f32::from(c.g()) - 200.0 / 255.0).abs() < 0.05
+    }
+
+    /// The pointer events one step of a drag is made of: the modifiers that are held - egui
+    /// carries those on an event of their own rather than on the raw input - then a move, and
+    /// optionally the button going down or coming up.
+    fn pointer(pos: Pos2, pressed: Option<bool>, modifiers: egui::Modifiers) -> Vec<egui::Event> {
+        let mut events =
+            vec![egui::Event::ModifiersChanged(modifiers), egui::Event::PointerMoved(pos)];
+        if let Some(pressed) = pressed {
+            events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers,
+            });
+        }
+        events
+    }
+
+    #[test]
+    fn test_a_plain_drag_pans_and_a_shift_drag_orbits() {
+        // The two canvases are looked at one after the other, and a gesture that means "move the
+        // picture" on one and "move the eye" on the other is a gesture the hand has to think
+        // about. The equatorial view pans on a plain drag, so this does too, and the orbit - which
+        // is the thing only this view has - is the one that takes a modifier.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let bob = bob_at(&metric, 4.0);
+        let signal = SignalField::default();
+
+        let drag = |modifiers: egui::Modifiers| {
+            let ctx = egui::Context::default();
+            ctx.set_fonts(egui::FontDefinitions::empty());
+            let mut canvas = VolumeCanvas {
+                camera: Camera::preset(Preset::ThreeQuarter, 48.0, Vec2::ZERO, 1.0),
+                show_past_cone: false,
+                show_pulse_surfaces: false,
+                keep_surface_framed: false,
+                ..Default::default()
+            };
+            let before = canvas.camera;
+            let press = Pos2::new(400.0, 320.0);
+            for (pos, pressed) in [
+                // egui resolves a press against the widgets the *previous* frame registered, so
+                // the first frame is the one that puts the canvas on the record.
+                (press, None),
+                (press, Some(true)),                          // the button goes down
+                (press + Vec2::new(30.0, 0.0), None),         // past egui's drag threshold
+                (press + Vec2::new(70.0, 24.0), None),        // the move itself
+                (press + Vec2::new(70.0, 24.0), Some(false)), // and the release
+            ] {
+                let raw =
+                    egui::RawInput { events: pointer(pos, pressed, modifiers), ..input() };
+                volume_frame_raw(
+                    &mut canvas,
+                    &ctx,
+                    &metric,
+                    Some(&bob),
+                    ReferenceFrame::DistantObserver,
+                    false,
+                    &signal,
+                    &signal,
+                    raw,
+                );
+            }
+            (before, canvas.camera)
+        };
+
+        let (before, after) = drag(egui::Modifiers::NONE);
+        println!(
+            "plain drag: pan {:?} -> {:?}, yaw {} -> {}, pitch {} -> {}",
+            before.pan, after.pan, before.yaw, after.yaw, before.pitch, after.pitch
+        );
+        assert!(
+            (after.pan - before.pan).length() > 1.0,
+            "a plain drag pans, but the pan went from {:?} to {:?}",
+            before.pan,
+            after.pan
+        );
+        assert_eq!(after.yaw, before.yaw, "and leaves the eye where it was");
+        assert_eq!(after.pitch, before.pitch);
+
+        let (before, after) = drag(egui::Modifiers::SHIFT);
+        println!(
+            "shift-drag: pan {:?} -> {:?}, yaw {} -> {}, pitch {} -> {}",
+            before.pan, after.pan, before.yaw, after.yaw, before.pitch, after.pitch
+        );
+        assert_eq!(after.pan, before.pan, "a shift-drag leaves the picture where it was");
+        assert!(
+            after.yaw != before.yaw && after.pitch != before.pitch,
+            "and moves the eye, but yaw went {} -> {} and pitch {} -> {}",
+            before.yaw,
+            after.yaw,
+            before.pitch,
+            after.pitch
+        );
+    }
+
+    #[test]
+    fn test_in_a_rest_frame_the_focus_worldline_is_the_axis() {
+        // The focus observer is at rest at the origin of their own chart: that is what the chart
+        // is. Their worldline is therefore the vertical through it, and drawing it instead by
+        // pushing their recorded trail through the map draws something else - the chord between
+        // two first-order answers about a curved worldline, which leans, and which reads as the
+        // observer drifting sideways through the frame they themselves define.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let mut bob = bob_at(&metric, 6.0);
+        for k in 1..=8 {
+            bob.step(&metric, (k as f64) * 0.25, 0.25);
+        }
+        assert!(bob.trail.len() > 2, "the walk has to leave a trail to draw");
+
+        let mut canvas = VolumeCanvas {
+            camera: Camera::preset(Preset::ThreeQuarter, 48.0, Vec2::ZERO, 1.0),
+            show_past_cone: false,
+            keep_surface_framed: false,
+            ..Default::default()
+        };
+        let shapes = volume_frame_on(&mut canvas, &metric, Some(&bob), ReferenceFrame::Bob, false);
+        let at = marker_of(&shapes);
+
+        let vertical = |points: &[Pos2]| points.iter().all(|p| (p.x - points[0].x).abs() < 0.5);
+        let mint: Vec<(&Vec<Pos2>, bool)> = shapes
+            .iter()
+            .filter_map(|s| match s {
+                Painted::Path { stroke: Some(c), points, closed, .. } if is_bob_stroke(*c) => {
+                    Some((points, *closed))
+                }
+                _ => None,
+            })
+            .collect();
+        let open: Vec<&Vec<Pos2>> =
+            mint.iter().filter(|(_, closed)| !closed).map(|(p, _)| *p).collect();
+        println!(
+            "{} mint strokes in Bob's own frame, {} of them open; his marker is at {at:?}",
+            mint.len(),
+            open.len()
+        );
+        assert!(
+            !open.is_empty(),
+            "his own worldline is drawn in his own frame: {:?}",
+            mint.iter().map(|(p, c)| (p.len(), c)).collect::<Vec<_>>()
+        );
+        assert!(
+            open.iter().any(|p| vertical(p) && (p[0].x - at.x).abs() < 0.5),
+            "it is the vertical through his marker at x = {}, but the mint strokes start at {:?}",
+            at.x,
+            open.iter().map(|p| p[0]).collect::<Vec<_>>()
+        );
+        // And nothing of his leans. A closed mint polyline would be a rim of some kind; there are
+        // none, because his cone is drawn in its own light blue, so every mint stroke here is a
+        // piece of the axis.
+        for p in open.iter() {
+            assert!(
+                vertical(p),
+                "every stroke of his worldline is vertical in his own rest frame, but one runs \
+                 from {:?} to {:?}",
+                p.first(),
+                p.last()
+            );
+        }
+    }
+
+    #[test]
+    fn test_in_a_rest_frame_no_pulse_surface_or_past_cone_is_drawn() {
+        // Both surfaces are loci of events several M from the focus event, and both are placed by
+        // a chart that answers exactly at that event and to first order anywhere else. At the
+        // boosts of a late fall that answer is a number with no picture in it, and the surface
+        // arrives as a wash across the canvas. So neither is drawn in a rest frame - and the past
+        // cone is not built either, which is the expensive half, nor is the cache it would have
+        // gone into disturbed.
+        let metric = KerrSchild::new(1.0, 0.65);
+        let (field, emitter) = emitting_field(&metric);
+        assert!(
+            field.pulses.iter().any(|p| p.history().is_some()),
+            "the run must leave a tagged pulse in flight for there to be a surface to suppress"
+        );
+        let idle = SignalField::default();
+        let ramp = front_ramp(FRONT_SURFACE_ALPHA);
+        let ramp_alpha = Theme::front_colour(1.0, FRONT_SURFACE_ALPHA).a();
+        let past_fill = Theme::cone_colours_at("Bob", Theme::VOLUME_CONE_FILL_ALPHA / 2).1;
+        let in_ramp = |colours: &[Color32]| {
+            !colours.is_empty()
+                && colours.iter().all(|c| c.a() == ramp_alpha && ramp.contains(&c.to_array()))
+        };
+
+        let frame = |frame_of_ref| {
+            let mut canvas = VolumeCanvas {
+                camera: Camera::preset(Preset::ThreeQuarter, 48.0, Vec2::ZERO, 1.0),
+                show_past_cone: true,
+                show_pulse_surfaces: true,
+                keep_surface_framed: false,
+                ..Default::default()
+            };
+            assert!(canvas.past_cone.is_none(), "the cache starts empty");
+            let shapes = volume_frame_signals(
+                &mut canvas,
+                &metric,
+                Some(&emitter),
+                frame_of_ref,
+                false,
+                &idle,
+                &field,
+            );
+            (shapes, canvas.past_cone.is_some())
+        };
+
+        let (shapes, built) = frame(ReferenceFrame::Bob);
+        println!("{} shapes in the emitter's own rest frame, cone built: {built}", shapes.len());
+        assert!(!built, "a rest frame does not integrate the past cone, so the cache is untouched");
+        assert!(
+            !shapes
+                .iter()
+                .any(|s| matches!(s, Painted::Mesh { colour: Some(c), .. } if *c == past_fill)),
+            "and nothing is painted in the past cone's half-alpha fill {past_fill:?}"
+        );
+        assert!(
+            !shapes
+                .iter()
+                .any(|s| matches!(s, Painted::Mesh { colours, .. } if in_ramp(colours))),
+            "and nothing is painted in the wavefront gain ramp"
+        );
+
+        // The same run in the global foliation draws both, so what suppresses them is the chart
+        // rather than a switch that has quietly turned itself off.
+        let (global, built) = frame(ReferenceFrame::DistantObserver);
+        assert!(built, "the global foliation does build the past cone");
+        assert!(
+            global
+                .iter()
+                .any(|s| matches!(s, Painted::Mesh { colour: Some(c), .. } if *c == past_fill)),
+            "and paints it"
+        );
+        assert!(
+            global.iter().any(|s| matches!(s, Painted::Mesh { colours, .. } if in_ramp(colours))),
+            "and paints the pulse surfaces too"
+        );
+    }
+
+    #[test]
+    fn test_in_a_rest_frame_the_patches_cover_the_canvas() {
+        // A patch is a square drawn in a plane the camera is free to spin, so there is no
+        // orientation its own corners can be kept out of the picture by - except by making it
+        // bigger than the canvas at every one of them. Half the diagonal is the radius of the disc
+        // the canvas is inscribed in; the overscan puts the corners outside that.
+        let rect = egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let half = patch_half_width(rect, 48.0);
+        let expected = PATCH_OVERSCAN * f64::from(400.0f32.hypot(300.0)) / 48.0;
+        println!("800 x 600 at 48 px/M: half-width {half} M against {expected} M");
+        assert!(
+            (half - expected).abs() < 1e-12,
+            "the patch half-width is the overscan times the rect's half-diagonal in M: {half} \
+             against {expected}"
+        );
+        assert!(
+            half > 14.0,
+            "which is wider than the 14 M time window the patch used to be sized to: {half}"
+        );
+
+        // The cells are unchanged - the pieces got bigger, not more numerous - so a rest frame
+        // still draws exactly one tessellated plane per surface of constant r.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let bob = bob_at(&metric, 3.0);
+        let mut canvas = VolumeCanvas {
+            camera: Camera::preset(Preset::ThreeQuarter, 48.0, Vec2::ZERO, 1.0),
+            show_past_cone: false,
+            keep_surface_framed: false,
+            ..Default::default()
+        };
+        let shapes = volume_frame_on(&mut canvas, &metric, Some(&bob), ReferenceFrame::Bob, false);
+        let quads = shapes.iter().filter(|s| matches!(s, Painted::Mesh { vertices: 4, .. })).count();
+        println!("{quads} four-cornered meshes for the four surfaces r = const");
+        assert_eq!(
+            quads,
+            4 * PLANE_CELLS * PLANE_CELLS,
+            "four surfaces at {PLANE_CELLS} cells a side"
+        );
+    }
+
+    #[test]
+    fn test_auto_zoom_frames_the_next_surface_in_a_rest_frame() {
+        // The flat rest-frame diagram's own framing rule, brought across: the surface the observer
+        // is about to meet crosses their own time axis at the proper time they have left, and
+        // `framed_window` turns that into the window in M the picture has to hold. Here it is
+        // spent on the height of the canvas, because in the volume the observer's own clock runs
+        // up the screen.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let mut bob = bob_at(&metric, 3.0);
+        for k in 1..=8 {
+            bob.step(&metric, (k as f64) * 0.2, 0.2);
+        }
+        let signal = SignalField::default();
+
+        let frame = |framed: bool| {
+            let ctx = egui::Context::default();
+            ctx.set_fonts(egui::FontDefinitions::empty());
+            let mut canvas = VolumeCanvas {
+                camera: Camera::preset(Preset::ThreeQuarter, 48.0, Vec2::ZERO, 1.0),
+                show_past_cone: false,
+                keep_surface_framed: framed,
+                ..Default::default()
+            };
+            let (_, rect) = volume_frame_raw(
+                &mut canvas,
+                &ctx,
+                &metric,
+                Some(&bob),
+                ReferenceFrame::Bob,
+                false,
+                &signal,
+                &signal,
+                input(),
+            );
+            (canvas.camera.scale, rect)
+        };
+
+        let (scale, rect) = frame(true);
+        let window = SpacetimeCanvas::framed_window(&metric, &bob, rect)
+            .expect("a falling observer has a surface ahead of them to frame");
+        let expected = (f64::from(rect.height()) * 0.4 / window) as f32;
+        println!(
+            "Bob at r = {:.4}: the window ahead is {window:.4} M, so the zoom is {scale} px/M \
+             against {expected}",
+            bob.r
+        );
+        assert!(
+            (scale - expected).abs() < 1e-3,
+            "the zoom puts that window across four tenths of the canvas height: {scale} against \
+             {expected}"
+        );
+
+        let (parked, _) = frame(false);
+        assert_eq!(parked, 48.0, "and with the framing off the zoom is the user's own");
     }
 
     #[test]
