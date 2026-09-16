@@ -3,7 +3,6 @@ pub mod local_frame;
 pub mod tetrad;
 pub mod observer;
 pub mod geodesic;
-pub mod fermi;
 pub mod wavefront;
 
 #[allow(unused_imports)]

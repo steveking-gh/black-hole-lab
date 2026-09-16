@@ -147,26 +147,6 @@ pub struct TrailPoint {
     stalled: bool,
 }
 
-impl TrailPoint {
-    /// The integrated 4-velocity at this event.
-    ///
-    /// The drawing wants it because a rest frame built on a *past* event of a worldline needs the
-    /// 4-velocity the observer actually had there, not the one they have now and not the closed
-    /// form at that radius: the volume view's Fermi rows carry an orthonormal frame at every
-    /// recorded event, and this is the vector each of those frames is built from.
-    pub fn u(&self) -> [f64; 3] {
-        self.u
-    }
-
-    /// A trail point standing for an event that is not on the recorded trail: the observer's own
-    /// present one, which the trail does not hold until the next step records it. The 4-velocity
-    /// is not carried, because the one caller has a better one to hand - `Observer::four_velocity`,
-    /// which knows about hovering and about the dragged modes - and passes it separately.
-    pub fn at(t: f64, r: f64, phi: f64, tau: f64) -> Self {
-        Self { t, r, phi, tau, u: [1.0, 0.0, 0.0], stalled: false }
-    }
-}
-
 /// Trail entries kept for a moving worldline, and for a dragged one. Past these the oldest entry
 /// is dropped, which bounds the drawing and, with it, how far back a rewind can reach: the
 /// reversible window is the window the trail keeps, exactly as it is for `SignalField`.
