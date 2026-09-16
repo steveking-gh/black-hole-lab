@@ -4,7 +4,7 @@ use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::geodesic::proper_time_between;
 use crate::physics::local_frame::{ruler_distance, LocalFrame, SurfaceCharacter};
 use crate::physics::observer::{Observer, ObserverMode};
-use crate::physics::wavefront::SignalField;
+use crate::physics::wavefront::{NullRay, Reception, SignalField};
 use egui::{epaint::PathShape, Color32, Pos2, Rect, Stroke, Vec2};
 use std::collections::HashMap;
 
@@ -980,11 +980,11 @@ impl SpacetimeCanvas {
                 match (asked, other) {
                     (Some(focus), other) => self.render_observer_frame(
                         ui, &painter, rect, metric, focus, other, use_km, font_scale,
-                        show_distant_clock_grid,
+                        show_distant_clock_grid, signals,
                     ),
                     (None, Some(focus)) => self.render_observer_frame(
                         ui, &painter, rect, metric, focus, None, use_km, font_scale,
-                        show_distant_clock_grid,
+                        show_distant_clock_grid, signals,
                     ),
                     (None, None) => {
                         painter.text(
@@ -1795,6 +1795,7 @@ Tick Enable Observer on Alice's or Bob's card",
         use_km: bool,
         font_scale: f32,
         show_distant_clock_grid: bool,
+        signals: SignalViews<'_>,
     ) {
         // Keep the next surface the observer meets on the canvas, if the user has not taken the
         // wheel. The window follows from one number and the same rule serves the whole fall, so
@@ -2147,6 +2148,63 @@ Tick Enable Observer on Alice's or Bob's card",
         }
 
         // 3. The focus observer's own light cone: 45 degrees through the origin, by construction.
+        // 3b. The other observer's transmission as a wave: every pulse is a crest, and a crest is
+        // a null surface, so through this plane it is a line at 45 degrees when it arrives
+        // radially and steeper when it arrives obliquely, since only the radial part of its motion
+        // lies in the drawn plane. A received crest passes through its arrival on the observer's
+        // own worldline, which is exact; one still in flight is placed by its nearest ray's
+        // current event, to first order. The spacing of the arrivals up the axis *is* the
+        // received period on the observer's own clock, and against the emitter's spacing it is
+        // the frequency ratio without a formula. On the approach to r- the rungs crowd together
+        // without limit: the infinite blueshift, drawn as crests. See `wave_crests`.
+        let (sender_field, sender_name, crest_colour) = if focus_obs.name == "Alice" {
+            (signals.bob, "Bob", Theme::BOB_COLOR)
+        } else {
+            (signals.alice, "Alice", Theme::ALICE_COLOR)
+        };
+        let crests = wave_crests(&frame, focus_obs, sender_field, self.frame_max_r);
+        for crest in &crests.crests {
+            let anchor = to_screen(crest.xi1, crest.xi0);
+            let dir = Vec2::new(crest.dir[0] as f32, -(crest.dir[1] as f32));
+            if let Some((a, b)) = clip_line_to_rect(anchor, dir, rect) {
+                let (alpha, width) = if crest.latest {
+                    (0.9, 1.6)
+                } else if crest.received {
+                    (0.55, 1.0)
+                } else {
+                    (0.3, 1.0)
+                };
+                painter.line_segment([a, b], Stroke::new(width, crest_colour.gamma_multiply(alpha)));
+            }
+            if crest.received && rect.contains(anchor) {
+                painter.circle_filled(anchor, 2.5, crest_colour);
+            }
+        }
+        if let (Some(rx), Some(tx)) = (crests.received_period, crests.emitted_period) {
+            let fmt = |m: f64| {
+                if use_km { metric.format_physical_time(m) } else { format!("{m:.3} M") }
+            };
+            let ratio = crests.period_ratio().map_or("n/a".to_string(), |x| format!("{x:.3}"));
+            let ray = crests.last_ray_ratio.map_or("n/a".to_string(), |x| format!("{x:.3}"));
+            painter.text(
+                Pos2::new(rect.right() - 10.0, rect.top() + 64.0 * font_scale),
+                egui::Align2::RIGHT_TOP,
+                format!(
+                    "{sender_name}'s signal at {}\n\
+                     crests: null lines through their arrivals on the worldline\n\
+                     received every {} of {}'s watch\n\
+                     sent every {} of {sender_name}'s\n\
+                     f_rx / f_tx = {ratio} from the periods, {ray} on the last ray",
+                    focus_obs.name,
+                    fmt(rx),
+                    focus_obs.name,
+                    fmt(tx),
+                ),
+                egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
+                crest_colour,
+            );
+        }
+
         let cone_len = (rect.height() * 0.35).min(rect.width() * 0.35);
         let apex = center;
         let (focus_future_fill, focus_past_fill, focus_edge) = Theme::cone_colours(&focus_obs.name);
@@ -2313,6 +2371,145 @@ Tick Enable Observer on Alice's or Bob's card",
 }
 
 /// Clip the infinite line p + t d to `rect` (Liang-Barsky), returning its visible segment.
+/// One crest of a transmission, placed in the focus observer's chart: a point of the drawn
+/// (xi^1, xi^0) plane it passes through and its Euclidean-unit direction there.
+pub(crate) struct Crest {
+    pub xi1: f64,
+    pub xi0: f64,
+    /// (d xi^1, d xi^0), the trace of the crest's null direction in the drawn plane.
+    pub dir: [f64; 2],
+    /// Whether the crest has already reached the observer, in which case it passes through the
+    /// arrival on their own worldline and the placement is exact.
+    pub received: bool,
+    /// The most recent arrival.
+    pub latest: bool,
+}
+
+/// The other observer's transmission read as a wave at the focus observer's worldline.
+pub(crate) struct WaveCrests {
+    pub crests: Vec<Crest>,
+    /// Proper time on the focus observer's clock between the last two arrivals, in M.
+    pub received_period: Option<f64>,
+    /// Proper time on the emitter's clock between the emissions of those same two pulses, in M.
+    pub emitted_period: Option<f64>,
+    /// nu(receiver) / nu(emitter) carried by the ray of the most recent arrival.
+    pub last_ray_ratio: Option<f64>,
+}
+
+impl WaveCrests {
+    /// f_rx / f_tx from the two periods: the ratio of proper intervals between the same pair of
+    /// pulses at emission and at reception, which is exact, and independent of the per-ray
+    /// factor it should agree with.
+    pub fn period_ratio(&self) -> Option<f64> {
+        match (self.emitted_period, self.received_period) {
+            (Some(tx), Some(rx)) if rx > 0.0 && tx.is_finite() => Some(tx / rx),
+            _ => None,
+        }
+    }
+}
+
+/// A transmission's pulses as wave crests in the focus observer's local chart.
+///
+/// A train of pulses emitted at a fixed interval of the emitter's clock is a wave with the
+/// pulses as crests, and the observer's received frequency is the ratio of two proper intervals:
+/// the emitter's between two emissions and the observer's between the corresponding arrivals.
+/// Both are recorded - every reception carries the observer's proper time at the crossing, every
+/// pulse its emitter's at emission - so the ratio is measured rather than computed, and the
+/// per-ray frequency factor the integrator carries is the monochromatic answer it agrees with in
+/// the limit of closely spaced pulses.
+///
+/// A received crest is placed through its arrival on the observer's worldline, xi^1 = 0 at
+/// xi^0 = tau_arrival - tau_now, which is exact. Its direction is that of the pulse's ray
+/// nearest the observer in azimuth, pushed into the chart: a radial arrival is a 45 degree
+/// line, an oblique one steeper, since only the radial part of its motion is in the drawn plane.
+/// A crest still in flight is placed by that ray's current event through the linearised chart,
+/// and only within twice `reach` M of the observer, the window the picture is framed to, which
+/// is the region the chart can speak for.
+pub(crate) fn wave_crests(
+    frame: &LocalFrame,
+    focus: &Observer,
+    field: &SignalField,
+    reach: f64,
+) -> WaveCrests {
+    use std::f64::consts::{PI, TAU};
+    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    // The trace in the drawn plane of a crest moving with coordinate slopes (dr/dt, dphi/dt):
+    // the null vector (1, dr/dt, dphi/dt) in the chart's components, projected onto (xi^1, xi^0).
+    let direction = |dr_dt: f64, dphi_dt: f64| -> [f64; 2] {
+        let radial_ingoing = [-std::f64::consts::FRAC_1_SQRT_2, std::f64::consts::FRAC_1_SQRT_2];
+        let v = frame.vector_to_local(&[1.0, dr_dt, dphi_dt]);
+        let len = (v[0] * v[0] + v[1] * v[1]).sqrt();
+        if !len.is_finite() || len <= 0.0 {
+            return radial_ingoing;
+        }
+        [v[1] / len, v[0] / len]
+    };
+    let pulse_of = |index: usize| field.pulses.iter().find(|p| p.index == index);
+    // Where a ray's current event lands in the chart.
+    let place = |ray: &NullRay| -> [f64; 3] {
+        frame.to_local(&[ray.t - focus.t, ray.r - focus.r, wrap(ray.phi - focus.phi)])
+    };
+
+    let mut received: Vec<&Reception> = field.receptions().collect();
+    received.sort_by(|a, b| a.tau_receiver.total_cmp(&b.tau_receiver));
+    let latest_index = received.last().map(|r| r.pulse_index);
+
+    let mut crests = Vec::new();
+    for rec in &received {
+        crests.push(Crest {
+            xi1: 0.0,
+            xi0: rec.tau_receiver - focus.tau,
+            dir: direction(rec.dr_dt, rec.dphi_dt),
+            received: true,
+            latest: latest_index == Some(rec.pulse_index),
+        });
+    }
+    for pulse in &field.pulses {
+        if received.iter().any(|r| r.pulse_index == pulse.index) {
+            continue;
+        }
+        // The point of the front nearest the observer in their own chart is where the crest
+        // will sweep over them, to first order: the ray whose current event lies closest.
+        let Some((ray, xi)) = pulse
+            .rays
+            .iter()
+            .filter(|ray| ray.alive())
+            .map(|ray| (ray, place(ray)))
+            .filter(|(_, xi)| xi.iter().all(|c| c.is_finite()))
+            .min_by(|(_, a), (_, b)| a[1].hypot(a[0]).total_cmp(&b[1].hypot(b[0])))
+        else {
+            continue;
+        };
+        if xi[1].hypot(xi[0]) >= 2.0 * reach {
+            continue;
+        }
+        crests.push(Crest {
+            xi1: xi[1],
+            xi0: xi[0],
+            dir: direction(ray.dr_dt, ray.dphi_dt),
+            received: false,
+            latest: false,
+        });
+    }
+
+    let (received_period, emitted_period) = match received.as_slice() {
+        [.., a, b] => (
+            Some(b.tau_receiver - a.tau_receiver),
+            match (pulse_of(a.pulse_index), pulse_of(b.pulse_index)) {
+                (Some(pa), Some(pb)) => Some(pb.emitted_tau - pa.emitted_tau),
+                _ => None,
+            },
+        ),
+        _ => (None, None),
+    };
+    WaveCrests {
+        crests,
+        received_period,
+        emitted_period,
+        last_ray_ratio: received.last().map(|r| r.ratio),
+    }
+}
+
 fn clip_line_to_rect(p: Pos2, d: Vec2, rect: Rect) -> Option<(Pos2, Pos2)> {
     if d.x.abs() < 1e-12 && d.y.abs() < 1e-12 {
         return None;
@@ -2981,6 +3178,64 @@ mod canvas_tests {
         assert_eq!(distant_clock_offset_label(SECONDS_PER_YEAR * 1e6), "+1e6 yr");
         // A step that lands between two units keeps one decimal rather than lying about being round.
         assert_eq!(distant_clock_offset_label(65.0 * 60.0), "+1.1 h");
+    }
+
+    #[test]
+    fn test_wave_crests_read_the_received_frequency_off_consecutive_arrivals() {
+        // Two static observers, Alice above Bob, and no spin: the frequency Bob receives from
+        // Alice is the gravitational shift sqrt((1 - 2M/r_A) / (1 - 2M/r_B)), a closed form. The
+        // crests give it two ways - the ratio of proper intervals between the same pair of pulses
+        // at emission and at arrival, and the per-ray factor on the last arrival - and both have
+        // to be it. Every received crest passes through the arrival on Bob's own worldline, in
+        // his past, heading inward; and the crests still on their way are placed too.
+        use crate::physics::observer::{ObserverMode, WorldlineParams};
+        let metric = KerrSchild::new(1.0, 0.0);
+        let (r_alice, r_bob) = (6.0, 4.5);
+        let mut alice =
+            Observer::new_with_phi(&metric, "Alice", 0.0, r_alice, 0.0, 0.0, WorldlineParams::default());
+        alice.mode = ObserverMode::Static;
+        let mut bob =
+            Observer::new_with_phi(&metric, "Bob", 0.0, r_bob, 0.0, 0.0, WorldlineParams::default());
+        bob.mode = ObserverMode::Static;
+        let mut field = SignalField::default();
+        let dt = 0.1;
+        for i in 0..60 {
+            let t = ((i + 1) as f64) * dt;
+            alice.step(&metric, t, dt);
+            bob.step(&metric, t, dt);
+            field.advance(&metric, dt);
+            field.emit_if_due(&metric, &alice);
+            field.detect_receptions(&metric, &bob);
+        }
+        assert!(field.received_count() >= 3, "Bob heard {} pulses", field.received_count());
+
+        let frame = LocalFrame::for_observer(&metric, bob.r, &bob.four_velocity(&metric));
+        let crests = wave_crests(&frame, &bob, &field, 10.0);
+        let expected = ((1.0 - 2.0 / r_alice) / (1.0 - 2.0 / r_bob)).sqrt();
+        let ratio = crests.period_ratio().expect("two arrivals give a period ratio");
+        let ray = crests.last_ray_ratio.expect("the last arrival carries its ray's factor");
+        println!(
+            "received every {:?} M of Bob's, sent every {:?} M of Alice's: f_rx/f_tx = {ratio:.4} \
+             from the periods, {ray:.4} on the last ray, {expected:.4} in closed form",
+            crests.received_period, crests.emitted_period
+        );
+        assert!((ratio / expected - 1.0).abs() < 0.03, "the period ratio is the gravitational shift");
+        assert!((ray / expected - 1.0).abs() < 0.03, "and so is the ray's own factor");
+
+        let received: Vec<&Crest> = crests.crests.iter().filter(|c| c.received).collect();
+        assert!(received.len() >= 3, "{} received crests drawn", received.len());
+        assert_eq!(received.iter().filter(|c| c.latest).count(), 1, "one crest is the latest");
+        for c in &received {
+            assert_eq!(c.xi1, 0.0, "a received crest passes through Bob's own worldline");
+            assert!(c.xi0 <= 0.0, "in his past: xi0 = {}", c.xi0);
+            let len = c.dir[0].hypot(c.dir[1]);
+            assert!((len - 1.0).abs() < 1e-9, "unit direction, not {len}");
+            assert!(c.dir[1] > 0.0 && c.dir[0] < 0.0, "future-directed and ingoing: {:?}", c.dir);
+        }
+        assert!(
+            crests.crests.iter().any(|c| !c.received),
+            "and the pulses still on their way to him are drawn too"
+        );
     }
 
     #[test]

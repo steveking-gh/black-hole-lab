@@ -1087,6 +1087,12 @@ pub struct Reception {
     /// nu(receiver) / nu(emitter at emission) for the ray that reached them, interpolated between
     /// the two passes exactly as the event is.
     pub ratio: f64,
+    /// The receiving ray's coordinate slopes (dr/dt, dphi/dt) at the pass that found the crossing:
+    /// the direction the crest was moving in as it swept over the receiver, which is what places
+    /// its trace through the arrival in the receiver's own frame. Of the two rays bracketing the
+    /// crossing, the one nearer the receiver's azimuth, as `frozen_family` is.
+    pub dr_dt: f64,
+    pub dphi_dt: f64,
     /// Whether the receiving ray belongs to the frozen family, E - Omega_- L < 0, which never
     /// crosses r- and piles onto it, rather than to the crossing family that passes straight
     /// through. Decided by `NullRay::inner_horizon_energy` on whichever of the two bracketing rays
@@ -1788,6 +1794,8 @@ impl Pulse {
                     r: at(prev.r, receiver.r),
                     phi: at(prev.phi, receiver.phi),
                     ratio: crossing_ratio,
+                    dr_dt: self.rays[nearer].dr_dt,
+                    dphi_dt: self.rays[nearer].dphi_dt,
                     frozen_family: self.rays[nearer].frozen(metric),
                     segment: i,
                     loop_s: sheet.loop_s,
