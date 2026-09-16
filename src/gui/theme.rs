@@ -99,6 +99,16 @@ impl Theme {
         )
     }
 
+    /// The colour a cone's rim is stroked in, in the volume: a brighter, opaque shade of the wall
+    /// it is the lip of. The two halves have two wall colours, and the rim carries the same
+    /// distinction rather than one edge colour for both, so the eye reads "future" and "past" off
+    /// the lip as well as the glass. The lift is halfway from the wall's own hue to white.
+    pub fn cone_rim_colour(fill: Color32) -> Color32 {
+        let [r, g, b, _] = fill.to_srgba_unmultiplied();
+        let lift = |c: u8| -> u8 { c.saturating_add((255 - c) / 2) };
+        Color32::from_rgb(lift(r), lift(g), lift(b))
+    }
+
     // River of Space (the E = 1, L = 0 raindrop flow). The streaks are keyed to the invariant
     // river speed beta = sqrt(1 - alpha^2) relative to the local ZAMO, not to the radius, so the
     // colour says the same thing at every spin: pale blue in the weak field, the ergosphere amber
