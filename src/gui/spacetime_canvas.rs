@@ -1250,11 +1250,8 @@ Tick Enable Observer on Alice's or Bob's card",
             painter.rect_filled(rect_ergo, 0.0, Theme::ERGOSPHERE_FILL);
         }
 
-        // Region I: [re, r_offset + max_r]
-        if rect.right() > x_re {
-            let rect_r1 = Rect::from_min_max(Pos2::new(x_re, rect.top()), Pos2::new(rect.right(), rect.bottom()));
-            painter.rect_filled(rect_r1, 0.0, Theme::REGION_I_FILL);
-        }
+        // Region I, [re, r_offset + max_r], is not filled: the exterior is the canvas background,
+        // as it is in the volume, and the three fills above mark what is not the exterior.
 
         // 1. Horizontal Time Grid & Vertical Time Axis Labels
         let raw_t_step = (t_max - t_min) / 7.0;

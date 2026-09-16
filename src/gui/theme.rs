@@ -12,8 +12,7 @@ impl Theme {
     pub const CANVAS_BG: Color32 = Color32::from_rgb(14, 16, 24);
     pub const PANEL_BG: Color32 = Color32::from_rgb(20, 24, 34);
 
-    // Region Fills (Translucent)
-    pub const REGION_I_FILL: Color32 = Color32::from_rgba_premultiplied(15, 25, 45, 40);
+    // Region Fills (Translucent). Region I has none: the exterior is the canvas background.
     pub const ERGOSPHERE_FILL: Color32 = Color32::from_rgba_premultiplied(50, 40, 10, 45);
     pub const REGION_II_FILL: Color32 = Color32::from_rgba_premultiplied(45, 15, 55, 60);
     pub const REGION_III_FILL: Color32 = Color32::from_rgba_premultiplied(10, 50, 45, 60);
