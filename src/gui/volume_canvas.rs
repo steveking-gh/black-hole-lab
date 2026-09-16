@@ -2208,7 +2208,10 @@ impl VolumeCanvas {
                 let Some(c) = corners else {
                     continue;
                 };
-                let near = c.iter().map(|p| within(*p)).fold(0.0f32, f32::max);
+                // Weighted by its *farthest* corner: a strip with one end at the focus event and
+                // the other beyond the reach is exactly the stripe across the canvas the fade is
+                // there to remove, and drawn by its nearest corner it would still be one.
+                let near = c.iter().map(|p| within(*p)).fold(1.0f32, f32::min);
                 if near <= 0.0 {
                     continue;
                 }
@@ -2914,7 +2917,10 @@ impl VolumeCanvas {
                                 if !corner.iter().all(|c| finite3(*c) && placeable(*c)) {
                                     continue;
                                 }
-                                if corner.iter().all(|c| within(*c) <= 0.0) {
+                                // Wholly inside the reach or not at all: a cell with one corner
+                                // near the event and one beyond the reach is a stripe across the
+                                // canvas however its far corner is weighted.
+                                if corner.iter().any(|c| within(*c) <= 0.0) {
                                     continue;
                                 }
                                 let base = mesh.vertices.len() as u32;
@@ -2996,7 +3002,7 @@ impl VolumeCanvas {
                     section(r_out, w[1])?,
                     section(r_in, w[1])?,
                 ];
-                let near = quad.iter().map(|(_, w)| *w).fold(0.0f32, f32::max);
+                let near = quad.iter().map(|(_, w)| *w).fold(1.0f32, f32::min);
                 if near <= 0.0 {
                     continue;
                 }
