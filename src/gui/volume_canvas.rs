@@ -54,15 +54,19 @@ pub struct Camera {
 ///
 /// `Top` is the equatorial view seen from directly above, which is what the other canvas draws;
 /// `Side` is almost edge-on, where the floor collapses to a line and the picture is a (space, time)
-/// diagram; `EdgeOn` is exactly that, the eye in the floor looking along +y; `ThreeQuarter` is the
-/// one that shows a cone as a cone.
+/// diagram; `EdgeOn` is nearer still, the eye all but in the floor looking along +y; `ThreeQuarter`
+/// is the one that shows a cone as a cone.
 ///
 /// `EdgeOn` earns its place in a rest frame. There the drawn axes are (xi^1, xi^2, xi^0) and every
 /// surface r = const is a plane containing the xi^2 direction (the axial gauge of
-/// `Tetrad::from_four_velocity_axial` puts e2^r = 0), so a line of sight along xi^2 lies *in* every
-/// one of those planes and each collapses to a line whose slope is its causal character: the
-/// picture is the flat rest-frame diagram's (xi^1, xi^0) plane, with the light cone at exactly 45
-/// degrees either side of the axis. Any other pitch tilts the planes open into bands.
+/// `Tetrad::from_four_velocity_axial` puts e2^r = 0), so a line of sight along xi^2 lies all but
+/// *in* every one of those planes and each closes to a narrow band whose slope is its causal
+/// character: the picture is the flat rest-frame diagram's (xi^1, xi^0) plane, with the light cone
+/// at 45 degrees either side of the axis. Not exactly in, because at pitch 0 each of those planes
+/// is seen exactly edge-on - every cell of it projects to zero area and its trace on the floor,
+/// which runs along xi^2, to a single point - and the horizons vanish from the picture altogether.
+/// A few degrees of pitch leaves each one a skinny band and a short bright trace, which is what
+/// the eye needs to find it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Preset {
     Top,
@@ -71,16 +75,20 @@ pub enum Preset {
     ThreeQuarter,
 }
 
+/// The pitch of the `EdgeOn` preset, radians: about four degrees above the floor. Seen in the
+/// app, exactly edge-on left the horizons invisible; this leaves each a skinny visible band.
+pub const EDGE_ON_PITCH: f32 = 0.07;
+
 impl Preset {
     /// The (yaw, pitch) this preset puts the eye at. `Side` is not exactly edge-on: at pitch 0 the
     /// floor is a single line and every worldline crossing the hole lands on top of every other, so
-    /// it is tilted just far enough that near and far are distinguishable. `EdgeOn` is pitch 0 on
-    /// purpose, for the reason the type's doc gives.
+    /// it is tilted just far enough that near and far are distinguishable. `EdgeOn` is four
+    /// degrees off pitch 0 on purpose, for the reason the type's doc gives.
     fn angles(self) -> (f32, f32) {
         match self {
             Self::Top => (0.0, std::f32::consts::FRAC_PI_2),
             Self::Side => (0.0, 0.17),
-            Self::EdgeOn => (0.0, 0.0),
+            Self::EdgeOn => (0.0, EDGE_ON_PITCH),
             Self::ThreeQuarter => (0.52, 0.61),
         }
     }
@@ -590,10 +598,54 @@ const CLOCK_PLANE_MAX_K: i64 = 100;
 /// solid block of overlapping glyphs, so the labels go and the geometry stays.
 const CLOCK_LABEL_MIN_PX: f32 = 14.0;
 
-/// How far in from the right-hand edge of the canvas the distant clock's labels are hung, in
-/// pixels. The flat rest-frame diagram hangs its own the same distance in from the left; this view
-/// mirrors them to the right, where the eye is not already reading the legend.
+/// How far in from the left-hand edge of the canvas the distant clock's labels are hung, in
+/// pixels: the same margin, the same distance in, as the flat rest-frame diagram's.
 const CLOCK_LABEL_EDGE_PX: f32 = 6.0;
+
+/// The zoom ceilings, in pixels per M, for the two charts.
+///
+/// In the global chart the ceiling is the equatorial view's, because the two views zoom the same
+/// plane at the same rate and a picture of the whole hole has no use for more. A rest frame is
+/// another matter: on the approach to the far branch of r- the surface ahead of the observer
+/// closes to 1e-10 M of the local chart and the flat diagram follows it down to 1e-12 M, and a
+/// volume capped at the equatorial ceiling stops following at about 1e-3 M - after which its
+/// framing, its planes and the rung of the observer's own clock all stand still while the outside
+/// universe's labels go on climbing, which reads as the ticks having stopped. Seen in the app at
+/// about 2 ms a tick. At 1e12 the r- plane is still 260 px from the observer when the integration
+/// stalls, so the volume follows the whole fall.
+///
+/// Anything mapped through a rest frame from far away lands at absurd screen coordinates at that
+/// zoom - the other observer, their trail, their pulses - and is kept off the tessellator by
+/// `on_stage`.
+const SCALE_MAX_GLOBAL: f32 = 500_000.0;
+const SCALE_MAX_LOCAL: f32 = 1e12;
+
+/// How far outside the canvas, in pixels, a projected point may fall before it is not drawn.
+///
+/// A rest frame zoomed to `SCALE_MAX_LOCAL` puts the other observer's worldline at 1e20 px or
+/// more, which is a finite number and a meaningless one: a stroke that long has a squared length
+/// past f32 and tessellates to NaN. A point a million pixels off the canvas is off the canvas at
+/// every zoom this view will ever be looked at in.
+const STAGE_PX: f32 = 1e6;
+
+/// Whether a projected point is finite and not absurdly far off the canvas. See `STAGE_PX`.
+fn on_stage(p: Pos2, rect: egui::Rect) -> bool {
+    p.is_finite()
+        && (p.x - rect.center().x).abs() < STAGE_PX
+        && (p.y - rect.center().y).abs() < STAGE_PX
+}
+
+/// The same point, pulled onto the stage if it is off it, for a drawing helper that takes a
+/// projector and cannot skip a point: what it draws there is wrong by at most the width of the
+/// stage, which is a million pixels off the canvas either way.
+fn stage_clamp(p: Pos2, rect: egui::Rect) -> Pos2 {
+    if on_stage(p, rect) {
+        return p;
+    }
+    let c = rect.center();
+    let clamp = |v: f32, o: f32| if v.is_finite() { (v - o).clamp(-STAGE_PX, STAGE_PX) + o } else { o };
+    Pos2::new(clamp(p.x, c.x), clamp(p.y, c.y))
+}
 
 /// Half the length of one tick of the focus observer's own clock on their axis, in pixels, and the
 /// backstop on how many of them are drawn either side of their own event. The count that actually
@@ -958,6 +1010,8 @@ impl VolumeCanvas {
             ReferenceFrame::Alice => alice,
             ReferenceFrame::DistantObserver => None,
         };
+        // The zoom ceiling belongs to the chart: see `SCALE_MAX_LOCAL`.
+        let scale_max = if frame_obs.is_some() { SCALE_MAX_LOCAL } else { SCALE_MAX_GLOBAL };
 
         // 1. The camera, moved before anything is projected, so that this frame draws the view the
         // pointer has just asked for rather than the previous one. The equatorial view can afford
@@ -1019,7 +1073,7 @@ impl VolumeCanvas {
                     let zoom_mult =
                         if inward { (1.0 + step).powi(steps) } else { (1.0 - step).powi(steps) };
                     let old_scale = self.camera.scale;
-                    let new_scale = (old_scale * zoom_mult).clamp(8.0, 500_000.0);
+                    let new_scale = (old_scale * zoom_mult).clamp(8.0, scale_max);
                     if let Some(mpos) = response.hover_pos() {
                         let nominal = rect.center() + self.camera.pan;
                         self.camera.pan += (mpos - nominal) * (1.0 - new_scale / old_scale);
@@ -1055,7 +1109,7 @@ impl VolumeCanvas {
         {
             let scale = (f64::from(rect.height()) * 0.4 / window_m) as f32;
             if scale.is_finite() {
-                self.camera.scale = scale.clamp(8.0, 500_000.0);
+                self.camera.scale = scale.clamp(8.0, scale_max);
             }
         }
 
@@ -1110,7 +1164,12 @@ impl VolumeCanvas {
             Chart::Global { .. } => camera.project(centre, [x, y, 0.0]).0,
             Chart::Local { .. } => {
                 let (r, phi) = metric.chart_point(x, y, RING_DROP_FLOOR);
-                camera.project(centre, chart.world(metric, current_time, r, phi, t_scale)).0
+                // A front many M from the focus event lands absurdly far off the canvas at the
+                // zooms a rest frame reaches; the helper cannot skip a point, so it is clamped.
+                stage_clamp(
+                    camera.project(centre, chart.world(metric, current_time, r, phi, t_scale)).0,
+                    rect,
+                )
             }
         };
         // Height is a coordinate-time difference in M, kept in f64 the whole way into `project`,
@@ -1318,7 +1377,7 @@ impl VolumeCanvas {
             // Edge-on preset the margin reads exactly as the flat diagram's does at every boost.
             // (Anchored on the patch's 3D centre instead it would sit off the slice by the plane's
             // xi^2 tilt, which at modest u^t pulls the readings a quarter closer together.)
-            let label_x = rect.right() - CLOCK_LABEL_EDGE_PX;
+            let label_x = rect.left() + CLOCK_LABEL_EDGE_PX;
             let edge_y = |dt: f64| -> Option<f32> {
                 local_plane(n_t, dt)?;
                 let line = frame.surface_t_const(dt);
@@ -1403,7 +1462,7 @@ impl VolumeCanvas {
                     }
                     buf.label(
                         at,
-                        egui::Align2::RIGHT_CENTER,
+                        egui::Align2::LEFT_CENTER,
                         distant_clock_offset_label(dt * seconds_per_m),
                         Theme::TEXT_MUTED,
                     );
@@ -1627,15 +1686,20 @@ impl VolumeCanvas {
                 let t_mid = 0.5 * (run[0].0 + run[run.len() - 1].0);
                 let fade = (0.45 + 0.55 * ((t_mid - t_min) / span)).clamp(0.0, 1.0) as f32;
                 let depth = centroid_depth(&camera, centre, run.iter().map(|(_, p)| *p));
-                buf.push(
-                    Layer::Below,
-                    depth,
-                    Prim::Line {
-                        points: run.iter().map(|(_, p)| project(*p).0).collect(),
-                        stroke: Stroke::new(width, colour_of(who).gamma_multiply(fade)),
-                        closed: false,
-                    },
-                );
+                let points: Vec<Pos2> = run.iter().map(|(_, p)| project(*p).0).collect();
+                // A run the rest frame's zoom has thrown a million pixels off the canvas is not
+                // drawn: its squared length is past f32 and it would tessellate to nothing good.
+                if points.iter().all(|p| on_stage(*p, rect)) {
+                    buf.push(
+                        Layer::Below,
+                        depth,
+                        Prim::Line {
+                            points,
+                            stroke: Stroke::new(width, colour_of(who).gamma_multiply(fade)),
+                            closed: false,
+                        },
+                    );
+                }
                 // One point of overlap, so the runs join instead of leaving a gap at every seam.
                 start = end - 1;
             }
@@ -1668,7 +1732,7 @@ impl VolumeCanvas {
                              own_chart: bool| {
             let tetrad = Observer::raindrop_tetrad(metric, r);
             let apex = chart.world(metric, t_at, r, phi, t_scale);
-            if !finite3(apex) {
+            if !finite3(apex) || !on_stage(project(apex).0, rect) {
                 return;
             }
             // The rim is the 36 null directions at the event, each carried a fixed span of the
@@ -2152,6 +2216,9 @@ impl VolumeCanvas {
                 continue;
             }
             let at = project(world).0;
+            if !on_stage(at, rect) {
+                continue;
+            }
             painter.circle_filled(at, who.marker_radius(), colour_of(who));
             markers.push((who, at));
             // A worldline frozen on the far branch of r- has not stopped: it is riding the
@@ -3580,14 +3647,14 @@ mod tests {
     }
 
     #[test]
-    fn test_in_a_rest_frame_the_clock_labels_sit_at_the_right_edge() {
+    fn test_in_a_rest_frame_the_clock_labels_sit_at_the_left_edge() {
         // Seen in the app: a dozen slice labels strewn diagonally across the middle of the
         // picture, each one hung wherever its own plane's nearest point happened to project to,
         // over the geometry the planes were drawn to be read against. They belong in a margin, as
         // the flat rest-frame diagram's do - and in the Edge-on preset, which is that diagram, the
         // two pictures are the same picture and the labels stack up the edge in the order the
-        // slices cross it. This view uses the right-hand margin: the left is already carrying the
-        // legend.
+        // slices cross it. The same margin as the flat diagram's, the left; a label that would
+        // land under the legend is simply not drawn.
         let metric = KerrSchild::new(1.0, 0.9);
         let frozen = Observer::frozen_bob(&metric);
         let ctx = egui::Context::default();
@@ -3626,11 +3693,11 @@ mod tests {
                 _ => None,
             })
             .collect();
-        let want = rect.right() - CLOCK_LABEL_EDGE_PX;
+        let want = rect.left() + CLOCK_LABEL_EDGE_PX;
         println!(
-            "{} slice labels against a right edge at {want}: {:?}",
+            "{} slice labels against a left edge at {want}: {:?}",
             labels.len(),
-            labels.iter().map(|(t, r)| (*t, r.right(), r.center().y)).collect::<Vec<_>>()
+            labels.iter().map(|(t, r)| (*t, r.left(), r.center().y)).collect::<Vec<_>>()
         );
         assert!(
             !labels.is_empty(),
@@ -3639,11 +3706,62 @@ mod tests {
         );
         for (text, at) in &labels {
             assert!(
-                (at.right() - want).abs() <= 8.0,
-                "every slice label is right-aligned on the margin at x = {want}, but \"{text}\"                  ends at {}",
-                at.right()
+                (at.left() - want).abs() <= 8.0,
+                "every slice label is left-aligned on the margin at x = {want}, but \"{text}\" \
+                 starts at {}",
+                at.left()
             );
         }
+    }
+
+    #[test]
+    fn test_the_rest_frame_zoom_follows_the_fall_to_the_stall() {
+        // Seen in the app: on the approach to r- the automatic framing ran into the equatorial
+        // view's zoom ceiling of 500 000 px/M, and from then on the planes, the framing and the
+        // rung of Bob's own clock all stood still at about 2 ms a tick while the outside
+        // universe's labels went on climbing - which read as his ticks having stopped. A rest
+        // frame has its own ceiling now, high enough that the surface ahead of a frozen Bob is
+        // still hundreds of pixels from him, and his clock is ticked in the units that leaves.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let frozen = Observer::frozen_bob(&metric);
+        let mut canvas = VolumeCanvas {
+            camera: Camera::preset(Preset::ThreeQuarter, 48.0, Vec2::ZERO, 1.0),
+            keep_surface_framed: true,
+            ..Default::default()
+        };
+        let shapes = volume_frame_on(&mut canvas, &metric, Some(&frozen), ReferenceFrame::Bob, true);
+        let ticks: Vec<&str> = shapes
+            .iter()
+            .filter_map(|s| match s {
+                Painted::Text { text, colour, .. }
+                    if *colour == Theme::BOB_COLOR && text.starts_with('+') =>
+                {
+                    Some(text.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        println!("frozen Bob framed at {} px/M; his clock reads {ticks:?}", canvas.camera.scale);
+        assert!(
+            canvas.camera.scale > SCALE_MAX_GLOBAL,
+            "a rest frame zooms past the equatorial ceiling to follow the fall: {} px/M",
+            canvas.camera.scale
+        );
+        assert!(
+            ticks.iter().any(|t| t.ends_with("ps") || t.ends_with("fs")),
+            "and Bob's own clock is ticked in the picoseconds that leaves, not {ticks:?}"
+        );
+        // The trace of the r- plane is on the canvas, not under the marker: the framing has
+        // something to frame.
+        let trace = shapes.iter().find_map(|s| match s {
+            Painted::Path { stroke: Some(c), closed: false, points, .. }
+                if *c == Theme::HORIZON_CAUCHY =>
+            {
+                Some(points.clone())
+            }
+            _ => None,
+        });
+        assert!(trace.is_some(), "the r- plane leaves a trace on the floor at that zoom");
     }
 
     #[test]
@@ -3781,16 +3899,25 @@ mod tests {
     #[test]
     fn test_the_edge_on_preset_lays_every_tangent_plane_flat() {
         // The reason the preset exists. In a rest frame every surface r = const is a plane
-        // containing the xi^2 direction, so an eye looking exactly along xi^2 - which is world +y -
-        // sees each of them as a line, and the picture is the flat rest-frame diagram's own
-        // (xi^1, xi^0) plane. That takes pitch exactly 0, which the snapped basis has to deliver
-        // as an exact +y line of sight, and it takes every point of such a plane to land on one
-        // screen line whatever its xi^2.
+        // containing the xi^2 direction, so an eye looking along xi^2 - which is world +y - sees
+        // each of them as a band no wider than the pitch makes it, and the picture is the flat
+        // rest-frame diagram's own (xi^1, xi^0) plane. Not pitch 0 exactly: seen in the app, that
+        // made every such plane vanish - zero-area cells, a trace that is a point - so the preset
+        // stands a few degrees off, and the test asks for the band to be narrow and for it to be
+        // there at all.
         let cam = Camera::preset(Preset::EdgeOn, 48.0, Vec2::ZERO, 1.0);
         let (right, up, d) = cam.basis();
-        assert_eq!(d, [0.0, 1.0, 0.0], "edge-on looks exactly along +y, the xi^2 axis");
-        assert_eq!(up, [0.0, 0.0, 1.0], "with the observer's time straight up the screen");
-        assert_eq!(right, [1.0, 0.0, 0.0], "and xi^1 across it");
+        let (sp, cp) = EDGE_ON_PITCH.sin_cos();
+        assert!(sp > 0.0 && EDGE_ON_PITCH < 0.15, "a few degrees off the floor, not in it");
+        for (name, got, want) in [("d", d, [0.0, cp, -sp]), ("up", up, [0.0, sp, cp])] {
+            for k in 0..3 {
+                assert!(
+                    (got[k] - want[k]).abs() < 1e-6,
+                    "{name} should be {want:?} at the edge-on pitch, got {got:?}"
+                );
+            }
+        }
+        assert_eq!(right, [1.0, 0.0, 0.0], "and xi^1 across the screen");
 
         // A plane n . xi = d with n_2 = 0, tilted at some slope in the (xi^1, xi^0) plane, as
         // every r = const plane of the axial gauge is.
@@ -3803,16 +3930,29 @@ mod tests {
             .into_iter()
             .map(|(s, t)| cam.project(CENTRE, xi_to_world(at(s, t))).0)
             .collect();
-        let (a, b) = (samples[0], samples[1]);
-        let dir = if a.distance(b) > 1e-3 { b - a } else { samples[2] - a };
+        // The line the plane would collapse to at pitch 0: through its xi^2 = 0 trace, which the
+        // pitch does not move sideways.
+        let flat = Camera { pitch: 0.0, ..cam };
+        let (a, b) = (
+            flat.project(CENTRE, xi_to_world(at(0.0, 0.0))).0,
+            flat.project(CENTRE, xi_to_world(at(1.0, 0.0))).0,
+        );
+        let dir = if a.distance(b) > 1e-3 { b - a } else { flat.project(CENTRE, xi_to_world(at(0.0, 1.0))).0 - a };
+        // Off that line by at most the band's half-width: the patch reaches 3 units along xi^2
+        // either side, and the pitch lifts each unit by sin(pitch) * scale pixels.
+        let band = 3.0 * 48.0 * sp + 1e-3;
+        let mut widest = 0.0f32;
         for p in &samples {
             let off = ((p.x - a.x) * dir.y - (p.y - a.y) * dir.x).abs() / dir.length();
             assert!(
-                off < 1e-3,
-                "edge-on, every point of a tangent plane lies on one screen line, but {p:?} is \
+                off <= band,
+                "near edge-on, a tangent plane is a band no wider than {band} px, but {p:?} is \
                  {off} px off the line through {a:?} along {dir:?}"
             );
+            widest = widest.max(off);
         }
+        println!("the plane's band is {widest:.1} px half-wide at the edge-on pitch");
+        assert!(widest > 1.0, "and wide enough to be seen, not {widest} px");
     }
 
     #[test]
