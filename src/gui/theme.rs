@@ -12,7 +12,9 @@ impl Theme {
     pub const CANVAS_BG: Color32 = Color32::from_rgb(14, 16, 24);
     pub const PANEL_BG: Color32 = Color32::from_rgb(20, 24, 34);
 
-    // Region Fills (Translucent). Region I has none: the exterior is the canvas background.
+    // Region Fills (Translucent). Region I has none: the exterior is the canvas background. Every
+    // view paints these as disjoint strips or bands, never one over another, so that each region
+    // is the same colour over the same background everywhere.
     pub const ERGOSPHERE_FILL: Color32 = Color32::from_rgba_premultiplied(50, 40, 10, 45);
     pub const REGION_II_FILL: Color32 = Color32::from_rgba_premultiplied(45, 15, 55, 60);
     pub const REGION_III_FILL: Color32 = Color32::from_rgba_premultiplied(10, 50, 45, 60);

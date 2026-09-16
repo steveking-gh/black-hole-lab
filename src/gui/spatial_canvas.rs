@@ -455,14 +455,33 @@ impl SpatialCanvas {
         );
 
         // 1. Concentric Zone Fills, every boundary at its Cartesian radius sqrt(r^2 + a^2).
+        // Each zone is its own band between two boundaries rather than a disc laid over the discs
+        // outside it, so that a region's pixel colour is its fill over the canvas background - the
+        // colour the (t, r) diagram paints the same region in - and not its fill stacked on every
+        // region it sits inside. See `annulus_mesh`.
         // Ergosphere: between r+ and the static limit 2M.
-        painter.circle_filled(center, r_to_px(rho_e), Theme::ERGOSPHERE_FILL);
+        painter.add(egui::Shape::mesh(annulus_mesh(
+            center,
+            r_to_px(rho_p),
+            r_to_px(rho_e),
+            Theme::ERGOSPHERE_FILL,
+        )));
 
         // Region II: between r- and r+.
-        painter.circle_filled(center, r_to_px(rho_p), Theme::REGION_II_FILL);
+        painter.add(egui::Shape::mesh(annulus_mesh(
+            center,
+            r_to_px(rho_m),
+            r_to_px(rho_p),
+            Theme::REGION_II_FILL,
+        )));
 
         // Region III: between the ring and r-.
-        painter.circle_filled(center, r_to_px(rho_m), Theme::REGION_III_FILL);
+        painter.add(egui::Shape::mesh(annulus_mesh(
+            center,
+            r_to_px(rho_ring),
+            r_to_px(rho_m),
+            Theme::REGION_III_FILL,
+        )));
 
         // The disc rho < a is the hole of the ring: it is not part of this sheet of the equatorial
         // plane at r > 0 at all, so it gets its own fill rather than a region colour.
@@ -831,6 +850,34 @@ impl SpatialCanvas {
             );
         }
     }
+}
+
+/// How many segments a zone's band is cut into: seventy-two, as the volume cuts its rings.
+const ZONE_SEGMENTS: usize = 72;
+
+/// The filled band between two concentric circles, as one mesh.
+///
+/// The zones are painted as disjoint bands rather than as nested discs so that a region's pixel
+/// colour is its own fill over the canvas background - the colour the (t, r) diagram paints the
+/// same region in, where the regions are side-by-side strips - rather than its fill stacked on the
+/// fill of every region outside it. Region II is then the same deep purple, and region III the
+/// same dark sea green, in every view. An inner radius of zero is a disc.
+pub(crate) fn annulus_mesh(center: Pos2, r_in: f32, r_out: f32, fill: Color32) -> egui::Mesh {
+    let mut mesh = egui::Mesh::default();
+    for i in 0..ZONE_SEGMENTS {
+        let th = std::f32::consts::TAU * (i as f32) / (ZONE_SEGMENTS as f32);
+        let (s, c) = th.sin_cos();
+        mesh.colored_vertex(center + Vec2::new(c * r_in, s * r_in), fill);
+        mesh.colored_vertex(center + Vec2::new(c * r_out, s * r_out), fill);
+    }
+    let n = ZONE_SEGMENTS as u32;
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let (a_in, a_out, b_in, b_out) = (2 * i, 2 * i + 1, 2 * j, 2 * j + 1);
+        mesh.add_triangle(a_in, a_out, b_out);
+        mesh.add_triangle(a_in, b_out, b_in);
+    }
+    mesh
 }
 
 /// Which observer a canvas is anchored to, given a standing request to keep one centred and the

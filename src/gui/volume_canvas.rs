@@ -2537,30 +2537,70 @@ impl VolumeCanvas {
         // view's helpers, which paint rather than return shapes.
         //
         // The region fills are the sections of the same four tubes at the floor's own height, so
-        // they are the same nested polygons in both charts and are built from the same
-        // `pipe_point`. In a rest frame the floor xi^0 = 0 is the observer's own local space rather
-        // than a slice t = const, and the section of a cylinder by it is an ellipse: the map from
-        // the section to the (xi^1, xi^2) floor is affine, so the polygons stay convex and stay
-        // nested, and "which region am I standing in" is still read off them. A section the chart
-        // cannot place in full is left out rather than half drawn.
+        // they are the same shapes in both charts and are built from the same `pipe_point`. In a
+        // rest frame the floor xi^0 = 0 is the observer's own local space rather than a slice
+        // t = const, and the section of a cylinder by it is an ellipse: the map from the section to
+        // the (xi^1, xi^2) floor is affine, so the sections stay convex and stay nested, and "which
+        // region am I standing in" is still read off them. A section the chart cannot place in
+        // full is left out rather than half drawn.
+        //
+        // Each region is the band between two sections rather than a disc laid over the discs
+        // outside it, for the reason `spatial_canvas::annulus_mesh` gives: a region's pixel colour
+        // is then its own fill over the canvas background, the colour the (t, r) diagram paints the
+        // same region in. The band is cut at the union of its two tubes' partitions, so its edges
+        // pass through the very points those tubes' rings are stroked through.
         //
         // The ring is the tube r = 0, at rho = |a|; a hole with no spin has no ring, so the
         // innermost fill is floored at two pixels of drawn radius - which is the chart radius
         // sqrt((2 px)^2 - a^2) where that is real, and r = 0 itself where |a| already exceeds it.
         let px = 2.0 / f64::from(camera.scale);
         let ring_r = (px * px - metric.a * metric.a).max(0.0).sqrt();
-        for (r, fill) in [
-            (re, Theme::ERGOSPHERE_FILL),
-            (rp, Theme::REGION_II_FILL),
-            (rm, Theme::REGION_III_FILL),
-            (ring_r, Theme::SINGULARITY_FILL),
+        let section = |r: f64, dphi: f64| -> Option<Pos2> {
+            let p = chart.pipe_point(metric, r, dphi, 0.0, t_scale)?;
+            placeable(p).then(|| project(p).0)
+        };
+        // A fill is a region, so it is the whole band or nothing: a run of it is an arc, and an
+        // arc closed across its own ends is a lie about which side of the surface one is on. Near
+        // the stall the sections run off the stage and the floor carries only the rings.
+        let band = |r_in: f64, r_out: f64, fill: Color32| -> Option<egui::Mesh> {
+            let mut cuts = pipe_partition(r_in);
+            cuts.extend(pipe_partition(r_out));
+            cuts.sort_by(f64::total_cmp);
+            cuts.dedup();
+            let mut mesh = egui::Mesh::default();
+            for w in cuts.windows(2) {
+                let quad = [
+                    section(r_in, w[0])?,
+                    section(r_out, w[0])?,
+                    section(r_out, w[1])?,
+                    section(r_in, w[1])?,
+                ];
+                let base = mesh.vertices.len() as u32;
+                for p in quad {
+                    mesh.colored_vertex(p, fill);
+                }
+                mesh.add_triangle(base, base + 1, base + 2);
+                mesh.add_triangle(base, base + 2, base + 3);
+            }
+            (!mesh.is_empty()).then_some(mesh)
+        };
+        for (r_in, r_out, fill) in [
+            (rp, re, Theme::ERGOSPHERE_FILL),
+            (rm, rp, Theme::REGION_II_FILL),
+            (ring_r, rm, Theme::REGION_III_FILL),
         ] {
-            // A fill is a region, so it is the whole loop or nothing: a run of it is an arc, and an
-            // arc closed across its own ends is a lie about which side of the surface one is on.
-            // Near the stall the sections run off the stage and the floor carries only the rings.
-            let (runs, closed) = ring_runs(r, 0.0, &pipe_partition(r));
+            if let Some(mesh) = band(r_in, r_out, fill) {
+                painter.add(egui::Shape::mesh(mesh));
+            }
+        }
+        {
+            let (runs, closed) = ring_runs(ring_r, 0.0, &pipe_partition(ring_r));
             if closed && let Some(points) = runs.into_iter().next() {
-                painter.add(egui::Shape::convex_polygon(points, fill, Stroke::NONE));
+                painter.add(egui::Shape::convex_polygon(
+                    points,
+                    Theme::SINGULARITY_FILL,
+                    Stroke::NONE,
+                ));
             }
         }
         for (points, stroke, closed) in floor_rings {
@@ -4157,42 +4197,70 @@ mod tests {
             ..Default::default()
         };
         let shapes = volume_frame_on(&mut canvas, &metric, Some(&bob), ReferenceFrame::Bob, false);
-        let fill_of = |want: Color32| {
-            shapes.iter().find_map(|s| match s {
-                Painted::Path { fill, points, .. } if *fill == want => Some(points.clone()),
-                _ => None,
-            })
+        // The shoelace area of a closed loop of points.
+        let area_of = |points: &[Pos2]| -> f64 {
+            (0.5 * points
+                .iter()
+                .zip(points.iter().cycle().skip(1))
+                .map(|(a, b)| f64::from(a.x) * f64::from(b.y) - f64::from(b.x) * f64::from(a.y))
+                .sum::<f64>())
+            .abs()
         };
-        // Painted in order from the outside in, so each is drawn over the one that contains it.
-        let mut previous: Option<f32> = None;
+        // Each region is one band between two sections, as a mesh of one quad per cut in the
+        // region's own fill - not a disc over the discs outside it, so that its colour on the
+        // floor is the (t, r) diagram's colour for the same region. The quads go in as four
+        // vertices each, inner-outer-outer-inner, so the two edges can be read back off them.
+        // Painted from the outside in, and each band's outer edge is the next one's inner edge.
+        let mut previous_inner: Option<f64> = None;
         for (name, fill) in [
             ("the ergosphere", Theme::ERGOSPHERE_FILL),
             ("region II", Theme::REGION_II_FILL),
             ("region III", Theme::REGION_III_FILL),
-            ("the ring", Theme::SINGULARITY_FILL),
         ] {
-            let points =
-                fill_of(fill).unwrap_or_else(|| panic!("{name} is filled on the rest frame's floor"));
-            assert_eq!(points.len(), RING_SEGMENTS, "{name} is the section of its own tube");
-            // The shoelace area of the section, which has to shrink as the tubes nest.
-            let area = 0.5
-                * points
-                    .iter()
-                    .zip(points.iter().cycle().skip(1))
-                    .map(|(a, b)| f64::from(a.x) * f64::from(b.y) - f64::from(b.x) * f64::from(a.y))
-                    .sum::<f64>();
-            println!("{name}: a {}-gon of signed area {area:.0} px^2", points.len());
-            assert!(area.abs() > 0.0, "{name} is a section with an inside");
-            if let Some(outer) = previous {
+            let points = shapes
+                .iter()
+                .find_map(|s| match s {
+                    Painted::Mesh { colour: Some(c), points, .. } if *c == fill => {
+                        Some(points.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{name} is a band on the rest frame's floor"));
+            assert_eq!(
+                points.len(),
+                4 * RING_SEGMENTS,
+                "{name} is one quad per cut of the uniform partition at this zoom"
+            );
+            let inner: Vec<Pos2> = points.iter().copied().step_by(4).collect();
+            let outer: Vec<Pos2> = points.iter().copied().skip(1).step_by(4).collect();
+            let (a_in, a_out) = (area_of(&inner), area_of(&outer));
+            println!("{name}: a band from {a_in:.0} px^2 out to {a_out:.0} px^2");
+            assert!(a_in > 0.0 && a_out > a_in, "{name} is a band with an inside and a width");
+            if let Some(prev) = previous_inner {
                 assert!(
-                    (area.abs() as f32) < outer,
-                    "{name} has to lie inside the region that contains it, but its area \
-                     {} is not below {outer}",
-                    area.abs()
+                    (a_out - prev).abs() < 1e-3 * prev,
+                    "{name}'s outer edge is the edge of the region outside it: {a_out} against \
+                     {prev}"
                 );
             }
-            previous = Some(area.abs() as f32);
+            previous_inner = Some(a_in);
         }
+        // The ring is a disc, the innermost of the floor's fills, inside region III.
+        let ring = shapes
+            .iter()
+            .find_map(|s| match s {
+                Painted::Path { fill, points, .. } if *fill == Theme::SINGULARITY_FILL => {
+                    Some(points.clone())
+                }
+                _ => None,
+            })
+            .expect("the ring is filled on the rest frame's floor");
+        assert_eq!(ring.len(), RING_SEGMENTS, "the ring is the section of its own tube");
+        let a_ring = area_of(&ring);
+        assert!(
+            a_ring > 0.0 && a_ring <= previous_inner.unwrap() * (1.0 + 1e-3),
+            "the ring lies inside region III: {a_ring} against {previous_inner:?}"
+        );
     }
 
     #[test]
@@ -5013,11 +5081,16 @@ mod tests {
             // Under the floor the past half is last too: nothing but the floor's own strokes and
             // the layer above separate it from the future half's neighbours, so no mesh painted
             // between the two halves may lie under the floor - and every mesh under the floor
-            // precedes it. The floor is found by its innermost disc, which is painted between the
-            // two layers in either chart.
-            let Some(floor) = shapes.iter().position(
-                |s| matches!(s, Painted::Path { fill, .. } if *fill == Theme::SINGULARITY_FILL),
-            ) else {
+            // precedes it. The floor is found by its first fill, which is painted between the two
+            // layers in either chart: the outermost band where the sections can be placed, the
+            // ring's disc where only it can.
+            let region_fills =
+                [Theme::ERGOSPHERE_FILL, Theme::REGION_II_FILL, Theme::REGION_III_FILL];
+            let Some(floor) = shapes.iter().position(|s| match s {
+                Painted::Path { fill, .. } => *fill == Theme::SINGULARITY_FILL,
+                Painted::Mesh { colour: Some(c), .. } => region_fills.contains(c),
+                _ => false,
+            }) else {
                 // At the stall the sections of the tubes are off the stage and the floor carries
                 // nothing at all, so there is no marker to measure the past half against; the
                 // claim about the future half above is the one that matters there anyway.
