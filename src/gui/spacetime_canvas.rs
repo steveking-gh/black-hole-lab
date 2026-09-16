@@ -2202,7 +2202,7 @@ Tick Enable Observer on Alice's or Bob's card",
             };
             let periods = match (crests.received_period, crests.emitted_period, crests.period_ratio()) {
                 (Some(rx), Some(tx), Some(ratio)) => format!(
-                    "received every {} of {}'s watch, sent every {} of {sender_name}'s\
+                    "received every {} of {}'s watch, sent every {} of {sender_name}'s\n\
                      f_rx / f_tx = {ratio:.3} from those periods, {ray:.3} on the last ray",
                     fmt(rx),
                     focus_obs.name,
@@ -3280,6 +3280,79 @@ mod canvas_tests {
             crests.crests.iter().any(|c| !c.received),
             "and the pulses still on their way to him are drawn too"
         );
+    }
+
+    #[test]
+    fn test_the_frame_view_reports_the_received_frequency_of_the_others_signal() {
+        // The readout belongs to the picture, not to a test of the model alone: with Alice
+        // transmitting and Bob receiving, Bob's frame prints the ratio, and Alice's frame, where
+        // the roles are the other way round and Bob is silent, prints nothing.
+        use crate::physics::observer::{ObserverMode, WorldlineParams};
+        let metric = KerrSchild::new(1.0, 0.0);
+        let mut alice =
+            Observer::new_with_phi(&metric, "Alice", 0.0, 6.0, 0.0, 0.0, WorldlineParams::default());
+        alice.mode = ObserverMode::Static;
+        let mut bob =
+            Observer::new_with_phi(&metric, "Bob", 0.0, 4.5, 0.0, 0.0, WorldlineParams::default());
+        bob.mode = ObserverMode::Static;
+        let mut field = SignalField::default();
+        let dt = 0.1;
+        for i in 0..60 {
+            let t = ((i + 1) as f64) * dt;
+            alice.step(&metric, t, dt);
+            bob.step(&metric, t, dt);
+            field.advance(&metric, dt);
+            field.emit_if_due(&metric, &alice);
+            field.detect_receptions(&metric, &bob);
+        }
+        let idle = SignalField::default();
+        let text_of = |frame: ReferenceFrame| {
+            let mut canvas = SpacetimeCanvas { keep_surface_framed: false, ..Default::default() };
+            let ctx = egui::Context::default();
+            ctx.set_fonts(egui::FontDefinitions::empty());
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
+                ..Default::default()
+            };
+            let output = ctx.run_ui(input, |ui| {
+                canvas.render(
+                    ui,
+                    &metric,
+                    Some(&bob),
+                    Some(&alice),
+                    6.0,
+                    600.0,
+                    false,
+                    frame,
+                    1.0,
+                    SignalViews { alice: &field, bob: &idle },
+                    false,
+                );
+            });
+            let mut text = String::new();
+            for clipped in output.shapes.iter() {
+                fn collect(shape: &egui::Shape, out: &mut String) {
+                    match shape {
+                        egui::Shape::Text(t) => {
+                            out.push_str(t.galley.text());
+                            out.push('\n');
+                        }
+                        egui::Shape::Vec(inner) => inner.iter().for_each(|s| collect(s, out)),
+                        _ => {}
+                    }
+                }
+                collect(&clipped.shape, &mut text);
+            }
+            output.drop_without_applying_deltas();
+            text
+        };
+        let bobs = text_of(ReferenceFrame::Bob);
+        println!("{bobs}");
+        assert!(bobs.contains("Alice's signal at Bob"), "Bob's frame names the signal");
+        assert!(bobs.contains("on the last ray"), "and prints the ratio");
+        assert!(bobs.contains("from those periods"), "both ways");
+        let alices = text_of(ReferenceFrame::Alice);
+        assert!(!alices.contains("signal at Alice"), "Bob sends nothing, so Alice's frame is silent");
     }
 
     #[test]
