@@ -602,6 +602,26 @@ const CLOCK_LABEL_MIN_PX: f32 = 14.0;
 /// pixels: the same margin, the same distance in, as the flat rest-frame diagram's.
 const CLOCK_LABEL_EDGE_PX: f32 = 6.0;
 
+/// The spacing of the global chart's time rungs for a window `span` M tall: the (t, r) diagram's
+/// own rule, about seven rungs a window on a 0.5, 1, 2, 5, 10, 25 ladder, so that the two pictures
+/// of the foliation are ruled the same way.
+fn time_grid_step(span: f64) -> f64 {
+    let raw = span / 7.0;
+    if raw > 20.0 {
+        25.0
+    } else if raw > 10.0 {
+        10.0
+    } else if raw > 4.0 {
+        5.0
+    } else if raw > 1.5 {
+        2.0
+    } else if raw > 0.7 {
+        1.0
+    } else {
+        0.5
+    }
+}
+
 /// The zoom ceilings, in pixels per M, for the two charts.
 ///
 /// In the global chart the ceiling is the equatorial view's, because the two views zoom the same
@@ -1565,17 +1585,27 @@ impl VolumeCanvas {
             }
             floor_rings.push((ring_points(rho, 0.0), Stroke::new(width, colour), true));
 
-            // The distant observer's clock, as rungs on one pipe: one ring per whole M of t. On
-            // r-, because that is the pipe a frozen worldline winds up, one turn of helix per
-            // 2 pi / Omega_- of t, and the rungs are what that pitch is read against; nothing runs
-            // away at r+ in this chart, a faller crosses it at a finite t. The same ladder on all
-            // four pipes would be three ladders saying nothing and one saying that. A hole with no
-            // spin has no r- pipe, and the rungs go on r+ instead.
+            // The distant observer's clock, as rungs on one pipe, labelled with the coordinate
+            // time itself - the reading on the chart's clock, not an offset from now - at the step
+            // the (t, r) diagram spaces its own time axis by, so that as the clock runs the rungs
+            // slide down into the past exactly as that diagram's grid lines do. Rungs at offsets
+            // from now would stand still on the screen with the same labels for ever, which is a
+            // clock that appears to have stopped. On r-, because that is the pipe a frozen
+            // worldline winds up, one turn of helix per 2 pi / Omega_- of t, and the rungs are
+            // what that pitch is read against; nothing runs away at r+ in this chart, a faller
+            // crosses it at a finite t. The same ladder on all four pipes would be three ladders
+            // saying nothing and one saying that. A hole with no spin has no r- pipe, and the
+            // rungs go on r+ instead.
             if show_distant_clock_grid && r == tick_r {
-                let k_lo = (t_min - current_time).ceil() as i64;
-                let k_hi = (t_max - current_time).floor() as i64;
-                for k in k_lo..=k_hi {
-                    let z = z_of(current_time + k as f64);
+                let t_step = time_grid_step(t_max - t_min);
+                let first = (t_min / t_step).floor() as i64;
+                let last = (t_max / t_step).ceil() as i64;
+                for i in first..=last {
+                    let t_val = (i as f64) * t_step;
+                    if t_val < t_min || t_val > t_max {
+                        continue;
+                    }
+                    let z = z_of(t_val);
                     let layer = if z >= 0.0 { Layer::Above } else { Layer::Below };
                     let depth = project([0.0, 0.0, z]).1;
                     buf.push(
@@ -1588,10 +1618,11 @@ impl VolumeCanvas {
                         },
                     );
                     let text = if use_km {
-                        let sign = if k < 0 { "-" } else { "+" };
-                        format!("t = {sign}{}", metric.format_physical_time(k.abs() as f64))
+                        format!("t = {}", metric.format_physical_time(t_val))
+                    } else if t_step >= 1.0 {
+                        format!("t = {:+}M", t_val as i64)
                     } else {
-                        format!("t = {k:+} M")
+                        format!("t = {t_val:+.1}M")
                     };
                     buf.label(
                         project([rho, 0.0, z]).0,
@@ -2714,6 +2745,7 @@ mod tests {
         bob: &Observer,
         frame_of_ref: ReferenceFrame,
         clock: f64,
+        grid: bool,
     ) -> Vec<Painted> {
         let ctx = egui::Context::default();
         ctx.set_fonts(egui::FontDefinitions::empty());
@@ -2730,7 +2762,7 @@ mod tests {
                 frame_of_ref,
                 1.0,
                 SignalViews { alice: &signal, bob: &signal },
-                false,
+                grid,
                 FrontStyle { arcs: true, hide_wound: true },
             );
         });
@@ -3811,6 +3843,74 @@ mod tests {
     }
 
     #[test]
+    fn test_the_global_clock_rungs_read_coordinate_time_and_slide_into_the_past() {
+        // Seen in the app: the rungs on the r- pipe were labelled as offsets from now, so they
+        // stood still on the screen with the same labels for ever while the clock ran - a time
+        // axis that had stopped. They read the chart's own time now, at the (t, r) diagram's
+        // spacing, and as the clock advances a given reading slides down into the past.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let bob = bob_at(&metric, 4.0);
+        let labels = |clock: f64| {
+            let mut canvas = VolumeCanvas {
+                camera: Camera::preset(Preset::ThreeQuarter, 48.0, Vec2::ZERO, 1.0),
+                show_past_cone: false,
+                show_pulse_surfaces: false,
+                ..Default::default()
+            };
+            let shapes = volume_frame_at_clock(
+                &mut canvas,
+                &metric,
+                &bob,
+                ReferenceFrame::DistantObserver,
+                clock,
+                true,
+            );
+            shapes
+                .iter()
+                .filter_map(|s| match s {
+                    Painted::Text { text, rect, colour }
+                        if *colour == Theme::TEXT_MUTED && text.starts_with("t = ") =>
+                    {
+                        Some((text.clone(), rect.center().y))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let before = labels(20.0);
+        let after = labels(20.7);
+        println!("rungs at t = 20: {before:?}\nrungs at t = 20.7: {after:?}");
+        assert!(before.len() >= 4, "the window is ruled by several rungs: {before:?}");
+        let step = time_grid_step(14.0);
+        assert!(
+            before.iter().all(|(t, _)| t == "t = +0M" || t.ends_with('M')),
+            "rungs read the chart's time in M: {before:?}"
+        );
+        // Every reading is a whole multiple of the step, and consecutive readings are one step
+        // apart, as on the (t, r) diagram's axis.
+        let mut values: Vec<i64> = before
+            .iter()
+            .map(|(t, _)| t.trim_start_matches("t = ").trim_end_matches('M').parse::<i64>().unwrap())
+            .collect();
+        values.sort_unstable();
+        assert!(
+            values.windows(2).all(|w| (w[1] - w[0]) as f64 == step),
+            "consecutive rungs are {step} M apart, got {values:?}"
+        );
+        // And a rung that is on both frames has moved down the screen by the clock's advance.
+        let moved = before.iter().find_map(|(t, y0)| {
+            after.iter().find(|(u, _)| u == t).map(|(_, y1)| (t.clone(), *y0, *y1))
+        });
+        let (t, y0, y1) = moved.expect("a rung survives 0.7 M of the clock");
+        println!("{t} moved from y = {y0} to y = {y1}");
+        assert!(
+            y1 > y0 + 10.0,
+            "as the clock runs a fixed reading slides into the past, down the screen: {t} went \
+             from {y0} to {y1}"
+        );
+    }
+
+    #[test]
     fn test_the_focus_event_is_the_origin_whatever_the_clock_rounding() {
         // Seen in the app at the stall: the marker, the cone and the telemetry box all gone,
         // while the axis and its ticks stayed. The app's clock and the frozen observer's own t
@@ -3828,7 +3928,7 @@ mod tests {
             ..Default::default()
         };
         let shapes =
-            volume_frame_at_clock(&mut canvas, &metric, &frozen, ReferenceFrame::Bob, clock);
+            volume_frame_at_clock(&mut canvas, &metric, &frozen, ReferenceFrame::Bob, clock, false);
         println!("framed at {} px/M with the clock {clock} against t = {}", canvas.camera.scale, frozen.t);
         let at = marker_of(&shapes);
         let canvas_rect = egui::Rect::from_min_size(Pos2::ZERO, egui::Vec2::new(800.0, 700.0));
