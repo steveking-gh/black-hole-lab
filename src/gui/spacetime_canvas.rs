@@ -619,6 +619,9 @@ type DrawnSurface<'a> = (f64, &'a str, Color32, f32, Color32, bool);
 /// Hover tip for the two horizon boxes, which name the methodology their third line uses.
 /// Hover tip for the static limit's and the ring's boxes, whose two lines read the drawn line
 /// rather than integrating anything.
+/// The hover text of the signal box in an observer's frame.
+pub const SIGNAL_BOX_TIP: &str = "The other observer's transmission read as a wave at this worldline. Their pulses are its crests, drawn as null strokes through the arrivals on the worldline; the receive frequency is one over the proper time between the last two arrivals of consecutive pulses on this observer's own clock, the transmit frequency one over the proper time between those two emissions on the sender's, and the blueshift is their ratio - a ratio of two measured intervals, not a formula. On the approach to r- the arrivals crowd together without limit and the blueshift runs away with them.";
+
 pub const SURFACE_BOX_TIP: &str =
 "What the surface is, read straight off the slope of its line in this frame. Steeper than 45 degrees is timelike - the world-tube of observers holding that radius, something a rocket can stay off. Exactly 45 degrees is null. Flatter than 45 degrees is spacelike: not a place at all but a moment of your history, which arrives whatever you do. Nothing about the tilt is put in by hand; it comes from the sign of g^rr at your own radius through the dual tetrad, so the reading is exact at the dot.
 
@@ -2196,30 +2199,52 @@ Tick Enable Observer on Alice's or Bob's card",
                 painter.circle_filled(anchor, 2.5, crest_colour);
             }
         }
+        // The readout: the two frequencies in hertz, on the two clocks that measure them, and
+        // their ratio. The periods are proper times in M; a second of a clock is M of it times
+        // t_g / M, the same conversion the distant clock's labels use. Where no consecutive pair
+        // of the same family has arrived yet there is no period, and the ray's own factor is the
+        // one number there is.
         if let Some(ray) = crests.last_ray_ratio {
-            let fmt = |m: f64| {
-                if use_km { metric.format_physical_time(m) } else { format!("{m:.3} M") }
+            let seconds_per_m = metric.t_grav_seconds() / metric.m.max(1e-12);
+            let hz = |period_m: f64| -> String {
+                let f = 1.0 / (period_m * seconds_per_m);
+                if !f.is_finite() {
+                    "n/a".to_string()
+                } else if f >= 0.01 {
+                    format!("{f:.3} Hz")
+                } else {
+                    format!("{f:.3e} Hz")
+                }
             };
-            let periods = match (crests.received_period, crests.emitted_period, crests.period_ratio()) {
-                (Some(rx), Some(tx), Some(ratio)) => format!(
-                    "received every {} of {}'s watch, sent every {} of {sender_name}'s\n\
-                     f_rx / f_tx = {ratio:.3} from those periods, {ray:.3} on the last ray",
-                    fmt(rx),
-                    focus_obs.name,
-                    fmt(tx),
-                ),
-                _ => format!("f_rx / f_tx = {ray:.3} on the last ray"),
+            let mut lines = vec![TelemetryLine {
+                text: format!("{sender_name}'s signal at {}", focus_obs.name),
+                color: crest_colour,
+                is_title: true,
+                bold: false,
+            }];
+            let line = |text: String| TelemetryLine {
+                text,
+                color: Theme::TEXT_BRIGHT,
+                is_title: false,
+                bold: false,
             };
-            painter.text(
-                Pos2::new(rect.right() - 10.0, rect.bottom() - 10.0),
-                egui::Align2::RIGHT_BOTTOM,
-                format!(
-                    "{sender_name}'s signal at {}: crests as null strokes through their arrivals\n{periods}",
-                    focus_obs.name
-                ),
-                egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
-                crest_colour,
-            );
+            match (crests.received_period, crests.emitted_period, crests.period_ratio()) {
+                (Some(rx), Some(tx), Some(ratio)) => {
+                    lines.push(line(format!("{} Receive Frequency: {}", focus_obs.name, hz(rx))));
+                    lines.push(line(format!("{sender_name} Transmit Frequency: {}", hz(tx))));
+                    lines.push(line(format!("Blueshift: {ratio:.3}")));
+                }
+                _ => lines.push(line(format!("Blueshift: {ray:.3} (last ray)"))),
+            }
+            // Anchored at the bottom right of the canvas until it is dragged somewhere else.
+            let size = telemetry_box_size(painter, &lines, font_scale);
+            pending_boxes.push(PendingBox {
+                name: format!("{sender_name} signal"),
+                anchor: Pos2::new(rect.right() - 10.0 - size.x, rect.bottom() - 10.0 - size.y),
+                lines,
+                color: crest_colour,
+                tip: SIGNAL_BOX_TIP,
+            });
         }
 
         let cone_len = (rect.height() * 0.35).min(rect.width() * 0.35);
@@ -3348,11 +3373,19 @@ mod canvas_tests {
         };
         let bobs = text_of(ReferenceFrame::Bob);
         println!("{bobs}");
-        assert!(bobs.contains("Alice's signal at Bob"), "Bob's frame names the signal");
-        assert!(bobs.contains("on the last ray"), "and prints the ratio");
-        assert!(bobs.contains("from those periods"), "both ways");
+        assert!(bobs.contains("Alice's signal at Bob"), "the box is titled with the signal");
+        // Both frequencies in hertz on the clocks that measure them, and their ratio.
+        let hz = |label: &str| -> f64 {
+            let line = bobs.lines().find(|l| l.starts_with(label)).unwrap_or_else(|| panic!("{label} in {bobs}"));
+            let number = line.trim_start_matches(label).trim().trim_end_matches(" Hz");
+            number.parse::<f64>().unwrap_or_else(|_| panic!("a frequency in hertz on {line:?}"))
+        };
+        let (f_rx, f_tx) = (hz("Bob Receive Frequency:"), hz("Alice Transmit Frequency:"));
+        let expected = ((1.0 - 2.0 / 6.0) / (1.0 - 2.0 / 4.5_f64)).sqrt();
+        assert!((f_rx / f_tx / expected - 1.0).abs() < 0.03, "{f_rx} Hz over {f_tx} Hz is the shift");
+        assert!(bobs.contains("Blueshift: 1.095"), "and it is printed as the blueshift: {bobs}");
         let alices = text_of(ReferenceFrame::Alice);
-        assert!(!alices.contains("signal at Alice"), "Bob sends nothing, so Alice's frame is silent");
+        assert!(!alices.contains("Receive Frequency"), "Bob sends nothing, so Alice's frame is silent");
     }
 
     #[test]
