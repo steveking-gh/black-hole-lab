@@ -1,0 +1,23 @@
+src/gui/spacetime_canvas.rs
+  s_c8d87c2c7b73cb::t_3239b71817084e 983,987,1798,2151-2207,2374-2435,2439,2441-2447,2452-2461,2463-2470,2481-2482,2484-2488,2490-2512,3183-3239
+  s_c8d87c2c7b73cb::t_1941775914af05 7,2436-2438,2440,2448-2451,2462,2471-2480,2483,2489
+  s_c8d87c2c7b73cb::t_dbf6eb601404c1 3240
+src/physics/wavefront.rs
+  s_c8d87c2c7b73cb::t_1941775914af05 1090-1095,1797-1798
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "2a0a92711af2dbaaf2c7e5ff8349fdd8b274ff16",
+  "prompts": {},
+  "sessions": {
+    "s_c8d87c2c7b73cb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "553fc9fe-1b48-463e-a36b-4c33628c4ac8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
