@@ -33,6 +33,10 @@ Region tag — location relative to the horizons: outside r₊, between r₊ and
 /// What a rest-frame view of the (t, r) column is. It used to be painted across the head of that
 /// canvas, above the picture; it is a statement about the chart rather than about anything moving
 /// in it, so it is now read on hover from the selector that chooses the chart.
+/// The one line both charts of the global foliation carry at the top centre, in white: the
+/// distinction that decides what a viewer may read off the picture.
+pub const CHART_BANNER: &str = "This is a chart, not a frame of reference.";
+
 pub const REST_FRAME_TIP: &str =
 "The focus observer's first-order local inertial frame, built from their orthonormal tetrad: c ≡ 1, so light cones are at 45° and every worldline through the event is steeper than that. The surfaces r = const - the horizons, the static limit, the ring singularity - are placed by the dual tetrad: exact at the observer's own event, linearised for offsets from it.";
 
@@ -1395,6 +1399,17 @@ Tick Enable Observer on Alice's or Bob's card",
             egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
             Color32::from_rgb(135, 185, 255),
         );
+        // What this picture is, said once where the eye lands first. A chart places every event
+        // where the coordinates put it and claims nothing about distance or simultaneity for any
+        // observer; the two rest-frame views make the opposite claim, and the reader has to know
+        // which of the two they are looking at.
+        painter.text(
+            Pos2::new(rect.center().x, rect.top() + 6.0),
+            egui::Align2::CENTER_TOP,
+            CHART_BANNER,
+            egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
+            Color32::WHITE,
+        );
 
         // Boundary lines
         //
@@ -1667,24 +1682,6 @@ Tick Enable Observer on Alice's or Bob's card",
         // Bob avatar circle
         painter.circle_filled(apex, bob_radius, Theme::BOB_COLOR);
         painter.circle_stroke(apex, bob_radius + 2.0, Stroke::new(1.5, Color32::WHITE));
-
-        // Light cone slope telemetry box
-        let slope_msg = if bob.r > 0.02 {
-            let cone = bob.compute_lightcone_polygon(metric, 1.8);
-            format!(
-                "Null Wedge at Bob (ZAMO rays):\nOutgoing dr/dt (L=0 ray) = {:+.3}\nIngoing dr/dt (L=0 ray) = {:+.3}\nOutgoing dϕ/dt (L=0 ray) = {:+.3}",
-                cone.dr_dt_out, cone.dr_dt_in, cone.dphi_dt_out
-            )
-        } else {
-            "Singularity r = 0 Reached\nLight cone terminated\nCurvature Riem² → ∞".to_string()
-        };
-        painter.text(
-            Pos2::new(rect.right() - 10.0, rect.top() + 10.0),
-            egui::Align2::RIGHT_TOP,
-            slope_msg,
-            egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
-            Theme::TEXT_BRIGHT,
-        );
 
         // Every info box on this canvas is painted here, after everything else is down, so that
         // the opaque fill of a box actually blocks out what is behind it.

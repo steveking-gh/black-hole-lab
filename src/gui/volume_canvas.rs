@@ -1,5 +1,5 @@
 use crate::gui::controls::{ReferenceFrame, SignalViews};
-use crate::gui::spacetime_canvas::{COARSE_ZOOM_STEPS, TelemetryBoxes};
+use crate::gui::spacetime_canvas::{CHART_BANNER, COARSE_ZOOM_STEPS, TelemetryBoxes};
 use crate::gui::spatial_canvas::{
     CENTRED_RING_GAP, FrontStyle, Who, draw_reception_tick, draw_signal_field, draw_spatial_trail,
     frame_focus,
@@ -1942,6 +1942,14 @@ impl VolumeCanvas {
             "2D+1 Volume (x, y, t)",
             legend_font.clone(),
             Theme::TEXT_BRIGHT,
+        );
+        // The same line the (t, r) chart carries, for the same reason: see `CHART_BANNER`.
+        painter.text(
+            Pos2::new(rect.center().x, rect.top() + 6.0),
+            egui::Align2::CENTER_TOP,
+            CHART_BANNER,
+            egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
+            Color32::WHITE,
         );
         painter.text(
             rect.left_top() + Vec2::new(10.0, 8.0 + Theme::MIN_FONT_PT * font_scale),

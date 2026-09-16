@@ -72,9 +72,18 @@ impl ReferenceFrame {
     /// same chart, so it answers the same way.
     pub fn watch_owner(&self) -> &'static str {
         match self {
-            Self::DistantObserver | Self::GlobalVolume => "The distant observer",
+            Self::DistantObserver | Self::GlobalVolume => "the distant clock",
             Self::Bob => "Bob",
             Self::Alice => "Alice",
+        }
+    }
+
+    /// The caption of the Watch-mode readout: whose clock the rate is measured on.
+    pub fn watch_label(&self) -> &'static str {
+        match self {
+            Self::DistantObserver | Self::GlobalVolume => "Distant Clock",
+            Self::Bob => "Bob's watch",
+            Self::Alice => "Alice's watch",
         }
     }
 }
@@ -1168,13 +1177,13 @@ impl AppControls {
                     if rate >= 0.01 { format!("{rate:.2}") } else { format!("{rate:.1e}") };
                 let text = if capped {
                     format!(
-                        "{}'s watch: {figure} s/s  (Δt capped at {WATCH_DT_CAP:.0} M per frame: \
+                        "{}: {figure} s/s  (Δt capped at {WATCH_DT_CAP:.0} M per frame: \
                          one tick of the watch here holds more of the outside future than can be \
                          integrated)",
-                        self.frame_of_ref.watch_owner()
+                        self.frame_of_ref.watch_label()
                     )
                 } else {
-                    format!("{}'s watch: {figure} s/s", self.frame_of_ref.watch_owner())
+                    format!("{}: {figure} s/s", self.frame_of_ref.watch_label())
                 };
                 let colour = if capped { Theme::WARNING_RED } else { Theme::TEXT_MUTED };
                 ui.label(egui::RichText::new(text).small().color(colour));
