@@ -883,6 +883,13 @@ fn time_grid_step(span: f64) -> f64 {
 /// zoom - the other observer, their trail, their pulses - and is kept off the tessellator by
 /// `on_stage`.
 const SCALE_MAX_GLOBAL: f32 = 500_000.0;
+
+/// The multiple of r^2 / (M u^t) out to which a rest frame trusts what its linearised chart
+/// places. See `within` in `VolumeCanvas::render`. Two: from r = 3 at the boost of the default
+/// fall that is nine M, the whole of the default canvas, so the sheared pipes of the exterior
+/// are untouched; from r = 1 at a blueshift of 300 it is a hundredth of an M, and the fade to
+/// nothing runs on to twice this.
+const CHART_REACH_FRACTION: f64 = 2.0;
 const SCALE_MAX_LOCAL: f32 = 1e12;
 
 /// How far outside the canvas, in pixels, a projected point may fall before it is not drawn.
@@ -1593,6 +1600,40 @@ impl VolumeCanvas {
         // below the floor at the highest zoom it offers - far off the canvas, and the honest place
         // for it - so nothing is dropped in that chart.
         let placeable = |p: [f64; 3]| !chart.is_frame() || on_stage(project(p).0, rect);
+        // How far from the focus event the linearised chart is trusted, in chart M, and the
+        // weight anything it places carries as a function of its distance from that event. The
+        // chart is exact at the event and its error at a chart distance D is of order the
+        // connection times the *coordinate* displacement, (M / r^2) x (u^t D): the boost times
+        // the distance, over the curvature scale. So the radius it is good to goes like
+        // r^2 / (M u^t). Outside the hole at a modest boost that is the whole canvas and nothing
+        // fades; at a blueshift of 300 it is a few thousandths of an M while the canvas spans ten
+        // times that, and everything the chart put beyond it - pipe walls stretched into stripes,
+        // bands across half the canvas, pulse surfaces smeared flat - was a picture of the
+        // chart's failure rather than of the spacetime. So in a rest frame what the chart
+        // places fades out between the reach and twice the reach, and is not drawn beyond. The
+        // reach scales with the boost exactly as the contracted gap between the horizons does,
+        // which is why the squeezed band of region II stays inside it at every depth of the fall.
+        // The past cone is exempt: in a rest frame it is drawn in observational coordinates and
+        // nothing on it went through the chart.
+        let reach = match (&chart, frame_obs) {
+            (Chart::Frame { .. }, Some(obs)) => {
+                let u_t = obs.four_velocity(metric)[0];
+                if u_t.is_finite() && u_t > 0.0 {
+                    let r = obs.r.max(1e-6);
+                    CHART_REACH_FRACTION * r * r / (metric.m.max(1e-12) * u_t)
+                } else {
+                    0.0
+                }
+            }
+            _ => f64::INFINITY,
+        };
+        let within = |p: [f64; 3]| -> f32 {
+            if !reach.is_finite() {
+                return 1.0;
+            }
+            let d = (p[0] * p[0] + p[1] * p[1] + (p[2] / t_scale) * (p[2] / t_scale)).sqrt();
+            (2.0 - d / reach).clamp(0.0, 1.0) as f32
+        };
 
         // The measuring rod the adaptive partition below works with: the same projection, in f64,
         // of one point of the wall.
@@ -1733,7 +1774,7 @@ impl VolumeCanvas {
                 .iter()
                 .map(|&dphi| {
                     let p = chart.pipe_point(metric, r, dphi, z, t_scale)?;
-                    placeable(p).then(|| project(p).0)
+                    (placeable(p) && within(p) > 0.0).then(|| project(p).0)
                 })
                 .collect();
             let whole = placed.iter().all(Option::is_some);
@@ -2167,11 +2208,15 @@ impl VolumeCanvas {
                 let Some(c) = corners else {
                     continue;
                 };
+                let near = c.iter().map(|p| within(*p)).fold(0.0f32, f32::max);
+                if near <= 0.0 {
+                    continue;
+                }
                 let (mesh, depth) = quad_mesh(
                     &camera,
                     centre,
                     [c[0], c[1], c[2], c[3]],
-                    glass(colour, base_alpha, weight),
+                    glass(colour, base_alpha, weight).gamma_multiply(near),
                 );
                 buf.push(Layer::Below, depth, Prim::Mesh(mesh));
                 strips += 1;
@@ -2869,11 +2914,15 @@ impl VolumeCanvas {
                                 if !corner.iter().all(|c| finite3(*c) && placeable(*c)) {
                                     continue;
                                 }
+                                if corner.iter().all(|c| within(*c) <= 0.0) {
+                                    continue;
+                                }
                                 let base = mesh.vertices.len() as u32;
                                 for ((_, s), c) in quad.into_iter().zip(corner) {
                                     mesh.colored_vertex(
                                         project(c).0,
-                                        Theme::front_colour(f64::from(s.gain), FRONT_SURFACE_ALPHA),
+                                        Theme::front_colour(f64::from(s.gain), FRONT_SURFACE_ALPHA)
+                                            .gamma_multiply(within(c)),
                                     );
                                     corners.push(c);
                                 }
@@ -2927,9 +2976,9 @@ impl VolumeCanvas {
         // sqrt((2 px)^2 - a^2) where that is real, and r = 0 itself where |a| already exceeds it.
         let px = 2.0 / f64::from(camera.scale);
         let ring_r = (px * px - metric.a * metric.a).max(0.0).sqrt();
-        let section = |r: f64, dphi: f64| -> Option<Pos2> {
+        let section = |r: f64, dphi: f64| -> Option<(Pos2, f32)> {
             let p = chart.pipe_point(metric, r, dphi, 0.0, t_scale)?;
-            placeable(p).then(|| project(p).0)
+            placeable(p).then(|| (project(p).0, within(p)))
         };
         // A fill is a region, so it is the whole band or nothing: a run of it is an arc, and an
         // arc closed across its own ends is a lie about which side of the surface one is on. Near
@@ -2947,9 +2996,13 @@ impl VolumeCanvas {
                     section(r_out, w[1])?,
                     section(r_in, w[1])?,
                 ];
+                let near = quad.iter().map(|(_, w)| *w).fold(0.0f32, f32::max);
+                if near <= 0.0 {
+                    continue;
+                }
                 let base = mesh.vertices.len() as u32;
-                for p in quad {
-                    mesh.colored_vertex(p, fill);
+                for (p, _) in quad {
+                    mesh.colored_vertex(p, fill.gamma_multiply(near));
                 }
                 mesh.add_triangle(base, base + 1, base + 2);
                 mesh.add_triangle(base, base + 2, base + 3);
@@ -3252,7 +3305,7 @@ impl VolumeCanvas {
                         "\nfirst-order local inertial chart, exact at {name}'s event, extended \
                          linearly through the Kerr-Schild embedding: pipes are sheared, not \
                          curved, by the boost; a wall too close to show its curve is drawn as its \
-                         tangent plane"
+                         tangent plane; what the chart places fades out beyond r/u^t of the event"
                     ),
                     None => String::new(),
                 },
