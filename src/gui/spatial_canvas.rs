@@ -1,5 +1,4 @@
 use crate::gui::controls::{ReferenceFrame, SignalViews};
-use crate::gui::river::RiverField;
 use crate::gui::spacetime_canvas::TelemetryBoxes;
 use crate::gui::theme::Theme;
 use crate::physics::geodesic::GeodesicState;
@@ -97,9 +96,6 @@ pub struct SpatialCanvas {
     dragging: Option<MarkerDrag>,
     /// Where the user has dragged each info box on this canvas, per observer.
     pub telemetry: TelemetryBoxes,
-    /// The animated raindrop flow. It is advanced from the app's own simulation clock, not from
-    /// the frame rate, so it freezes when paused and steps with the arrow keys.
-    pub river: RiverField,
 }
 
 impl Default for SpatialCanvas {
@@ -110,7 +106,6 @@ impl Default for SpatialCanvas {
             centred_on: None,
             dragging: None,
             telemetry: TelemetryBoxes::pinning(),
-            river: RiverField::default(),
         }
     }
 }
@@ -261,7 +256,6 @@ impl SpatialCanvas {
         bob: &mut Option<Observer>,
         alice: &mut Option<Observer>,
         current_time: f64,
-        show_river: bool,
         signals: SignalViews<'_>,
         canvas_height: f32,
         use_km: bool,
@@ -512,13 +506,7 @@ impl SpatialCanvas {
             );
         }
 
-        // 3. River of Space: the E = 1, L = 0 raindrop congruence, drawn under the arrows, the
-        // trails and the observer markers so it never competes with them for legibility.
-        if show_river {
-            self.river.draw(&painter, metric, &to_screen, zoom);
-        }
-
-        // 4. The two transmissions, drawn over the flow but under the worldlines and the markers,
+        // 3. The two transmissions, drawn under the worldlines and the markers,
         // so the fronts read as something moving through the field rather than as part of the
         // observers' own trajectories. Bob's goes down first and Alice's over it, so where the two
         // overlap it is the heavier, primary field that stays legible.
@@ -740,7 +728,6 @@ impl SpatialCanvas {
                  Cauchy Horizon r₋: {} ({:.2}M, ρ = {:.2}M)\n\
                  Spin a/M: {:.3}\n\
                  Drag: Ω_H = {:.3}/M = {:.3e} rad/s\n\
-                 River: colour √(1−α²) vs ZAMO (1 at r₊); length √(2M/r) (1 at 2M)\n\
                  Front colour: ν an infaller here measures ÷ ν the infaller passing the emitter\n\
                  measured as it left: red ×1 (every front is born red), orange ×3, yellow ×10,\n\
                  green ×30, blue ×1000, violet ×100000, grey below ×1. One lightness throughout,\n\
@@ -778,7 +765,6 @@ impl SpatialCanvas {
                  Cauchy Horizon r₋: {:.2}M ({}), ρ = {:.2}M\n\
                  Spin a/M: {:.3}\n\
                  Drag: Ω_H = {:.3}/M\n\
-                 River: colour √(1−α²) vs ZAMO (1 at r₊); length √(2M/r) (1 at 2M)\n\
                  Front colour: ν an infaller here measures ÷ ν the infaller passing the emitter\n\
                  measured as it left: red ×1 (every front is born red), orange ×3, yellow ×10,\n\
                  green ×30, blue ×1000, violet ×100000, grey below ×1. One lightness throughout,\n\
@@ -1255,7 +1241,7 @@ pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
     to_screen: &F,
 ) {
     // `derivatives` reads only (E, L) off the state and takes the radius as an argument, so one
-    // instance of the raindrop congruence serves every ray of every pulse, as it does in the river.
+    // instance of the raindrop congruence serves every ray of every pulse.
     let raindrop = GeodesicState::new_infall(metric, 0.0, 12.0, 1.0, 0.0);
     // The emitter's colour, faint: present enough to read as a mark on their trail, quiet enough
     // not to compete with the wavefront it anchors.
@@ -1568,7 +1554,6 @@ mod tests {
                 bob,
                 alice,
                 clock,
-                false,
                 SignalViews { alice: &signal, bob: &signal },
                 600.0,
                 false,
@@ -1641,7 +1626,6 @@ mod tests {
                 bob,
                 &mut alice,
                 clock,
-                false,
                 SignalViews { alice: &signal, bob: &signal },
                 600.0,
                 false,

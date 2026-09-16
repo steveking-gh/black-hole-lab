@@ -109,42 +109,6 @@ impl Theme {
         Color32::from_rgb(lift(r), lift(g), lift(b))
     }
 
-    // River of Space (the E = 1, L = 0 raindrop flow). The streaks are keyed to the invariant
-    // river speed beta = sqrt(1 - alpha^2) relative to the local ZAMO, not to the radius, so the
-    // colour says the same thing at every spin: pale blue in the weak field, the ergosphere amber
-    // as beta closes on 1 at r+, the Cauchy magenta beyond it.
-    pub const RIVER_SLOW_RGB: [u8; 3] = [120, 180, 235]; // cool pale blue
-    pub const RIVER_MID_RGB: [u8; 3] = [255, 180, 0]; // ERGOSPHERE_LINE amber
-    pub const RIVER_FAST_RGB: [u8; 3] = [255, 0, 130]; // HORIZON_CAUCHY magenta
-    /// beta at or below which the streak is pure `RIVER_SLOW_RGB`.
-    pub const RIVER_BETA_SLOW: f64 = 0.7;
-    /// beta at which the ramp reaches `RIVER_MID_RGB`: exactly the horizon r+.
-    pub const RIVER_BETA_MID: f64 = 1.0;
-    /// beta at or above which the ramp is clamped to `RIVER_FAST_RGB`.
-    pub const RIVER_BETA_FAST: f64 = 1.5;
-    /// Opacity of a fully faded-in streak, low enough that worldlines and horizons stay legible.
-    pub const RIVER_ALPHA: u8 = 130;
-
-    /// The streak colour for a river speed beta, at opacity `alpha`.
-    pub fn river_colour(beta: f64, alpha: u8) -> Color32 {
-        let lerp = |lo: [u8; 3], hi: [u8; 3], t: f64| -> [u8; 3] {
-            let t = t.clamp(0.0, 1.0);
-            [
-                (lo[0] as f64 + t * (hi[0] as f64 - lo[0] as f64)).round() as u8,
-                (lo[1] as f64 + t * (hi[1] as f64 - lo[1] as f64)).round() as u8,
-                (lo[2] as f64 + t * (hi[2] as f64 - lo[2] as f64)).round() as u8,
-            ]
-        };
-        let rgb = if beta <= Self::RIVER_BETA_MID {
-            let span = Self::RIVER_BETA_MID - Self::RIVER_BETA_SLOW;
-            lerp(Self::RIVER_SLOW_RGB, Self::RIVER_MID_RGB, (beta - Self::RIVER_BETA_SLOW) / span)
-        } else {
-            let span = Self::RIVER_BETA_FAST - Self::RIVER_BETA_MID;
-            lerp(Self::RIVER_MID_RGB, Self::RIVER_FAST_RGB, (beta - Self::RIVER_BETA_MID) / span)
-        };
-        Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], alpha)
-    }
-
     // Grid
     /// One stroke colour for every gridline in the (t, r) diagram: the time lines and the radial
     /// lines are the same kind of thing and now look it.

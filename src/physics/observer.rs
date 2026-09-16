@@ -43,8 +43,8 @@ pub enum Release {
     /// the one release that joins the hover before it without a jump in velocity.
     AtRest,
     /// From rest at infinity: E = 1, the raindrop. They arrive at the drop radius already moving,
-    /// which is what "fell from far away" means, and they are then a member of the same E = 1,
-    /// L = 0 congruence the river of space is drawn from.
+    /// which is what "fell from far away" means, and they are then a member of the E = 1,
+    /// L = 0 raindrop congruence every shift in the app is quoted against.
     FromInfinity,
 }
 

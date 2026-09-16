@@ -2283,7 +2283,6 @@ mod tests {
                 &mut bob,
                 &mut alice,
                 clock,
-                false,
                 SignalViews { alice: &signal, bob: &signal },
                 600.0,
                 false,
