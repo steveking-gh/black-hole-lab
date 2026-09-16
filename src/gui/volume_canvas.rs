@@ -1,6 +1,7 @@
 use crate::gui::controls::{ReferenceFrame, SignalViews};
 use crate::gui::spacetime_canvas::{
-    SpacetimeCanvas, TelemetryBoxes, distant_clock_grid_step, distant_clock_offset_label,
+    COARSE_ZOOM_STEPS, SpacetimeCanvas, TelemetryBoxes, distant_clock_grid_step,
+    distant_clock_offset_label,
 };
 use crate::gui::spatial_canvas::{
     CENTRED_RING_GAP, FrontStyle, RING_DROP_FLOOR, Who, draw_reception_tick, draw_signal_field,
@@ -901,39 +902,56 @@ impl VolumeCanvas {
             }
         }
         if response.hovered() {
-            // The same step and the same clamp as the equatorial view's wheel, taken about the
-            // cursor in the same way, so that the two canvases zoom at one rate and `scale` goes on
-            // meaning px/M in both. The cursor is held on the point under it only up to the tilt:
-            // the anchor is the nominal centre `rect.center() + pan`, which is where world
-            // (0, 0, 0) lands with nobody being followed.
-            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-            if scroll.abs() > 0.1 {
-                let step = 0.01875;
-                let zoom_mult = if scroll > 0.0 { 1.0 + step } else { 1.0 - step };
-                let old_scale = self.camera.scale;
-                let new_scale = (old_scale * zoom_mult).clamp(8.0, 500_000.0);
-                if let Some(mpos) = response.hover_pos() {
-                    let nominal = rect.center() + self.camera.pan;
-                    self.camera.pan += (mpos - nominal) * (1.0 - new_scale / old_scale);
-                }
-                self.camera.scale = new_scale;
-                // The user has taken the wheel, so the automatic framing stands down until they
-                // ask for it back - the same bargain the flat rest-frame diagram's own wheel
-                // makes, and for the same reason.
-                if frame_of_ref != ReferenceFrame::DistantObserver {
-                    self.keep_surface_framed = false;
-                }
+            let (zoom_delta, scroll, shift) =
+                ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta, i.modifiers.shift));
+            // A shift-held wheel is handed over as horizontal scroll on some platforms and as
+            // vertical on others, so whichever axis moved is the notch.
+            let wheel = if scroll.y.abs() > 0.1 { scroll.y } else { scroll.x };
+            if shift && wheel.abs() > 0.1 {
+                // Shift-wheel stretches time against space. It is the one control here with no
+                // counterpart on the other canvases: t_scale is the exchange rate between an M of
+                // time and an M of length, and at 1 a far-away light ray rises at 45 degrees, so
+                // moving it off 1 is moving the picture off the one setting where a slope can be
+                // read as a speed.
+                let mult = if wheel > 0.0 { 1.05 } else { 1.0 / 1.05 };
+                self.camera.t_scale = (self.camera.t_scale * mult).clamp(0.1, 10.0);
                 moved = true;
-            }
-            // Ctrl-wheel stretches time against space. It is the one control here with no
-            // counterpart on the other canvases: t_scale is the exchange rate between an M of time
-            // and an M of length, and at 1 a far-away light ray rises at 45 degrees, so moving it
-            // off 1 is moving the picture off the one setting where a slope can be read as a speed.
-            let zoom_delta = ui.input(|i| i.zoom_delta());
-            if (zoom_delta - 1.0).abs() > 1e-4 {
-                self.camera.t_scale =
-                    (self.camera.t_scale * f64::from(zoom_delta)).clamp(0.1, 10.0);
-                moved = true;
+            } else {
+                // The same fine step and the same clamp as the equatorial view's wheel, and the
+                // same coarse gesture as the (t, r) diagram's: ctrl (or command) held turns the
+                // wheel into egui's `zoom_delta`, read here for its direction only, so that one
+                // notch of the coarse zoom is exactly `COARSE_ZOOM_STEPS` of the fine one however
+                // fast the platform reports the wheel. The zoom is taken about the cursor as the
+                // equatorial view takes it, so that the two canvases zoom at one rate and `scale`
+                // goes on meaning px/M in both; the cursor is held on the point under it only up to
+                // the tilt, the anchor being the nominal centre `rect.center() + pan`, which is
+                // where world (0, 0, 0) lands with nobody being followed.
+                let (inward, steps) = if (zoom_delta - 1.0).abs() > 1e-4 {
+                    (zoom_delta > 1.0, COARSE_ZOOM_STEPS)
+                } else if scroll.y.abs() > 0.1 {
+                    (scroll.y > 0.0, 1)
+                } else {
+                    (false, 0)
+                };
+                if steps > 0 {
+                    let step = 0.01875f32;
+                    let zoom_mult =
+                        if inward { (1.0 + step).powi(steps) } else { (1.0 - step).powi(steps) };
+                    let old_scale = self.camera.scale;
+                    let new_scale = (old_scale * zoom_mult).clamp(8.0, 500_000.0);
+                    if let Some(mpos) = response.hover_pos() {
+                        let nominal = rect.center() + self.camera.pan;
+                        self.camera.pan += (mpos - nominal) * (1.0 - new_scale / old_scale);
+                    }
+                    self.camera.scale = new_scale;
+                    // The user has taken the wheel, so the automatic framing stands down until
+                    // they ask for it back - the same bargain the flat rest-frame diagram's own
+                    // wheel makes, and for the same reason.
+                    if frame_of_ref != ReferenceFrame::DistantObserver {
+                        self.keep_surface_framed = false;
+                    }
+                    moved = true;
+                }
             }
         }
         if moved {
@@ -1996,12 +2014,33 @@ impl VolumeCanvas {
         let button_size = Vec2::new(40.0 * font_scale, 16.0 * font_scale);
         let gap = 4.0 * font_scale;
         let strip = button_size.x * buttons.len() as f32 + gap * (buttons.len() - 1) as f32;
-        for (i, (label, preset)) in buttons
-        .into_iter()
-        .enumerate()
-        {
-            let min =
-                rect.right_top() + Vec2::new(-8.0 - strip + (button_size.x + gap) * i as f32, 6.0);
+        // The buttons sit in a named, outlined box, because five bare words in the corner of a
+        // picture read as part of the picture: the frame is what says they are controls, and the
+        // heading is what says which.
+        let pad = 6.0 * font_scale;
+        let heading_h = Theme::MIN_FONT_PT * font_scale + 2.0;
+        let box_size = Vec2::new(strip + 2.0 * pad, pad + heading_h + gap + button_size.y + pad);
+        let box_rect = egui::Rect::from_min_size(
+            rect.right_top() + Vec2::new(-8.0 - box_size.x, 6.0),
+            box_size,
+        );
+        painter.rect_filled(box_rect, 4.0, Theme::PANEL_BG.gamma_multiply(0.85));
+        painter.rect_stroke(
+            box_rect,
+            4.0,
+            Stroke::new(1.0, Theme::CHIP_OUTLINE),
+            egui::StrokeKind::Inside,
+        );
+        painter.text(
+            box_rect.left_top() + Vec2::new(pad, pad),
+            egui::Align2::LEFT_TOP,
+            "View Presets",
+            legend_font.clone(),
+            Theme::TEXT_MUTED,
+        );
+        let row_top = box_rect.top() + pad + heading_h + gap;
+        for (i, (label, preset)) in buttons.into_iter().enumerate() {
+            let min = Pos2::new(box_rect.left() + pad + (button_size.x + gap) * i as f32, row_top);
             let button = egui::Button::new(
                 egui::RichText::new(label).font(legend_font.clone()).color(Theme::TEXT_BRIGHT),
             )
@@ -2049,7 +2088,8 @@ impl VolumeCanvas {
             format!(
                 "yaw {:.0}°  pitch {:.0}°  {:.0} px/M  t×{:.2}\n\
                  window {:.1} … {:.1} M  (floor = now){}\n\
-                 drag: pan  shift-drag: orbit  wheel: zoom  ctrl-wheel: time scale  \
+                 drag: pan  shift-drag: orbit  wheel: zoom  ctrl-wheel: coarse zoom  \
+                 shift-wheel: time scale  \
                  right-click: menu\n\
                  below the floor: the past · above: the future · {}: r = const · cones: exact \
                  null generators{}{}",
@@ -2481,6 +2521,10 @@ mod tests {
                         assert!(
                             text.contains("2D+1 Volume"),
                             "{name} at {preset:?} in {frame:?} (grid {grid}) drew no volume view"
+                        );
+                        assert!(
+                            text.contains("View Presets"),
+                            "{name} at {preset:?} in {frame:?}: the preset box is named"
                         );
                     }
                 }
@@ -3613,6 +3657,90 @@ mod tests {
             });
         }
         events
+    }
+
+    #[test]
+    fn test_ctrl_wheel_is_the_coarse_zoom_and_shift_wheel_the_time_scale() {
+        // The wheel means the same on every canvas: a notch is one fine step of zoom, and with
+        // ctrl held it is twenty of them, as the (t, r) diagram has it. The one control this view
+        // adds, the exchange rate between an M of time and an M of length, lives on shift-wheel so
+        // that it cannot be mistaken for a zoom that did nothing.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let bob = bob_at(&metric, 4.0);
+        let signal = SignalField::default();
+
+        let wheel = |modifiers: egui::Modifiers| {
+            let ctx = egui::Context::default();
+            ctx.set_fonts(egui::FontDefinitions::empty());
+            let mut canvas = VolumeCanvas {
+                camera: Camera::preset(Preset::ThreeQuarter, 48.0, Vec2::ZERO, 1.0),
+                show_past_cone: false,
+                show_pulse_surfaces: false,
+                keep_surface_framed: false,
+                ..Default::default()
+            };
+            let before = canvas.camera;
+            let at = Pos2::new(400.0, 320.0);
+            // A warm-up frame puts the canvas on record under the pointer; the wheel turns on the
+            // next one.
+            for events in [
+                pointer(at, None, modifiers),
+                vec![
+                    egui::Event::ModifiersChanged(modifiers),
+                    egui::Event::PointerMoved(at),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Line,
+                        delta: Vec2::new(0.0, 1.0),
+                        phase: egui::TouchPhase::Move,
+                        modifiers,
+                    },
+                ],
+            ] {
+                let raw = egui::RawInput { events, ..input() };
+                volume_frame_raw(
+                    &mut canvas,
+                    &ctx,
+                    &metric,
+                    Some(&bob),
+                    ReferenceFrame::DistantObserver,
+                    false,
+                    &signal,
+                    &signal,
+                    raw,
+                );
+            }
+            (before, canvas.camera)
+        };
+
+        let fine = 1.0 + 0.01875f32;
+        let (before, plain) = wheel(egui::Modifiers::NONE);
+        let (_, coarse) = wheel(egui::Modifiers::COMMAND);
+        let (_, stretched) = wheel(egui::Modifiers::SHIFT);
+        println!(
+            "scale {}: plain wheel -> {}, ctrl-wheel -> {}; shift-wheel t_scale {} -> {}",
+            before.scale, plain.scale, coarse.scale, before.t_scale, stretched.t_scale
+        );
+        assert!(
+            (plain.scale / before.scale - fine).abs() < 1e-4,
+            "one notch is one fine step: {} -> {}",
+            before.scale,
+            plain.scale
+        );
+        assert!(
+            (coarse.scale / before.scale - fine.powi(COARSE_ZOOM_STEPS)).abs() < 1e-3,
+            "ctrl-wheel is {COARSE_ZOOM_STEPS} fine steps at once: {} -> {}",
+            before.scale,
+            coarse.scale
+        );
+        assert_eq!(plain.t_scale, before.t_scale, "a zoom leaves the time scale alone");
+        assert_eq!(coarse.t_scale, before.t_scale);
+        assert_eq!(stretched.scale, before.scale, "and shift-wheel is not a zoom");
+        assert!(
+            stretched.t_scale > before.t_scale,
+            "shift-wheel stretches time: {} -> {}",
+            before.t_scale,
+            stretched.t_scale
+        );
     }
 
     #[test]

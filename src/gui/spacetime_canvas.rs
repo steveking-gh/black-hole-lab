@@ -74,7 +74,7 @@ const FRAME_ZOOM_LERP: f64 = 0.15;
 /// about a decade of zoom per notch of the hand, and the range between the view the app opens on
 /// and an observer's last femtoseconds is eleven decades: at the fine step alone that is a thousand
 /// scroll events.
-const COARSE_ZOOM_STEPS: i32 = 20;
+pub(crate) const COARSE_ZOOM_STEPS: i32 = 20;
 
 /// Hover gloss on the automatic framing.
 pub const KEEP_SURFACE_FRAMED_TIP: &str =
