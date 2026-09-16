@@ -2163,42 +2163,59 @@ Tick Enable Observer on Alice's or Bob's card",
             (signals.alice, "Alice", Theme::ALICE_COLOR)
         };
         let crests = wave_crests(&frame, focus_obs, sender_field, self.frame_max_r);
+        // A crest is drawn as a stroke through its anchor a third of the canvas long, not across
+        // the whole plane: near the worldline the placement is exact and far from it the chart is
+        // only first order, and a stroke that ends says so. The older arrivals keep their dot on
+        // the worldline and lose their stroke, so the rungs stay countable as they crowd.
+        let half_len = 0.3 * rect.height().min(rect.width());
+        let received_total = crests.crests.iter().filter(|c| c.received).count();
+        let mut received_seen = 0usize;
         for crest in &crests.crests {
             let anchor = to_screen(crest.xi1, crest.xi0);
             let dir = Vec2::new(crest.dir[0] as f32, -(crest.dir[1] as f32));
-            if let Some((a, b)) = clip_line_to_rect(anchor, dir, rect) {
+            let as_line = if crest.received {
+                received_seen += 1;
+                received_total - received_seen < CRESTS_RECEIVED_AS_LINES
+            } else {
+                true
+            };
+            if as_line {
                 let (alpha, width) = if crest.latest {
                     (0.9, 1.6)
                 } else if crest.received {
-                    (0.55, 1.0)
+                    (0.5, 1.0)
                 } else {
                     (0.3, 1.0)
                 };
-                painter.line_segment([a, b], Stroke::new(width, crest_colour.gamma_multiply(alpha)));
+                painter.line_segment(
+                    [anchor - dir * half_len, anchor + dir * half_len],
+                    Stroke::new(width, crest_colour.gamma_multiply(alpha)),
+                );
             }
             if crest.received && rect.contains(anchor) {
                 painter.circle_filled(anchor, 2.5, crest_colour);
             }
         }
-        if let (Some(rx), Some(tx)) = (crests.received_period, crests.emitted_period) {
+        if let Some(ray) = crests.last_ray_ratio {
             let fmt = |m: f64| {
                 if use_km { metric.format_physical_time(m) } else { format!("{m:.3} M") }
             };
-            let ratio = crests.period_ratio().map_or("n/a".to_string(), |x| format!("{x:.3}"));
-            let ray = crests.last_ray_ratio.map_or("n/a".to_string(), |x| format!("{x:.3}"));
-            painter.text(
-                Pos2::new(rect.right() - 10.0, rect.top() + 64.0 * font_scale),
-                egui::Align2::RIGHT_TOP,
-                format!(
-                    "{sender_name}'s signal at {}\n\
-                     crests: null lines through their arrivals on the worldline\n\
-                     received every {} of {}'s watch\n\
-                     sent every {} of {sender_name}'s\n\
-                     f_rx / f_tx = {ratio} from the periods, {ray} on the last ray",
-                    focus_obs.name,
+            let periods = match (crests.received_period, crests.emitted_period, crests.period_ratio()) {
+                (Some(rx), Some(tx), Some(ratio)) => format!(
+                    "received every {} of {}'s watch, sent every {} of {sender_name}'s\
+                     f_rx / f_tx = {ratio:.3} from those periods, {ray:.3} on the last ray",
                     fmt(rx),
                     focus_obs.name,
                     fmt(tx),
+                ),
+                _ => format!("f_rx / f_tx = {ray:.3} on the last ray"),
+            };
+            painter.text(
+                Pos2::new(rect.right() - 10.0, rect.bottom() - 10.0),
+                egui::Align2::RIGHT_BOTTOM,
+                format!(
+                    "{sender_name}'s signal at {}: crests as null strokes through their arrivals\n{periods}",
+                    focus_obs.name
                 ),
                 egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
                 crest_colour,
@@ -2371,6 +2388,12 @@ Tick Enable Observer on Alice's or Bob's card",
 }
 
 /// Clip the infinite line p + t d to `rect` (Liang-Barsky), returning its visible segment.
+/// How many crests still on their way are drawn, nearest first, and how many received ones are
+/// drawn as strokes rather than as dots on the worldline alone: the wave at the observer, not
+/// the whole history of the transmission.
+const CRESTS_IN_FLIGHT: usize = 4;
+const CRESTS_RECEIVED_AS_LINES: usize = 12;
+
 /// One crest of a transmission, placed in the focus observer's chart: a point of the drawn
 /// (xi^1, xi^0) plane it passes through and its Euclidean-unit direction there.
 pub(crate) struct Crest {
@@ -2464,6 +2487,7 @@ pub(crate) fn wave_crests(
             latest: latest_index == Some(rec.pulse_index),
         });
     }
+    let mut in_flight: Vec<(f64, Crest)> = Vec::new();
     for pulse in &field.pulses {
         if received.iter().any(|r| r.pulse_index == pulse.index) {
             continue;
@@ -2480,27 +2504,47 @@ pub(crate) fn wave_crests(
         else {
             continue;
         };
-        if xi[1].hypot(xi[0]) >= 2.0 * reach {
+        let distance = xi[1].hypot(xi[0]);
+        if distance >= 2.0 * reach {
             continue;
         }
-        crests.push(Crest {
-            xi1: xi[1],
-            xi0: xi[0],
-            dir: direction(ray.dr_dt, ray.dphi_dt),
-            received: false,
-            latest: false,
-        });
+        in_flight.push((
+            distance,
+            Crest {
+                xi1: xi[1],
+                xi0: xi[0],
+                dir: direction(ray.dr_dt, ray.dphi_dt),
+                received: false,
+                latest: false,
+            },
+        ));
     }
+    // The few crests about to arrive, nearest first: the picture is of the wave at the
+    // observer's worldline, and forty fronts in flight drawn across the whole plane are a web.
+    in_flight.sort_by(|a, b| a.0.total_cmp(&b.0));
+    crests.extend(in_flight.into_iter().take(CRESTS_IN_FLIGHT).map(|(_, c)| c));
 
-    let (received_period, emitted_period) = match received.as_slice() {
-        [.., a, b] => (
+    // The periods come from the last arrival and the arrival of the pulse sent just before it,
+    // on the same sheet family. Not simply the last two arrivals: a front is a loop, and inside
+    // r+ the same pulse can sweep the observer twice, once with its crossing family and once with
+    // its frozen one, and a pair mixing two pulses' families or skipping a pulse measures nothing
+    // a wave has. Where no such pair exists there is no period to report, only the ray's factor.
+    let pair = received.last().and_then(|b| {
+        received
+            .iter()
+            .rev()
+            .find(|a| a.pulse_index + 1 == b.pulse_index && a.frozen_family == b.frozen_family)
+            .map(|a| (a, b))
+    });
+    let (received_period, emitted_period) = match pair {
+        Some((a, b)) => (
             Some(b.tau_receiver - a.tau_receiver),
             match (pulse_of(a.pulse_index), pulse_of(b.pulse_index)) {
                 (Some(pa), Some(pb)) => Some(pb.emitted_tau - pa.emitted_tau),
                 _ => None,
             },
         ),
-        _ => (None, None),
+        None => (None, None),
     };
     WaveCrests {
         crests,
