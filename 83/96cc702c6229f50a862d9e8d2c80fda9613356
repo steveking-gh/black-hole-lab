@@ -1,0 +1,52 @@
+src/gui/spacetime_canvas.rs
+  s_c8d87c2c7b73cb::t_f3a4db24f35e86 1704
+src/gui/volume_canvas.rs
+  s_c8d87c2c7b73cb::t_a7cadf9aae5b94 3483-3485,3487-3488
+  s_c8d87c2c7b73cb::t_3287441e087ade 932-951
+  s_c8d87c2c7b73cb::t_73ce0383cf9ff4 1137-1148,1158
+  s_c8d87c2c7b73cb::t_05030b744f67f3 1669-1673
+  s_c8d87c2c7b73cb::t_259ea039e7a235 782-789
+  s_c8d87c2c7b73cb::t_b63a5ac8a77548 958
+  s_c8d87c2c7b73cb::t_44346362e40ecd 2051-2053,2058
+  s_c8d87c2c7b73cb::t_69757254c9e830 2107-2109,2147
+  s_c8d87c2c7b73cb::t_33ce1ed26aba7d 3473-3482,3486,3489-3522,3526-3530,3533-3814
+  s_c8d87c2c7b73cb::t_b8b8fbd6bd4846 1316-1326,1328-1332,1341-1368
+  s_c8d87c2c7b73cb::t_99bc508280abf8 1191
+  s_c8d87c2c7b73cb::t_49fccc563c174d 651-656
+  s_c8d87c2c7b73cb::t_0d3db6f54c910d 3523-3525
+  s_c8d87c2c7b73cb::t_b982a9df38e723 3
+  s_c8d87c2c7b73cb::t_1c031fb8b0e2b5 1920-1923,1925-1932,1938-1943,1945
+  s_c8d87c2c7b73cb::t_ca943ae957ac74 815
+  s_c8d87c2c7b73cb::t_14dd0a7b639756 859-868,874-877,886-887
+  s_c8d87c2c7b73cb::t_979b1d154f9b04 541-559
+  s_c8d87c2c7b73cb::t_0de1eebaf9f239 1213,1225-1232,1234
+  s_c8d87c2c7b73cb::t_42b813dc46ecb9 2028
+  s_c8d87c2c7b73cb::t_f7876badfbd177 3531-3532
+  s_c8d87c2c7b73cb::t_f0dde48a1fe492 2241-2274,2277-2281,2299
+  s_c8d87c2c7b73cb::t_d4b90acbbeef10 909-914
+  s_c8d87c2c7b73cb::t_551fe411a32ac1 1327
+  s_c8d87c2c7b73cb::t_82a7a6ebcffd5e 1531-1542
+  s_c8d87c2c7b73cb::t_58997abf64d90c 657
+src/gui/controls.rs
+  s_c8d87c2c7b73cb::t_47ba4957a45cb9 393
+src/app.rs
+  s_c8d87c2c7b73cb::t_207c990ae72bba 757-792
+  s_c8d87c2c7b73cb::t_e48fc18057bc62 384-398
+  s_c8d87c2c7b73cb::t_a46dbcd98fa6ed 756
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "8396cc702c6229f50a862d9e8d2c80fda9613356",
+  "prompts": {},
+  "sessions": {
+    "s_c8d87c2c7b73cb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "553fc9fe-1b48-463e-a36b-4c33628c4ac8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
