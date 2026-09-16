@@ -1,0 +1,40 @@
+src/gui/volume_canvas.rs
+  s_c8d87c2c7b73cb::t_76a5ea5cd4b8a7 2404
+  s_c8d87c2c7b73cb::t_789a59d37e56c9 2427-2432,2476-2480,2702
+  s_c8d87c2c7b73cb::t_333db0305bc406 4395-4403,4405,4407-4408,4422-4423
+  s_c8d87c2c7b73cb::t_dfced30a094c6a 868
+  s_c8d87c2c7b73cb::t_d85c947e6c23f4 593-604
+  s_c8d87c2c7b73cb::t_53286c75f69441 2267-2268,2270-2271
+  s_c8d87c2c7b73cb::t_e48117d4c5b6f9 706-750
+  s_c8d87c2c7b73cb::t_0547e6a4eef533 3086,3582-3723
+  s_c8d87c2c7b73cb::t_00f43a8eef9110 2902,2908,2977,3011
+  s_c8d87c2c7b73cb::t_d952b868c8611d 1217-1219
+  s_c8d87c2c7b73cb::t_c6b722e14bcb05 1298-1316,1321-1322,1324,1326-1375,1377-1448,1450-1452,1455-1460,1463-1470,1474,1476-1479
+  s_c8d87c2c7b73cb::t_1104197be5a2e7 1242-1246
+  s_c8d87c2c7b73cb::t_b7d41e02fe540f 2107-2115
+  s_c8d87c2c7b73cb::t_5f0bd82993279f 3087-3159
+  s_c8d87c2c7b73cb::t_f893ba221ca745 1317-1320,1323,1325
+  s_c8d87c2c7b73cb::t_55714fe97d3114 828
+  s_c8d87c2c7b73cb::t_92e0f31d75300c 2287
+  s_c8d87c2c7b73cb::t_6ff0038de5695a 772-773
+  s_c8d87c2c7b73cb::t_2e7dfde2097a1a 638-651,653-671
+  s_c8d87c2c7b73cb::t_d73034822a61d3 3033-3036,3044-3045,3047-3048,3050-3061,3064-3065,3068,3070-3075,3077-3080
+  s_c8d87c2c7b73cb::t_43d9962d28bcf6 1841-1856
+  s_c8d87c2c7b73cb::t_48cf8d50e2caf0 799,802-804,809
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "086f26275fee41947f7313b8d6ba90d5e20bac43",
+  "prompts": {},
+  "sessions": {
+    "s_c8d87c2c7b73cb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "553fc9fe-1b48-463e-a36b-4c33628c4ac8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
