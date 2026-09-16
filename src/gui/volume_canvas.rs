@@ -1731,7 +1731,12 @@ impl VolumeCanvas {
                              ghost: bool,
                              own_chart: bool| {
             let tetrad = Observer::raindrop_tetrad(metric, r);
-            let apex = chart.world(metric, t_at, r, phi, t_scale);
+            // The focus observer's own event is the origin of their chart by definition, and is
+            // not computed: the clock and their own t agree to rounding, and at u^t ~ 1e10 and
+            // 1e11 px/M a rounding of 1e-12 M is billions of pixels. Seen in the app as the cone
+            // vanishing at the stall.
+            let apex =
+                if own_chart { [0.0; 3] } else { chart.world(metric, t_at, r, phi, t_scale) };
             if !finite3(apex) || !on_stage(project(apex).0, rect) {
                 return;
             }
@@ -2210,8 +2215,15 @@ impl VolumeCanvas {
         let mut markers: Vec<(Who, Pos2)> = Vec::new();
         for (obs, who) in present.iter().copied() {
             // In a rest frame the focus observer's own marker is the origin of the chart, which is
-            // the one place in the picture that needs no calculation at all.
-            let world = chart.world(metric, current_time, obs.r, obs.phi, t_scale);
+            // the one place in the picture that needs no calculation at all - and must not get
+            // one: the clock and their own t agree only to rounding, and at u^t ~ 1e10 and the
+            // zooms a rest frame reaches, a rounding of 1e-12 M maps to billions of pixels. Seen
+            // in the app as the marker, the cone and the telemetry box vanishing at the stall.
+            let world = if Some(who) == axis_who {
+                [0.0; 3]
+            } else {
+                chart.world(metric, current_time, obs.r, obs.phi, t_scale)
+            };
             if !finite3(world) {
                 continue;
             }
@@ -2691,6 +2703,40 @@ mod tests {
         let shapes = painted(&output);
         output.drop_without_applying_deltas();
         (shapes, rect)
+    }
+
+    /// One frame at a clock the caller sets, rather than at the observer's own t: the app's clock
+    /// and a frozen observer's t agree only to rounding, and what a rounding does at the zoom a
+    /// rest frame reaches is the subject of a test.
+    fn volume_frame_at_clock(
+        canvas: &mut VolumeCanvas,
+        metric: &KerrSchild,
+        bob: &Observer,
+        frame_of_ref: ReferenceFrame,
+        clock: f64,
+    ) -> Vec<Painted> {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let signal = SignalField::default();
+        let output = ctx.clone().run_ui(input(), |ui| {
+            canvas.render(
+                ui,
+                metric,
+                Some(bob),
+                None,
+                clock,
+                600.0,
+                false,
+                frame_of_ref,
+                1.0,
+                SignalViews { alice: &signal, bob: &signal },
+                false,
+                FrontStyle { arcs: true, hide_wound: true },
+            );
+        });
+        let shapes = painted(&output);
+        output.drop_without_applying_deltas();
+        shapes
     }
 
     /// One frame with the exact past cone switched as the right-click menu switches it.
@@ -3762,6 +3808,43 @@ mod tests {
             _ => None,
         });
         assert!(trace.is_some(), "the r- plane leaves a trace on the floor at that zoom");
+    }
+
+    #[test]
+    fn test_the_focus_event_is_the_origin_whatever_the_clock_rounding() {
+        // Seen in the app at the stall: the marker, the cone and the telemetry box all gone,
+        // while the axis and its ticks stayed. The app's clock and the frozen observer's own t
+        // differ by a rounding, about 1e-12 M; mapped through his frame that is multiplied by
+        // u^t ~ 1e10, and at the 1e11 px/M the framing has reached, by that again - billions of
+        // pixels, so his own event was off the stage and everything hung on it was skipped. His
+        // event is the origin by definition and is placed there without arithmetic.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let frozen = Observer::frozen_bob(&metric);
+        let clock = frozen.t * (1.0 + 4.0 * f64::EPSILON);
+        assert!(clock != frozen.t, "the clock is a rounding away from Bob's own t");
+        let mut canvas = VolumeCanvas {
+            camera: Camera::preset(Preset::ThreeQuarter, 48.0, Vec2::ZERO, 1.0),
+            keep_surface_framed: true,
+            ..Default::default()
+        };
+        let shapes =
+            volume_frame_at_clock(&mut canvas, &metric, &frozen, ReferenceFrame::Bob, clock);
+        println!("framed at {} px/M with the clock {clock} against t = {}", canvas.camera.scale, frozen.t);
+        let at = marker_of(&shapes);
+        let canvas_rect = egui::Rect::from_min_size(Pos2::ZERO, egui::Vec2::new(800.0, 700.0));
+        assert!(canvas_rect.contains(at), "Bob's marker is on the canvas, at {at:?}");
+        let (future_fill, _, _) = Theme::cone_colours_at("Bob", Theme::VOLUME_CONE_FILL_ALPHA);
+        let cone = shapes.iter().find_map(|s| match s {
+            Painted::Mesh { colour: Some(c), first, vertices, .. }
+                if *c == future_fill && *vertices == CONE_SAMPLES + 1 =>
+            {
+                Some(*first)
+            }
+            _ => None,
+        });
+        let apex = cone.expect("his cone is painted");
+        assert!(apex.distance(at) < 0.5, "and its apex is his marker: {apex:?} against {at:?}");
+        assert!(text_of(&shapes).contains("Bob ["), "and his telemetry box is there");
     }
 
     #[test]
