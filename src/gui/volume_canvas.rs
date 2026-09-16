@@ -437,8 +437,9 @@ pub fn glass(colour: Color32, base_alpha: u8, weight: f32) -> Color32 {
 /// Everything the two charts disagree about then follows from the map being linear and the tetrad
 /// being orthonormal. In `Frame` the focus observer is at rest at the origin, their cone is exactly
 /// 45 degrees, a pipe is sheared over by their boost so that it is tangent to that cone where they
-/// cross it, and the distant clock's slices are a stack of planes that crowd into the past cone as
-/// u^t runs away. In `Global` nothing is boosted and the cone leans over instead. Neither is a
+/// cross it, and the distant clock's slices are a fan of lines through their axis that lean into
+/// the past cone as u^t runs away. In `Global` nothing is boosted and the cone leans over instead.
+/// Neither is a
 /// drawing rule: both come out of the same geometry read in two charts.
 ///
 /// It is a first-order chart. The orientations at the focus observer's own event - the tilt of
@@ -644,30 +645,17 @@ fn patch_half_width(rect: egui::Rect, scale: f32) -> f64 {
     PATCH_OVERSCAN * half_diagonal / f64::from(scale).max(1e-6)
 }
 
-/// How many quads one slice of the distant clock is cut into along each side.
-///
-/// A plane cannot be one mesh: it runs from the bottom of the window to the top, so a single
-/// primitive sorted at one depth would interleave wrongly with every worldline and cone it passes
-/// through, and its centroid would place the whole surface in one layer when half of it is in the
-/// observer's past and half in their future. Four a side is 16 pieces, each short enough that its
-/// own centroid is a fair place to sort and to layer it; coarse, because there are dozens of these
-/// and each is a faint wash rather than a surface to be read against.
-const CLOCK_PLANE_CELLS: usize = 4;
-
-/// Opacity of one slice of the distant clock drawn as a plane.
-const CLOCK_PLANE_ALPHA: u8 = 30;
-
 /// At most this many slices of the distant clock, either side of the observer's own now.
 ///
-/// The bound that actually decides the count is geometric - a plane whose nearest point is further
-/// from the origin than the patch is wide has nothing on screen - and this is the backstop for the
+/// The bound that actually decides the count is geometric - a slice whose nearest point is further
+/// from the origin than the canvas reaches has nothing on screen - and this is the backstop for the
 /// case where the step has collapsed relative to the window.
-const CLOCK_PLANE_MAX_K: i64 = 100;
+const CLOCK_SLICE_MAX_K: i64 = 100;
 
 /// How close two neighbouring slices of the distant clock may be drawn, in pixels, before their
 /// labels are dropped.
 ///
-/// The planes themselves stay: a wall of them piling into the past cone *is* the picture on the
+/// The lines themselves stay: a fan of them leaning into the past cone *is* the picture on the
 /// approach to the far branch of r-. What cannot survive it is the text, which at that spacing is a
 /// solid block of overlapping glyphs, so the labels go and the geometry stays.
 const CLOCK_LABEL_MIN_PX: f32 = 14.0;
@@ -1658,18 +1646,26 @@ impl VolumeCanvas {
                 Vec2::new(rect.width() * 0.6, 7.0 * Theme::MIN_FONT_PT * font_scale),
             );
 
-            // The distant observer's clock, as a stack of planes rather than as rungs on one pipe.
+            // The distant observer's clock, as a fan of lines through the observer's axis rather
+            // than as rungs on one pipe.
             //
             // A slice t = const of the chart's Killing time is the set of events that far-away
-            // clock labels with one reading, and in this frame it is the plane e_a^t xi^a = dt. The
-            // step between neighbours is picked by the same rule the flat rest-frame diagram uses -
-            // a round unit of the observer's *own* clock, carried across by u^t - so the grid keeps
+            // clock labels with one reading, and in this frame it is the plane e_a^t xi^a = dt. It
+            // is drawn as the line that plane cuts in the slice xi^2 = 0 through the observer's
+            // own worldline - the very line the flat rest-frame diagram draws for it, lifted into
+            // the volume - and not as a surface. It used to be a surface: a translucent patch the
+            // size of the canvas per slice, and with the rung at a constant pixel pitch a hundred
+            // of them stood between the eye and everything else, which tinted the whole picture
+            // the grid's colour and said nothing a line does not say. What the slice carries is
+            // one-dimensional: where it crosses the observer's neighbourhood and how steeply it
+            // leans. The step between neighbours is picked by the same rule the flat diagram uses -
+            // a round unit of the observer's *own* clock, carried across by u^t - so the fan keeps
             // a constant pixel pitch while the outside clock runs away. On the approach to the far
             // branch of r- u^t grows like exp(kappa_- t), and what that does to this picture is the
-            // whole point of drawing it: the planes crowd into the observer's past cone without
+            // whole point of drawing it: the lines lean over into the observer's past cone without
             // limit, so infinitely many of the distant clock's moments are crossed in a finite
-            // amount of their own time. Every one of these planes is flatter than 45 degrees, in
-            // every region, because dt is timelike everywhere in this chart.
+            // amount of their own time. Every one of them is flatter than 45 degrees, in every
+            // region, because dt is timelike everywhere in this chart.
             //
             // The rung is worked out whether or not the slices are asked for, because section 4b
             // spaces the observer's *own* clock by the same rung divided by u^t, and that clock is
@@ -1679,29 +1675,25 @@ impl VolumeCanvas {
             let seconds_per_m = metric.t_grav_seconds() / metric.m.max(1e-12);
             let u_t = tetrad.e0[0];
             let step = distant_clock_grid_step(u_t, camera.scale, seconds_per_m, font_scale).step_m;
-            // Where one slice's label is hung: at the right-hand margin, on the slice's own
-            // centreline, exactly as the flat rest-frame diagram hangs its labels at the left-hand
-            // one. A patch that covers the canvas has its nearest point wherever the geometry puts
-            // it, and hanging the caption there strews a dozen of them diagonally across the
-            // middle of the picture, over everything the planes were drawn to be read against. The
-            // margin is a margin: the labels stack up one edge in the order the slices cross it,
-            // and the picture is left alone.
-            //
-            // The centreline is the plane's intersection with the drawn slice xi^2 = 0 - the same
-            // line `LocalFrame::surface_t_const` gives the flat diagram, in (xi^1, xi^0), lifted
-            // to world by the chart's own axes - anchored on that line's own point, so that in the
-            // Edge-on preset the margin reads exactly as the flat diagram's does at every boost.
-            // (Anchored on the patch's 3D centre instead it would sit off the slice by the plane's
-            // xi^2 tilt, which at modest u^t pulls the readings a quarter closer together.)
-            let label_x = rect.left() + CLOCK_LABEL_EDGE_PX;
-            let edge_y = |dt: f64| -> Option<f32> {
-                local_plane(n_t, dt)?;
+            // The line one slice is drawn as: the plane's intersection with the drawn slice
+            // xi^2 = 0 - the same line `LocalFrame::surface_t_const` gives the flat diagram, in
+            // (xi^1, xi^0), lifted to world by the chart's own axes - as a point on it and a
+            // direction along it. Its label hangs where it crosses the left-hand margin, exactly
+            // as the flat rest-frame diagram hangs its labels, so that in the Edge-on preset the
+            // margin reads exactly as the flat diagram's does at every boost, and the labels stack
+            // up one edge in the order the slices cross it while the picture is left alone.
+            let slice_line = |dt: f64| -> Option<([f64; 3], [f64; 3])> {
+                if !dt.is_finite() || !finite3(n_t) {
+                    return None;
+                }
                 let line = frame.surface_t_const(dt);
                 let at = xi_to_world([line.point[1], line.point[0], 0.0]);
                 let along = [line.dir[0], 0.0, line.dir[1] * t_scale];
-                if !finite3(at) || !finite3(along) {
-                    return None;
-                }
+                (finite3(at) && finite3(along)).then_some((at, along))
+            };
+            let label_x = rect.left() + CLOCK_LABEL_EDGE_PX;
+            let edge_y = |dt: f64| -> Option<f32> {
+                let (at, along) = slice_line(dt)?;
                 let a = camera.project(centre, at).0;
                 let b = camera
                     .project(centre, [at[0] + along[0], at[1] + along[1], at[2] + along[2]])
@@ -1718,7 +1710,7 @@ impl VolumeCanvas {
             // The pixel-spacing rule, asked where the labels actually land: how far apart in y two
             // neighbouring slices cross that margin. Closer than a glyph's height they are thinned
             // by a stride rather than dropped wholesale, as the flat diagram thins its own - the
-            // planes crowding into the past cone is the picture, and a reading every n-th plane is
+            // lines crowding into the past cone is the picture, and a reading every n-th line is
             // still a reading.
             let label_every = match (edge_y(0.0), edge_y(step)) {
                 (Some(y0), Some(y1)) => {
@@ -1735,28 +1727,56 @@ impl VolumeCanvas {
                 && n_len.is_finite()
                 && n_len > 0.0
             {
-                // A plane whose nearest point is further from the origin than the patch is wide
-                // has nothing on screen: |k step| / |n| > W. That is the bound, and the count
-                // cap behind it is only a backstop.
+                // A slice whose plane's nearest point is further from the origin than the canvas
+                // reaches has nothing on screen: |k step| / |n| > W. That is the bound, and the
+                // count cap behind it is only a backstop.
                 let reach = half * n_len / step;
                 let k_max = if reach.is_finite() {
-                    (reach.floor() as i64).clamp(0, CLOCK_PLANE_MAX_K)
+                    (reach.floor() as i64).clamp(0, CLOCK_SLICE_MAX_K)
                 } else {
-                    CLOCK_PLANE_MAX_K
+                    CLOCK_SLICE_MAX_K
                 };
                 for k in -k_max..=k_max {
                     let dt = (k as f64) * step;
-                    let Some(plane) = local_plane(n_t, dt) else {
+                    let Some((at, along)) = slice_line(dt) else {
                         continue;
                     };
-                    push_plane(
-                        &mut buf,
-                        &plane,
-                        half,
-                        CLOCK_PLANE_CELLS,
-                        Theme::GRID_LINE,
-                        (CLOCK_PLANE_ALPHA, CLOCK_PLANE_ALPHA),
-                    );
+                    // The line runs the canvas's reach either side of its anchor, and is cut at
+                    // the floor so that the half in the observer's past is sorted under it with
+                    // every other past and the half in their future over it. A point of it the
+                    // chart cannot place on the stage ends it there.
+                    let norm = (along[0] * along[0] + along[2] * along[2]).sqrt();
+                    if norm.is_nan() || norm <= 0.0 {
+                        continue;
+                    }
+                    let span = half / norm;
+                    let point_at = |s: f64| -> [f64; 3] {
+                        [at[0] + s * along[0], at[1] + s * along[1], at[2] + s * along[2]]
+                    };
+                    let crossing = (along[2].abs() > 1e-300)
+                        .then(|| -at[2] / along[2])
+                        .filter(|s| s.abs() < span);
+                    let pieces: Vec<(f64, f64)> = match crossing {
+                        Some(s0) => vec![(-span, s0), (s0, span)],
+                        None => vec![(-span, span)],
+                    };
+                    for (s_a, s_b) in pieces {
+                        let (a, b) = (point_at(s_a), point_at(s_b));
+                        if !placeable(a) || !placeable(b) {
+                            continue;
+                        }
+                        let mid_z = 0.5 * (a[2] + b[2]);
+                        let layer = if mid_z >= 0.0 { Layer::Above } else { Layer::Below };
+                        buf.push(
+                            layer,
+                            centroid_depth(&camera, centre, [a, b].into_iter()),
+                            Prim::Line {
+                                points: vec![project(a).0, project(b).0],
+                                stroke: Stroke::new(Theme::GRID_LINE_WIDTH, Theme::GRID_LINE),
+                                closed: false,
+                            },
+                        );
+                    }
                     let Some(every) = label_every else {
                         continue;
                     };
@@ -1976,7 +1996,7 @@ impl VolumeCanvas {
             // In the global chart only: there a rung is a slice t = const of the chart's own time,
             // which is what the ladder is a reading of. In a rest frame the surfaces t = const are
             // not sections of a pipe at all - they lean against it - and the distant clock is drawn
-            // as the stack of planes section 4 builds instead.
+            // as the fan of lines section 4 builds instead.
             if show_distant_clock_grid && r == tick_r && !chart.is_frame() {
                 let t_step = time_grid_step(t_max - t_min);
                 let first = (t_min / t_step).floor() as i64;
@@ -4158,8 +4178,7 @@ mod tests {
             strips.len()
         );
         assert!(
-            strips.len() <= 4 * (RING_SEGMENTS + 2 * PIPE_MAX_DEPTH as usize)
-                + CLOCK_PLANE_MAX_K as usize * 2 * CLOCK_PLANE_CELLS * CLOCK_PLANE_CELLS,
+            strips.len() <= 4 * (RING_SEGMENTS + 2 * PIPE_MAX_DEPTH as usize + PLANE_CELLS * PLANE_CELLS),
             "the refinement has to be bounded by its depth, but {} quads were painted",
             strips.len()
         );
@@ -4389,13 +4408,15 @@ mod tests {
     }
 
     #[test]
-    fn test_in_the_rest_frame_the_distant_clocks_slices_are_drawn_as_planes() {
+    fn test_in_the_rest_frame_the_distant_clocks_slices_are_drawn_as_lines() {
         // In the global chart the distant clock is a ladder of rings up one pipe. In a rest frame
-        // it is what it actually is: a stack of planes, e_a^t xi^a = k * step, each of them the set
-        // of events the far-away clock gives one reading. They are drawn as glass quads like every
-        // other surface here, so the claim is a count - turning the grid on adds at least one whole
-        // slice's worth of four-cornered meshes - together with the label on the slice through the
-        // observer's own now.
+        // each slice e_a^t xi^a = k * step is a plane, and it is drawn as the line that plane cuts
+        // in the slice xi^2 = 0 through the observer's own worldline - the flat diagram's own line
+        // for it, lifted into the volume. Not as a surface: a canvas-sized translucent patch per
+        // slice, a hundred deep, tinted the whole picture and said nothing a line does not. So the
+        // claim is two counts - turning the grid on adds grid-coloured strokes and adds no
+        // four-cornered mesh at all - together with the label on the slice through the observer's
+        // own now.
         let metric = KerrSchild::new(1.0, 0.9);
         let bob = bob_at(&metric, 3.0);
         let frame = |grid| {
@@ -4404,25 +4425,34 @@ mod tests {
         let quads = |shapes: &[Painted]| {
             shapes.iter().filter(|s| matches!(s, Painted::Mesh { vertices: 4, .. })).count()
         };
+        let grid_lines = |shapes: &[Painted]| {
+            shapes
+                .iter()
+                .filter(|s| {
+                    matches!(s, Painted::Path { stroke: Some(c), closed: false, points, .. }
+                        if *c == Theme::GRID_LINE && points.len() == 2)
+                })
+                .count()
+        };
 
         let off = frame(false);
         let on = frame(true);
         let (n_off, n_on) = (quads(&off), quads(&on));
+        let (l_off, l_on) = (grid_lines(&off), grid_lines(&on));
         println!(
-            "four-cornered meshes in Bob's rest frame: {n_off} with the distant clock off, \
-             {n_on} with it on ({} per slice)",
-            CLOCK_PLANE_CELLS * CLOCK_PLANE_CELLS
+            "Bob's rest frame: {n_off} quads and {l_off} grid strokes with the distant clock off, \
+             {n_on} quads and {l_on} grid strokes with it on"
         );
         assert_eq!(
             n_off,
             4 * RING_SEGMENTS,
             "with the clock off the only quads are the four pipes' strips"
         );
+        assert_eq!(n_on, n_off, "the distant clock adds no area to the picture");
+        assert_eq!(l_off, 0, "and with it off there is no grid stroke to be seen");
         assert!(
-            n_on >= n_off + CLOCK_PLANE_CELLS * CLOCK_PLANE_CELLS,
-            "turning the distant clock on has to add at least one slice of {} quads, but the \
-             count went from {n_off} to {n_on}",
-            CLOCK_PLANE_CELLS * CLOCK_PLANE_CELLS
+            l_on >= 3,
+            "turning the distant clock on draws its slices as lines, but only {l_on} appeared"
         );
         // The slice through the observer's own event reads "now", on a line of its own; the
         // legend's "(floor = now)" is a different line and is there either way.
@@ -5746,10 +5776,11 @@ mod tests {
             "which is wider than the 14 M time window the patch used to be sized to: {half}"
         );
 
-        // What the half-width is spent on, now that the surfaces r = const are pipes: the slices
-        // of the distant clock, which are the only planes left in the picture. Each is cut into
-        // `CLOCK_PLANE_CELLS` a side, and turning the clock on has to add whole slices of them on
-        // top of the four pipes the frame draws either way.
+        // What the half-width is spent on, now that the surfaces r = const are pipes and the
+        // distant clock's slices are lines: the reach of each of those lines either side of its
+        // anchor, and the patch of a wall that has fallen back to its tangent plane. At an ordinary
+        // zoom no wall falls back, so turning the clock on adds strokes and no mesh: the four pipes'
+        // strips are the only quads either way.
         let metric = KerrSchild::new(1.0, 0.9);
         let bob = bob_at(&metric, 3.0);
         let quads = |grid: bool| {
@@ -5763,23 +5794,13 @@ mod tests {
             shapes.iter().filter(|s| matches!(s, Painted::Mesh { vertices: 4, .. })).count()
         };
         let (bare, clocked) = (quads(false), quads(true));
-        println!(
-            "{bare} four-cornered meshes with the clock off, {clocked} with it on ({} per slice)",
-            CLOCK_PLANE_CELLS * CLOCK_PLANE_CELLS
-        );
+        println!("{bare} four-cornered meshes with the clock off, {clocked} with it on");
         assert_eq!(
             bare,
             4 * RING_SEGMENTS,
             "with the clock off the only quads are the four pipes' {RING_SEGMENTS} strips apiece"
         );
-        let slices = (clocked - bare) / (CLOCK_PLANE_CELLS * CLOCK_PLANE_CELLS);
-        assert!(
-            slices >= 1 && (clocked - bare) % (CLOCK_PLANE_CELLS * CLOCK_PLANE_CELLS) == 0,
-            "the clock adds whole slices of {} cells, but it added {}",
-            CLOCK_PLANE_CELLS * CLOCK_PLANE_CELLS,
-            clocked - bare
-        );
-        println!("{slices} slices of the distant clock reached the patch");
+        assert_eq!(clocked, bare, "and the clock adds none: its slices are lines");
     }
 
     #[test]
