@@ -349,95 +349,188 @@ pub fn cone_mesh(
     (mesh, depth)
 }
 
-/// The runs of a cone's rim that the eye can see past the cone's own wall, each as its world
-/// points and whether it is the whole closed rim.
+/// How far from edge-on a cone's wall may be, as the cosine between its outward normal and the
+/// direction to the eye, before the lip along it is drawn at full strength. Below this the lip
+/// fades linearly to nothing, so that as the camera orbits, or the cone tips over on a fall, the
+/// lip dims out ahead of the wall turning to hide it rather than vanishing in one frame. On an
+/// upright 45 degree cone seen from 35 degrees above the floor it is the last thirty degrees or
+/// so of azimuth before the far lip goes behind the near wall.
+const LIP_FADE_COS: f64 = 0.3;
+
+/// How many levels the lip's strength is quantised to when it is cut into runs: consecutive
+/// segments at the same level are one polyline, so a lip that is wholly lit is one loop and a
+/// fading one is a handful of arcs rather than thirty-six separate strokes.
+const LIP_LEVELS: f64 = 8.0;
+
+/// How visible each point of a cone's rim is, in [0, 1], to an eye looking along `view`.
 ///
-/// A cone over a convex rim is a convex solid, so a point of its boundary is visible exactly when
-/// some face meeting it faces the eye, and a rim point meets three: the wall triangle on either
-/// side of it and the open base. A rim segment is taken to be visible when its wall triangle or
-/// the base faces the eye. Outward is decided against the solid's own centroid, which is what
-/// makes the rule hold for a cone that leans past its own generator - inside the horizon, where
-/// the apex projects outside the rim - as well as for an upright one. `view` is the direction the
-/// eye looks along, in world axes, as `Camera::view_direction` gives it.
-fn visible_rim_runs(apex: [f64; 3], rim: &[[f64; 3]], view: [f32; 3]) -> Vec<(Vec<[f64; 3]>, bool)> {
+/// Two things can stand between a lip and the eye. The first is the cone's own wall: a cone over a
+/// convex rim is a convex solid, so a rim point is hidden exactly when every face meeting it faces
+/// away from the eye - the wall triangle either side of it and the open base - and the strength is
+/// the cosine between the best of those and the direction to the eye, ramped over `LIP_FADE_COS`.
+/// Seen from above, the future half is a cup looked into and its whole lip shows; the past half is
+/// a cone looked down onto and its far lip is behind the near wall, and which part is missing is
+/// what tells the eye which way the cone faces. The second is the *other* half of the same cone,
+/// `other` being its rim about the same apex: from high enough above, the far lip of the past half
+/// lies behind the wall of the future half, and a lip point whose line of sight to the eye passes
+/// through that solid is hidden. Both are decided per rim point, and the segment between two
+/// points takes the mean, so either boundary is a fade across a segment or two and not a step.
+fn rim_visibility(apex: [f64; 3], rim: &[[f64; 3]], other: &[[f64; 3]], view: [f32; 3]) -> Vec<f64> {
     let n = rim.len();
     if n < 3 {
-        return vec![(rim.to_vec(), false)];
+        return vec![1.0; n];
     }
     let eye = [-f64::from(view[0]), -f64::from(view[1]), -f64::from(view[2])];
     let sub = |a: [f64; 3], b: [f64; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
     let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-    let mut solid = apex;
-    for p in rim {
-        for k in 0..3 {
-            solid[k] += p[k];
-        }
-    }
-    let solid = solid.map(|c| c / (n as f64 + 1.0));
-    let mut base_centre = [0.0; 3];
-    for p in rim {
-        for k in 0..3 {
-            base_centre[k] += p[k] / (n as f64);
-        }
-    }
-    // The base's normal from the rim's own fan about its centre, turned to point away from the
-    // apex.
-    let mut base_normal = [0.0; 3];
-    for i in 0..n {
-        let c = cross3(sub(rim[i], base_centre), sub(rim[(i + 1) % n], base_centre));
-        for k in 0..3 {
-            base_normal[k] += c[k];
-        }
-    }
-    if dot(base_normal, sub(base_centre, apex)) < 0.0 {
-        base_normal = base_normal.map(|c| -c);
-    }
-    let base_faces_eye = dot(base_normal, eye) > 0.0;
-    let visible: Vec<bool> = (0..n)
-        .map(|i| {
-            if base_faces_eye {
-                return true;
+    let unit = |v: [f64; 3]| {
+        let len = dot(v, v).sqrt();
+        if len > 0.0 { v.map(|c| c / len) } else { v }
+    };
+    let eye = unit(eye);
+    // The mean of a solid's points, against which "outward" is decided; and a base's normal from
+    // the rim's own fan about its centre, turned to point away from the apex.
+    let solid_centre = |rim: &[[f64; 3]]| {
+        let mut c = apex;
+        for p in rim {
+            for k in 0..3 {
+                c[k] += p[k];
             }
+        }
+        c.map(|v| v / (rim.len() as f64 + 1.0))
+    };
+    let base_of = |rim: &[[f64; 3]]| -> ([f64; 3], [f64; 3]) {
+        let m = rim.len();
+        let mut centre = [0.0; 3];
+        for p in rim {
+            for k in 0..3 {
+                centre[k] += p[k] / (m as f64);
+            }
+        }
+        let mut normal = [0.0; 3];
+        for i in 0..m {
+            let c = cross3(sub(rim[i], centre), sub(rim[(i + 1) % m], centre));
+            for k in 0..3 {
+                normal[k] += c[k];
+            }
+        }
+        if dot(normal, sub(centre, apex)) < 0.0 {
+            normal = normal.map(|c| -c);
+        }
+        (centre, unit(normal))
+    };
+    let own_centre = solid_centre(rim);
+    let (_, own_base) = base_of(rim);
+    let base_facing = dot(own_base, eye);
+    // The facing of each wall triangle (i, i + 1): the cosine between its outward normal and the
+    // eye.
+    let facing: Vec<f64> = (0..n)
+        .map(|i| {
             let (a, b) = (rim[i], rim[(i + 1) % n]);
-            let mut normal = cross3(sub(a, apex), sub(b, apex));
+            let mut normal = unit(cross3(sub(a, apex), sub(b, apex)));
             let face_centre = [
                 (apex[0] + a[0] + b[0]) / 3.0,
                 (apex[1] + a[1] + b[1]) / 3.0,
                 (apex[2] + a[2] + b[2]) / 3.0,
             ];
-            if dot(normal, sub(face_centre, solid)) < 0.0 {
+            if dot(normal, sub(face_centre, own_centre)) < 0.0 {
                 normal = normal.map(|c| -c);
             }
-            dot(normal, eye) > 0.0
+            dot(normal, eye)
         })
         .collect();
-    if visible.iter().all(|v| *v) {
-        return vec![(rim.to_vec(), true)];
-    }
-    if !visible.iter().any(|v| *v) {
+    // Whether the line of sight from a point to the eye passes through the other half's solid:
+    // any of its wall triangles, or its base. Möller-Trumbore, forward along the ray only.
+    let hits_triangle = |from: [f64; 3], t0: [f64; 3], t1: [f64; 3], t2: [f64; 3]| -> bool {
+        let e1 = sub(t1, t0);
+        let e2 = sub(t2, t0);
+        let p = cross3(eye, e2);
+        let det = dot(e1, p);
+        if det.abs() < 1e-300 {
+            return false;
+        }
+        let inv = 1.0 / det;
+        let s = sub(from, t0);
+        let u = dot(s, p) * inv;
+        if !(0.0..=1.0).contains(&u) {
+            return false;
+        }
+        let q = cross3(s, e1);
+        let v = dot(eye, q) * inv;
+        if v < 0.0 || u + v > 1.0 {
+            return false;
+        }
+        dot(e2, q) * inv > 1e-9
+    };
+    let occluded = |from: [f64; 3]| -> bool {
+        let m = other.len();
+        if m < 3 {
+            return false;
+        }
+        let (centre, _) = base_of(other);
+        (0..m).any(|i| {
+            let (a, b) = (other[i], other[(i + 1) % m]);
+            hits_triangle(from, apex, a, b) || hits_triangle(from, centre, a, b)
+        })
+    };
+    (0..n)
+        .map(|i| {
+            // The point meets the wall triangle before it and the one after it, and the base.
+            let best = facing[i].max(facing[(i + n - 1) % n]).max(base_facing);
+            let own = (best / LIP_FADE_COS).clamp(0.0, 1.0);
+            if own <= 0.0 || occluded(rim[i]) { 0.0 } else { own }
+        })
+        .collect()
+}
+
+/// The lip cut into polylines of one strength each: the world points of each run, its strength
+/// in (0, 1], and whether it is the whole closed rim. A segment's strength is the mean of its two
+/// ends', quantised to `LIP_LEVELS`; segments at zero are not drawn.
+fn lip_runs(rim: &[[f64; 3]], visibility: &[f64]) -> Vec<(Vec<[f64; 3]>, f32, bool)> {
+    let n = rim.len();
+    if n < 2 {
         return Vec::new();
     }
-    // Runs of consecutive visible segments, started just after a hidden one so that a run
+    let level = |i: usize| -> u8 {
+        let v = 0.5 * (visibility[i] + visibility[(i + 1) % n]);
+        ((v * LIP_LEVELS).ceil().clamp(0.0, LIP_LEVELS)) as u8
+    };
+    let levels: Vec<u8> = (0..n).map(level).collect();
+    let strength = |l: u8| f32::from(l) / LIP_LEVELS as f32;
+    if levels.iter().all(|l| *l == levels[0]) {
+        return if levels[0] == 0 {
+            Vec::new()
+        } else {
+            vec![(rim.to_vec(), strength(levels[0]), true)]
+        };
+    }
+    // Runs of consecutive segments at one level, started just after a change so that a run
     // wrapping round the seam is one run and not two.
-    let start = (0..n).find(|&i| !visible[i] && visible[(i + 1) % n]).unwrap_or(0);
-    let mut runs: Vec<(Vec<[f64; 3]>, bool)> = Vec::new();
+    let start = (0..n).find(|&i| levels[i] != levels[(i + 1) % n]).unwrap_or(0);
+    let mut runs: Vec<(Vec<[f64; 3]>, f32, bool)> = Vec::new();
     let mut run: Vec<[f64; 3]> = Vec::new();
+    let mut run_level = 0u8;
     for step in 1..=n {
         let i = (start + step) % n;
-        if visible[i] {
-            if run.is_empty() {
-                run.push(rim[i]);
+        if !run.is_empty() && levels[i] != run_level {
+            if run_level > 0 {
+                runs.push((std::mem::take(&mut run), strength(run_level), false));
+            } else {
+                run.clear();
             }
-            run.push(rim[(i + 1) % n]);
-        } else if !run.is_empty() {
-            runs.push((std::mem::take(&mut run), false));
         }
+        if run.is_empty() {
+            run.push(rim[i]);
+            run_level = levels[i];
+        }
+        run.push(rim[(i + 1) % n]);
     }
-    if !run.is_empty() {
-        runs.push((run, false));
+    if !run.is_empty() && run_level > 0 {
+        runs.push((run, strength(run_level), false));
     }
     runs
 }
+
 
 /// The depth of the mean of a set of world points. Depth is linear in the world position, so this
 /// is also the mean of the points' depths; it is the one number a whole primitive has to be sorted
@@ -2317,9 +2410,9 @@ impl VolumeCanvas {
                 .map(|p| [2.0 * apex[0] - p[0], 2.0 * apex[1] - p[1], 2.0 * z0 - p[2]])
                 .collect();
             let n = future.len() as f64;
-            for (rim, fill, mean_z, fixed) in [
-                (&future, fills.0, (z0 + n * (z0 + rise)) / (n + 1.0), Layer::Above),
-                (&past, fills.1, (z0 + n * (z0 - rise)) / (n + 1.0), Layer::Below),
+            for (rim, other, fill, mean_z, fixed) in [
+                (&future, &past, fills.0, (z0 + n * (z0 + rise)) / (n + 1.0), Layer::Above),
+                (&past, &future, fills.1, (z0 + n * (z0 - rise)) / (n + 1.0), Layer::Below),
             ] {
                 // A cone at the present event straddles the floor and its two halves are the two
                 // sides of it; a ghost further down the trail may be wholly below, so it is placed
@@ -2339,22 +2432,18 @@ impl VolumeCanvas {
                 // pipe's wall.
                 let depth = if chart.is_frame() && !ghost { f32::NEG_INFINITY } else { depth };
                 buf.push(layer, depth, Prim::Mesh(mesh));
-                // The rim, as a bright lip in this half's own colour, and only where the eye can
-                // see it past the cone's own wall. A rim point is hidden exactly when the wall
-                // stands between it and the eye, and a cone over a convex rim is a convex solid,
-                // so that is the case when every face meeting the point faces away from the eye:
-                // the two wall triangles either side of it and the open base. Seen from above, the
-                // future half is a cup looked into and its whole lip shows; the past half is a
-                // cone looked down onto and its far lip is behind the near wall. Which part is
-                // missing is what tells the eye which way the cone faces.
-                let stroke = Stroke::new(1.8, Theme::cone_rim_colour(fill));
-                for (points, closed) in visible_rim_runs(apex, rim, view_d) {
+                // The rim, as a bright lip in this half's own colour, drawn only where the eye can
+                // see it - past the cone's own wall, and past the other half's - and fading out
+                // ahead of either boundary rather than stopping at it. See `rim_visibility`.
+                let lip = Theme::cone_rim_colour(fill);
+                let visibility = rim_visibility(apex, rim, other, view_d);
+                for (points, strength, closed) in lip_runs(rim, &visibility) {
                     buf.push(
                         layer,
                         depth,
                         Prim::Line {
                             points: points.iter().map(|p| project(*p).0).collect(),
-                            stroke,
+                            stroke: Stroke::new(1.8, lip.gamma_multiply(strength)),
                             closed,
                         },
                     );
@@ -3626,28 +3715,33 @@ mod tests {
     #[test]
     fn test_a_cone_rim_is_lit_in_its_own_halfs_colour_only_where_the_wall_does_not_hide_it() {
         // The lip of each half is stroked in a brighter shade of that half's own wall colour, and
-        // only where the eye can see it past the cone's own wall. From above, the future half is a
-        // cup the eye looks into and its whole lip is drawn as one closed loop; the past half is a
-        // cone the eye looks down onto, and the far part of its lip lies behind the near wall, so
-        // its lip is an open arc - which is what tells the viewer which way the cone faces. From
-        // straight above, in the Top preset, the eye is over the 45 degree wall and both lips
-        // close.
+        // only where the eye can see it. From above, the future half is a cup the eye looks into
+        // and its whole lip is one closed loop at full strength; the past half is a cone the eye
+        // looks down onto, and the far part of its lip lies behind the near wall, so its lip is
+        // open arcs - which is what tells the viewer which way the cone faces - and it fades out
+        // ahead of the boundary rather than stopping at it. From higher up, over the 45 degree
+        // wall, the past lip is clear of its own wall but its far arc is behind the wall of the
+        // future half, and that hides it too.
         let metric = KerrSchild::new(1.0, 0.9);
         let bob = bob_at(&metric, 9.0);
         let (future_fill, past_fill, _) =
             Theme::cone_colours_at("Bob", Theme::VOLUME_CONE_FILL_ALPHA);
-        let lip_of = |shapes: &[Painted], fill: Color32| -> Vec<(bool, usize)> {
-            let want = Theme::cone_rim_colour(fill);
+        // Every stroke in a lip's hue: (closed, points, strength).
+        let lip_of = |shapes: &[Painted], fill: Color32| -> Vec<(bool, usize, f32)> {
+            let want = Theme::cone_rim_colour(fill).to_srgba_unmultiplied();
             shapes
                 .iter()
                 .filter_map(|s| match s {
-                    Painted::Path { stroke: Some(c), closed, points, .. } if *c == want => {
-                        Some((*closed, points.len()))
+                    Painted::Path { stroke: Some(c), closed, points, .. } => {
+                        let got = c.to_srgba_unmultiplied();
+                        let same_hue = (0..3).all(|k| (i32::from(got[k]) - i32::from(want[k])).abs() <= 2);
+                        (same_hue && c.a() > 0).then(|| (*closed, points.len(), f32::from(c.a()) / 255.0))
                     }
                     _ => None,
                 })
                 .collect()
         };
+        let drawn = |lip: &[(bool, usize, f32)]| lip.iter().map(|(_, n, _)| n - 1).sum::<usize>();
         // Brighter than the wall on every channel, and opaque.
         for fill in [future_fill, past_fill] {
             let lip = Theme::cone_rim_colour(fill);
@@ -3670,27 +3764,48 @@ mod tests {
         println!("three-quarter: future lip {future:?}, past lip {past:?}");
         assert_eq!(
             future,
-            vec![(true, CONE_SAMPLES)],
-            "looked into from above, the future half shows its whole lip as one closed loop"
+            vec![(true, CONE_SAMPLES, 1.0)],
+            "looked into from above, the future half shows its whole lip as one closed loop at \
+             full strength"
         );
-        assert_eq!(past.len(), 1, "the past half's lip is one open arc, not {past:?}");
-        let (closed, points) = past[0];
-        assert!(!closed, "and it is open: the far lip is behind the near wall");
+        assert!(!past.is_empty(), "the past half's lip is drawn");
+        assert!(past.iter().all(|(closed, _, _)| !closed), "and it is open: {past:?}");
+        let segments = drawn(&past);
         assert!(
-            points > CONE_SAMPLES / 2 && points < CONE_SAMPLES,
+            segments > CONE_SAMPLES / 2 && segments < CONE_SAMPLES,
             "at a pitch of 35 degrees under a 45 degree wall about a quarter of the lip is \
-             hidden, not {} of {CONE_SAMPLES} points",
-            CONE_SAMPLES + 1 - points
+             hidden, not {} of {CONE_SAMPLES} segments",
+            CONE_SAMPLES - segments
+        );
+        assert!(
+            past.iter().any(|(_, _, s)| *s >= 1.0) && past.iter().any(|(_, _, s)| *s < 1.0),
+            "the lip is at full strength facing the eye and fades towards the wall: {past:?}"
         );
 
-        let top =
-            volume_frame(&metric, Some(&bob), Preset::Top, ReferenceFrame::DistantObserver, false);
+        // From 60 degrees up the eye is over the past half's own wall and its whole lip would show,
+        // but the far arc is behind the future half's wall, which hides it.
+        let mut canvas = VolumeCanvas {
+            camera: Camera { yaw: 0.52, pitch: 1.05, scale: 48.0, pan: Vec2::ZERO, t_scale: 1.0 },
+            show_past_cone: false,
+            ..Default::default()
+        };
+        let high =
+            volume_frame_on(&mut canvas, &metric, Some(&bob), ReferenceFrame::DistantObserver, false);
+        let past = lip_of(&high, past_fill);
+        println!("from 60 degrees up: past lip {past:?}");
+        assert!(!past.is_empty() && past.iter().all(|(closed, _, _)| !closed), "{past:?}");
+        let segments = drawn(&past);
+        assert!(
+            segments < CONE_SAMPLES,
+            "the far arc of the past lip is behind the future half's wall: {segments} segments"
+        );
         assert_eq!(
-            lip_of(&top, past_fill),
-            vec![(true, CONE_SAMPLES)],
-            "from straight above, over the wall, the past half's whole lip shows too"
+            lip_of(&high, future_fill),
+            vec![(true, CONE_SAMPLES, 1.0)],
+            "and nothing stands between the eye and the future half's lip"
         );
     }
+
 
     #[test]
     fn test_the_past_cone_rays_retrace_forward_onto_the_focus_event() {
