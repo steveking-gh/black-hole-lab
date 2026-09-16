@@ -1501,13 +1501,21 @@ impl VolumeCanvas {
                     fixed
                 };
                 let (mesh, depth) = cone_mesh(&camera, centre, apex, rim, fill);
+                // In a rest frame the observer's own cone is what the picture is of, and the
+                // tangent planes and the distant clock's slices all pass through its apex, so a
+                // depth sort puts dozens of their cells over it - seen in the app on the approach
+                // to r-, where fifty layers of glass left no cone at all. It is painted last in
+                // its layer there, over the planes, as the subject of a picture is painted over
+                // its context. In the global chart the sort stands: a cone inside a pipe really is
+                // seen through the pipe's wall.
+                let depth = if chart.is_local() && !ghost { f32::NEG_INFINITY } else { depth };
                 buf.push(layer, depth, Prim::Mesh(mesh));
                 buf.push(
                     layer,
                     depth,
                     Prim::Line {
                         points: rim.iter().map(|p| project(*p).0).collect(),
-                        stroke: Stroke::new(1.0, fills.2),
+                        stroke: Stroke::new(1.5, fills.2),
                         closed: true,
                     },
                 );
@@ -3378,6 +3386,47 @@ mod tests {
                 "and big enough to see: the {half} rim reaches only {radius} px from the apex"
             );
         }
+    }
+
+    #[test]
+    fn test_in_a_rest_frame_the_focus_cone_is_painted_over_the_planes() {
+        // Seen in the app with Bob gliding on r- in his own frame: the cone was painted, on the
+        // canvas, at a readable size, and invisible - every tangent plane and every slice of the
+        // distant clock passes through its apex, and the depth sort laid some fifty of their cells
+        // over it. In a rest frame the cone is therefore painted last in its layer: the future
+        // half is the last mesh of the whole frame, and the past half comes after every mesh that
+        // lies under the floor with it.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let frozen = Observer::frozen_bob(&metric);
+        let mut canvas = VolumeCanvas {
+            camera: Camera::preset(Preset::ThreeQuarter, 48.0, Vec2::ZERO, 1.0),
+            keep_surface_framed: true,
+            ..Default::default()
+        };
+        let shapes = volume_frame_on(&mut canvas, &metric, Some(&frozen), ReferenceFrame::Bob, true);
+        let (future_fill, past_fill, _) =
+            Theme::cone_colours_at("Bob", Theme::VOLUME_CONE_FILL_ALPHA);
+        let index_of = |fill: Color32| {
+            shapes.iter().position(|s| matches!(s, Painted::Mesh { colour: Some(c), vertices, .. } if *c == fill && *vertices == CONE_SAMPLES + 1))
+        };
+        let future = index_of(future_fill).expect("the future half is painted");
+        let past = index_of(past_fill).expect("the past half is painted");
+        let last_mesh = shapes.iter().rposition(|s| matches!(s, Painted::Mesh { .. })).unwrap();
+        let meshes = shapes.iter().filter(|s| matches!(s, Painted::Mesh { .. })).count();
+        println!("{meshes} meshes; past half at {past}, future half at {future}, last mesh at {last_mesh}");
+        assert_eq!(future, last_mesh, "the future half of the focus cone is painted over every plane");
+        // Under the floor the past half is last too: nothing but the floor's own strokes and the
+        // layer above separate it from the future half's neighbours, so no mesh painted between
+        // the two halves may lie under the floor - and every mesh under the floor precedes it.
+        // The floor is found by the trace the r- plane leaves on it: in a rest frame that is an
+        // open stroke in the Cauchy horizon's colour, and nothing painted under the floor is.
+        let floor = shapes
+            .iter()
+            .position(|s| matches!(s, Painted::Path { stroke: Some(c), closed: false, .. } if *c == Theme::HORIZON_CAUCHY))
+            .expect("the r- plane leaves a trace on the floor");
+        assert!(past < floor, "the past half is painted under the floor");
+        let between = shapes[past + 1..floor].iter().filter(|s| matches!(s, Painted::Mesh { .. })).count();
+        assert_eq!(between, 0, "and after every other mesh under it, but {between} follow it");
     }
 
     #[test]
