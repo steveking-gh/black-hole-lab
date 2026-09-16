@@ -2206,16 +2206,7 @@ Tick Enable Observer on Alice's or Bob's card",
         // one number there is.
         if let Some(ray) = crests.last_ray_ratio {
             let seconds_per_m = metric.t_grav_seconds() / metric.m.max(1e-12);
-            let hz = |period_m: f64| -> String {
-                let f = 1.0 / (period_m * seconds_per_m);
-                if !f.is_finite() {
-                    "n/a".to_string()
-                } else if f >= 0.01 {
-                    format!("{f:.3} Hz")
-                } else {
-                    format!("{f:.3e} Hz")
-                }
-            };
+            let hz = |period_m: f64| format_frequency(1.0 / (period_m * seconds_per_m));
             let mut lines = vec![TelemetryLine {
                 text: format!("{sender_name}'s signal at {}", focus_obs.name),
                 color: crest_colour,
@@ -2577,6 +2568,41 @@ pub(crate) fn wave_crests(
         emitted_period,
         last_ray_ratio: received.last().map(|r| r.ratio),
     }
+}
+
+/// A frequency in hertz with the usual SI prefix, at four significant digits: 489.0 mHz,
+/// 12.35 Hz, 1.095 kHz, 136.2 MHz. Below a microhertz or above a terahertz it falls back to
+/// scientific notation, and anything that is not a finite positive number is "n/a".
+pub(crate) fn format_frequency(hz: f64) -> String {
+    if !hz.is_finite() || hz <= 0.0 {
+        return "n/a".to_string();
+    }
+    // Rounded to four significant digits first, so that a value which rounds up to the next
+    // power of a thousand takes the next prefix rather than printing as 1000.0.
+    let magnitude = hz.log10().floor() - 3.0;
+    let quantum = 10f64.powf(magnitude);
+    let hz = (hz / quantum).round() * quantum;
+    const PREFIXES: [(&str, f64); 7] = [
+        ("µHz", 1e-6),
+        ("mHz", 1e-3),
+        ("Hz", 1.0),
+        ("kHz", 1e3),
+        ("MHz", 1e6),
+        ("GHz", 1e9),
+        ("THz", 1e12),
+    ];
+    // The largest prefix the value is at least one of, so the mantissa lies in [1, 1000).
+    let Some(&(unit, scale)) = PREFIXES.iter().rev().find(|(_, scale)| hz >= *scale) else {
+        return format!("{hz:.3e} Hz");
+    };
+    let mantissa = hz / scale;
+    if mantissa >= 1000.0 {
+        return format!("{hz:.3e} Hz");
+    }
+    // Four significant digits: three decimals for a mantissa below ten, two below a hundred,
+    // one below a thousand.
+    let decimals = if mantissa < 10.0 { 3 } else if mantissa < 100.0 { 2 } else { 1 };
+    format!("{mantissa:.decimals$} {unit}")
 }
 
 fn clip_line_to_rect(p: Pos2, d: Vec2, rect: Rect) -> Option<(Pos2, Pos2)> {
@@ -3308,6 +3334,26 @@ mod canvas_tests {
     }
 
     #[test]
+    fn test_a_frequency_is_printed_with_its_si_prefix_at_four_significant_digits() {
+        for (hz, want) in [
+            (0.489, "489.0 mHz"),
+            (12.345, "12.35 Hz"),
+            (1095.4, "1.095 kHz"),
+            (136_150.846, "136.2 kHz"),
+            (2.5e6, "2.500 MHz"),
+            (7.77e10, "77.70 GHz"),
+            (3.0e12, "3.000 THz"),
+            (4.2e-6, "4.200 µHz"),
+            (999.96, "1.000 kHz"),
+        ] {
+            assert_eq!(format_frequency(hz), want, "{hz} Hz");
+        }
+        assert_eq!(format_frequency(0.0), "n/a");
+        assert_eq!(format_frequency(f64::NAN), "n/a");
+        assert_eq!(format_frequency(1e-9), "1.000e-9 Hz");
+    }
+
+    #[test]
     fn test_the_frame_view_reports_the_received_frequency_of_the_others_signal() {
         // The readout belongs to the picture, not to a test of the model alone: with Alice
         // transmitting and Bob receiving, Bob's frame prints the ratio, and Alice's frame, where
@@ -3377,8 +3423,19 @@ mod canvas_tests {
         // Both frequencies in hertz on the clocks that measure them, and their ratio.
         let hz = |label: &str| -> f64 {
             let line = bobs.lines().find(|l| l.starts_with(label)).unwrap_or_else(|| panic!("{label} in {bobs}"));
-            let number = line.trim_start_matches(label).trim().trim_end_matches(" Hz");
-            number.parse::<f64>().unwrap_or_else(|_| panic!("a frequency in hertz on {line:?}"))
+            let mut parts = line.trim_start_matches(label).split_whitespace();
+            let number: f64 = parts.next().and_then(|n| n.parse().ok()).unwrap_or_else(|| panic!("a number on {line:?}"));
+            let scale = match parts.next() {
+                Some("µHz") => 1e-6,
+                Some("mHz") => 1e-3,
+                Some("Hz") => 1.0,
+                Some("kHz") => 1e3,
+                Some("MHz") => 1e6,
+                Some("GHz") => 1e9,
+                Some("THz") => 1e12,
+                other => panic!("a frequency unit on {line:?}, not {other:?}"),
+            };
+            number * scale
         };
         let (f_rx, f_tx) = (hz("Bob Receive Frequency:"), hz("Alice Transmit Frequency:"));
         let expected = ((1.0 - 2.0 / 6.0) / (1.0 - 2.0 / 4.5_f64)).sqrt();
