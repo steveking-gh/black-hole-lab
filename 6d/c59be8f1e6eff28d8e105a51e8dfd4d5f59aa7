@@ -1,0 +1,19 @@
+src/gui/volume_canvas.rs
+  s_c8d87c2c7b73cb::t_c2d5718d3e8a6c 888-893
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "6dc59be8f1e6eff28d8e105a51e8dfd4d5f59aa7",
+  "prompts": {},
+  "sessions": {
+    "s_c8d87c2c7b73cb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "553fc9fe-1b48-463e-a36b-4c33628c4ac8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
