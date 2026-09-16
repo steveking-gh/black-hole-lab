@@ -885,11 +885,12 @@ fn time_grid_step(span: f64) -> f64 {
 const SCALE_MAX_GLOBAL: f32 = 500_000.0;
 
 /// The multiple of r^2 / (M u^t) out to which a rest frame trusts what its linearised chart
-/// places. See `within` in `VolumeCanvas::render`. Two: from r = 3 at the boost of the default
-/// fall that is nine M, the whole of the default canvas, so the sheared pipes of the exterior
-/// are untouched; from r = 1 at a blueshift of 300 it is a hundredth of an M, and the fade to
-/// nothing runs on to twice this.
-const CHART_REACH_FRACTION: f64 = 2.0;
+/// places. See `within` in `VolumeCanvas::render`. Four: from r = 3 at the boost of the default
+/// fall that is sixteen M, which covers the default canvas and the whole depth of the time
+/// window below it, so the sheared pipes of the exterior are untouched to the foot of their
+/// walls; from r = 1 at a blueshift of 300 it is three hundredths of an M, a few times the
+/// contracted gap between the horizons there, and the fade to nothing runs on to twice this.
+const CHART_REACH_FRACTION: f64 = 4.0;
 const SCALE_MAX_LOCAL: f32 = 1e12;
 
 /// How far outside the canvas, in pixels, a projected point may fall before it is not drawn.
