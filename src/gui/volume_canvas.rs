@@ -13,7 +13,6 @@ use crate::physics::local_frame::LocalFrame;
 use crate::physics::observer::Observer;
 use crate::physics::wavefront::{NullRay, RaySample, SignalField};
 use egui::{Color32, Pos2, Stroke, Vec2};
-use std::time::{Duration, Instant};
 
 /// How close to 0 or to +/-1 a basis component has to be before it is taken to *be* 0 or +/-1.
 ///
@@ -591,6 +590,18 @@ const CLOCK_PLANE_MAX_K: i64 = 100;
 /// solid block of overlapping glyphs, so the labels go and the geometry stays.
 const CLOCK_LABEL_MIN_PX: f32 = 14.0;
 
+/// How far in from the right-hand edge of the canvas the distant clock's labels are hung, in
+/// pixels. The flat rest-frame diagram hangs its own the same distance in from the left; this view
+/// mirrors them to the right, where the eye is not already reading the legend.
+const CLOCK_LABEL_EDGE_PX: f32 = 6.0;
+
+/// Half the length of one tick of the focus observer's own clock on their axis, in pixels, and the
+/// backstop on how many of them are drawn either side of their own event. The count that actually
+/// decides it is the canvas height over the tick pitch; this is only the guard for a pitch that has
+/// collapsed against the window.
+const AXIS_CLOCK_TICK_PX: f32 = 4.0;
+const AXIS_CLOCK_MAX_K: i64 = 512;
+
 /// How many segments a pipe wall, a floor ring and a tick ring are each cut into. Seventy-two is
 /// five degrees a segment: at the zoom the view opens on, a chord of five degrees departs from the
 /// circle it stands for by well under a pixel, and the pipe's shading needs one strip per segment
@@ -624,15 +635,40 @@ const PAST_CONE_RAYS: usize = 36;
 /// the view opens on.
 const PAST_CONE_DT: f64 = 0.05;
 
-/// While the focus event keeps moving, at most one rebuild of the past cone per this many
-/// milliseconds.
+/// The same two numbers while the focus event is *moving*.
 ///
-/// This is what keeps play smooth. A build is a few ms of integration - 36 rays times a couple of
-/// hundred steps - which is nothing once and is the whole frame budget sixty times a second. So a
-/// cone whose key has gone stale but which was built less than this ago is drawn again as it
-/// stands, and the frame asks for a repaint after the throttle expires so the fresh one arrives
-/// without the user having to touch anything. Paused, the key is stable and it builds exactly once.
-const PAST_CONE_REBUILD_MS: u128 = 150;
+/// This is what keeps play smooth, and it buys it with resolution rather than with staleness. A
+/// cone rebuilt every 150 ms while the event moves is a cone that jumps: the surface belongs to
+/// where the observer was up to a tenth of a second ago, and on a played infall the eye sees the
+/// picture lurch rather than flow. So the cone is rebuilt on every frame that moves it and the
+/// build is made cheap enough to afford - 24 generators at 0.1 M a sample is a third of the work
+/// of the full one, which is a fraction of a millisecond over the view's own window (see
+/// `test_the_past_cone_build_is_affordable_every_frame`) - and the frame that stops the event
+/// rebuilds once at `PAST_CONE_RAYS` and `PAST_CONE_DT`, where the surface is looked at closely.
+const PAST_CONE_RAYS_MOVING: usize = 24;
+const PAST_CONE_DT_MOVING: f64 = 0.1;
+
+/// How finely one past cone was integrated, and whether that was the full resolution.
+///
+/// It travels with the built cone because it is what says whether the cone still has work owing to
+/// it: a moving build is a draft, and the first frame that does not move the event replaces it with
+/// the full one. Nothing in the drawing reads it - the surface is built from `rays.len()` and from
+/// each ray's own samples, so a coarse cone draws by exactly the same code as a fine one.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct ConeRes {
+    /// M of coordinate time between consecutive samples of a generator.
+    dt: f64,
+    /// How many null generators the cone is sampled on.
+    rays: usize,
+    /// Whether this is the full-resolution build, which is not to be rebuilt again.
+    full: bool,
+}
+
+impl ConeRes {
+    const MOVING: Self =
+        Self { dt: PAST_CONE_DT_MOVING, rays: PAST_CONE_RAYS_MOVING, full: false };
+    const FULL: Self = Self { dt: PAST_CONE_DT, rays: PAST_CONE_RAYS, full: true };
+}
 
 /// How many sample rows of the past cone's surface go into one mesh.
 ///
@@ -667,6 +703,51 @@ const GLOBAL_SURFACES_ONLY_TIP: &str =
      linearised everywhere else - at the boosts of a late fall the linearisation of an offset that \
      size paints as a wash over the whole canvas rather than as a surface.";
 
+/// The camera positions the view offers as buttons, and one more that undoes an exploration:
+/// Reset puts the zoom, the pan and the time scale back where `Camera::default` has them and
+/// leaves the eye where the user has moved it, which is the one part of the view they chose on
+/// purpose.
+const PRESET_BUTTONS: [(&str, Option<Preset>); 5] = [
+    ("Top", Some(Preset::Top)),
+    ("Side", Some(Preset::Side)),
+    ("Edge", Some(Preset::EdgeOn)),
+    ("3/4", Some(Preset::ThreeQuarter)),
+    ("Reset", None),
+];
+
+/// Where the View Presets box stands, and how its buttons are laid out inside it.
+///
+/// The buttons sit in a named, outlined box, because five bare words in the corner of a picture
+/// read as part of the picture: the frame is what says they are controls, and the heading is what
+/// says which. The arithmetic lives here rather than at the one place that paints it, because two
+/// places want it - section 12 draws the box, and section 4 has to know where it stands so that a
+/// label of the distant clock's is not hung underneath it.
+#[derive(Clone, Copy)]
+struct PresetsBox {
+    rect: egui::Rect,
+    button: Vec2,
+    gap: f32,
+    pad: f32,
+    heading: f32,
+}
+
+fn presets_box(rect: egui::Rect, font_scale: f32) -> PresetsBox {
+    let button = Vec2::new(40.0 * font_scale, 16.0 * font_scale);
+    let gap = 4.0 * font_scale;
+    let n = PRESET_BUTTONS.len();
+    let strip = button.x * n as f32 + gap * (n - 1) as f32;
+    let pad = 6.0 * font_scale;
+    let heading = Theme::MIN_FONT_PT * font_scale + 2.0;
+    let size = Vec2::new(strip + 2.0 * pad, pad + heading + gap + button.y + pad);
+    PresetsBox {
+        rect: egui::Rect::from_min_size(rect.right_top() + Vec2::new(-8.0 - size.x, 6.0), size),
+        button,
+        gap,
+        pad,
+        heading,
+    }
+}
+
 /// What a built past cone belongs to. If any of it changes the cone is a cone of a different event
 /// in a different spacetime and has to be integrated again; if none of it changes the cached rays
 /// are still exactly right, however the camera has been dragged.
@@ -688,8 +769,8 @@ struct PastCone {
     /// earlier and earlier. Kept in coordinates rather than projected, so that a camera move
     /// redraws the same integration.
     rays: Vec<Vec<[f64; 3]>>,
-    /// When this cone was integrated, for the rebuild throttle.
-    built: Instant,
+    /// How finely it was integrated, and whether that was the full resolution.
+    res: ConeRes,
 }
 
 /// Integrate the past light cone of the observer's current event down to `t_min`.
@@ -715,17 +796,17 @@ struct PastCone {
 /// clock without moving and its (t, r, phi) would claim the ray sat at the ring for the rest of the
 /// window. A generator whose past hugs a horizon needs no special case at all: its dr/dt decays to
 /// zero and the steps get cheap.
-fn build_past_cone(metric: &KerrSchild, obs: &Observer, t_min: f64) -> PastCone {
+fn build_past_cone(metric: &KerrSchild, obs: &Observer, t_min: f64, res: ConeRes) -> PastCone {
     let tetrad = Observer::raindrop_tetrad(metric, obs.r);
     let u = tetrad.e0;
-    let mut rays = Vec::with_capacity(PAST_CONE_RAYS);
-    for i in 0..PAST_CONE_RAYS {
-        let alpha = std::f64::consts::TAU * (i as f64) / (PAST_CONE_RAYS as f64);
+    let mut rays = Vec::with_capacity(res.rays);
+    for i in 0..res.rays {
+        let alpha = std::f64::consts::TAU * (i as f64) / (res.rays as f64);
         let mut ray =
             NullRay::from_local_direction(metric, obs.t, obs.r, obs.phi, &tetrad, alpha, &u);
         let mut samples = vec![[ray.t, ray.r, ray.phi]];
         while ray.alive() && ray.t > t_min {
-            ray.step_back(metric, PAST_CONE_DT);
+            ray.step_back(metric, res.dt);
             if !ray.alive() {
                 break;
             }
@@ -744,7 +825,7 @@ fn build_past_cone(metric: &KerrSchild, obs: &Observer, t_min: f64) -> PastCone 
             t_min,
         },
         rays,
-        built: Instant::now(),
+        res,
     }
 }
 
@@ -784,7 +865,7 @@ pub struct VolumeCanvas {
     show_past_cone: bool,
     /// That surface, held between frames. Integrating it is the only work in this view that a
     /// camera drag must not repeat, so it is cached against the event it belongs to; see
-    /// `PastConeKey` and `PAST_CONE_REBUILD_MS`.
+    /// `PastConeKey` and `ConeRes`.
     past_cone: Option<PastCone>,
     /// Draw the light cone of every tagged pulse as a surface: the ring history the physics keeps
     /// on every `HISTORY_PULSE_STRIDE`-th pulse, swept up in t and coloured by gain. On by default,
@@ -1133,6 +1214,9 @@ impl VolumeCanvas {
         };
 
         let mut buf = PrimBuffer::default();
+        // Where the View Presets box will stand, settled now because the distant clock's labels
+        // run up the right-hand edge of the canvas and the box is what they have to dodge.
+        let presets = presets_box(rect, font_scale);
 
         // 4. The surfaces of constant r: glass pipes in the global chart, tangent planes in a rest
         // frame, and in both a mark on the floor where they cross it.
@@ -1155,6 +1239,11 @@ impl VolumeCanvas {
         let z_bottom = z_of(t_min);
         let tick_r = if metric.cartesian_radius(rm) > 0.0 { rm } else { rp };
         let mut floor_rings: Vec<(Vec<Pos2>, Stroke, bool)> = Vec::new();
+        // The ticks of the focus observer's own clock up their own axis, built in section 4b where
+        // the rung they are spaced by is worked out and painted in section 9b, after the layer
+        // above the floor: they are an annotation on the axis rather than geometry in the volume,
+        // and a wash of tangent plane laid over one is a tick nobody can read.
+        let mut axis_clock_ticks: Vec<egui::Shape> = Vec::new();
         let surfaces = [
             (0.0, Theme::SINGULARITY_LINE, 70u8, 2.0f32),
             (rm, Theme::HORIZON_CAUCHY, 60, 2.0),
@@ -1206,64 +1295,188 @@ impl VolumeCanvas {
             // limit, so infinitely many of the distant clock's moments are crossed in a finite
             // amount of their own time. Every one of these planes is flatter than 45 degrees, in
             // every region, because dt is timelike everywhere in this chart.
-            if show_distant_clock_grid {
-                let n_t = [tetrad.e0[0], tetrad.e1[0], tetrad.e2[0]];
-                let n_len = (n_t[0] * n_t[0] + n_t[1] * n_t[1] + n_t[2] * n_t[2]).sqrt();
-                let seconds_per_m = metric.t_grav_seconds() / metric.m.max(1e-12);
-                let step =
-                    distant_clock_grid_step(tetrad.e0[0], camera.scale, seconds_per_m, font_scale)
-                        .step_m;
-                if step.is_finite() && step > 0.0 && n_len.is_finite() && n_len > 0.0 {
-                    // A plane whose nearest point is further from the origin than the patch is wide
-                    // has nothing on screen: |k step| / |n| > W. That is the bound, and the count
-                    // cap behind it is only a backstop.
-                    let reach = half * n_len / step;
-                    let k_max = if reach.is_finite() {
-                        (reach.floor() as i64).clamp(0, CLOCK_PLANE_MAX_K)
-                    } else {
-                        CLOCK_PLANE_MAX_K
+            //
+            // The rung is worked out whether or not the slices are asked for, because section 4b
+            // spaces the observer's *own* clock by the same rung divided by u^t, and that clock is
+            // theirs rather than the distant one's: it is ticked either way.
+            let n_t = [tetrad.e0[0], tetrad.e1[0], tetrad.e2[0]];
+            let n_len = (n_t[0] * n_t[0] + n_t[1] * n_t[1] + n_t[2] * n_t[2]).sqrt();
+            let seconds_per_m = metric.t_grav_seconds() / metric.m.max(1e-12);
+            let u_t = tetrad.e0[0];
+            let step = distant_clock_grid_step(u_t, camera.scale, seconds_per_m, font_scale).step_m;
+            // Where one slice's label is hung: at the right-hand margin, on the slice's own
+            // centreline, exactly as the flat rest-frame diagram hangs its labels at the left-hand
+            // one. A patch that covers the canvas has its nearest point wherever the geometry puts
+            // it, and hanging the caption there strews a dozen of them diagonally across the
+            // middle of the picture, over everything the planes were drawn to be read against. The
+            // margin is a margin: the labels stack up one edge in the order the slices cross it,
+            // and the picture is left alone.
+            //
+            // The centreline is the plane's intersection with the drawn slice xi^2 = 0 - the same
+            // line `LocalFrame::surface_t_const` gives the flat diagram, in (xi^1, xi^0), lifted
+            // to world by the chart's own axes - anchored on that line's own point, so that in the
+            // Edge-on preset the margin reads exactly as the flat diagram's does at every boost.
+            // (Anchored on the patch's 3D centre instead it would sit off the slice by the plane's
+            // xi^2 tilt, which at modest u^t pulls the readings a quarter closer together.)
+            let label_x = rect.right() - CLOCK_LABEL_EDGE_PX;
+            let edge_y = |dt: f64| -> Option<f32> {
+                local_plane(n_t, dt)?;
+                let line = frame.surface_t_const(dt);
+                let at = xi_to_world([line.point[1], line.point[0], 0.0]);
+                let along = [line.dir[0], 0.0, line.dir[1] * t_scale];
+                if !finite3(at) || !finite3(along) {
+                    return None;
+                }
+                let a = camera.project(centre, at).0;
+                let b = camera
+                    .project(centre, [at[0] + along[0], at[1] + along[1], at[2] + along[2]])
+                    .0;
+                let d = b - a;
+                // A centreline the camera has turned edge-on projects to a point, and one drawn
+                // vertically never reaches the margin at all. Neither has a crossing to label.
+                if !a.is_finite() || !d.is_finite() || d.x.abs() < 1e-6 {
+                    return None;
+                }
+                let y = a.y + (label_x - a.x) * d.y / d.x;
+                y.is_finite().then_some(y)
+            };
+            // The pixel-spacing rule, asked where the labels actually land: how far apart in y two
+            // neighbouring slices cross that margin. Closer than a glyph's height they are thinned
+            // by a stride rather than dropped wholesale, as the flat diagram thins its own - the
+            // planes crowding into the past cone is the picture, and a reading every n-th plane is
+            // still a reading.
+            let label_every = match (edge_y(0.0), edge_y(step)) {
+                (Some(y0), Some(y1)) => {
+                    let spacing = (y1 - y0).abs();
+                    (spacing.is_finite() && spacing > 0.0).then(|| {
+                        ((CLOCK_LABEL_MIN_PX * font_scale / spacing).ceil() as i64).max(1)
+                    })
+                }
+                _ => None,
+            };
+            if show_distant_clock_grid
+                && step.is_finite()
+                && step > 0.0
+                && n_len.is_finite()
+                && n_len > 0.0
+            {
+                // A plane whose nearest point is further from the origin than the patch is wide
+                // has nothing on screen: |k step| / |n| > W. That is the bound, and the count
+                // cap behind it is only a backstop.
+                let reach = half * n_len / step;
+                let k_max = if reach.is_finite() {
+                    (reach.floor() as i64).clamp(0, CLOCK_PLANE_MAX_K)
+                } else {
+                    CLOCK_PLANE_MAX_K
+                };
+                for k in -k_max..=k_max {
+                    let dt = (k as f64) * step;
+                    let Some(plane) = local_plane(n_t, dt) else {
+                        continue;
                     };
-                    // How far apart two neighbouring slices land on the screen, measured between
-                    // the nearest points of k = 0 and k = 1. Below a glyph's width the labels are a
-                    // solid block, so they are dropped and the planes go on without them.
-                    let label = local_plane(n_t, step).is_some_and(|one| {
-                        let a = camera.project(centre, xi_to_world([0.0, 0.0, 0.0])).0;
-                        let b = camera.project(centre, xi_to_world(one.nearest)).0;
-                        a.distance(b) >= CLOCK_LABEL_MIN_PX * font_scale
-                    });
+                    push_plane(
+                        &mut buf,
+                        &plane,
+                        half,
+                        CLOCK_PLANE_CELLS,
+                        Theme::GRID_LINE,
+                        (CLOCK_PLANE_ALPHA, CLOCK_PLANE_ALPHA),
+                    );
+                    let Some(every) = label_every else {
+                        continue;
+                    };
+                    if k % every != 0 {
+                        continue;
+                    }
+                    let Some(y) = edge_y(dt) else {
+                        continue;
+                    };
+                    // A slice that leaves the canvas above or below the margin has no crossing to
+                    // label, and one whose crossing is under the legend or under the View Presets
+                    // box has a caption nobody can read. Neither is drawn.
+                    let at = Pos2::new(label_x, y);
+                    if !rect.contains(at)
+                        || legend_rect.contains(at)
+                        || presets.rect.contains(at)
+                    {
+                        continue;
+                    }
+                    buf.label(
+                        at,
+                        egui::Align2::RIGHT_CENTER,
+                        distant_clock_offset_label(dt * seconds_per_m),
+                        Theme::TEXT_MUTED,
+                    );
+                }
+            }
+
+            // 4b. The focus observer's own clock, ticked up their own axis.
+            //
+            // The slice t = t_obs + k * step crosses the axis xi^1 = xi^2 = 0 at
+            // xi^0 = k * step / u^t exactly - set xi^1 = 0 in `LocalFrame::surface_t_const`'s line
+            // and everything else cancels - so the planes above cut this axis at exact multiples
+            // of the round step on the observer's own watch that the rung was chosen to be, and
+            // the axis can be ticked with the same numbers the planes are spaced by. It is the
+            // flat rest-frame diagram's section 2b, in the volume: the same rung, the same ±4 px
+            // ticks, the same labels in the observer's own colour.
+            //
+            // Drawn whether or not the distant grid is, because this is the observer's own clock
+            // rather than the distant one's - and in this view it is the only reading of it there
+            // is. At the zoom the automatic framing settles on near r- these are femtoseconds, and
+            // the r- plane's crossing of this same axis is read straight off them.
+            let clock_proper_step =
+                if u_t.is_finite() && u_t > 0.0 { step / u_t } else { f64::INFINITY };
+            if clock_proper_step.is_finite() && clock_proper_step > 0.0 {
+                let colour = match frame_of_ref {
+                    ReferenceFrame::Alice => Theme::ALICE_COLOR,
+                    _ => Theme::BOB_COLOR,
+                };
+                let tick_at = |k: i64| {
+                    camera
+                        .project(centre, [0.0, 0.0, (k as f64) * clock_proper_step * t_scale])
+                        .0
+                };
+                let origin = tick_at(0);
+                // World (0, 0, z) carries no component along the screen's right, at any yaw or
+                // pitch, so the axis is vertical on the screen and the pitch of its ticks is a
+                // separation in y alone.
+                let spacing = (tick_at(1).y - origin.y).abs();
+                if spacing.is_finite() && spacing >= 1.0 {
+                    let k_max =
+                        ((rect.height() / spacing).ceil() as i64).clamp(0, AXIS_CLOCK_MAX_K);
+                    let label_every =
+                        ((CLOCK_LABEL_MIN_PX * font_scale / spacing).ceil() as i64).max(1);
                     for k in -k_max..=k_max {
-                        let dt = (k as f64) * step;
-                        let Some(plane) = local_plane(n_t, dt) else {
-                            continue;
-                        };
-                        push_plane(
-                            &mut buf,
-                            &plane,
-                            half,
-                            CLOCK_PLANE_CELLS,
-                            Theme::GRID_LINE,
-                            (CLOCK_PLANE_ALPHA, CLOCK_PLANE_ALPHA),
-                        );
-                        if !label {
+                        // k = 0 is the observer's own event, which is already a marker with their
+                        // name beside it.
+                        if k == 0 {
                             continue;
                         }
-                        let at = xi_to_world(plane.nearest);
-                        if !finite3(at) {
+                        let at = tick_at(k);
+                        if !at.is_finite()
+                            || !rect.contains(at)
+                            || legend_rect.contains(at)
+                            || presets.rect.contains(at)
+                        {
                             continue;
                         }
-                        // A patch that covers the canvas hangs its label wherever its nearest
-                        // point happens to project to, and that is often off the edge or under
-                        // the legend in the top-left corner. Neither is a caption anybody can
-                        // read, so neither is drawn.
-                        let at = camera.project(centre, at).0;
-                        if !rect.contains(at) || legend_rect.contains(at) {
+                        axis_clock_ticks.push(egui::Shape::line(
+                            vec![
+                                Pos2::new(at.x - AXIS_CLOCK_TICK_PX, at.y),
+                                Pos2::new(at.x + AXIS_CLOCK_TICK_PX, at.y),
+                            ],
+                            Stroke::new(1.2, colour),
+                        ));
+                        if k % label_every != 0 {
                             continue;
                         }
                         buf.label(
-                            at,
+                            at + Vec2::new(AXIS_CLOCK_TICK_PX + 3.0, 0.0),
                             egui::Align2::LEFT_CENTER,
-                            distant_clock_offset_label(dt * seconds_per_m),
-                            Theme::TEXT_MUTED,
+                            distant_clock_offset_label(
+                                (k as f64) * clock_proper_step * seconds_per_m,
+                            ),
+                            colour,
                         );
                     }
                 }
@@ -1625,18 +1838,22 @@ impl VolumeCanvas {
                 a: metric.a,
                 t_min,
             };
-            if self.past_cone.as_ref().map(|c| &c.key) != Some(&key) {
-                // Stale - but a rebuild is a few ms, and doing one on every frame of a played
-                // infall would cost more than everything else this view draws put together. So a
-                // cone built inside the throttle is drawn again as it stands and the fresh one is
-                // asked for by a timed repaint, which arrives whether or not the user touches
-                // anything. Paused, the key stops changing and the first build is the only one.
-                match self.past_cone.as_ref().map(|c| c.built.elapsed()) {
-                    Some(since) if since.as_millis() < PAST_CONE_REBUILD_MS => {
-                        let throttle = Duration::from_millis(PAST_CONE_REBUILD_MS as u64);
-                        ui.ctx().request_repaint_after(throttle.saturating_sub(since));
-                    }
-                    _ => self.past_cone = Some(build_past_cone(metric, obs, t_min)),
+            // The cone follows the event on every frame, and pays for that in resolution rather
+            // than in lag. A cone of where the observer was a tenth of a second ago is a cone of
+            // the wrong event, and on a played infall the eye reads that as the surface jumping
+            // rather than moving; a cone of this event on 24 generators is the right surface,
+            // drawn a little coarsely. So a key that has changed builds at `ConeRes::MOVING` and
+            // asks for one more frame, and that frame - if the event has stopped, and the key is
+            // therefore the same - replaces the draft with the full build and marks it, so a
+            // paused view integrates once and a camera drag over it integrates not at all.
+            match self.past_cone.as_ref() {
+                Some(cone) if cone.key == key && cone.res.full => {}
+                Some(cone) if cone.key == key => {
+                    self.past_cone = Some(build_past_cone(metric, obs, t_min, ConeRes::FULL));
+                }
+                _ => {
+                    self.past_cone = Some(build_past_cone(metric, obs, t_min, ConeRes::MOVING));
+                    ui.ctx().request_repaint();
                 }
             }
             if let Some(cone) = &self.past_cone {
@@ -1887,6 +2104,15 @@ impl VolumeCanvas {
 
         buf.paint(Layer::Above, &painter);
 
+        // 9b. The ticks of the focus observer's own clock, laid on their axis over both layers.
+        // Built in section 4b; painted here, because a tick sorted into the volume with the
+        // planes is a tick with an alpha-30 wash of tangent plane over it, and this is an
+        // annotation on the axis rather than a thing standing in the spacetime. Its labels went
+        // through the buffer and land later still, with every other label.
+        for tick in axis_clock_ticks {
+            painter.add(tick);
+        }
+
         // 10. Every arrival, on the receiver's worldline at the height of the crossing, in the
         // sender's colour: the same pairing the equatorial view draws, lifted off the floor onto
         // the event it happened at. Inside r+ these bunch onto the r- pipe, and in the volume the
@@ -2038,30 +2264,11 @@ impl VolumeCanvas {
         });
 
         // The same camera positions as buttons, because a right-click menu is not discoverable by
-        // looking at a picture, and one more that undoes an exploration: Reset puts the zoom, the
-        // pan and the time scale back where `Camera::default` has them and leaves the eye where the
-        // user has moved it, which is the one part of the view they chose on purpose.
+        // looking at a picture. Where the box stands was settled before anything was drawn, in
+        // `presets`, because the distant clock's labels have to keep out from under it.
         let legend_font = egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale);
-        let buttons = [
-            ("Top", Some(Preset::Top)),
-            ("Side", Some(Preset::Side)),
-            ("Edge", Some(Preset::EdgeOn)),
-            ("3/4", Some(Preset::ThreeQuarter)),
-            ("Reset", None),
-        ];
-        let button_size = Vec2::new(40.0 * font_scale, 16.0 * font_scale);
-        let gap = 4.0 * font_scale;
-        let strip = button_size.x * buttons.len() as f32 + gap * (buttons.len() - 1) as f32;
-        // The buttons sit in a named, outlined box, because five bare words in the corner of a
-        // picture read as part of the picture: the frame is what says they are controls, and the
-        // heading is what says which.
-        let pad = 6.0 * font_scale;
-        let heading_h = Theme::MIN_FONT_PT * font_scale + 2.0;
-        let box_size = Vec2::new(strip + 2.0 * pad, pad + heading_h + gap + button_size.y + pad);
-        let box_rect = egui::Rect::from_min_size(
-            rect.right_top() + Vec2::new(-8.0 - box_size.x, 6.0),
-            box_size,
-        );
+        let PresetsBox { rect: box_rect, button: button_size, gap, pad, heading: heading_h } =
+            presets;
         painter.rect_filled(box_rect, 4.0, Theme::PANEL_BG.gamma_multiply(0.85));
         painter.rect_stroke(
             box_rect,
@@ -2077,7 +2284,7 @@ impl VolumeCanvas {
             Theme::TEXT_MUTED,
         );
         let row_top = box_rect.top() + pad + heading_h + gap;
-        for (i, (label, preset)) in buttons.into_iter().enumerate() {
+        for (i, (label, preset)) in PRESET_BUTTONS.into_iter().enumerate() {
             let min = Pos2::new(box_rect.left() + pad + (button_size.x + gap) * i as f32, row_top);
             let button = egui::Button::new(
                 egui::RichText::new(label).font(legend_font.clone()).color(Theme::TEXT_BRIGHT),
@@ -2194,6 +2401,7 @@ impl VolumeCanvas {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
     /// One shape the painter emitted, reduced to what a test about the scene has to ask of it.
     /// Kept as owned data because the `FullOutput` the shapes live in has to be dropped before the
@@ -2216,7 +2424,12 @@ mod tests {
         /// from an open run of a worldline.
         Path { fill: Color32, stroke: Option<Color32>, points: Vec<Pos2>, closed: bool },
         Circle { fill: Color32, radius: f32, centre: Pos2 },
-        Text(String),
+        /// A run of text, with the screen rectangle the laid-out galley occupies and the colour it
+        /// was painted in. The rectangle is where the alignment put it - `Align2::RIGHT_CENTER` at
+        /// x puts its right edge at x - which is what a test about *where* a label was hung has to
+        /// read, and the colour is what tells the distant clock's slice labels from the focus
+        /// observer's own clock ticked up his axis.
+        Text { text: String, rect: egui::Rect, colour: Color32 },
         Other,
     }
 
@@ -2260,7 +2473,11 @@ mod tests {
                 egui::Shape::Circle(c) => {
                     out.push(Painted::Circle { fill: c.fill, radius: c.radius, centre: c.center })
                 }
-                egui::Shape::Text(t) => out.push(Painted::Text(t.galley.text().to_string())),
+                egui::Shape::Text(t) => out.push(Painted::Text {
+                    text: t.galley.text().to_string(),
+                    rect: egui::Rect::from_min_size(t.pos, t.galley.rect.size()),
+                    colour: t.fallback_color,
+                }),
                 _ => out.push(Painted::Other),
             }
         }
@@ -2482,7 +2699,7 @@ mod tests {
     fn text_of(shapes: &[Painted]) -> String {
         let mut out = String::new();
         for s in shapes {
-            if let Painted::Text(t) = s {
+            if let Painted::Text { text: t, .. } = s {
                 out.push_str(t);
                 out.push('\n');
             }
@@ -2682,13 +2899,13 @@ mod tests {
         let t_min = bob.t - 5.0;
 
         let started = Instant::now();
-        let cone = build_past_cone(&metric, &bob, t_min);
+        let cone = build_past_cone(&metric, &bob, t_min, ConeRes::FULL);
         println!(
             "build_past_cone over {:.1} M at {PAST_CONE_RAYS} rays and dt = {PAST_CONE_DT}: {:?}",
             bob.t - t_min,
             started.elapsed()
         );
-        let long = build_past_cone(&metric, &bob, bob.t - 10.0);
+        let long = build_past_cone(&metric, &bob, bob.t - 10.0, ConeRes::FULL);
         println!(
             "and over 10 M: {:?} ({} samples on the longest generator)",
             started.elapsed(),
@@ -2757,7 +2974,7 @@ mod tests {
         let metric = KerrSchild::new(1.0, 0.9);
         let (rp, rm) = (metric.outer_horizon(), metric.inner_horizon());
         let bob = bob_at(&metric, 0.5 * (rp + rm));
-        let cone = build_past_cone(&metric, &bob, bob.t - 5.0);
+        let cone = build_past_cone(&metric, &bob, bob.t - 5.0, ConeRes::FULL);
 
         let mut highest = bob.r;
         for (i, samples) in cone.rays.iter().enumerate() {
@@ -2791,7 +3008,7 @@ mod tests {
         let metric = KerrSchild::new(1.0, 0.9);
         let frozen = Observer::frozen_bob(&metric);
         let (rp, rm) = (metric.outer_horizon(), metric.inner_horizon());
-        let cone = build_past_cone(&metric, &frozen, frozen.t - 10.0);
+        let cone = build_past_cone(&metric, &frozen, frozen.t - 10.0, ConeRes::FULL);
         let highest = cone
             .rays
             .iter()
@@ -2813,10 +3030,10 @@ mod tests {
     #[test]
     fn test_the_past_cone_is_rebuilt_only_when_the_event_moves() {
         // The surface is the only thing in this view that costs an integration rather than a
-        // projection, so it is cached against the event it belongs to: a camera drag, a resize or
-        // a paused frame must redraw the same rays rather than integrate them again. When the
-        // event does move the cache has to let go, or the picture would be the past cone of where
-        // the observer used to be.
+        // projection, so it is cached against the event it belongs to: once it has settled at full
+        // resolution, a camera drag, a resize or a paused frame must redraw the same rays rather
+        // than integrate them again. When the event does move the cache has to let go, or the
+        // picture would be the past cone of where the observer used to be.
         let metric = KerrSchild::new(1.0, 0.9);
         let mut bob = bob_at(&metric, 4.0);
         let mut canvas = VolumeCanvas {
@@ -2824,33 +3041,120 @@ mod tests {
             ..Default::default()
         };
 
+        // The first frame has no cone to compare against, so it builds the moving draft; the
+        // second finds the key unchanged and settles it at full resolution.
         volume_frame_on(&mut canvas, &metric, Some(&bob), ReferenceFrame::DistantObserver, false);
-        let first = canvas.past_cone.as_ref().expect("the first frame builds the cone").built;
+        let draft = canvas.past_cone.as_ref().expect("the first frame builds the cone").res;
+        assert_eq!(draft, ConeRes::MOVING, "and builds it as the moving draft");
         volume_frame_on(&mut canvas, &metric, Some(&bob), ReferenceFrame::DistantObserver, false);
-        let second = canvas.past_cone.as_ref().expect("and the second keeps it").built;
-        assert_eq!(
-            second, first,
-            "nothing about the event changed between the two frames, so the second must have drawn \
-             the cone the first integrated"
+        let settled = canvas.past_cone.as_ref().expect("and the second settles it");
+        assert_eq!(settled.res, ConeRes::FULL, "at the full resolution, the event having stopped");
+        // Whether a third frame integrated anything is a question about identity, not about
+        // contents: two builds of the same event agree ray for ray. The address of the outer
+        // vector answers it - a rebuild allocates its own while this one is still alive - and no
+        // wall clock has to be consulted to ask.
+        let settled = settled.rays.as_ptr();
+        volume_frame_on(&mut canvas, &metric, Some(&bob), ReferenceFrame::DistantObserver, false);
+        let cone = canvas.past_cone.as_ref().expect("and the third keeps it");
+        assert!(
+            std::ptr::eq(cone.rays.as_ptr(), settled),
+            "nothing about the event changed, so the third frame must have drawn the very rays              the second integrated"
         );
 
-        // Move him, and wind the build clock back past the throttle rather than sleeping through
-        // it: the throttle is a wall-clock rule and a test has no business waiting on one.
+        // Move him: the cone follows on that frame, at the moving resolution and with no throttle
+        // between the step and the picture.
         bob.step(&metric, bob.t + 0.5, 0.5);
-        canvas.past_cone.as_mut().unwrap().built -= Duration::from_secs(1);
         volume_frame_on(&mut canvas, &metric, Some(&bob), ReferenceFrame::DistantObserver, false);
-        let cone = canvas.past_cone.as_ref().expect("and the third rebuilds it");
+        let cone = canvas.past_cone.as_ref().expect("and the fourth rebuilds it");
         println!(
-            "Bob stepped to t = {:.3}, r = {:.4}; the cone's key followed to t = {:.3}, r = {:.4}",
-            bob.t, bob.r, cone.key.t, cone.key.r
+            "Bob stepped to t = {:.3}, r = {:.4}; the cone's key followed to t = {:.3}, r = {:.4}              at {} generators",
+            bob.t,
+            bob.r,
+            cone.key.t,
+            cone.key.r,
+            cone.rays.len()
         );
-        assert!(
-            cone.built > first,
-            "the event moved, so the cone belongs to the new one and must have been integrated \
-             again"
+        assert_eq!(
+            cone.res,
+            ConeRes::MOVING,
+            "the event moved, so the cone belongs to the new one and was integrated again as a              draft"
         );
         assert_eq!(cone.key.t, bob.t, "and it is the cone of the event Bob is standing on now");
         assert_eq!(cone.key.r, bob.r);
+    }
+
+    #[test]
+    fn test_the_past_cone_follows_the_event_every_frame() {
+        // The cone used to be rebuilt at most once per 150 ms while the event moved, which meant
+        // that during play the surface on the screen was the past cone of where Bob was up to a
+        // tenth of a second ago: it lagged, and then caught up in a jump. It now follows him on
+        // every frame that moves him, and buys that with resolution rather than with staleness -
+        // the moving build is the draft, and the first frame that does not move him replaces it
+        // with the full one.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let mut bob = bob_at(&metric, 3.0);
+        let mut canvas = VolumeCanvas {
+            camera: Camera::preset(Preset::ThreeQuarter, 48.0, Vec2::ZERO, 1.0),
+            ..Default::default()
+        };
+        volume_frame_on(&mut canvas, &metric, Some(&bob), ReferenceFrame::DistantObserver, false);
+
+        // One step of the simulation, taken exactly as `Observer::frozen_bob` takes its own.
+        bob.step(&metric, bob.t + 0.25, 0.25);
+        volume_frame_on(&mut canvas, &metric, Some(&bob), ReferenceFrame::DistantObserver, false);
+        let cone = canvas.past_cone.as_ref().expect("the moved event has a cone of its own");
+        println!(
+            "Bob stepped to t = {:.3}; the cone's key is t = {:.3} on {} generators at dt = {}",
+            bob.t,
+            cone.key.t,
+            cone.rays.len(),
+            cone.res.dt
+        );
+        assert_eq!(
+            cone.key.t, bob.t,
+            "the frame that moved the event drew the cone of that event, with nothing held back              by a throttle"
+        );
+        assert_eq!(cone.res, ConeRes::MOVING, "at the moving resolution, which is what pays for it");
+        assert_eq!(cone.rays.len(), PAST_CONE_RAYS_MOVING, "and it really is that many generators");
+
+        // Nothing moves: the next frame settles the draft at the full resolution and marks it, and
+        // the resolution is the only thing that changes - it is still the same event's cone.
+        volume_frame_on(&mut canvas, &metric, Some(&bob), ReferenceFrame::DistantObserver, false);
+        let cone = canvas.past_cone.as_ref().expect("and the event that stopped keeps it");
+        assert_eq!(cone.res, ConeRes::FULL, "the event stopped, so the cone is rebuilt in full");
+        assert_eq!(cone.rays.len(), PAST_CONE_RAYS);
+        assert_eq!(cone.key.t, bob.t, "of the same event");
+    }
+
+    #[test]
+    fn test_the_past_cone_build_is_affordable_every_frame() {
+        // What the throttle used to buy, and what now has to be bought by the resolution instead:
+        // a build that fits inside a frame. The window is the view's own 14 M, the event is an
+        // ordinary one well outside r+, and the number that matters is the moving one, because
+        // that is the build a played infall does sixty times a second.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let bob = bob_at(&metric, 3.0);
+        let t_min = bob.t - VolumeCanvas::default().time_window;
+
+        let started = Instant::now();
+        let moving = build_past_cone(&metric, &bob, t_min, ConeRes::MOVING);
+        let moving_took = started.elapsed();
+        let started = Instant::now();
+        let full = build_past_cone(&metric, &bob, t_min, ConeRes::FULL);
+        let full_took = started.elapsed();
+        println!(
+            "a 14 M past cone at r = 3, a = 0.9: moving ({} rays, dt = {}) {moving_took:?},              {} samples on its longest generator; full ({} rays, dt = {}) {full_took:?}, {}              samples",
+            ConeRes::MOVING.rays,
+            ConeRes::MOVING.dt,
+            moving.rays.iter().map(Vec::len).max().unwrap_or(0),
+            ConeRes::FULL.rays,
+            ConeRes::FULL.dt,
+            full.rays.iter().map(Vec::len).max().unwrap_or(0),
+        );
+        assert!(
+            moving_took < Duration::from_millis(5),
+            "the moving build has to fit inside a frame with the rest of the scene, but it took              {moving_took:?}"
+        );
     }
 
     #[test]
@@ -3273,6 +3577,148 @@ mod tests {
             "and with the clock off there are no slice labels: {}",
             text_of(&off)
         );
+    }
+
+    #[test]
+    fn test_in_a_rest_frame_the_clock_labels_sit_at_the_right_edge() {
+        // Seen in the app: a dozen slice labels strewn diagonally across the middle of the
+        // picture, each one hung wherever its own plane's nearest point happened to project to,
+        // over the geometry the planes were drawn to be read against. They belong in a margin, as
+        // the flat rest-frame diagram's do - and in the Edge-on preset, which is that diagram, the
+        // two pictures are the same picture and the labels stack up the edge in the order the
+        // slices cross it. This view uses the right-hand margin: the left is already carrying the
+        // legend.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let frozen = Observer::frozen_bob(&metric);
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let signal = SignalField::default();
+        let mut canvas = VolumeCanvas {
+            camera: Camera::preset(Preset::EdgeOn, 48.0, Vec2::ZERO, 1.0),
+            show_past_cone: false,
+            ..Default::default()
+        };
+        let (shapes, rect) = volume_frame_raw(
+            &mut canvas,
+            &ctx,
+            &metric,
+            Some(&frozen),
+            ReferenceFrame::Bob,
+            true,
+            &signal,
+            &signal,
+            input(),
+        );
+
+        // Every reading of the distant clock, and nothing else: a slice label is muted text whose
+        // first character is the sign of the offset it names. The slice through Bob's own event
+        // says "now", his own clock's ticks up the axis are in his own colour, and the legend, the
+        // presets and his telemetry all start with a letter.
+        let labels: Vec<(&str, egui::Rect)> = shapes
+            .iter()
+            .filter_map(|s| match s {
+                Painted::Text { text, rect, colour }
+                    if *colour == Theme::TEXT_MUTED
+                        && (text.starts_with('+') || text.starts_with('-')) =>
+                {
+                    Some((text.as_str(), *rect))
+                }
+                _ => None,
+            })
+            .collect();
+        let want = rect.right() - CLOCK_LABEL_EDGE_PX;
+        println!(
+            "{} slice labels against a right edge at {want}: {:?}",
+            labels.len(),
+            labels.iter().map(|(t, r)| (*t, r.right(), r.center().y)).collect::<Vec<_>>()
+        );
+        assert!(
+            !labels.is_empty(),
+            "the slices of the distant clock are labelled in a rest frame: {}",
+            text_of(&shapes)
+        );
+        for (text, at) in &labels {
+            assert!(
+                (at.right() - want).abs() <= 8.0,
+                "every slice label is right-aligned on the margin at x = {want}, but \"{text}\"                  ends at {}",
+                at.right()
+            );
+        }
+    }
+
+    #[test]
+    fn test_in_a_rest_frame_the_focus_clock_is_ticked_up_the_axis() {
+        // The volume's rest frame had no reading of the focus observer's *own* clock anywhere on
+        // it: the planes are the distant clock's, and the axis they cut was a bare line. The flat
+        // diagram ticks that axis at the same rung divided by u^t - which is exactly where the
+        // planes cross it - and this is the same ticking in the volume, drawn whether or not the
+        // planes themselves are asked for, because it is his clock and not the far-away one's.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let bob = bob_at(&metric, 3.0);
+        for grid in [false, true] {
+            let mut canvas = VolumeCanvas {
+                camera: Camera::preset(Preset::ThreeQuarter, 48.0, Vec2::ZERO, 1.0),
+                show_past_cone: false,
+                keep_surface_framed: false,
+                ..Default::default()
+            };
+            let shapes =
+                volume_frame_on(&mut canvas, &metric, Some(&bob), ReferenceFrame::Bob, grid);
+            let axis_x = marker_of(&shapes).x;
+            let ticks: Vec<&Vec<Pos2>> = shapes
+                .iter()
+                .filter_map(|s| match s {
+                    Painted::Path { stroke: Some(c), points, .. }
+                        if *c == Theme::BOB_COLOR
+                            && points.len() == 2
+                            && (points[0].y - points[1].y).abs() < 1e-6
+                            && ((points[1].x - points[0].x).abs()
+                                - 2.0 * AXIS_CLOCK_TICK_PX)
+                                .abs()
+                                < 1e-6 =>
+                    {
+                        Some(points)
+                    }
+                    _ => None,
+                })
+                .collect();
+            let labels: Vec<(&str, egui::Rect)> = shapes
+                .iter()
+                .filter_map(|s| match s {
+                    Painted::Text { text, rect, colour }
+                        if *colour == Theme::BOB_COLOR
+                            && (text.starts_with('+') || text.starts_with('-')) =>
+                    {
+                        Some((text.as_str(), *rect))
+                    }
+                    _ => None,
+                })
+                .collect();
+            println!(
+                "distant clock {}: {} ticks on the axis at x = {axis_x}, {} of them labelled: {:?}",
+                if grid { "on" } else { "off" },
+                ticks.len(),
+                labels.len(),
+                labels.iter().map(|(t, _)| *t).collect::<Vec<_>>()
+            );
+            assert!(
+                ticks.len() >= 4,
+                "his own clock is ticked up his own axis, but only {} short mint strokes were                  painted",
+                ticks.len()
+            );
+            for points in &ticks {
+                let mid = 0.5 * (points[0].x + points[1].x);
+                assert!(
+                    (mid - axis_x).abs() < 0.5,
+                    "each tick is centred on the axis at x = {axis_x}, but one runs {:?}",
+                    points
+                );
+            }
+            assert!(
+                labels.iter().any(|(_, at)| at.left() >= axis_x),
+                "and the readings are written beside it, to the right: {labels:?}"
+            );
+        }
     }
 
     const CENTRE: Pos2 = Pos2::new(400.0, 300.0);
@@ -3946,12 +4392,20 @@ mod tests {
                 _ => None,
             })
             .collect();
-        let open: Vec<&Vec<Pos2>> =
-            mint.iter().filter(|(_, closed)| !closed).map(|(p, _)| *p).collect();
+        // The ticks of his own clock are mint strokes too, and horizontal on purpose: they are
+        // the rungs section 4b lays across the axis, not pieces of it. Two points at one height is
+        // what tells them from a run of worldline.
+        let is_tick = |p: &Vec<Pos2>| p.len() == 2 && (p[0].y - p[1].y).abs() < 1e-6;
+        let open: Vec<&Vec<Pos2>> = mint
+            .iter()
+            .filter(|(p, closed)| !closed && !is_tick(p))
+            .map(|(p, _)| *p)
+            .collect();
         println!(
-            "{} mint strokes in Bob's own frame, {} of them open; his marker is at {at:?}",
+            "{} mint strokes in Bob's own frame, {} of them open pieces of his worldline and {}              ticks of his own clock; his marker is at {at:?}",
             mint.len(),
-            open.len()
+            open.len(),
+            mint.iter().filter(|(p, _)| is_tick(p)).count()
         );
         assert!(
             !open.is_empty(),
@@ -3965,8 +4419,8 @@ mod tests {
             open.iter().map(|p| p[0]).collect::<Vec<_>>()
         );
         // And nothing of his leans. A closed mint polyline would be a rim of some kind; there are
-        // none, because his cone is drawn in its own light blue, so every mint stroke here is a
-        // piece of the axis.
+        // none, because his cone is drawn in its own light blue, so every open mint stroke that is
+        // not a tick of his clock is a piece of the axis.
         for p in open.iter() {
             assert!(
                 vertical(p),
