@@ -1,0 +1,30 @@
+src/gui/controls.rs
+  s_c8d87c2c7b73cb::t_50fe4cb7a8ebe1 393
+src/gui/spacetime_canvas.rs
+  s_c8d87c2c7b73cb::t_50fe4cb7a8ebe1 77
+src/gui/volume_canvas.rs
+  s_c8d87c2c7b73cb::t_ed1e526fa1af5b 3694
+  s_c8d87c2c7b73cb::t_5323e6a469b8c2 3-4
+  s_c8d87c2c7b73cb::t_25f0d8ad322e28 2091-2092
+  s_c8d87c2c7b73cb::t_1245e35dd1f158 2017-2043
+  s_c8d87c2c7b73cb::t_37a217044618ee 2525-2528
+  s_c8d87c2c7b73cb::t_32f772c9a85989 905-917,919-954
+  s_c8d87c2c7b73cb::t_dae32ab7652872 3663-3693,3695-3745
+  s_c8d87c2c7b73cb::t_728ae894d181ce 3662
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "078d625014897b4610e3458fb1f85e38dc0f6404",
+  "prompts": {},
+  "sessions": {
+    "s_c8d87c2c7b73cb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "553fc9fe-1b48-463e-a36b-4c33628c4ac8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
