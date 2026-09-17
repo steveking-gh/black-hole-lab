@@ -1,0 +1,19 @@
+src/gui/controls.rs
+  s_c8d87c2c7b73cb::t_3eb288f03756c2 689-694,696-700,707-713
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "1ea0ee581a7d291e8f007e063abf7494a1b818ec",
+  "prompts": {},
+  "sessions": {
+    "s_c8d87c2c7b73cb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "553fc9fe-1b48-463e-a36b-4c33628c4ac8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
