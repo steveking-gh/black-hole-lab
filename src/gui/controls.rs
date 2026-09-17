@@ -696,13 +696,22 @@ impl ObserverCard {
             });
 
             let circular = settings.release.circular_sense();
-            // On a circular orbit L is the orbit's, not the slider's: shown, not dialled.
+            // On a circular orbit L is the orbit's, not the slider's: the greyed slider shows the
+            // orbit's value, and the card's own L is kept untouched behind it for when the
+            // release is changed back.
+            let mut shown = match circular {
+                Some(_) => settings.worldline_params(metric).l_ang.clamp(-4.0, 4.0),
+                None => settings.l_ang,
+            };
             ui.add_enabled(
                 circular.is_none(),
-                egui::Slider::new(&mut settings.l_ang, -4.0..=4.0)
+                egui::Slider::new(&mut shown, -4.0..=4.0)
                     .text("Angular momentum L (per unit mass, M)"),
             )
             .on_hover_text(ANGULAR_MOMENTUM_TIP);
+            if circular.is_none() {
+                settings.l_ang = shown;
+            }
 
             // What the card has actually asked for, in the two numbers the physics uses and the
             // one a user can picture. E is derived, so it is reported rather than dialled, and the
