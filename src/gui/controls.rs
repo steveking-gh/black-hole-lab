@@ -707,13 +707,19 @@ impl ObserverCard {
             ui.horizontal(|ui| {
                 ui.label("ISCO:");
                 for (prograde, label) in [(true, "Prograde"), (false, "Retrograde")] {
-                    if ui.small_button(label).on_hover_text(ISCO_TIP).clicked() {
+                    let release = if prograde {
+                        Release::CircularPrograde
+                    } else {
+                        Release::CircularRetrograde
+                    };
+                    // Lit while the card is asking for exactly this orbit: that sense's circular
+                    // release at that sense's ISCO radius. Moving the radius slider off it
+                    // unlights the chip by itself.
+                    let selected = settings.release == release
+                        && (settings.drop_r - metric.isco(prograde)).abs() < 1e-9;
+                    if chip(ui, selected, label).on_hover_text(ISCO_TIP).clicked() {
                         settings.drop_r = metric.isco(prograde);
-                        settings.release = if prograde {
-                            Release::CircularPrograde
-                        } else {
-                            Release::CircularRetrograde
-                        };
+                        settings.release = release;
                         settings.mode = ObserverMode::FreeFall;
                     }
                 }
