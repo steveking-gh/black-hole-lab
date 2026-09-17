@@ -1,0 +1,31 @@
+src/gui/controls.rs
+  s_c8d87c2c7b73cb::t_e3ec9f5f5ffcfb 425-427,659,671-696,698-701,732-770
+src/physics/kerr_schild.rs
+  s_c8d87c2c7b73cb::t_02cd0b8f13d38b 366,373
+  s_c8d87c2c7b73cb::t_e3ec9f5f5ffcfb 348-365,367-372,374-421,1336-1341,1343-1363,1368,1377-1400
+  s_c8d87c2c7b73cb::t_7906be65e20d04 1365-1367,1369-1376
+  s_c8d87c2c7b73cb::t_3725f48f1ed407 1342,1364
+  s_c8d87c2c7b73cb::t_21bd87d7a9eb2c 1401
+src/physics/observer.rs
+  s_c8d87c2c7b73cb::t_e3ec9f5f5ffcfb 49-66,84-96,144-145,393-396
+src/app.rs
+  s_c8d87c2c7b73cb::t_e3ec9f5f5ffcfb 1674-1683,1685-1695,1698-1699,1704-1707,1709-1714
+  s_c8d87c2c7b73cb::t_02cd0b8f13d38b 1684,1696-1697,1700-1703,1708
+  s_c8d87c2c7b73cb::t_43bdff65f2c181 1673
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ad9ad8f351077af1b8841e5bff41d986353ff5c3",
+  "prompts": {},
+  "sessions": {
+    "s_c8d87c2c7b73cb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "553fc9fe-1b48-463e-a36b-4c33628c4ac8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
