@@ -686,39 +686,31 @@ impl ObserverCard {
             });
             // An orbit is a free-fall worldline, so asking for one puts the Motion on free fall
             // as well: a circular release held on the static or ZAMO worldline would be a request
-            // the card could not honour.
-            ui.horizontal(|ui| {
+            // the card could not honour. Four chips in one category: the circular orbit of either
+            // sense at the drop radius as it stands, and the innermost stable one of either sense,
+            // which is the same release with the drop radius moved onto the ISCO. One of the four
+            // is lit at a time: an ISCO chip while the radius is on its ISCO, the plain circular
+            // chip otherwise, so nudging the radius off the ISCO passes the light across.
+            ui.horizontal_wrapped(|ui| {
                 ui.label("Orbit:");
-                for (release, label) in [
-                    (Release::CircularPrograde, "Circular, prograde"),
-                    (Release::CircularRetrograde, "Circular, retrograde"),
+                for (prograde, at_isco, label) in [
+                    (true, false, "Circular, prograde"),
+                    (false, false, "Circular, retrograde"),
+                    (true, true, "ISCO, prograde"),
+                    (false, true, "ISCO, retrograde"),
                 ] {
-                    if chip(ui, settings.release == release, label)
-                        .on_hover_text(CIRCULAR_ORBIT_TIP)
-                        .clicked()
-                    {
-                        settings.release = release;
-                        settings.mode = ObserverMode::FreeFall;
-                    }
-                }
-            });
-            // The innermost stable orbit of either sense, in one click: the drop radius, the
-            // release and the motion together.
-            ui.horizontal(|ui| {
-                ui.label("ISCO:");
-                for (prograde, label) in [(true, "Prograde"), (false, "Retrograde")] {
                     let release = if prograde {
                         Release::CircularPrograde
                     } else {
                         Release::CircularRetrograde
                     };
-                    // Lit while the card is asking for exactly this orbit: that sense's circular
-                    // release at that sense's ISCO radius. Moving the radius slider off it
-                    // unlights the chip by itself.
-                    let selected = settings.release == release
-                        && (settings.drop_r - metric.isco(prograde)).abs() < 1e-9;
-                    if chip(ui, selected, label).on_hover_text(ISCO_TIP).clicked() {
-                        settings.drop_r = metric.isco(prograde);
+                    let on_isco = (settings.drop_r - metric.isco(prograde)).abs() < 1e-9;
+                    let selected = settings.release == release && on_isco == at_isco;
+                    let tip = if at_isco { ISCO_TIP } else { CIRCULAR_ORBIT_TIP };
+                    if chip(ui, selected, label).on_hover_text(tip).clicked() {
+                        if at_isco {
+                            settings.drop_r = metric.isco(prograde);
+                        }
                         settings.release = release;
                         settings.mode = ObserverMode::FreeFall;
                     }
