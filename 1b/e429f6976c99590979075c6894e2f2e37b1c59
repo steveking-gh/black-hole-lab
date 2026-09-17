@@ -1,0 +1,25 @@
+Cargo.toml
+  s_99085f80de58c0::t_6c5fc7ebd84ef4 2,5
+src/main.rs
+  s_99085f80de58c0::t_e05c7dc3e0ea12 1-15
+THIRD-PARTY-NOTICES.md
+  s_99085f80de58c0::t_482e4be5e4c6d9 1-161
+Cargo.lock
+  s_99085f80de58c0::t_fd5959ec4fed2c 456-466
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "1be429f6976c99590979075c6894e2f2e37b1c59",
+  "prompts": {},
+  "sessions": {
+    "s_99085f80de58c0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b270d59c-b282-4517-83fc-8b530cf1e304",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
