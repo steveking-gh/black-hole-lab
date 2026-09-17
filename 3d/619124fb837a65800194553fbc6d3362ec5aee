@@ -1,0 +1,34 @@
+src/gui/theme.rs
+  s_99085f80de58c0::t_023e8ca44cfa59 135-142
+src/gui/spacetime_canvas.rs
+  s_99085f80de58c0::t_eb76004120d931 3549-3574,3595-3597,3599-3615,3617-3629,3631-3637,3642,3644-3645,3647,3653-3656
+  s_99085f80de58c0::t_4352c37ce53118 6,761-766,3575-3578,3594,3598,3616,3630
+  s_99085f80de58c0::t_94374e00cbab15 3638-3641,3643,3646,3648-3652
+  s_99085f80de58c0::t_b748df38ffe1d3 3579-3593
+  s_99085f80de58c0::t_e9b171823c4e0b 19-22,25-29
+  s_99085f80de58c0::t_77f656a8e0d64b 758-760
+  s_99085f80de58c0::t_92e3269d9be25f 735-757,767-768,796-816,882,892-900
+  s_99085f80de58c0::t_8418413212f623 23-24
+  s_99085f80de58c0::t_fbaba48b84154c 3548
+src/physics/observer.rs
+  s_99085f80de58c0::t_8cd0b5bea8369a 2605-2665,2667-2743
+  s_99085f80de58c0::t_e8910a64b04f51 3-50,691,713-737,745
+  s_99085f80de58c0::t_a0e1a655bfee5f 1171-1239
+  s_99085f80de58c0::t_77f656a8e0d64b 2666
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "3d619124fb837a65800194553fbc6d3362ec5aee",
+  "prompts": {},
+  "sessions": {
+    "s_99085f80de58c0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b270d59c-b282-4517-83fc-8b530cf1e304",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
