@@ -270,7 +270,7 @@ impl SpatialCanvas {
         current_time: f64,
         signals: SignalViews<'_>,
         canvas_height: f32,
-        use_km: bool,
+        use_physical_units: bool,
         frame_of_ref: ReferenceFrame,
         font_scale: f32,
         style: FrontStyle,
@@ -354,7 +354,7 @@ impl SpatialCanvas {
         }
 
         // Ticks and labels along X and Y axes
-        if use_km {
+        if use_physical_units {
             let px_per_km = zoom / (metric.r_grav_km() as f32);
             let max_span_km = ((rect.width().max(rect.height()) * 0.7) / px_per_km.max(1e-6)) as f64;
             let target_step = (max_span_km / 5.0).max(1e-4);
@@ -438,7 +438,7 @@ impl SpatialCanvas {
 
         // Axis Titles with Physical Conversion
         let phys_m_str = metric.format_physical_distance(1.0);
-        let x_title = if use_km {
+        let x_title = if use_physical_units {
             "► Spatial x  [Kilometers (km)]".to_string()
         } else {
             format!("► Spatial x  [Units of M = GM/c² : 1M = {}]", phys_m_str)
@@ -450,7 +450,7 @@ impl SpatialCanvas {
             egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
             Theme::TEXT_BRIGHT,
         );
-        let y_title = if use_km {
+        let y_title = if use_physical_units {
             "▲ Spatial y  [Kilometers (km)]".to_string()
         } else {
             format!("▲ Spatial y  [Units of M = GM/c² : 1M = {}]", phys_m_str)
@@ -751,7 +751,7 @@ impl SpatialCanvas {
                 ),
                 (false, None) => format!("Equatorial View (θ = π/2)   🔍 {:.0} px/M", self.zoom),
             }
-        } else if use_km {
+        } else if use_physical_units {
             format!(
                 "Equatorial View (θ = π/2, x + iy = (r + ia) e^{{iϕ}})\n\
                  Cartesian radius ρ = √(r²+a²); ring singularity at ρ = a\n\
@@ -859,13 +859,13 @@ impl SpatialCanvas {
         // 8. Draggable info boxes, registered last so they take the drag instead of the canvas.
         if let (Some(al), Some(al_pos)) = (alice.as_ref(), alice_box) {
             self.telemetry.show(
-                ui, &painter, "spatial", rect, al_pos, "Alice", Theme::ALICE_COLOR, al, metric, use_km,
+                ui, &painter, "spatial", rect, al_pos, "Alice", Theme::ALICE_COLOR, al, metric, use_physical_units,
                 font_scale,
             );
         }
         if let (Some(b), Some(bob_pos)) = (bob.as_ref(), bob_box) {
             self.telemetry.show(
-                ui, &painter, "spatial", rect, bob_pos, "Bob", Theme::BOB_COLOR, b, metric, use_km,
+                ui, &painter, "spatial", rect, bob_pos, "Bob", Theme::BOB_COLOR, b, metric, use_physical_units,
                 font_scale,
             );
         }

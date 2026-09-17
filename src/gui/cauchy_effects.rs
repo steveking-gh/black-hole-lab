@@ -50,7 +50,7 @@ impl CauchyEffects {
         bob_signal: &SignalField,
         release_gap: f64,
         current_time: f64,
-        use_km: bool,
+        use_physical_units: bool,
     ) {
         ui.vertical(|ui| {
             ui.add_space(2.0);
@@ -68,7 +68,7 @@ impl CauchyEffects {
                             && bob.is_active
                         {
                             let diff = (bob.r - al.r).abs();
-                            let sep_str = if use_km {
+                            let sep_str = if use_physical_units {
                                 metric.format_km(metric.r_to_km(diff))
                             } else {
                                 format!("{:.3}M", diff)
@@ -80,12 +80,12 @@ impl CauchyEffects {
 
                 ui.horizontal(|ui| {
                     if let Some(al) = alice {
-                        let al_r_str = if use_km {
+                        let al_r_str = if use_physical_units {
                             metric.format_km(metric.r_to_km(al.r))
                         } else {
                             format!("{:.2}M", al.r)
                         };
-                        let tau_str = if use_km {
+                        let tau_str = if use_physical_units {
                             metric.format_physical_time(al.tau)
                         } else {
                             format!("{:.2}M ({})", al.tau, metric.format_physical_time(al.tau))
@@ -99,12 +99,12 @@ impl CauchyEffects {
                     }
 
                     if let Some(bob) = bob {
-                        let bob_r_str = if use_km {
+                        let bob_r_str = if use_physical_units {
                             metric.format_km(metric.r_to_km(bob.r))
                         } else {
                             format!("{:.2}M", bob.r)
                         };
-                        let bob_tau_str = if use_km {
+                        let bob_tau_str = if use_physical_units {
                             metric.format_physical_time(bob.tau)
                         } else {
                             format!("{:.2}M ({})", bob.tau, metric.format_physical_time(bob.tau))
@@ -117,14 +117,14 @@ impl CauchyEffects {
                         ui.separator();
                     }
 
-                    let ext_t_str = if use_km {
+                    let ext_t_str = if use_physical_units {
                         metric.format_physical_time(current_time)
                     } else {
                         format!("{:.2}M ({})", current_time, metric.format_physical_time(current_time))
                     };
                     ui.label(format!("Exterior Time t: {}", ext_t_str));
                     if let Some(bob) = bob.as_ref().filter(|b| b.release_t > 0.0) {
-                        let delay_str = if use_km {
+                        let delay_str = if use_physical_units {
                             metric.format_physical_time(bob.release_t)
                         } else {
                             format!("{:.1}M", bob.release_t)
@@ -205,7 +205,7 @@ impl CauchyEffects {
                             match bob_signal.last_delivered_pulse() {
                                 Some(pulse) => {
                                     let never = bob_signal.pulses_after(pulse.pulse_index);
-                                    let r_str = if use_km {
+                                    let r_str = if use_physical_units {
                                         metric.format_km(metric.r_to_km(pulse.emitted_r))
                                     } else {
                                         format!("{:.3}M", pulse.emitted_r)

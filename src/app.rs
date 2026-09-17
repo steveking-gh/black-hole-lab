@@ -306,7 +306,7 @@ impl eframe::App for SpacetimeApp {
                 &self.bob_signal,
                 self.controls.release_gap(),
                 self.current_time,
-                self.controls.use_km,
+                self.controls.use_physical_units,
             );
         });
 
@@ -455,7 +455,7 @@ impl eframe::App for SpacetimeApp {
                                 self.alice.as_ref(),
                                 self.current_time,
                                 canvas_height,
-                                self.controls.use_km,
+                                self.controls.use_physical_units,
                                 self.controls.font_scale,
                                 SignalViews { alice: &self.signal, bob: &self.bob_signal },
                                 self.controls.show_distant_clock_grid,
@@ -472,7 +472,7 @@ impl eframe::App for SpacetimeApp {
                                 self.alice.as_ref(),
                                 self.current_time,
                                 canvas_height,
-                                self.controls.use_km,
+                                self.controls.use_physical_units,
                                 self.controls.frame_of_ref,
                                 self.controls.font_scale,
                                 SignalViews { alice: &self.signal, bob: &self.bob_signal },
@@ -503,7 +503,7 @@ impl eframe::App for SpacetimeApp {
                             self.current_time,
                             SignalViews { alice: &self.signal, bob: &self.bob_signal },
                             canvas_height,
-                            self.controls.use_km,
+                            self.controls.use_physical_units,
                             self.controls.frame_of_ref,
                             self.controls.font_scale,
                             FrontStyle {
@@ -1574,9 +1574,11 @@ mod tests {
     #[test]
     fn test_control_defaults() {
         let d = AppControls::default();
-        // Kilometres are the default unit, and nothing throttles the step near r₋ any more:
-        // the play speed and the step size are the only things that set sim_dt.
-        assert!(d.use_km, "distances are shown in km out of the box");
+        // Physical units out of the box: kilometres, seconds and radians per second. The panel's
+        // units checkbox is the opt-in to M, not an escape from it, so it opens unticked - which
+        // is this flag being true. Nothing throttles the step near r₋ any more either: the play
+        // speed and the step size are the only things that set sim_dt.
+        assert!(d.use_physical_units, "the app opens in km and seconds, not in M");
         // Paused: the run the user is handed is a standing start, so that nothing has happened
         // before they have had a chance to look at it or to move anybody.
         assert!(!d.is_playing, "the app opens paused");
@@ -1596,7 +1598,7 @@ mod tests {
         // this walks the interaction path as well as the paint path.
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
-        app.controls.use_km = true;
+        app.controls.use_physical_units = true;
         app.controls.frame_of_ref = ReferenceFrame::DistantObserver;
         assert!(app.alice.is_some(), "both cards are ticked out of the box");
 
@@ -1612,7 +1614,7 @@ mod tests {
             app.ui(ui, &mut frame);
         });
 
-        assert!(app.controls.use_km);
+        assert!(app.controls.use_physical_units);
     }
 
     #[test]
@@ -2789,8 +2791,8 @@ mod tests {
                     ReferenceFrame::Alice,
                 ] {
                     app.controls.frame_of_ref = frame_of_ref;
-                    for use_km in [true, false] {
-                        app.controls.use_km = use_km;
+                    for use_physical_units in [true, false] {
+                        app.controls.use_physical_units = use_physical_units;
                         let painted = painted_text(&mut app);
                         assert_eq!(app.alice.is_some(), alice_on, "Alice's card is the authority");
                         assert_eq!(app.bob.is_some(), bob_on, "and Bob's is his");

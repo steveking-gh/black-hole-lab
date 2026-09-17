@@ -1006,7 +1006,7 @@ impl VolumeCanvas {
         alice: Option<&Observer>,
         current_time: f64,
         canvas_height: f32,
-        use_km: bool,
+        use_physical_units: bool,
         font_scale: f32,
         signals: SignalViews<'_>,
         show_distant_clock_grid: bool,
@@ -1241,7 +1241,7 @@ impl VolumeCanvas {
                             },
                         );
                     }
-                    let text = if use_km {
+                    let text = if use_physical_units {
                         format!("t = {}", metric.format_physical_time(t_val))
                     } else if t_step >= 1.0 {
                         format!("t = {:+}M", t_val as i64)
@@ -2002,7 +2002,7 @@ impl VolumeCanvas {
                 colour_of(who),
                 obs,
                 metric,
-                use_km,
+                use_physical_units,
                 font_scale,
             );
         }

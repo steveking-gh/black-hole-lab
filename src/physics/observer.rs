@@ -1163,7 +1163,12 @@ impl Observer {
         self.four_velocity(metric)[1]
     }
 
-    /// Physical radial velocity in km/s
+    /// Physical radial velocity in km/s.
+    ///
+    /// Nothing on screen reads it any more: the telemetry quotes dr/dt in c in both unit modes,
+    /// because a six-digit km/s said less in more space. It stays because it is the conversion
+    /// the tests bound against c, and because it is the honest physical form of the quantity.
+    #[allow(dead_code)] // the readout is in c; the tests check the km/s conversion stays under c
     pub fn velocity_km_s(&self, metric: &KerrSchild) -> f64 {
         self.velocity_c(metric) * 299792.458
     }

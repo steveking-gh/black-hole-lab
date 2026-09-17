@@ -120,6 +120,16 @@ impl KerrSchild {
         }
     }
 
+    /// A rate quoted per unit of the chart's time, in inverse seconds.
+    ///
+    /// The inverse of the conversion `format_physical_time` makes: one M of coordinate time is
+    /// t_g/m seconds, so a rate per M is that many times m/t_g per second. Angular velocities are
+    /// the ones this is for - the observer's own dphi/dt and the local frame-dragging rate - which
+    /// come out of the metric per M and have to be readable by somebody who does not think in M.
+    pub fn rate_per_second(&self, per_m: f64) -> f64 {
+        per_m * self.m.max(1e-12) / self.t_grav_seconds()
+    }
+
     /// Convert coordinate radius r (in units of M) to kilometers.
     pub fn r_to_km(&self, r: f64) -> f64 {
         (r / self.m) * self.r_grav_km()
@@ -184,9 +194,9 @@ impl KerrSchild {
         format!("{:.prec$}M", r, prec = decimals)
     }
 
-    /// Format a radius either in km or M based on use_km flag.
-    pub fn format_r(&self, r: f64, use_km: bool) -> String {
-        if use_km {
+    /// Format a radius either in km or M based on use_physical_units flag.
+    pub fn format_r(&self, r: f64, use_physical_units: bool) -> String {
+        if use_physical_units {
             self.format_km(self.r_to_km(r))
         } else {
             format!("{:.2}M", r)

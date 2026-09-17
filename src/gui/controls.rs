@@ -323,7 +323,16 @@ pub struct AppControls {
     /// Bob's card, identical in shape to Alice's.
     pub bob: ObserverSettings,
     pub show_theory_modal: bool,
-    pub use_km: bool,
+    /// Whether distances, times and rates are shown in physical units - kilometres, seconds and
+        /// radians per second, each climbing to whatever scale suits the hole - rather than in the
+        /// geometric M the metric is written in.
+    ///
+    /// On by default, and the checkbox is the *opt-out*: it offers M rather than offering an escape
+    /// from it. An M is a perfectly good unit of length and of time once you know that it means
+    /// GM/c² and GM/c³, and unreadable before that, so the app opens in units anybody can read
+    /// and the GR convention is there for whoever wants it. Speeds are quoted in c in both modes,
+    /// because c is the one natural unit that needs no introduction.
+    pub use_physical_units: bool,
     pub frame_of_ref: ReferenceFrame,
     /// Whether the view in the foliation column draws the distant clock's own moments: the surfaces
     /// t = const of the chart's Killing time, one line per round unit of the distant clock,
@@ -375,7 +384,9 @@ impl Default for AppControls {
             },
             bob: ObserverSettings::raindrop(0.0),
             show_theory_modal: false,
-            use_km: true,
+            // Kilometres and seconds. See the field's own note: the checkbox offers M rather
+            // than offering a way out of it.
+            use_physical_units: true,
             frame_of_ref: ReferenceFrame::DistantObserver,
             show_distant_clock_grid: true,
             font_scale: 1.0,
@@ -463,6 +474,13 @@ const WAVEFRONT_POINTS_TIP: &str = "How finely a pulse samples the emitter's lig
 
 /// The hover tip on the Wavefronts kept slider.
 const WAVEFRONTS_KEPT_TIP: &str = "How many wavefronts each transmission holds at once. Past this count the oldest is dropped, so it is the length of the history the picture keeps: at the default of 64 nothing a single infall sends is ever evicted - a whole fall from r = 4.5M is about forty pulses at the emission interval of 0.1M of the emitter's proper time - and a hovering emitter, who transmits for as long as the wait lasts, runs past it and is drawing its oldest arcs from light sent long before the release. Turn it down to read one front at a time, or to watch a single pulse break on r₋ without sixty others stacked over it; turn it up to see the whole stack a long transmission builds against the Cauchy horizon at once. With the points slider above it, this is the other half of what a frame costs: the integration, the reception test and the drawing all scale as the product of the two, so 128 fronts at 1024 points is 131 k exact null geodesics carried every step, against 9 k at the pair of defaults. The 2D+1 volume view is coupled to it too - every eighth pulse by serial number carries a swept surface, so the cap fixes how many of those sheets can be in flight, eight at the default and sixteen at the top. Two things to know about moving it. Lowering it takes effect at once, on the next frame, whether the run is playing or paused; and the drop is permanent, because an evicted pulse is gone from the field and ⏪ Step Back reintegrates the rays it still has rather than re-emitting ones it has let go, so raising it again widens the window from here on rather than restoring what was dropped. What no cap can erase is what the transmission measured: an arrival is an event that happened, and the receptions list and the last delivery are kept outside the pulses, so even at a cap of one front the HUD's arrival lines and measured shifts are the same as at 128. It is kept across ⏮ Reset, as every control on this panel is.";
+
+/// The hover tip on the units checkbox.
+const M_CHECKBOX_TIP: &str = "Whether every distance and time in the app is quoted in M, the geometric unit the Kerr metric is actually written in, instead of in kilometres and seconds. Unticked — the default — radii read in km, AU or light-years and times in µs, seconds, days or years, each picked to suit the hole the mass slider is set to, and angular rates read in radians per second. Ticked, all of them read in M.
+
+One M is two units at once, and that is the whole reason the convention exists: as a length it is GM/c² and as a time it is GM/c³, the two lines printed under this box for the hole you have dialled up. Setting them both to 1 is what makes the equations readable — the outer horizon sits at r₊ = M + √(M² − a²) whatever the mass, the ISCO of a non-spinning hole is at 6M, and light does 1 M of distance in 1 M of time, so a 45° line on the (t, r) diagram is a light ray. In kilometres and seconds none of that is visible, because every one of those numbers scales with the mass; in M the picture of a stellar-mass hole and a supermassive one are the same picture. Which is exactly why it is offered and not imposed: it is the right unit for reading the geometry and the wrong one for knowing how far away anything is.
+
+Speeds are in c either way. Two readings keep a foot in both camps whichever way the box is set: the E and L of a free-faller's geodesic stay in M, because they are the constants of the motion the sliders set and the L slider is labelled in M too, and the horizon list under BLACK HOLE PROPERTIES prints each radius both ways so the correspondence is always on screen somewhere.";
 
 /// The hover tip on the Arcs between wavefront points checkbox.
 const FRONT_ARCS_TIP: &str = "Whether the pieces of a wavefront between neighbouring rays are drawn. Ticked, each piece is the curve linear in (r, ϕ) from one ray to the next, cut into steps of at most 0.05 rad and each step put through the embedding x + iy = (r + ia)e^{iϕ} — so a piece joining two rays sitting on r₋ is drawn as an arc of the r₋ circle, and one joining two rays a quarter of a turn apart is drawn going round. Unticked, nothing is drawn between the rays: the front is shown as the calculated points themselves, one dot per ray in the same gain colour the arc would have had, and the frozen family keeps its heavier beads. Nothing physical turns on it. The reception test interpolates in (r, ϕ) along exactly the same pieces whichever way they are drawn, so an arrival happens at the same event, at the same measured shift, in both settings. What the tick buys is that the front you are looking at is the same curve the detector is testing; what unticking buys is the raw output of the integrator with no interpolation laid over it, which is worth being able to see, because everything the arcs add is inference. Inside r₋ the annulus is thin (at a = 0.90 the embedding puts r₋ at ρ = 1.06 against the ring at ρ = 0.90) and neighbouring rays wind at wildly different rates, dϕ/dt running from about −5 per M near the ring to +0.8 for one settling onto r₋, so a pair of neighbours ends up most of a radian apart and the arc between them is drawn along a curve no ray was integrated on; the dots are the part that is not inferred. It is independent of the winding cut on the checkbox below it, which drops the two or so segments per pulse whose rays have wound more than a whole turn apart; with the arcs unticked that cut has nothing left to drop, since every live ray is already drawn as its own dot. The setting is a view setting and is kept across ⏮ Reset, as every control on this panel is.";
@@ -575,7 +593,7 @@ impl ObserverCard {
         obs: &mut Option<Observer>,
         field: &mut SignalField,
         current_time: f64,
-        use_km: bool,
+        use_physical_units: bool,
     ) {
         ui.group(|ui| {
             ui.label(
@@ -648,7 +666,7 @@ impl ObserverCard {
             // number Reset builds them at, so the slider and the marker are two ways to say one
             // thing. It is a standing request like the rest of the card: it takes effect at the
             // next drop, which is why moving it does not teleport a run already under way.
-            if use_km {
+            if use_physical_units {
                 let mut r_km = metric.r_to_km(settings.drop_r);
                 let min_km = metric.r_to_km(0.05);
                 let max_km = metric.r_to_km(30.0);
@@ -789,7 +807,7 @@ impl ObserverCard {
                     (Some((_, l_ang)), Some(omega), Some(dilation)) => {
                         let period = std::f64::consts::TAU / omega.abs();
                         let fmt = |m: f64| {
-                            if use_km { metric.format_physical_time(m) } else { format!("{m:.2} M") }
+                            if use_physical_units { metric.format_physical_time(m) } else { format!("{m:.2} M") }
                         };
                         let stability = if r >= isco {
                             format!("stable (ISCO at {:.3} M)", isco)
@@ -820,7 +838,7 @@ impl ObserverCard {
             // chart coordinates, which are what the physics is stated in, and this says the dot.
             let (x, y) = metric.cartesian_position(settings.drop_r, settings.drop_phi);
             ui.label(
-                egui::RichText::new(if use_km {
+                egui::RichText::new(if use_physical_units {
                     format!(
                         "Drawn at x = {}, y = {} — drag the marker on the equatorial view to move it",
                         metric.format_km(metric.r_to_km(x)),
@@ -1300,10 +1318,20 @@ impl AppControls {
 
             match self.step_mode {
                 StepMode::Time => {
+                    // The slider's own number is in M whichever mode the app is in, since that is
+                    // the quantity the stepper takes; what the label adds is what the current
+                    // setting is worth on the distant clock, which is the part a reader who does
+                    // not think in M needs. It used to carry no unit at all. Built before the
+                    // slider, which takes a &mut to the field the label reads.
+                    let label = if self.use_physical_units {
+                        format!("Step Size (Δt = {})", metric.format_physical_time(self.step_size))
+                    } else {
+                        "Step Size (Δt, in M)".to_string()
+                    };
                     ui.add(
                         egui::Slider::new(&mut self.step_size, 0.0005..=0.5)
                             .logarithmic(true)
-                            .text("Step Size (Δt)"),
+                            .text(label),
                     );
                 }
                 StepMode::Distance => {
@@ -1333,10 +1361,19 @@ impl AppControls {
                 // The same slider as Time mode, read as proper time instead of coordinate time:
                 // one number for "how big is a step", whichever clock is being kept.
                 StepMode::Watch => {
+                    let label = if self.use_physical_units {
+                        format!(
+                            "Step Size (Δτ = {} on {}'s watch)",
+                            metric.format_physical_time(self.step_size),
+                            self.frame_of_ref.watch_owner()
+                        )
+                    } else {
+                        "Step Size (Δτ in M, focus watch)".to_string()
+                    };
                     ui.add(
                         egui::Slider::new(&mut self.step_size, 0.0005..=0.5)
                             .logarithmic(true)
-                            .text("Step Size (Δτ, focus watch)"),
+                            .text(label),
                     )
                     .on_hover_text(format!(
                         "How much proper time one step is worth on {}'s own watch - the observer \
@@ -1396,7 +1433,18 @@ impl AppControls {
 
             ui.separator();
             ui.label(egui::RichText::new("📐 UNITS & COORDINATE SYSTEM").small().strong().color(Theme::TEXT_BRIGHT));
-            ui.checkbox(&mut self.use_km, "📏 Display in Kilometers (km) instead of M");
+            // Shown inverted. The stored flag says "physical units", which is what the whole
+            // app reads; the checkbox asks the opposite question, because M is the thing a user
+            // has to opt into and a box that is ticked out of the box reads as the exception
+            // rather than the default.
+            let mut use_m = !self.use_physical_units;
+            if ui
+                .checkbox(&mut use_m, "📐 Show distances and times in M (GR convention)")
+                .on_hover_text(M_CHECKBOX_TIP)
+                .changed()
+            {
+                self.use_physical_units = !use_m;
+            }
             // One pair of lines whichever unit the charts are labelled in. The two branches this
             // replaces printed the same two numbers under different captions, and only one of them
             // carried the conversions - which are the part that answers what M actually is. They
@@ -1455,7 +1503,7 @@ impl AppControls {
             let rp = metric.outer_horizon();
             let rm = metric.inner_horizon();
             let re = metric.ergosphere_equatorial();
-            if self.use_km {
+            if self.use_physical_units {
                 ui.label(format!("• Outer Horizon r₊: {} ({:.3} M)", metric.format_km(metric.r_to_km(rp)), rp));
                 ui.label(format!("• Cauchy Horizon r₋: {} ({:.3} M)", metric.format_km(metric.r_to_km(rm)), rm));
                 ui.label(format!("• Ergosphere r_E:   {} ({:.3} M)", metric.format_km(metric.r_to_km(re)), re));
@@ -1472,9 +1520,9 @@ impl AppControls {
         // for - the light cones, the rest-frame view and the stack on r₋ are all his - so his card
         // is the one reached for most often and it sits at the top of the pair. They are the same
         // code twice: see `ObserverCard`.
-        BOB_CARD.show(ui, metric, &mut self.bob, bob, signals.bob, *current_time, self.use_km);
+        BOB_CARD.show(ui, metric, &mut self.bob, bob, signals.bob, *current_time, self.use_physical_units);
         ui.add_space(4.0);
-        ALICE_CARD.show(ui, metric, &mut self.alice, alice, signals.alice, *current_time, self.use_km);
+        ALICE_CARD.show(ui, metric, &mut self.alice, alice, signals.alice, *current_time, self.use_physical_units);
 
         ui.add_space(6.0);
 

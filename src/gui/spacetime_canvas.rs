@@ -401,10 +401,10 @@ impl TelemetryBoxes {
         color: Color32,
         obs: &Observer,
         metric: &KerrSchild,
-        use_km: bool,
+        use_physical_units: bool,
         font_scale: f32,
     ) -> egui::Response {
-        let lines = telemetry_lines(name, color, obs, metric, use_km);
+        let lines = telemetry_lines(name, color, obs, metric, use_physical_units);
         let size = telemetry_box_size(painter, &lines, font_scale);
         let anchored = default_badge_pos(canvas_rect, pos, size);
         self.show_lines(
@@ -745,6 +745,13 @@ fn rate_per_m(omega: f64) -> String {
     }
 }
 
+/// The same rate in radians per second, for the mode that does not speak M. The span is wide -
+/// a supermassive hole's ISCO turns in hours and a stellar-mass one's in milliseconds - so this
+/// stays in scientific notation rather than trying to pick a scale per decade.
+fn rate_per_second(per_s: f64) -> String {
+    format!("{:+.3e} rad/s", per_s)
+}
+
 /// One measured speed: v, the Lorentz factor between the two worldlines, and the celerity, with
 /// the frame that measured it named in the label.
 ///
@@ -772,10 +779,9 @@ fn telemetry_lines(
     color: Color32,
     obs: &Observer,
     metric: &KerrSchild,
-    use_km: bool,
+    use_physical_units: bool,
 ) -> Vec<TelemetryLine> {
     let v_c = obs.velocity_c(metric);
-    let v_kms = obs.velocity_km_s(metric);
     let u_prop = obs.proper_velocity_c(metric);
     let a_prop = obs.proper_acceleration_g(metric);
     // Decide "free fall" from the geometric magnitude, not from a_prop: the g-conversion
@@ -788,17 +794,24 @@ fn telemetry_lines(
 
     // One metric per line: the coordinate velocity and the proper velocity are different
     // statements about the infall and no longer share a row.
-    let v_coord_str = if use_km {
-        format!("dr/dt   = {:+.0} km/s ({:+.2}c)", v_kms, v_c)
-    } else {
-        format!("dr/dt   = {:+.2}c", v_c)
-    };
+    // In c in both modes. It is the one unit on the box that needs no introduction, and the
+    // km/s this used to lead with in physical mode was a six-digit number nobody reads: -161898
+    // km/s says less than -0.54c does, and says it in more space. `Observer::velocity_km_s` is
+    // still the conversion the tests bound against c.
+    let v_coord_str = format!("dr/dt   = {:+.2}c", v_c);
     // No "c" on this one. dr/dtau is a coordinate rate against a proper time, not a speed
     // anybody measures: it runs past 1 on any deep infall and reads -2.68 on a worldline
     // asymptoting to r-, where nothing is moving faster than light and the radial coordinate is
     // not even spacelike. Printed with a c it read as an impossibility. The numbers that *are*
     // speeds, and are below c in every region and every frame, are the v_ rows below it.
-    let v_proper_str = format!("dr/dτ   = {:+.2} M/τ", u_prop);
+    // dr/dtau is a coordinate rate against a proper time, so its physical form is kilometres
+    // of radius per second of the observer's *own* clock - which is exactly why it can pass c,
+    // and why the two clocks are named in the label rather than left to be inferred.
+    let v_proper_str = if use_physical_units {
+        format!("dr/dτ   = {:+.3e} km/s (own clock)", u_prop * 299_792.458)
+    } else {
+        format!("dr/dτ   = {:+.2} M/τ", u_prop)
+    };
 
     // The chart's other rate. Omega = dphi/dt against the local dragging rate omega: outside the
     // static limit they are independent, and inside it every timelike worldline is forced to
@@ -806,8 +819,14 @@ fn telemetry_lines(
     // the ergosphere a place rather than a label.
     let omega_obs = obs.angular_velocity(metric);
     let omega_drag = metric.frame_dragging_omega(obs.r);
-    let omega_str =
-        format!("Ω       = {} (drag {})", rate_per_m(omega_obs), rate_per_m(omega_drag));
+    let rate = |per_m: f64| {
+        if use_physical_units {
+            rate_per_second(metric.rate_per_second(per_m))
+        } else {
+            rate_per_m(per_m)
+        }
+    };
+    let omega_str = format!("Ω       = {} (drag {})", rate(omega_obs), rate(omega_drag));
 
     // What a local observer actually measures for this observer's motion past them, one row per
     // observer who exists at this event to do the measuring. See `Observer::local_speeds`: both
@@ -987,7 +1006,7 @@ impl SpacetimeCanvas {
         alice: Option<&Observer>,
         current_time: f64,
         canvas_height: f32,
-        use_km: bool,
+        use_physical_units: bool,
         frame_of_ref: ReferenceFrame,
         font_scale: f32,
         signals: SignalViews<'_>,
@@ -1071,11 +1090,11 @@ impl SpacetimeCanvas {
                 };
                 match (asked, other) {
                     (Some(focus), other) => self.render_observer_frame(
-                        ui, &painter, rect, metric, focus, other, use_km, font_scale,
+                        ui, &painter, rect, metric, focus, other, use_physical_units, font_scale,
                         show_distant_clock_grid, signals,
                     ),
                     (None, Some(focus)) => self.render_observer_frame(
-                        ui, &painter, rect, metric, focus, None, use_km, font_scale,
+                        ui, &painter, rect, metric, focus, None, use_physical_units, font_scale,
                         show_distant_clock_grid, signals,
                     ),
                     (None, None) => {
@@ -1103,7 +1122,7 @@ Tick Enable Observer on Alice's or Bob's card",
                     bob,
                     alice,
                     current_time,
-                    use_km,
+                    use_physical_units,
                     font_scale,
                     signals,
                 );
@@ -1155,7 +1174,7 @@ Tick Enable Observer on Alice's or Bob's card",
 
         if line_x_sing >= t_rect.left() && line_x_sing <= t_rect.right() {
             t_painter.line_segment([Pos2::new(line_x_sing + 1.0, t_rect.top()), Pos2::new(line_x_sing + 1.0, t_rect.bottom())], Stroke::new(2.5, Theme::SINGULARITY_LINE));
-            if use_km {
+            if use_physical_units {
                 t_painter.text(Pos2::new(line_x_sing + 2.0, t_rect.bottom() - 3.0), egui::Align2::LEFT_BOTTOM, "r=0 km", egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::SINGULARITY_LINE);
             } else {
                 t_painter.text(Pos2::new(line_x_sing + 2.0, t_rect.bottom() - 3.0), egui::Align2::LEFT_BOTTOM, "r=0", egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::SINGULARITY_LINE);
@@ -1163,7 +1182,7 @@ Tick Enable Observer on Alice's or Bob's card",
         }
         if line_x_rm >= t_rect.left() && line_x_rm <= t_rect.right() {
             t_painter.line_segment([Pos2::new(line_x_rm, t_rect.top()), Pos2::new(line_x_rm, t_rect.bottom())], Stroke::new(2.5, Theme::HORIZON_CAUCHY));
-            if use_km {
+            if use_physical_units {
                 t_painter.text(Pos2::new(line_x_rm, t_rect.bottom() - 3.0), egui::Align2::CENTER_BOTTOM, format!("r₋={}", metric.format_km(metric.r_to_km(rm))), egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::HORIZON_CAUCHY);
             } else {
                 t_painter.text(Pos2::new(line_x_rm, t_rect.bottom() - 3.0), egui::Align2::CENTER_BOTTOM, "Cauchy r₋", egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::HORIZON_CAUCHY);
@@ -1171,7 +1190,7 @@ Tick Enable Observer on Alice's or Bob's card",
         }
         if line_x_rp >= t_rect.left() && line_x_rp <= t_rect.right() {
             t_painter.line_segment([Pos2::new(line_x_rp, t_rect.top()), Pos2::new(line_x_rp, t_rect.bottom())], Stroke::new(2.5, Theme::HORIZON_OUTER));
-            if use_km {
+            if use_physical_units {
                 t_painter.text(Pos2::new(line_x_rp, t_rect.bottom() - 3.0), egui::Align2::CENTER_BOTTOM, format!("r₊={}", metric.format_km(metric.r_to_km(rp))), egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::HORIZON_OUTER);
             } else {
                 t_painter.text(Pos2::new(line_x_rp, t_rect.bottom() - 3.0), egui::Align2::CENTER_BOTTOM, "Outer r₊", egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::HORIZON_OUTER);
@@ -1179,7 +1198,7 @@ Tick Enable Observer on Alice's or Bob's card",
         }
         if line_x_re >= t_rect.left() && line_x_re <= t_rect.right() {
             t_painter.line_segment([Pos2::new(line_x_re, t_rect.top()), Pos2::new(line_x_re, t_rect.bottom())], Stroke::new(1.5, Theme::ERGOSPHERE_LINE));
-            if use_km {
+            if use_physical_units {
                 t_painter.text(Pos2::new(line_x_re, t_rect.bottom() - 3.0), egui::Align2::CENTER_BOTTOM, format!("r_E={}", metric.format_km(metric.r_to_km(re))), egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::ERGOSPHERE_LINE);
             } else {
                 t_painter.text(Pos2::new(line_x_re, t_rect.bottom() - 3.0), egui::Align2::CENTER_BOTTOM, "r_E", egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::ERGOSPHERE_LINE);
@@ -1187,7 +1206,7 @@ Tick Enable Observer on Alice's or Bob's card",
         }
 
         // Track header badge
-        let track_badge = if use_km {
+        let track_badge = if use_physical_units {
             "1D RADIAL TRACK  |  Radial Axis r [Kilometers (km)]".to_string()
         } else {
             format!(
@@ -1235,7 +1254,7 @@ Tick Enable Observer on Alice's or Bob's card",
             t_painter.line_segment([Pos2::new(al_x, center_y), Pos2::new(bob_x, center_y)], Stroke::new(2.0, Color32::WHITE));
 
             let mid_x = (al_x + bob_x) * 0.5;
-            let diff_text = if use_km {
+            let diff_text = if use_physical_units {
                 format!("Δr = {}", metric.format_km(metric.r_to_km(diff)))
             } else {
                 format!("Δr = {:.2}M", diff)
@@ -1261,7 +1280,7 @@ Tick Enable Observer on Alice's or Bob's card",
         bob: Option<&Observer>,
         alice: Option<&Observer>,
         current_time: f64,
-        use_km: bool,
+        use_physical_units: bool,
         font_scale: f32,
         signals: SignalViews<'_>,
     ) {
@@ -1384,7 +1403,7 @@ Tick Enable Observer on Alice's or Bob's card",
                     Stroke::new(Theme::GRID_LINE_WIDTH, Theme::GRID_LINE),
                 );
                 // Time tick label on the left margin
-                let t_label = if use_km {
+                let t_label = if use_physical_units {
                     format!("t = {}", metric.format_physical_time(t_val))
                 } else {
                     format!("t = {:+}M", t_val as i32)
@@ -1400,7 +1419,7 @@ Tick Enable Observer on Alice's or Bob's card",
         }
 
         // 2. Vertical Radial Grid & Tick Labels
-        if use_km {
+        if use_physical_units {
             let min_km = self.r_offset * metric.r_grav_km();
             let max_km = (self.r_offset + self.max_r) * metric.r_grav_km();
             let target_step = (self.max_r * metric.r_grav_km() / 7.0).max(1e-6);
@@ -1465,7 +1484,7 @@ Tick Enable Observer on Alice's or Bob's card",
         let t_phys_unit = metric.format_physical_time(1.0);
 
         // Horizontal Axis Title (Bottom Right)
-        let r_axis_title = if use_km {
+        let r_axis_title = if use_physical_units {
             format!("► Radial Distance r  [Kilometers (km) | 1M = {}]", r_phys_unit)
         } else {
             format!("► Radial Distance r  [Units of M = GM/c² : 1M = {}]", r_phys_unit)
@@ -1479,7 +1498,7 @@ Tick Enable Observer on Alice's or Bob's card",
         );
 
         // Vertical Axis Title (Top Left)
-        let t_axis_title = if use_km {
+        let t_axis_title = if use_physical_units {
             format!("▲ Coordinate Time t  [Physical Time | 1M = {}]", t_phys_unit)
         } else {
             format!("▲ Coordinate Time t  [Units of M/c = GM/c³ : 1M = {}]", t_phys_unit)
@@ -1526,7 +1545,7 @@ Tick Enable Observer on Alice's or Bob's card",
         let x_rm_actual = to_screen_x(rm);
         if x_rm_actual >= rect.left() && x_rm_actual <= rect.right() {
             painter.line_segment([Pos2::new(x_rm_actual, rect.top()), Pos2::new(x_rm_actual, rect.bottom())], Stroke::new(2.5, Theme::HORIZON_CAUCHY));
-            let rm_label = if use_km {
+            let rm_label = if use_physical_units {
                 format!("Cauchy Horizon r₋ = {} ({:.2}M)", metric.format_km(metric.r_to_km(rm)), rm)
             } else {
                 format!("Cauchy Horizon r₋ = {:.2}M ({})", rm, metric.format_physical_distance(rm))
@@ -1558,7 +1577,7 @@ Tick Enable Observer on Alice's or Bob's card",
         let x_rp_actual = to_screen_x(rp);
         if x_rp_actual >= rect.left() && x_rp_actual <= rect.right() {
             painter.line_segment([Pos2::new(x_rp_actual, rect.top()), Pos2::new(x_rp_actual, rect.bottom())], Stroke::new(2.5, Theme::HORIZON_OUTER));
-            let rp_label = if use_km {
+            let rp_label = if use_physical_units {
                 format!("Event Horizon r₊ = {} ({:.2}M)", metric.format_km(metric.r_to_km(rp)), rp)
             } else {
                 format!("Event Horizon r₊ = {:.2}M ({})", rp, metric.format_physical_distance(rp))
@@ -1590,7 +1609,7 @@ Tick Enable Observer on Alice's or Bob's card",
         let x_re_actual = to_screen_x(re);
         if x_re_actual >= rect.left() && x_re_actual <= rect.right() {
             painter.line_segment([Pos2::new(x_re_actual, rect.top()), Pos2::new(x_re_actual, rect.bottom())], Stroke::new(1.5, Theme::ERGOSPHERE_LINE));
-            let re_label = if use_km {
+            let re_label = if use_physical_units {
                 format!("Ergosphere r_E = {} ({:.2}M)", metric.format_km(metric.r_to_km(re)), re)
             } else {
                 format!("Ergosphere r_E = {:.2}M ({})", re, metric.format_physical_distance(re))
@@ -1752,7 +1771,7 @@ Tick Enable Observer on Alice's or Bob's card",
             if let (Some(al), Some(alice_pos)) = (alice, alice_box) {
                 self.telemetry.show(
                     ui, painter, "spacetime", rect, alice_pos, "Alice", Theme::ALICE_COLOR, al,
-                    metric, use_km, font_scale,
+                    metric, use_physical_units, font_scale,
                 );
             }
             return;
@@ -1781,12 +1800,12 @@ Tick Enable Observer on Alice's or Bob's card",
 
         if let (Some(al), Some(alice_pos)) = (alice, alice_box) {
             self.telemetry.show(
-                ui, painter, "spacetime", rect, alice_pos, "Alice", Theme::ALICE_COLOR, al, metric, use_km,
+                ui, painter, "spacetime", rect, alice_pos, "Alice", Theme::ALICE_COLOR, al, metric, use_physical_units,
                 font_scale,
             );
         }
         self.telemetry.show(
-            ui, painter, "spacetime", rect, apex, "Bob", Theme::BOB_COLOR, bob, metric, use_km, font_scale,
+            ui, painter, "spacetime", rect, apex, "Bob", Theme::BOB_COLOR, bob, metric, use_physical_units, font_scale,
         );
     }
 
@@ -1884,7 +1903,7 @@ Tick Enable Observer on Alice's or Bob's card",
         metric: &KerrSchild,
         focus_obs: &Observer,
         other_obs: Option<&Observer>,
-        use_km: bool,
+        use_physical_units: bool,
         font_scale: f32,
         show_distant_clock_grid: bool,
         signals: SignalViews<'_>,
@@ -2437,7 +2456,7 @@ Tick Enable Observer on Alice's or Bob's card",
                     egui::Align2::LEFT_TOP,
                     format!(
                         "azimuthal offset ξ² = {}\nradial speed in this frame = {:.3}c",
-                        metric.format_r(xi[2], use_km),
+                        metric.format_r(xi[2], use_physical_units),
                         v_rel.min(9.999)
                     ),
                     egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
@@ -2477,12 +2496,12 @@ Tick Enable Observer on Alice's or Bob's card",
         self.flush_pending_boxes(ui, painter, "restframe", rect, &pending_boxes, font_scale);
         if let Some((other, other_pos, other_color)) = other_box {
             self.telemetry.show(
-                ui, painter, "restframe", rect, other_pos, &other.name, other_color, other, metric, use_km,
+                ui, painter, "restframe", rect, other_pos, &other.name, other_color, other, metric, use_physical_units,
                 font_scale,
             );
         }
         self.telemetry.show(
-            ui, painter, "restframe", rect, apex, &focus_obs.name, obs_color, focus_obs, metric, use_km,
+            ui, painter, "restframe", rect, apex, &focus_obs.name, obs_color, focus_obs, metric, use_physical_units,
             font_scale,
         );
     }
@@ -3629,6 +3648,25 @@ mod canvas_tests {
         let box_text = text(&inside);
         assert!(box_text.contains("v_rain"), "the frame that exists everywhere: {box_text}");
         assert!(!box_text.contains("v_ZAMO"), "and no hovering frame: {box_text}");
+
+        // The default is physical units, and in that mode the box may not put an M in front of a
+        // reader who has not asked for one. The E and L of a geodesic are the documented
+        // exception: they are the constants the sliders set, and that slider is labelled in M too.
+        let phys = telemetry_lines("Alice", Theme::ALICE_COLOR, &orbiter, &metric, true)
+            .iter()
+            .map(|l| l.text.clone())
+            .collect::<Vec<_>>()
+            .join("
+");
+        assert!(phys.contains("rad/s"), "Ω reads as a rate per second: {phys}");
+        assert!(phys.contains("km/s (own clock)"), "and dr/dτ in km per second: {phys}");
+        assert!(phys.contains("dr/dt   = -0.00c"), "speeds stay in c in both modes: {phys}");
+        for line in phys.lines().filter(|l| !l.starts_with("E =")) {
+            assert!(
+                !line.contains(" M") && !line.contains("/M") && !line.ends_with('M'),
+                "an M reached the default readout: {line:?}"
+            );
+        }
 
         // However far the chart rates run away, every measured speed in the box is below c: a
         // worldline frozen on r- is measured against the raindrop at a huge gamma, and the row
