@@ -132,6 +132,14 @@ impl Theme {
     pub const TEXT_BRIGHT: Color32 = Color32::from_rgb(230, 240, 255);
     pub const TEXT_MUTED: Color32 = Color32::from_rgb(130, 145, 170);
 
+    /// The telemetry box's measured-speed rows: what a local observer standing at the event reads
+    /// off their own ruler and clock, as against the chart rates above them, which are printed in
+    /// `TEXT_BRIGHT`. A warm off-white rather than the blue-white of the rest, because the whole
+    /// point of those rows is that they are a different kind of statement from the lines they sit
+    /// under - a measurement rather than a coordinate difference - and nothing else in the box
+    /// distinguishes them.
+    pub const SPEED_MEASURED: Color32 = Color32::from_rgb(255, 238, 205);
+
     /// Outline on the panel's chip buttons: the quick picks that set the slider beside them, and
     /// the small choices - a motion, a release, a step mode - that egui draws as bare text until
     /// they are the selected one. A dimmed blue rather than the headings' full cyan: a dozen of

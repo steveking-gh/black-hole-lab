@@ -3,7 +3,7 @@ use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::geodesic::proper_time_between;
 use crate::physics::local_frame::{ruler_distance, LocalFrame, SurfaceCharacter};
-use crate::physics::observer::{Observer, ObserverMode};
+use crate::physics::observer::{LocalRestFrame, LocalSpeed, Observer, ObserverMode};
 use crate::physics::wavefront::{NullRay, Reception, SignalField};
 use egui::{epaint::PathShape, Color32, Pos2, Rect, Stroke, Vec2};
 use std::collections::HashMap;
@@ -16,7 +16,17 @@ pub const TELEMETRY_HOVER_TIP: &str =
 
 dr/dt — map speed: how fast the dot crosses the (t, r) chart per tick of the chart's shared clock. Far from the hole, this equals what a distant observer would measure. Near the hole, the chart uses a clock that lets infall and light cross the horizon without freezing, so the number only means something relative to the light wedge.
 
-dr/dτ — wristwatch speed: kilometres of radius per second on the observer's own watch. Can exceed c without breaking relativity, because the watch runs slow and the radius undercounts stretched space near the hole. Inside the horizon, radius becomes a countdown, and dr/dτ is how fast it runs.
+dr/dτ — how fast the radial coordinate changes per unit of the observer's own proper time, in M of r per M of τ. It is deliberately not labelled in c, because it is not a speed: it is one coordinate differentiated against a clock, and the two belong to different things. It runs past 1 on any deep infall and reaches −2.68 on a worldline asymptoting to r₋ with nothing moving faster than light, partly because the watch runs slow and partly because r undercounts stretched space; inside r₊ the radial coordinate is not even spacelike, so the quantity is a countdown rate rather than a velocity at all. For speeds that are speeds, see the v_ rows.
+
+Ω — dϕ/dt, how fast the observer goes round the hole per unit of the chart's shared clock, signed, prograde positive. Beside it in brackets is the local frame-dragging rate ω = −g_tϕ/g_ϕϕ, the Ω of the zero-angular-momentum observer at that radius: the rate at which the hole is turning space itself there. Far out the two are unrelated and ω falls off as 2Ma/r³. Inside the static limit r = 2M every timelike worldline is forced to share the hole's sign of Ω, however hard it thrusts — that, and not the horizon, is what the ergosphere is. On r₋ the dragging reaches Ω₋ = a/(r₋² + a²) and a frozen worldline is carried round at exactly that rate, which is the number the Frozen line refers to. Quoted in inverse M in both unit modes, because its whole use is comparison with the other rates the app prints, which are all in inverse M.
+
+One warning about reading Ω as which way something goes round. This is the ingoing Kerr-Schild chart, and its ϕ shears with radius — the metric's rϕ cross term g_rϕ = −a(1 + 2M/r) is not zero — so for any worldline with dr ≠ 0 the chart's dϕ/dt is not the angular velocity a distant observer would infer. The two differ by exactly (a/Δ)(dr/dt). A raindrop dropped from rest at infinity carries precisely zero angular momentum and is dragged prograde, and yet at r = 4.5M with a = 0.90 this line reads Ω = −0.0138/M: its Boyer-Lindquist dϕ/dt is +0.0265/M and the chart's own twist, −0.0403/M at that infall speed, is the steeper of the two. Nothing is orbiting backwards. The invariant statement is the L printed further down the box — L = 0 is zero angular momentum whatever dϕ/dt says — while for an observer holding r, where the shear contributes nothing at all, Ω and ω are both chart-independent and the comparison between them is exact. A worldline frozen on r₋ is the clean case: it reads Ω = ω = Ω₋ to every printed digit, because it is riding the horizon's own generator.
+
+v_static, v_ZAMO, v_raindrop — the speed the observer is actually moving at, as measured by a local observer who is there to measure it, with γ the Lorentz factor between the two worldlines and γv the celerity (the measurer's ruler distance per unit of the *moving* observer's proper time, which is unbounded and is the quantity dr/dτ is the radial part of). These are the honest velocities in the box: each is got from the one invariant the pair of worldlines has, γ = −g(u, u_frame), so each is strictly below c at every radius and in every region, horizons included, however large the chart rates above have grown.
+
+Which rows appear depends on who exists to do the measuring, because a velocity with no second worldline named is not a quantity. Outside the static limit r = 2M there are two hovering observers and both are quoted: the static observer, at rest with respect to the distant stars, and the ZAMO, who holds the same radius but goes along with the dragging. They can disagree sharply, and the gap *is* the frame dragging — at a = 0.90 an orbiter on the prograde ISCO at r = 2.32M passes the static observer at 0.898c and the ZAMO at only 0.625c, because the ZAMO is already being carried round at half the orbiter's own Ω. Inside the static limit no rocket can hold ϕ fixed, so the static row drops out and the ZAMO is the only hovering observer left. Inside r₊ nothing can hold a radius at all, and the speed is quoted against the raindrop — the observer dropped from rest at infinity — which is the one frame that exists at every r > 0. Where the rows are close to c the printed v stops at >0.9999c rather than rounding to a flat 1.000c, and γ carries the magnitude.
+
+Two checks worth knowing, because they are what the tests pin: with no spin, an orbiter on the ISCO at r = 6M passes the static observer at exactly 0.5c with γ = 2/√3, and a raindrop passes a static observer at r at exactly √(2M/r), the Newtonian escape speed.
 
 a_prop — proper acceleration in Earth g, the accelerometer reading. Zero means free fall.
 
@@ -722,6 +732,40 @@ fn horizon_box_lines(
 
 
 
+/// A dphi/dt or a dragging rate, in inverse M, signed so that prograde reads positive.
+///
+/// Scientific notation below a thousandth of a radian per M: far from the hole Omega falls off as
+/// r^-3/2 and a fixed number of decimals would print a column of zeroes, while near r- the rates
+/// that matter are of order one.
+fn rate_per_m(omega: f64) -> String {
+    if omega != 0.0 && omega.abs() < 1e-3 {
+        format!("{:+.2e}/M", omega)
+    } else {
+        format!("{:+.4}/M", omega)
+    }
+}
+
+/// One measured speed: v, the Lorentz factor between the two worldlines, and the celerity, with
+/// the frame that measured it named in the label.
+///
+/// v is held below 1 by construction, so the formatting has to stay honest where it gets close:
+/// a worldline frozen on r- is measured against the raindrop at a gamma of order 1e10, where
+/// three decimals of v would print a flat "1.000c" and say that something reached the speed of
+/// light. Past four nines it prints the bound instead and leaves gamma to carry the magnitude.
+fn speed_row(s: &LocalSpeed) -> String {
+    let v = if s.v >= 0.9999 { ">0.9999c".to_string() } else { format!("{:.3}c", s.v) };
+    let big = |x: f64| if x >= 1e3 { format!("{:.2e}", x) } else { format!("{:.2}", x) };
+    // Six characters and a pad to eight, so the = lands in the same column as the rates above.
+    // The names are abbreviated to hold that column; the hover tip spells all three out, and
+    // which of them can appear at all is `Observer::local_speeds`.
+    let label = match s.frame {
+        LocalRestFrame::Static => "v_stat",
+        LocalRestFrame::Zamo => "v_ZAMO",
+        LocalRestFrame::Raindrop => "v_rain",
+    };
+    format!("{label:<8}= {v} (γ {}, γv {}c)", big(s.gamma), big(s.celerity()))
+}
+
 /// The box's contents, one metric per line.
 fn telemetry_lines(
     name: &str,
@@ -749,7 +793,27 @@ fn telemetry_lines(
     } else {
         format!("dr/dt   = {:+.2}c", v_c)
     };
-    let v_proper_str = format!("dr/dτ   = {:+.2}c", u_prop);
+    // No "c" on this one. dr/dtau is a coordinate rate against a proper time, not a speed
+    // anybody measures: it runs past 1 on any deep infall and reads -2.68 on a worldline
+    // asymptoting to r-, where nothing is moving faster than light and the radial coordinate is
+    // not even spacelike. Printed with a c it read as an impossibility. The numbers that *are*
+    // speeds, and are below c in every region and every frame, are the v_ rows below it.
+    let v_proper_str = format!("dr/dτ   = {:+.2} M/τ", u_prop);
+
+    // The chart's other rate. Omega = dphi/dt against the local dragging rate omega: outside the
+    // static limit they are independent, and inside it every timelike worldline is forced to
+    // share the hole's sign of Omega however hard it thrusts, which is the one number that makes
+    // the ergosphere a place rather than a label.
+    let omega_obs = obs.angular_velocity(metric);
+    let omega_drag = metric.frame_dragging_omega(obs.r);
+    let omega_str =
+        format!("Ω       = {} (drag {})", rate_per_m(omega_obs), rate_per_m(omega_drag));
+
+    // What a local observer actually measures for this observer's motion past them, one row per
+    // observer who exists at this event to do the measuring. See `Observer::local_speeds`: both
+    // hovering frames outside the static limit, the ZAMO alone through the ergosphere, and the
+    // raindrop between the horizons where nothing can hover at all.
+    let speed_strs: Vec<String> = obs.local_speeds(metric).iter().map(speed_row).collect();
 
     // A Static or ZAMO selection at a radius where that worldline does not exist is not quietly
     // shown as free fall: it *is* free fall - `Observer::effective_mode` steps the observer along
@@ -815,6 +879,7 @@ fn telemetry_lines(
         TelemetryLine { text: format!("{} [{}]", name, region_tag), color, is_title: true, bold: false },
         TelemetryLine { text: v_coord_str, color: Theme::TEXT_BRIGHT, is_title: false, bold: false },
         TelemetryLine { text: v_proper_str, color: Theme::TEXT_BRIGHT, is_title: false, bold: false },
+        TelemetryLine { text: omega_str, color: Theme::TEXT_BRIGHT, is_title: false, bold: false },
         TelemetryLine { text: a_str, color: Color32::from_rgb(180, 240, 180), is_title: false, bold: false },
         TelemetryLine { text: tidal_str, color: Color32::from_rgb(255, 200, 100), is_title: false, bold: false },
         TelemetryLine {
@@ -824,6 +889,15 @@ fn telemetry_lines(
             bold: false,
         },
     ];
+    // Inserted after the chart's own rates and before the accelerometer, so the box reads
+    // outward from what the chart says to what somebody standing there measures.
+    let insert_at = 4;
+    for (i, text) in speed_strs.into_iter().enumerate() {
+        lines.insert(
+            insert_at + i,
+            TelemetryLine { text, color: Theme::SPEED_MEASURED, is_title: false, bold: false },
+        );
+    }
     if let Some(constants_str) = constants_str {
         lines.push(TelemetryLine { text: constants_str, color: Theme::TEXT_MUTED, is_title: false, bold: false });
     }
@@ -3469,6 +3543,115 @@ mod canvas_tests {
         assert!(bobs.contains("Blueshift: 1.095"), "and it is printed as the blueshift: {bobs}");
         let alices = text_of(ReferenceFrame::Alice);
         assert!(!alices.contains("Receive Frequency"), "Bob sends nothing, so Alice's frame is silent");
+    }
+
+    #[test]
+    fn test_the_box_quotes_a_measured_speed_only_against_a_frame_that_exists() {
+        use crate::physics::observer::{Release, WorldlineParams};
+
+        // A circular orbit is the case the radial rates cannot describe at all: dr/dt and dr/dtau
+        // are both exactly zero on it, and without the rows below them the box would say an ISCO
+        // orbiter at a quarter of the speed of light was standing still.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let r = metric.isco(true);
+        let (energy, l_ang) = metric.circular_orbit(r, true).expect("the prograde ISCO");
+        let orbiter = Observer::new_with_phi(
+            &metric,
+            "Alice",
+            0.0,
+            r,
+            0.0,
+            0.0,
+            WorldlineParams { energy, l_ang, outgoing: false, release: Release::CircularPrograde },
+        );
+        let text = |obs: &Observer| {
+            telemetry_lines("Alice", Theme::ALICE_COLOR, obs, &metric, false)
+                .iter()
+                .map(|l| l.text.clone())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let box_text = text(&orbiter);
+        assert!(box_text.contains("0.00c"), "not moving in r: {box_text}");
+        assert!(box_text.contains("v_stat  = 0.898c"), "the static observer's reading: {box_text}");
+        assert!(box_text.contains("v_ZAMO  = 0.625c"), "and the ZAMO's: {box_text}");
+        // Every label field is eight wide, so the = of every line sits in one column.
+        // The rates and the speeds are one block of the box and share a column for their =. The
+        // lines below them - a_prop, Tidal, ν - are each their own width and always were; this is
+        // about the group that reads as a column. Counted in characters, not bytes, because the
+        // labels carry τ and Ω.
+        let block: Vec<&str> = box_text
+            .lines()
+            .filter(|l| l.starts_with("dr/") || l.starts_with('Ω') || l.starts_with("v_"))
+            .collect();
+        assert_eq!(block.len(), 5, "two rates, an Ω and two speeds: {block:?}");
+        for line in block {
+            assert_eq!(
+                line.chars().position(|c| c == '='),
+                Some(8),
+                "the = of {line:?} is out of column"
+            );
+        }
+        assert!(box_text.contains("Ω       = +0.2254/M (drag +0.1125/M)"), "{box_text}");
+
+        // dr/dtau is the one rate in the box that is not a speed, and it no longer claims to be.
+        assert!(box_text.contains("0.00 M/τ"), "{box_text}");
+        assert!(
+            !box_text.lines().any(|l| l.starts_with("dr/dτ") && l.contains('c')),
+            "dr/dτ must not be labelled in c: {box_text}"
+        );
+
+        // Inside the static limit the static observer is gone and the box stops quoting one.
+        let ergo_r = 0.5 * (metric.outer_horizon() + metric.ergosphere_equatorial());
+        let in_ergo = Observer::new_with_phi(
+            &metric,
+            "Alice",
+            0.0,
+            ergo_r,
+            0.0,
+            0.0,
+            WorldlineParams::default(),
+        );
+        let box_text = text(&in_ergo);
+        assert!(!box_text.contains("v_stat "), "no static observer in the ergosphere: {box_text}");
+        assert!(box_text.contains("v_ZAMO"), "but the ZAMO survives it: {box_text}");
+
+        // Between the horizons nothing hovers, and the raindrop is what is left.
+        let inside = Observer::new_with_phi(
+            &metric,
+            "Alice",
+            0.0,
+            0.5 * (metric.inner_horizon() + metric.outer_horizon()),
+            0.0,
+            0.0,
+            WorldlineParams::default(),
+        );
+        let box_text = text(&inside);
+        assert!(box_text.contains("v_rain"), "the frame that exists everywhere: {box_text}");
+        assert!(!box_text.contains("v_ZAMO"), "and no hovering frame: {box_text}");
+
+        // However far the chart rates run away, every measured speed in the box is below c: a
+        // worldline frozen on r- is measured against the raindrop at a huge gamma, and the row
+        // prints the bound rather than rounding up to exactly c.
+        let frozen = Observer::frozen_bob(&metric);
+        let box_text = text(&frozen);
+        assert!(
+            box_text.contains("v_rain  = >0.9999c"),
+            "frozen on r-, the bound rather than a flat 1.000c: {box_text}"
+        );
+        for line in box_text.lines().filter(|l| l.starts_with("v_")) {
+            let token = line
+                .split('=')
+                .nth(1)
+                .and_then(|t| t.split_whitespace().next())
+                .unwrap_or_else(|| panic!("a speed on {line:?}"));
+            let v: f64 = token
+                .trim_start_matches('>')
+                .trim_end_matches('c')
+                .parse()
+                .unwrap_or_else(|_| panic!("a number on {line:?}"));
+            assert!(v <= 0.9999, "{line} claims c or better");
+        }
     }
 
     #[test]

@@ -1,6 +1,53 @@
 use crate::physics::geodesic::{GeodesicState, R_STOP};
 use crate::physics::kerr_schild::KerrSchild;
-use crate::physics::tetrad::Tetrad;
+use crate::physics::tetrad::{Tetrad, inner};
+
+/// A local observer that another observer's speed can be quoted against.
+///
+/// There is no such thing as *the* velocity of a worldline in general relativity: a speed is
+/// always a statement about two worldlines crossing at one event, and naming the other one is not
+/// a detail but the whole content of the number. The three here are the hovering observers this
+/// chart has, in the order of how far in they survive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalRestFrame {
+    /// The static observer, at rest with respect to the distant stars: fixed r and fixed phi.
+    /// Exists only outside the equatorial static limit r = 2M, and its own Lorentz factor against
+    /// anything diverges as that surface is approached, because the frame itself is turning null.
+    Static,
+    /// The zero-angular-momentum observer, holding r while being swept round at the local dragging
+    /// rate. Exists through the whole ergosphere, down to r+, which is as far as any fixed-r
+    /// worldline goes.
+    Zamo,
+    /// The raindrop: the E = 1, L = 0 ingoing geodesic, dropped from rest at infinity. Not a
+    /// hovering observer at all, and the only one of the three that exists at every r > 0 - which
+    /// is why `ObserverMode::ManualDrag` already defines its boost against this frame.
+    Raindrop,
+}
+
+
+/// One observer's motion as a local observer of `frame` actually measures it, off their own ruler
+/// and their own clock.
+#[derive(Debug, Clone, Copy)]
+pub struct LocalSpeed {
+    /// Who did the measuring.
+    pub frame: LocalRestFrame,
+    /// The speed, as a fraction of c. Strictly below 1 for any two timelike worldlines, however
+    /// deep in the well the event is and whatever the chart says about coordinate rates.
+    pub v: f64,
+    /// The Lorentz factor between the two worldlines, gamma = -g(u, u_frame). This is the time
+    /// dilation *between the observers*, not the u^t of either of them against the distant clock.
+    pub gamma: f64,
+}
+
+impl LocalSpeed {
+    /// Proper velocity, or celerity: the local observer's ruler distance per unit of the *moving*
+    /// observer's proper time, gamma v. It is unbounded - it is what passes c without anything
+    /// physical happening, since the two factors belong to different clocks - and it is the
+    /// quantity `dr/dtau` is the radial part of.
+    pub fn celerity(self) -> f64 {
+        self.gamma * self.v
+    }
+}
 
 /// How an observer's worldline is generated. Every mode pins down a contravariant 4-velocity
 /// u^mu at the observer's current event, and all telemetry (coordinate velocity, proper velocity,
@@ -641,13 +688,7 @@ impl Observer {
                 Self::static_four_velocity(metric, r).expect("admissible above the static limit")
             }
             ObserverMode::Zamo if Self::mode_admissible_at(ObserverMode::Zamo, metric, r) => {
-                // u^mu = gamma (1, 0, omega) with omega = -g_tphi/g_phiphi (so u_phi = 0) and
-                // gamma = 1 / sqrt(-(g_tt + 2 omega g_tphi + omega^2 g_phiphi)).
-                let g = metric.metric_components(r);
-                let omega = metric.frame_dragging_omega(r);
-                let norm_sq = -(g[0][0] + 2.0 * omega * g[0][2] + omega * omega * g[2][2]);
-                let gamma = 1.0 / norm_sq.max(1e-14).sqrt();
-                [gamma, 0.0, gamma * omega]
+                Self::zamo_four_velocity(metric, r).expect("admissible outside r+")
             }
             ObserverMode::ManualDrag => {
                 // The dragged observer is defined as a *boost of the local raindrop frame*:
@@ -669,6 +710,31 @@ impl Observer {
         }
     }
 
+    /// u^mu = gamma (1, 0, omega) with omega = -g_tphi/g_phiphi, so that u_phi = 0: the
+    /// zero-angular-momentum observer, holding r while going along with the frame dragging. None
+    /// at and inside r+, where no worldline of fixed r is timelike.
+    fn zamo_four_velocity(metric: &KerrSchild, r: f64) -> Option<[f64; 3]> {
+        if r <= metric.outer_horizon() {
+            return None;
+        }
+        let g = metric.metric_components(r);
+        let omega = metric.frame_dragging_omega(r);
+        // gamma = 1 / sqrt(-(g_tt + 2 omega g_tphi + omega^2 g_phiphi)).
+        let norm_sq = -(g[0][0] + 2.0 * omega * g[0][2] + omega * omega * g[2][2]);
+        let gamma = 1.0 / norm_sq.max(1e-14).sqrt();
+        Some([gamma, 0.0, gamma * omega])
+    }
+
+    /// The raindrop's own 4-velocity at radius r: the E = 1, L = 0 ingoing geodesic. It exists at
+    /// every r > 0, which is the whole reason this frame is in the app twice over - as the
+    /// reference for `ObserverMode::ManualDrag` and as the last frame a speed can be quoted
+    /// against once both hovering observers have run out.
+    pub fn raindrop_four_velocity(metric: &KerrSchild, r: f64) -> [f64; 3] {
+        let raindrop = GeodesicState::new_infall(metric, 0.0, r, 1.0, 0.0);
+        let (dt_dtau, dr_dtau, dphi_dtau) = raindrop.derivatives(metric, r);
+        [dt_dtau, dr_dtau, dphi_dtau]
+    }
+
     /// Orthonormal tetrad of the raindrop (E = 1, L = 0 ingoing geodesic) observer at radius r.
     ///
     /// It is public because it is also the frame anything drawn *at* an observer's event should be
@@ -676,9 +742,7 @@ impl Observer {
     /// of order 1, while a worldline frozen on r- carries u^t out to `geodesic::U_T_STALL` = 1e10,
     /// and uniform sampling in a frame boosted that hard is aberrated into a single point.
     pub fn raindrop_tetrad(metric: &KerrSchild, r: f64) -> Tetrad {
-        let raindrop = GeodesicState::new_infall(metric, 0.0, r, 1.0, 0.0);
-        let (dt_dtau, dr_dtau, dphi_dtau) = raindrop.derivatives(metric, r);
-        Tetrad::from_four_velocity(metric, r, &[dt_dtau, dr_dtau, dphi_dtau])
+        Tetrad::from_four_velocity(metric, r, &Self::raindrop_four_velocity(metric, r))
     }
 
     /// The closed-form geodesic congruence with this observer's conserved (E, L), evaluated at
@@ -1102,6 +1166,75 @@ impl Observer {
     /// Physical radial velocity in km/s
     pub fn velocity_km_s(&self, metric: &KerrSchild) -> f64 {
         self.velocity_c(metric) * 299792.458
+    }
+
+    /// Angular velocity dphi/dt = u^phi / u^t: how fast the observer goes round the hole per unit
+    /// of the chart's shared clock, signed, prograde positive.
+    ///
+    /// Unlike a coordinate *speed* this is worth printing. It is a rate of one coordinate against
+    /// another with nothing pretending to be a length in it, it is the quantity the hole's own
+    /// rotation rates are quoted in - `KerrSchild::frame_dragging_omega` at this radius,
+    /// `inner_horizon_omega` on r-, and the circular-orbit Omega of `orbital_angular_velocity` -
+    /// and comparing it to the local dragging rate is what makes the ergosphere legible: inside
+    /// the static limit every timelike worldline has the same sign of Omega as the hole, whatever
+    /// its thrust.
+    pub fn angular_velocity(&self, metric: &KerrSchild) -> f64 {
+        let u = self.four_velocity(metric);
+        u[2] / u[0].max(1e-9)
+    }
+
+    /// How fast this observer is moving past a local observer of `frame`, as that observer
+    /// measures it - or None where no such observer exists at this event.
+    ///
+    /// The speed is got from the one invariant the pair of worldlines has, the Lorentz factor
+    /// gamma = -g(u, u_frame), and never from a difference of coordinate rates: v = sqrt(1 -
+    /// gamma^-2) follows from gamma alone and is below c by construction for any two timelike
+    /// vectors, at every radius and in every region. That is the point of routing it this way. The
+    /// chart's own rates say nothing directly useful - `velocity_c` is a ratio of coordinate
+    /// differentials and `proper_velocity_c` divides a coordinate by a proper time - and inside r+
+    /// the radial coordinate is timelike, so a "speed" read off the chart there is not one.
+    ///
+    /// What it cannot do is invent a frame. A static observer exists only outside the equatorial
+    /// static limit r = 2M, a ZAMO only outside r+, and inside r+ there is no hovering observer at
+    /// all; those cases are None rather than a number, and the caller says so in as many words
+    /// instead of quoting a speed against a worldline that is not there.
+    pub fn local_speed(&self, metric: &KerrSchild, frame: LocalRestFrame) -> Option<LocalSpeed> {
+        let u_frame = match frame {
+            LocalRestFrame::Static => Self::static_four_velocity(metric, self.r)?,
+            LocalRestFrame::Zamo => Self::zamo_four_velocity(metric, self.r)?,
+            LocalRestFrame::Raindrop => Self::raindrop_four_velocity(metric, self.r),
+        };
+        let u = self.four_velocity(metric);
+        // -g(u, u_frame) is the Lorentz factor for any two future-directed unit timelike vectors,
+        // and is >= 1 with equality only when they are the same worldline. It is clamped at 1
+        // because the floating-point value of a pair that *is* the same worldline - a ZAMO
+        // observer measured against the ZAMO, say - lands a few ulp either side of it, and 1 - eps
+        // would take the square root of a negative number.
+        let gamma = (-inner(metric, self.r, &u, &u_frame)).max(1.0);
+        let v = (1.0 - 1.0 / (gamma * gamma)).max(0.0).sqrt();
+        Some(LocalSpeed { frame, v, gamma })
+    }
+
+    /// Every local observer at this event who can measure a speed, outermost frame first: the
+    /// static observer and the ZAMO where each exists, and the raindrop alone where neither does.
+    ///
+    /// Both hovering frames are reported outside the static limit rather than one of them, because
+    /// they disagree by a great deal where the dragging is strong and neither is the right answer
+    /// to the exclusion of the other. At a = 0.90 the prograde ISCO sits at r = 2.32M, a whisker
+    /// outside the static limit: an orbiter there passes the static observer at 0.898c and the
+    /// ZAMO at 0.625c, because the ZAMO is itself being carried round at half the orbiter's own
+    /// Omega. Printing one number would be picking a side of that; printing both is the honest
+    /// statement, and their divergence *is* the frame dragging, read off directly.
+    pub fn local_speeds(&self, metric: &KerrSchild) -> Vec<LocalSpeed> {
+        let hovering: Vec<LocalSpeed> = [LocalRestFrame::Static, LocalRestFrame::Zamo]
+            .into_iter()
+            .filter_map(|f| self.local_speed(metric, f))
+            .collect();
+        if hovering.is_empty() {
+            self.local_speed(metric, LocalRestFrame::Raindrop).into_iter().collect()
+        } else {
+            hovering
+        }
     }
 
     /// The accelerometer reading in Earth g's (weightlessness = 0.0), for every mode. This is
@@ -2468,5 +2601,143 @@ mod tests {
             bob.phi
         );
     }
-}
 
+    /// An observer standing on the circular orbit at `r`, prograde or retrograde: the thrust-free
+    /// orbit's own (E, L), with the geodesic state seeded at that radius.
+    fn orbiter(metric: &KerrSchild, r: f64, prograde: bool) -> Observer {
+        let (energy, l_ang) = metric.circular_orbit(r, prograde).expect("a circular orbit here");
+        let params = WorldlineParams {
+            energy,
+            l_ang,
+            outgoing: false,
+            release: if prograde { Release::CircularPrograde } else { Release::CircularRetrograde },
+        };
+        Observer::new_with_phi(metric, "orbiter", 0.0, r, 0.0, 0.0, params)
+    }
+
+    #[test]
+    fn test_a_circular_orbit_measures_0_5c_at_the_schwarzschild_isco() {
+        // The textbook case, and the one number in this whole readout that can be checked against
+        // a closed form by eye: at a = 0 the ISCO is at r = 6M and an orbiter passes the static
+        // observer there at exactly v = sqrt(M / (r - 2M)) = 1/2, with gamma = 2/sqrt(3).
+        let metric = KerrSchild::new(1.0, 0.0);
+        let orbiter = orbiter(&metric, 6.0, true);
+        let stat = orbiter.local_speed(&metric, LocalRestFrame::Static).expect("static at 6M");
+        assert!((stat.v - 0.5).abs() < 1e-9, "v = {} against an exact 0.5", stat.v);
+        assert!(
+            (stat.gamma - 2.0 / 3.0_f64.sqrt()).abs() < 1e-9,
+            "gamma = {} against an exact 2/sqrt(3)",
+            stat.gamma
+        );
+        assert!((stat.celerity() - 0.5 * 2.0 / 3.0_f64.sqrt()).abs() < 1e-9);
+
+        // With no spin there is no dragging, so the ZAMO *is* the static observer and the two
+        // readings coincide. That is the degenerate case of the pair the box prints.
+        let zamo = orbiter.local_speed(&metric, LocalRestFrame::Zamo).expect("ZAMO at 6M");
+        assert!((zamo.v - stat.v).abs() < 1e-9, "no spin, no disagreement: {} vs {}", zamo.v, stat.v);
+    }
+
+    #[test]
+    fn test_the_two_hovering_frames_disagree_by_the_dragging() {
+        // At a = 0.90 the prograde ISCO is at r = 2.32M, a whisker outside the static limit at 2M,
+        // and the two hovering observers give very different answers for the same orbit: the ZAMO
+        // is being carried round at half the orbiter's own Omega, so it sees much less of the
+        // motion than the static observer does. Both numbers are right; the gap between them is
+        // the frame dragging, which is why the box prints the pair.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let r = metric.isco(true);
+        assert!((r - 2.321).abs() < 1e-3, "the prograde ISCO at a = 0.90: r = {r}");
+        let orbiter = orbiter(&metric, r, true);
+        let stat = orbiter.local_speed(&metric, LocalRestFrame::Static).expect("just outside 2M");
+        let zamo = orbiter.local_speed(&metric, LocalRestFrame::Zamo).expect("well outside r+");
+        assert!((stat.v - 0.898).abs() < 1e-3, "v against the static observer: {}", stat.v);
+        assert!((zamo.v - 0.625).abs() < 1e-3, "v against the ZAMO: {}", zamo.v);
+        assert!(zamo.v < stat.v, "going along with the dragging always sees less of the motion");
+
+        // The orbiter's own Omega against the rate the ZAMO is dragged at, which is the reason for
+        // the gap and the second number on the box's Omega line.
+        let omega_orbit = orbiter.angular_velocity(&metric);
+        let omega_drag = metric.frame_dragging_omega(r);
+        assert!((omega_orbit - 0.2254).abs() < 1e-3, "Omega = {omega_orbit}");
+        assert!((omega_drag - 0.1125).abs() < 1e-3, "dragging rate = {omega_drag}");
+
+        // Whatever the frame, a timelike worldline measured by a timelike worldline is below c.
+        for s in orbiter.local_speeds(&metric) {
+            assert!(s.v < 1.0, "{:?} reads {}c", s.frame, s.v);
+            assert!(s.gamma >= 1.0);
+        }
+    }
+
+    #[test]
+    fn test_a_raindrop_passes_a_static_observer_at_the_newtonian_escape_speed() {
+        // The other closed form: the E = 1, L = 0 infall passes the static observer at r with
+        // v = sqrt(2M/r), the Newtonian escape speed, exactly - a = 0 here, since with spin the
+        // raindrop picks up a dragged u^phi and the coincidence is not expected to survive it.
+        let metric = KerrSchild::new(1.0, 0.0);
+        for r in [8.0, 4.5, 3.0, 2.5] {
+            let drop =
+                Observer::new_with_phi(&metric, "drop", 0.0, r, 0.0, 0.0, WorldlineParams::default());
+            let stat = drop.local_speed(&metric, LocalRestFrame::Static).expect("outside 2M");
+            let expect = (2.0 / r).sqrt();
+            assert!(
+                (stat.v - expect).abs() < 1e-9,
+                "at r = {r}: v = {} against sqrt(2M/r) = {expect}",
+                stat.v
+            );
+        }
+    }
+
+    #[test]
+    fn test_a_frame_is_never_invented_where_its_observer_cannot_exist() {
+        // The readout may not quote a speed against a worldline that is not there. The static
+        // observer runs out at the equatorial static limit r = 2M, the ZAMO at r+, and inside r+
+        // the pair falls back to the raindrop, which is the one frame that exists at every r > 0.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let (rp, re) = (metric.outer_horizon(), metric.ergosphere_equatorial());
+        assert!(rp < re, "r+ = {rp} inside the static limit {re}");
+        let at = |r: f64| {
+            Observer::new_with_phi(&metric, "o", 0.0, r, 0.0, 0.0, WorldlineParams::default())
+        };
+
+        let outside = at(3.0);
+        assert_eq!(outside.local_speeds(&metric).len(), 2, "both hovering frames outside 2M");
+        assert!(outside.local_speeds(&metric).iter().all(|s| s.frame != LocalRestFrame::Raindrop));
+
+        // In the ergosphere no rocket can hold phi fixed, so there is no static observer to be
+        // measured against and the ZAMO is the only hovering frame left.
+        let ergo = at(0.5 * (rp + re));
+        let speeds = ergo.local_speeds(&metric);
+        assert_eq!(speeds.len(), 1, "one frame inside the static limit");
+        assert_eq!(speeds[0].frame, LocalRestFrame::Zamo);
+        assert!(ergo.local_speed(&metric, LocalRestFrame::Static).is_none());
+
+        // Inside r+ nothing can hold a radius at all.
+        let inside = at(0.5 * (metric.inner_horizon() + rp));
+        let speeds = inside.local_speeds(&metric);
+        assert_eq!(speeds.len(), 1, "no hovering observer between the horizons");
+        assert_eq!(speeds[0].frame, LocalRestFrame::Raindrop);
+        assert!(speeds[0].v < 1.0, "and even there the measured speed is below c: {}", speeds[0].v);
+        assert!(inside.local_speed(&metric, LocalRestFrame::Zamo).is_none());
+    }
+
+    #[test]
+    fn test_the_frame_measured_against_itself_reads_zero() {
+        // The degenerate case the clamp in `local_speed` is there for: gamma = -g(u, u) = 1 for a
+        // unit timelike vector, to within a few ulp either side, and 1 - eps must not come back as
+        // a NaN speed.
+        let metric = KerrSchild::new(1.0, 0.9);
+        for (mode, r) in [(ObserverMode::Static, 3.0), (ObserverMode::Zamo, 1.8)] {
+            let mut obs =
+                Observer::new_with_phi(&metric, "o", 0.0, r, 0.0, 0.0, WorldlineParams::default());
+            obs.mode = mode;
+            let frame = if mode == ObserverMode::Static {
+                LocalRestFrame::Static
+            } else {
+                LocalRestFrame::Zamo
+            };
+            let s = obs.local_speed(&metric, frame).expect("the frame exists at this radius");
+            assert!(s.v.is_finite() && s.v < 1e-7, "{:?} against itself: v = {}", mode, s.v);
+            assert!((s.gamma - 1.0).abs() < 1e-7, "and gamma = {}", s.gamma);
+        }
+    }
+}
