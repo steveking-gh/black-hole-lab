@@ -217,12 +217,17 @@ impl ObserverSettings {
         }
     }
 
-    /// A zero-angular-momentum observer: held on the circle r = const, carried round at the
-    /// frame-dragging rate omega = -g_tphi/g_phiphi, which is the worldline with u_phi = 0. The
-    /// geodesic constants are still carried, because they are what a release puts them on: switch
-    /// the Motion to Free Fall, or drag them, and they fall on the E and L their card is showing.
-    fn zamo(delta_t_delay: f64) -> Self {
-        Self { mode: ObserverMode::Zamo, ..Self::raindrop(delta_t_delay) }
+    /// An observer in free fall on the prograde innermost stable circular orbit of the hole the
+    /// app opens on (`OPENING_SPIN`): the thrust-free orbit, released the moment the run starts.
+    /// The radius is the ISCO's for that spin; a different hole chosen from the presets re-drops
+    /// the observer from this radius, which the card then reports as stable or not for it.
+    fn isco_orbiter(delta_t_delay: f64) -> Self {
+        Self {
+            mode: ObserverMode::FreeFall,
+            release: Release::CircularPrograde,
+            drop_r: KerrSchild::new(1.0, OPENING_SPIN).isco(true),
+            ..Self::raindrop(delta_t_delay)
+        }
     }
 
     /// The worldline this card is asking for: the release it names, at the radius it names, with
@@ -347,12 +352,15 @@ impl Default for AppControls {
             hide_wound_segments: true,
             show_spatial_details: false,
             // Both are let go the moment the run starts, and the difference between them is the
-            // worldline rather than the wait: Alice holds her radius on the ZAMO circle while Bob
-            // falls through it. A trailing delay is still what builds the stack on r₋ that the
-            // HUD's "Alice → Bob" line and the Theory Guide describe - put a delay on Bob's card
-            // and he cuts through her pulses exactly as those texts say - but it is a
-            // configuration to reach for rather than the layout the app opens on.
-            alice: ObserverSettings { drop_phi: ALICE_DROP_PHI, ..ObserverSettings::zamo(0.0) },
+            // worldline rather than the wait: Alice circles the hole on the prograde ISCO, the
+            // thrust-free orbit, while Bob falls through. A trailing delay is still what builds
+            // the stack on r₋ that the HUD's "Alice → Bob" line and the Theory Guide describe -
+            // put a delay on Bob's card and he cuts through her pulses exactly as those texts say
+            // - but it is a configuration to reach for rather than the layout the app opens on.
+            alice: ObserverSettings {
+                drop_phi: ALICE_DROP_PHI,
+                ..ObserverSettings::isco_orbiter(0.0)
+            },
             bob: ObserverSettings::raindrop(0.0),
             show_theory_modal: false,
             use_km: true,
@@ -379,6 +387,10 @@ const PRESETS: [(&str, f64, f64, f64, &str); 7] = [
     ("Gargantua (100M M☉)", 1.0, 0.999, 1.0e8, GARGANTUA_NOTE),
 ];
 
+/// The presets drawn on the second row of the two: the widest labels, kept together so the
+/// first row is no wider than the panel.
+const PRESET_SECOND_ROW: [&str; 2] = ["Sagittarius A* (4.15M M☉)", "Extreme Kerr (a=0.998)"];
+
 /// Why the Gargantua preset is not Gargantua's spin.
 const GARGANTUA_NOTE: &str = "Kip Thorne's hole from Interstellar, at the mass he gives it: about 10^8 M☉, which is what puts a survivable tidal field at the horizon of something that swallows a solar system.
 
@@ -404,6 +416,10 @@ const DISTANCE_STEP_MIN_SPEED: f64 = 0.01;
 /// (r_E = 2M on the equator) for a static hover to exist there, close enough in for the whole fall
 /// to be a few tens of M. After that each card carries its own `ObserverSettings::drop_r`.
 const DROP_RADIUS: f64 = 4.5;
+
+/// The spin of the hole the app opens on, Sagittarius A*'s a/M = 0.90: `SpacetimeApp::default`
+/// builds that metric, and Alice's default drop radius is its prograde ISCO.
+pub const OPENING_SPIN: f64 = 0.90;
 
 /// The azimuth Alice is dropped at out of the box, a quarter of a radian round from Bob. Two
 /// observers at the same (r, phi) would be the same observer; the gap is what makes the pair a
@@ -457,7 +473,7 @@ const ALICE_SIGNAL_TIP: &str = "Alice broadcasts a pulse into the whole of her o
 
 /// The hover tip on the Transmit Signal checkbox of Bob's card. The return path, which is not the
 /// mirror image of Alice's: it has an end.
-const BOB_SIGNAL_TIP: &str = "Bob broadcasts exactly as Alice does, a whole light cone of exact null geodesics every 0.1 M of his own proper time, and he starts at t = 0, before he is released: while he waits he is the static observer at his hover radius, with a clock ticking at √(−g_tt) of coordinate time and an orthonormal frame to broadcast into, and nothing in the geometry stops him transmitting from it. His pulses come every 0.134 M of coordinate time while he hovers at r = 4.5M and every 0.1 M of his own once he falls. The colours mean the same thing as Alice's: on the equatorial view, the gain between two raindrops along each ray since it left him, so his fronts are born the same uniform red hers are and climb the same ramp. His fronts are drawn at half stroke width and his emission dots in his own mint, so the two transmissions can be told apart without touching the colouring, which is a measurement. What is not the same is the physics of the return path, and which way it runs depends on which of them is deeper. In the layout the app opens on, Alice holds her radius on the ZAMO circle while Bob falls past her, so it is his light that has to climb: the shift she measures on it starts as a small blueshift, because his fall toward the light beats his recession from her, and turns over into a redshift as he drops away below her. The climb has a limit. The last pulse of his that can reach her at all is one he sends just outside r₊; the outgoing edge of a pulse sent exactly on the horizon stays on the horizon for ever, and every ray of one sent inside it falls, so from his crossing onward everything he transmits is sent to nobody. Put a Release Delay on his card instead and he trails her down the same infall: his pulses then chase her inward, and the only part of each one that ever catches her is the ingoing part of his cone, which runs at up to dr/dt = −1 in this chart, a rate no timelike worldline can match. That is the light whose shift is finite on the branch of r₋ she actually crosses, so unlike Alice → Bob there is no stack for her to cut through. His frozen family, E − Ω₋L < 0, does pile onto r₋ from outside, but it settles there behind her, after she has already gone through, so she never meets it. Where her worldline ends — on the ring, or frozen on r₋ — his transmission stops arriving for that reason instead: there is a last pulse of his that reached her, and its emission event is the boundary, on his own worldline, of the causal past of the end of hers. Neither view marks that event; the HUD names it once her worldline has finished, giving the pulse, when and where he sent it, and how many later ones never arrive. On the (t, r) diagram his pulses are drawn exactly as hers are, each as the wedge of its own radial extent but in his mint: lower edge the most ingoing ray, upper edge the outermost, a worldline inside the wedge in range of the pulse rather than receiving it, and the dots the actual arrivals.";
+const BOB_SIGNAL_TIP: &str = "Bob broadcasts exactly as Alice does, a whole light cone of exact null geodesics every 0.1 M of his own proper time, and he starts at t = 0, before he is released: while he waits he is the static observer at his hover radius, with a clock ticking at √(−g_tt) of coordinate time and an orthonormal frame to broadcast into, and nothing in the geometry stops him transmitting from it. His pulses come every 0.134 M of coordinate time while he hovers at r = 4.5M and every 0.1 M of his own once he falls. The colours mean the same thing as Alice's: on the equatorial view, the gain between two raindrops along each ray since it left him, so his fronts are born the same uniform red hers are and climb the same ramp. His fronts are drawn at half stroke width and his emission dots in his own mint, so the two transmissions can be told apart without touching the colouring, which is a measurement. What is not the same is the physics of the return path, and which way it runs depends on which of them is deeper. In the layout the app opens on, Alice circles the hole on the prograde ISCO while Bob falls past her, so it is his light that has to climb: the shift she measures on it starts as a small blueshift, because his fall toward the light beats his recession from her, and turns over into a redshift as he drops away below her. The climb has a limit. The last pulse of his that can reach her at all is one he sends just outside r₊; the outgoing edge of a pulse sent exactly on the horizon stays on the horizon for ever, and every ray of one sent inside it falls, so from his crossing onward everything he transmits is sent to nobody. Put a Release Delay on his card instead and he trails her down the same infall: his pulses then chase her inward, and the only part of each one that ever catches her is the ingoing part of his cone, which runs at up to dr/dt = −1 in this chart, a rate no timelike worldline can match. That is the light whose shift is finite on the branch of r₋ she actually crosses, so unlike Alice → Bob there is no stack for her to cut through. His frozen family, E − Ω₋L < 0, does pile onto r₋ from outside, but it settles there behind her, after she has already gone through, so she never meets it. Where her worldline ends — on the ring, or frozen on r₋ — his transmission stops arriving for that reason instead: there is a last pulse of his that reached her, and its emission event is the boundary, on his own worldline, of the causal past of the end of hers. Neither view marks that event; the HUD names it once her worldline has finished, giving the pulse, when and where he sent it, and how many later ones never arrive. On the (t, r) diagram his pulses are drawn exactly as hers are, each as the wedge of its own radial extent but in his mint: lower edge the most ingoing ray, upper edge the outermost, a worldline inside the wedge in range of the pulse rather than receiving it, and the dots the actual arrivals.";
 
 /// What to say about an observer whose selected mode cannot exist where they are, or None when the
 /// selection is fine.
@@ -668,6 +684,9 @@ impl ObserverCard {
                     }
                 }
             });
+            // An orbit is a free-fall worldline, so asking for one puts the Motion on free fall
+            // as well: a circular release held on the static or ZAMO worldline would be a request
+            // the card could not honour.
             ui.horizontal(|ui| {
                 ui.label("Orbit:");
                 for (release, label) in [
@@ -679,11 +698,15 @@ impl ObserverCard {
                         .clicked()
                     {
                         settings.release = release;
+                        settings.mode = ObserverMode::FreeFall;
                     }
                 }
-                // The innermost stable orbit of either sense, in one click: the drop radius and
-                // the release together.
-                for (prograde, label) in [(true, "ISCO prograde"), (false, "ISCO retrograde")] {
+            });
+            // The innermost stable orbit of either sense, in one click: the drop radius, the
+            // release and the motion together.
+            ui.horizontal(|ui| {
+                ui.label("ISCO:");
+                for (prograde, label) in [(true, "Prograde"), (false, "Retrograde")] {
                     if ui.small_button(label).on_hover_text(ISCO_TIP).clicked() {
                         settings.drop_r = metric.isco(prograde);
                         settings.release = if prograde {
@@ -691,6 +714,7 @@ impl ObserverCard {
                         } else {
                             Release::CircularRetrograde
                         };
+                        settings.mode = ObserverMode::FreeFall;
                     }
                 }
             });
@@ -1385,21 +1409,28 @@ impl AppControls {
             }
 
             ui.label(egui::RichText::new("Presets (Sets Mass & Spin):").small());
-            ui.horizontal_wrapped(|ui| {
-                let mut preset_changed = false;
-                let highlighted = active_preset(metric);
-                for (label, m, a_star, m_solar, note) in PRESETS {
-                    let pick = chip(ui, highlighted == Some(label), label);
-                    let pick = if note.is_empty() { pick } else { pick.on_hover_text(note) };
-                    if pick.clicked() {
-                        *metric = KerrSchild::with_solar_mass(m, a_star * m, m_solar);
-                        preset_changed = true;
+            // Two rows rather than one that wraps where it likes: the two widest labels have a
+            // row of their own, so the panel stays as narrow as the rest of it.
+            let mut preset_changed = false;
+            let highlighted = active_preset(metric);
+            for second_row in [false, true] {
+                ui.horizontal_wrapped(|ui| {
+                    for (label, m, a_star, m_solar, note) in PRESETS {
+                        if PRESET_SECOND_ROW.contains(&label) != second_row {
+                            continue;
+                        }
+                        let pick = chip(ui, highlighted == Some(label), label);
+                        let pick = if note.is_empty() { pick } else { pick.on_hover_text(note) };
+                        if pick.clicked() {
+                            *metric = KerrSchild::with_solar_mass(m, a_star * m, m_solar);
+                            preset_changed = true;
+                        }
                     }
-                }
-                if preset_changed {
-                    self.drop_observers(metric, alice, bob, &mut signals, current_time);
-                }
-            });
+                });
+            }
+            if preset_changed {
+                self.drop_observers(metric, alice, bob, &mut signals, current_time);
+            }
 
             ui.separator();
             let rp = metric.outer_horizon();

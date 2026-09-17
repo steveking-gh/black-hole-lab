@@ -1,6 +1,7 @@
 use crate::gui::cauchy_effects::CauchyEffects;
 use crate::gui::controls::{
-    AppControls, DISTANT_CLOCK_GRID_TIP, GLOBAL_VOLUME_TIP, ReferenceFrame, SignalViews, StepMode, VIEW_TIP,
+    AppControls, DISTANT_CLOCK_GRID_TIP, GLOBAL_VOLUME_TIP, OPENING_SPIN, ReferenceFrame, SignalViews,
+    StepMode, VIEW_TIP,
 };
 use crate::gui::spacetime_canvas::{KEEP_SURFACE_FRAMED_TIP, REST_FRAME_TIP, SpacetimeCanvas};
 use crate::gui::spatial_canvas::{FrontStyle, SpatialCanvas};
@@ -48,12 +49,12 @@ impl Default for SpacetimeApp {
         // stellar-mass one, and the preset row lights up by itself because the highlight is read
         // off the metric (`active_preset`). At this spin r+ = 1.436M and r- = 0.564M, so the
         // trapped region is narrow and the Cauchy horizon is well clear of the ring.
-        let metric = KerrSchild::with_solar_mass(1.0, 0.90, 4.15e6);
+        let metric = KerrSchild::with_solar_mass(1.0, OPENING_SPIN, 4.15e6);
 
         // The layout the app opens on is built by the same call the transport's Reset and Drop
         // Observers buttons make, from the same two cards, so the three cannot disagree about
-        // where a run starts: both observers dropped from r = 4.5M as raindrops (E = 1, L = 0,
-        // ingoing), Alice released at once and Bob hovering there until t = 8.
+        // where a run starts: Alice in free fall on the prograde ISCO, Bob a raindrop from
+        // r = 4.5M, both let go at once.
         let mut controls = AppControls::default();
         let (mut alice, mut bob) = (None, None);
         let mut signal = SignalField::default();
@@ -597,15 +598,47 @@ mod tests {
     /// Alice released at once and Bob 8 M of coordinate time later, so he trails her down the same
     /// infall and hovers while he waits.
     ///
-    /// It is no longer what the app opens on - Alice holds the ZAMO circle at the drop radius and
-    /// Bob falls at once - so a test that needs somebody falling in r, or needs the trailing hover,
+    /// It is no longer what the app opens on - Alice circles the prograde ISCO and Bob falls at
+    /// once - so a test that needs somebody falling in r, or needs the trailing hover,
     /// asks for it here rather than inheriting it from the defaults. The tests that are *about* the
     /// defaults do not call this: `test_control_defaults` and
     /// `test_startup_reset_and_drop_observers_all_build_the_same_layout` state them directly.
     fn trailing_raindrops(app: &mut SpacetimeApp) {
+        // Stated in full rather than inherited: a test that needs this layout gets it whatever
+        // the app happens to open on.
+        raindrop_cards(app);
         app.controls.bob.delta_t_delay = 8.0;
         drop_observers(app);
         set_free_fall(app);
+    }
+
+    /// Both cards as raindrops from 4.5 M: E = 1, L = 0, released from infinity, in free fall,
+    /// no delay. The azimuths are left as the cards have them.
+    fn raindrop_cards(app: &mut SpacetimeApp) {
+        for card in [&mut app.controls.alice, &mut app.controls.bob] {
+            card.release = Release::FromInfinity;
+            card.l_ang = 0.0;
+            card.drop_r = 4.5;
+            card.mode = ObserverMode::FreeFall;
+            card.delta_t_delay = 0.0;
+        }
+    }
+
+    /// The layout the app used to open on, stated in full: both raindrops from 4.5 M let go at
+    /// once, Bob falling and Alice holding the ZAMO circle at the drop radius.
+    fn zamo_alice_falling_bob(app: &mut SpacetimeApp) {
+        raindrop_cards(app);
+        app.controls.alice.mode = ObserverMode::Zamo;
+        drop_observers(app);
+        // Motion is the one thing a re-drop inherits from the observer being replaced rather
+        // than reading off the card, so it is set on the observers themselves, as
+        // `set_free_fall` does.
+        if let Some(alice) = app.alice.as_mut() {
+            alice.mode = ObserverMode::Zamo;
+        }
+        if let Some(bob) = app.bob.as_mut() {
+            bob.mode = ObserverMode::FreeFall;
+        }
     }
 
     /// Put both observers on their geodesics, the way the Motion radio on their cards does.
@@ -1320,17 +1353,18 @@ mod tests {
             "and the card says which release it actually made"
         );
 
-        // Defaults stay the raindrop constants on both cards, both let go at once, and the
-        // difference between them is the Motion: Alice holds the ZAMO circle, Bob falls.
+        // Both let go at once, both in free fall; the difference is the worldline. Bob is the
+        // raindrop from 4.5 M, Alice circles the prograde ISCO of the hole the app opens on.
         let d = AppControls::default();
         for card in [d.alice, d.bob] {
-            assert_eq!((card.l_ang, card.release), (0.0, Release::FromInfinity));
-            assert_eq!(card.drop_r, 4.5, "and both are dropped from the same radius");
             assert!(card.enabled && card.transmit);
             assert_eq!(card.delta_t_delay, 0.0);
+            assert_eq!(card.mode, ObserverMode::FreeFall);
         }
-        assert_eq!(d.alice.mode, ObserverMode::Zamo);
-        assert_eq!(d.bob.mode, ObserverMode::FreeFall);
+        assert_eq!((d.bob.l_ang, d.bob.release, d.bob.drop_r), (0.0, Release::FromInfinity, 4.5));
+        assert_eq!(d.alice.release, Release::CircularPrograde);
+        let isco = KerrSchild::new(1.0, OPENING_SPIN).isco(true);
+        assert!((d.alice.drop_r - isco).abs() < 1e-12, "Alice drops onto the ISCO at {isco} M");
         assert_eq!(d.release_gap(), 0.0, "no trailing delay, so no stack for anyone to cut");
     }
 
@@ -1373,9 +1407,9 @@ mod tests {
         let dropped = bob_of(&app).r;
         println!("dragged to 7.25M at t = 0, Reset drops him at {dropped:.4}M");
         assert!((dropped - 7.25).abs() < 1e-9, "Reset puts him back where he was put: {dropped}");
-        // Alice, who was not touched, is still dropped where she always was.
+        // Alice, who was not touched, is still dropped where her own card says.
         assert!(
-            (alice_of(&app).r - 4.5).abs() < 1e-9,
+            (alice_of(&app).r - app.controls.alice.drop_r).abs() < 1e-9,
             "and nobody else moves: {}",
             alice_of(&app).r
         );
@@ -1617,9 +1651,9 @@ mod tests {
         app.controls.step_mode = StepMode::Distance;
         app.controls.step_distance_km = 1000.0;
 
-        // 1. Both falling: Bob's own speed, as before. That is the layout the app opens on for
-        //    him - no release delay - but not for Alice, who holds the ZAMO circle until she is
-        //    put on a geodesic here.
+        // 1. Both falling in r: Bob's own speed, as before. That is the layout the app opens on
+        //    for him - no release delay - but not for Alice, who circles the ISCO until she is
+        //    put on an infall here.
         set_free_fall(&mut app);
         app.step_forward(0.05);
         let falling = app.arrow_step();
@@ -2325,6 +2359,7 @@ mod tests {
         // was already the far one. The stamp is now the interpolated crossing event.
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
+        zamo_alice_falling_bob(&mut app);
         let step = 0.02;
         for _ in 0..200 {
             app.step_forward(step);
@@ -2572,13 +2607,14 @@ mod tests {
         let opening = layout(&app);
         assert_eq!(opening.len(), 2, "both cards are ticked out of the box");
         assert_eq!(opening[0].0, "Alice");
-        assert!((opening[0].2 - 4.5).abs() < 1e-12, "Alice drops from r = 4.5M");
+        let isco = app.metric.isco(true);
+        assert!((opening[0].2 - isco).abs() < 1e-12, "Alice drops onto the prograde ISCO");
         assert!(opening[0].5 == 0.0 && opening[0].6, "released at once");
-        assert!((opening[1].2 - 4.5).abs() < 1e-12, "and Bob from the same radius");
+        assert!((opening[1].2 - 4.5).abs() < 1e-12, "and Bob from r = 4.5M");
         assert!(opening[1].5 == 0.0 && opening[1].6, "and at the same moment");
-        // The difference between them is the Motion each is dropped on, which is the one thing a
-        // re-drop inherits from the observer it replaces rather than reading off the card.
-        assert_eq!(alice_of(&app).mode, ObserverMode::Zamo, "Alice holds the ZAMO circle");
+        // Both in free fall; the difference between them is the worldline each is released on.
+        assert_eq!(alice_of(&app).mode, ObserverMode::FreeFall, "Alice circles the ISCO");
+        assert_eq!(alice_of(&app).release, Release::CircularPrograde);
         assert_eq!(bob_of(&app).mode, ObserverMode::FreeFall, "Bob falls");
 
         // Part-way through a run, with light in flight and Bob's worldline well below the drop.
