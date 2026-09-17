@@ -454,6 +454,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 
 [[package]]
+name = "black-hole-lab"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "nalgebra",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "block2"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3009,17 +3020,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd538fb6910ac1099850255cf94a94df6551fbdd602454387d0adb2d1ca6dead"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "spacetime"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "egui",
- "nalgebra",
- "serde",
- "serde_json",
 ]
 
 [[package]]
