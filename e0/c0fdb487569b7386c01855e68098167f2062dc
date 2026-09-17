@@ -1,0 +1,23 @@
+src/physics/wavefront.rs
+  s_99085f80de58c0::t_80c9170fc1169c 4539
+src/gui/controls.rs
+  s_99085f80de58c0::t_80c9170fc1169c 499
+src/gui/spatial_canvas.rs
+  s_99085f80de58c0::t_80c9170fc1169c 1082,2706
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e0c0fdb487569b7386c01855e68098167f2062dc",
+  "prompts": {},
+  "sessions": {
+    "s_99085f80de58c0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b270d59c-b282-4517-83fc-8b530cf1e304",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
