@@ -190,6 +190,15 @@ impl eframe::App for SpacetimeApp {
         // only by a frame that is actually played in Watch mode.
         self.controls.achieved_watch_rate = None;
 
+        // The Wavefronts kept slider is a statement about what is on the screen, not a request
+        // about the next emission, so it goes in here - once a frame, before the played step and
+        // before anything is drawn - rather than on the stepping path the ray count takes. That is
+        // what makes lowering it bite while the run is paused, which is when a user reaching for it
+        // to thin a crowded picture is most likely to be. Raising it only widens the window from
+        // here on: the pulses already evicted are gone. See `SignalField::max_pulses`.
+        SignalPair { alice: &mut self.signal, bob: &mut self.bob_signal }
+            .set_max_pulses(self.controls.max_pulses);
+
         // Advance simulation if playing
         if self.controls.is_playing {
             // Time mode: frame-rate independent playback at `play_speed` units of M per real second.

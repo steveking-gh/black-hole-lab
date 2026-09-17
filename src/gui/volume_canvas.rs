@@ -1587,11 +1587,12 @@ impl VolumeCanvas {
         // by its colour: a gain ramp that meant Alice on one sheet and Bob on another would mean
         // nothing on either.
         //
-        // The cost is bounded by the physics module's own caps and by the window: at most
-        // `MAX_PULSES / HISTORY_PULSE_STRIDE` = 8 tagged pulses per field, 24 kept rays each and
-        // `HISTORY_MAX_ROWS` = 256 rows, so 8 x 24 x 255 x 2 = 98 k triangles per field and under
-        // 200 k for both - the worst case the caps allow, against a typical window holding a
-        // hundred rows of two or three tagged pulses.
+        // The cost is bounded by the physics module's own caps and by the window: at most the
+        // pulse cap over `HISTORY_PULSE_STRIDE` tagged pulses per field - eight at the default cap
+        // of `MAX_PULSES` and sixteen at the top of the Wavefronts kept slider - with 24 kept rays
+        // each and `HISTORY_MAX_ROWS` = 256 rows, so 8 x 24 x 255 x 2 = 98 k triangles per field at
+        // the default and 196 k at the widest, under 400 k for both - the worst case the caps
+        // allow, against a typical window holding a hundred rows of two or three tagged pulses.
         //
         if self.show_pulse_surfaces {
             let to_world = |t: f64, s: &RaySample| {

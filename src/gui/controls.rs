@@ -2,7 +2,7 @@ use crate::gui::theme::Theme;
 use crate::physics::geodesic::GeodesicState;
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::{Observer, ObserverMode, ObserverPair, Release, WorldlineParams};
-use crate::physics::wavefront::{Endpoint, RAYS_PER_PULSE, SignalField, SignalPair};
+use crate::physics::wavefront::{Endpoint, MAX_PULSES, RAYS_PER_PULSE, SignalField, SignalPair};
 
 /// Why one M is a mass, a length and a duration at the same time.
 const M_UNITS_TIP: &str =
@@ -281,6 +281,17 @@ pub struct AppControls {
     /// `SignalField::emit_if_due` and by nothing else. Pulses already in flight keep the count they
     /// were emitted with, because their rays are the null geodesics that were launched.
     pub rays_per_pulse: usize,
+    /// How many wavefronts each transmission keeps at once, from one to 128, starting at
+    /// `MAX_PULSES`. Past it the oldest is dropped, so this is the length of the history the
+    /// picture holds and, with `rays_per_pulse`, one of the two numbers that decide what a frame
+    /// costs to integrate and to draw.
+    ///
+    /// Not a standing request like the ray count: it is pushed into both transmissions once a
+    /// frame by `SpacetimeApp::ui`, played or paused, and `SignalPair::set_max_pulses` trims them
+    /// to it as it goes. Lowering it therefore thins the picture immediately and permanently -
+    /// `step_back` cannot recover an evicted pulse - while raising it widens the window from that
+    /// frame onward. Like every control on this panel it survives Reset.
+    pub max_pulses: usize,
     /// Whether the segments of a wavefront between neighbouring rays are drawn at all: on, each is
     /// the curve linear in (r, phi) between its two rays; off, only the rays themselves are drawn,
     /// one dot per calculated point and nothing between them.
@@ -348,6 +359,7 @@ impl Default for AppControls {
             step_distance_km: 1000.0,
             achieved_watch_rate: None,
             rays_per_pulse: RAYS_PER_PULSE,
+            max_pulses: MAX_PULSES,
             draw_front_arcs: true,
             hide_wound_segments: true,
             show_spatial_details: false,
@@ -448,6 +460,9 @@ const ZAMO_TIP: &str = "The zero-angular-momentum observer, the frame in which a
 
 /// The hover tip on the Wavefront points slider.
 const WAVEFRONT_POINTS_TIP: &str = "How finely a pulse samples the emitter's light cone: n directions at α = 2πi/n, spaced 360/n degrees apart — 2.5° at the default of 144 — with α = 0, the emitter's own outward radial leg, always the first of them whatever n is. Each direction is one exact null geodesic, so this is the resolution of the whole picture the light draws: more points give finer tongues where the front is being swallowed at the ring, more beads along the frozen arcs stacked on r₋, shorter segments around the loop on the equatorial view, and rarer handovers from one sheet of a front to the next in the reception test, since neighbouring rays are then closer together in azimuth. They are not free. Integrating the rays, testing them against the receiver's worldline and drawing them all scale linearly in the count: about 1.1 ms of frame time for each extra 72 rays a pulse with forty pulses in flight, of which the integration and the reception test are 0.3 ms, so 1024 points is about seven times the work of 144 and the play loop is the first thing to feel it. It applies to pulses sent from now on. Light already in flight is the geodesics that were launched, and each pulse keeps the count it went out with, so the slider changes the transmission rather than redrawing it.";
+
+/// The hover tip on the Wavefronts kept slider.
+const WAVEFRONTS_KEPT_TIP: &str = "How many wavefronts each transmission holds at once. Past this count the oldest is dropped, so it is the length of the history the picture keeps: at the default of 64 nothing a single infall sends is ever evicted - a whole fall from r = 4.5M is about forty pulses at the emission interval of 0.1M of the emitter's proper time - and a hovering emitter, who transmits for as long as the wait lasts, runs past it and is drawing its oldest arcs from light sent long before the release. Turn it down to read one front at a time, or to watch a single pulse break on r₋ without sixty others stacked over it; turn it up to see the whole stack a long transmission builds against the Cauchy horizon at once. With the points slider above it, this is the other half of what a frame costs: the integration, the reception test and the drawing all scale as the product of the two, so 128 fronts at 1024 points is 131 k exact null geodesics carried every step, against 9 k at the pair of defaults. The 2D+1 volume view is coupled to it too - every eighth pulse by serial number carries a swept surface, so the cap fixes how many of those sheets can be in flight, eight at the default and sixteen at the top. Two things to know about moving it. Lowering it takes effect at once, on the next frame, whether the run is playing or paused; and the drop is permanent, because an evicted pulse is gone from the field and ⏪ Step Back reintegrates the rays it still has rather than re-emitting ones it has let go, so raising it again widens the window from here on rather than restoring what was dropped. What no cap can erase is what the transmission measured: an arrival is an event that happened, and the receptions list and the last delivery are kept outside the pulses, so even at a cap of one front the HUD's arrival lines and measured shifts are the same as at 128. It is kept across ⏮ Reset, as every control on this panel is.";
 
 /// The hover tip on the Arcs between wavefront points checkbox.
 const FRONT_ARCS_TIP: &str = "Whether the pieces of a wavefront between neighbouring rays are drawn. Ticked, each piece is the curve linear in (r, ϕ) from one ray to the next, cut into steps of at most 0.05 rad and each step put through the embedding x + iy = (r + ia)e^{iϕ} — so a piece joining two rays sitting on r₋ is drawn as an arc of the r₋ circle, and one joining two rays a quarter of a turn apart is drawn going round. Unticked, nothing is drawn between the rays: the front is shown as the calculated points themselves, one dot per ray in the same gain colour the arc would have had, and the frozen family keeps its heavier beads. Nothing physical turns on it. The reception test interpolates in (r, ϕ) along exactly the same pieces whichever way they are drawn, so an arrival happens at the same event, at the same measured shift, in both settings. What the tick buys is that the front you are looking at is the same curve the detector is testing; what unticking buys is the raw output of the integrator with no interpolation laid over it, which is worth being able to see, because everything the arcs add is inference. Inside r₋ the annulus is thin (at a = 0.90 the embedding puts r₋ at ρ = 1.06 against the ring at ρ = 0.90) and neighbouring rays wind at wildly different rates, dϕ/dt running from about −5 per M near the ring to +0.8 for one settling onto r₋, so a pair of neighbours ends up most of a radian apart and the arc between them is drawn along a curve no ray was integrated on; the dots are the part that is not inferred. It is independent of the winding cut on the checkbox below it, which drops the two or so segments per pulse whose rays have wound more than a whole turn apart; with the arcs unticked that cut has nothing left to drop, since every live ray is already drawn as its own dot. The setting is a view setting and is kept across ⏮ Reset, as every control on this panel is.";
@@ -1351,6 +1366,12 @@ impl AppControls {
                     .text("Wavefront points"),
             )
             .on_hover_text(WAVEFRONT_POINTS_TIP);
+            ui.add(
+                egui::Slider::new(&mut self.max_pulses, 1..=128)
+                    .integer()
+                    .text("Wavefronts kept"),
+            )
+            .on_hover_text(WAVEFRONTS_KEPT_TIP);
             ui.checkbox(&mut self.draw_front_arcs, "Arcs between wavefront points")
                 .on_hover_text(FRONT_ARCS_TIP);
             ui.checkbox(&mut self.hide_wound_segments, "Hide segments wound past a full turn")

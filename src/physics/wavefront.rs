@@ -121,7 +121,8 @@
 //! the split the module header derives is visible in it directly: the rows of the frozen family,
 //! E - Omega_- L < 0, wrap onto the r- pipe and run up the gain ramp while the rest of the sheet
 //! falls through. The memory is bounded on both axes - `HISTORY_MAX_ROWS` rows, thinned like the
-//! track rather than stopped, and `MAX_PULSES / HISTORY_PULSE_STRIDE` tagged pulses in flight - and
+//! track rather than stopped, and the pulse cap over `HISTORY_PULSE_STRIDE` tagged pulses in
+//! flight - and
 //! a dead ray records r = NaN rather than the radius it was left standing at, so nothing draws a
 //! piece of front that is not there.
 
@@ -141,14 +142,16 @@ use crate::physics::tetrad::Tetrad;
 /// flight together. The tests use it as the count a field emits at unless they say otherwise.
 pub const RAYS_PER_PULSE: usize = 144;
 
-/// Pulses kept at once. The oldest is dropped past this, which bounds both the drawing and the
-/// integration cost of a long run.
+/// Pulses kept at once when the app starts, and the default of `SignalField::max_pulses`. The
+/// oldest is dropped past the cap, which bounds both the drawing and the integration cost of a
+/// long run; the panel's "Wavefronts kept" slider moves it, between one pulse and 128.
 ///
 /// A pulse whose every ray has died is not retired early. A dead ray keeps its state at the death
 /// event and can be revived by `SignalField::step_back`, so dropping a spent pulse would put a hole
 /// in the field that stepping backwards could never fill. Dead rays cost nothing to integrate and
-/// nothing to draw, and this cap bounds the pile either way; a whole infall is some forty pulses,
-/// well under it.
+/// nothing to draw, and the cap bounds the pile either way; a whole infall is some forty pulses, so
+/// at this value nothing a single infall sends is evicted at all and the slider only starts to bite
+/// below it.
 pub const MAX_PULSES: usize = 64;
 
 /// The emitter's proper-time interval between pulses, in units of M. A whole infall from r = 4.5M
@@ -230,9 +233,10 @@ const TRACK_MAX_POINTS: usize = 4000;
 ///
 /// A history is a surface rather than a curve, so keeping one for every pulse would be forty of
 /// them stacked on top of each other in the volume view - unreadable as well as expensive. At this
-/// stride the `MAX_PULSES` cap allows at most eight in flight per field, which is one sheet every
-/// 0.8 M of the emitter's proper time at `EMISSION_INTERVAL_TAU`: enough of them to read the
-/// stack building against r-, few enough that each is a surface the eye can follow.
+/// stride the default pulse cap allows at most eight in flight per field - sixteen at the top of
+/// the "Wavefronts kept" slider - which is one sheet every 0.8 M of the emitter's proper time at
+/// `EMISSION_INTERVAL_TAU`: enough of them to read the stack building against r-, few enough that
+/// each is a surface the eye can follow.
 pub const HISTORY_PULSE_STRIDE: usize = 8;
 
 /// Rays a tagged pulse aims to keep in each history row. The stride is `rays.len() / this`, floored
@@ -1128,7 +1132,7 @@ pub struct Reception {
 /// It is a copy of the numbers that locate a `Pulse`'s emission event on the emitter's worldline,
 /// plus the time of the arrival that made the pulse a delivery, and it exists because the emission
 /// event has to outlive the pulse. A transmitter running for a whole infall sends more pulses than
-/// the `MAX_PULSES` cap keeps - a hovering emitter alone sends about sixty before release at the
+/// the pulse cap keeps - a hovering emitter alone sends about sixty before release at the
 /// app's default delay - and the pulse that carried the last signal to arrive is one of the
 /// oldest, so it is the first the cap throws away. The event it marks is a fact about the
 /// spacetime and does not stop being true when the drawing of its wavefront is dropped.
@@ -1948,8 +1952,23 @@ pub struct SignalField {
     /// Whatever n is, the emission angles are alpha = 2 pi i / n, so alpha = 0 - the emitter's own
     /// outward radial leg - is ray zero of every pulse and the spacing is 360/n degrees.
     pub rays_per_pulse: usize,
+    /// How many pulses this transmission keeps at once: set from the panel's "Wavefronts kept"
+    /// slider and starting at `MAX_PULSES`. Past it the oldest is dropped, which is what bounds the
+    /// drawing and the integration cost of a run that transmits for a whole infall.
+    ///
+    /// Unlike `rays_per_pulse`, which is a standing request about the next emission, this one bites
+    /// the moment it moves: `set_max_pulses` trims the field to it there and then, because the
+    /// reason to lower it is to stop paying for fronts you are no longer looking at, and waiting
+    /// for the next emission to collect would leave the saving a whole step away.
+    ///
+    /// Lowering it is not reversible. An evicted pulse is gone from the field and no amount of
+    /// stepping backwards restores it (see `step_back`), so raising the slider again widens the
+    /// window from here on rather than giving back what was let go. What the eviction cannot touch
+    /// is the record of what the transmission did: `last_delivered` and `heard` are kept outside
+    /// the pulses for precisely this reason, so a cap of one pulse still measures every arrival.
+    pub max_pulses: usize,
     /// The newest delivery this transmission has made, remembered separately from the pulses so
-    /// that the `MAX_PULSES` cap cannot erase the causal boundary it marks. Maintained by
+    /// that the pulse cap cannot erase the causal boundary it marks. Maintained by
     /// `detect_receptions` and wound back by `step_back`; read through `last_delivered_pulse`.
     last_delivered: Option<Delivery>,
     /// Every arrival this transmission has made, in the order they were recorded, for the same
@@ -1972,6 +1991,7 @@ impl Default for SignalField {
             last_emit_tau: None,
             interval_tau: EMISSION_INTERVAL_TAU,
             rays_per_pulse: RAYS_PER_PULSE,
+            max_pulses: MAX_PULSES,
             last_delivered: None,
             heard: Vec::new(),
             budget_exhausted: 0,
@@ -2041,7 +2061,7 @@ impl SignalField {
             track_dt: TRACK_MIN_DT,
             // Every eighth pulse carries a surface as well as a wedge. The stride is taken on the
             // serial number rather than on the position in the field, so which pulses are tagged
-            // does not shift as the `MAX_PULSES` cap evicts the oldest.
+            // does not shift as the cap evicts the oldest.
             history: self
                 .next_index
                 .is_multiple_of(HISTORY_PULSE_STRIDE)
@@ -2051,9 +2071,27 @@ impl SignalField {
         });
         self.next_index += 1;
         self.last_emit_tau = Some(emitter.tau);
-        while self.pulses.len() > MAX_PULSES {
+        self.trim_to_cap();
+    }
+
+    /// Drop the oldest pulses until the field is inside its own `max_pulses`.
+    ///
+    /// The two ways a field can end up over its cap - it emitted one more, or the cap itself came
+    /// down under it - are the same eviction, so they go through one place. The floor of one pulse
+    /// is not reachable from the panel, whose slider stops there, and is here so that a cap of zero
+    /// from anywhere else cannot leave a transmitting emitter with nothing in flight at all.
+    fn trim_to_cap(&mut self) {
+        while self.pulses.len() > self.max_pulses.max(1) {
             self.pulses.remove(0);
         }
+    }
+
+    /// Set this field's pulse cap, dropping the oldest pulses down to it at once. See `max_pulses`
+    /// for why the trim is immediate rather than deferred to the next emission, and why it cannot
+    /// be undone.
+    pub fn set_max_pulses(&mut self, pulses: usize) {
+        self.max_pulses = pulses;
+        self.trim_to_cap();
     }
 
     /// Advance every live ray by dt of coordinate time, then record how far each pulse's radial
@@ -2112,7 +2150,7 @@ impl SignalField {
     /// cadence as time runs forward again, and `next_index` is left alone: serial numbers are not
     /// reused, and a re-emitted pulse is a new pulse even where it lands on an old emission event.
     ///
-    /// One thing does not come back. A pulse already evicted by the `MAX_PULSES` cap is gone from
+    /// One thing does not come back. A pulse already evicted by the pulse cap is gone from
     /// the field, and no amount of stepping backwards restores it; the reversible window is the
     /// window the cap keeps.
     pub fn step_back(&mut self, metric: &KerrSchild, dt: f64) {
@@ -2248,7 +2286,7 @@ impl SignalField {
     }
 
     /// Every crossing of the receiver's worldline this transmission has made, including those
-    /// carried by pulses the `MAX_PULSES` cap has since dropped.
+    /// carried by pulses the pulse cap has since dropped.
     pub fn receptions(&self) -> impl Iterator<Item = &Reception> {
         self.heard.iter()
     }
@@ -2292,8 +2330,9 @@ impl SignalField {
     /// many later ones never arrive; neither canvas marks that event, because a lone ring on a
     /// worldline reads as a thing in the spacetime rather than as a fact about the run.
     ///
-    /// It survives the `MAX_PULSES` cap, which matters: an emitter transmitting from t = 0 through
-    /// a whole infall sends of order a hundred pulses against a cap of sixty-four, and the last
+    /// It survives the pulse cap, which matters: an emitter transmitting from t = 0 through
+    /// a whole infall sends of order a hundred pulses against a cap that defaults to sixty-four,
+    /// and can be asked to keep as few as one, and the last
     /// pulse to be delivered is usually one of the first to have been sent. See `Delivery`.
     pub fn last_delivered_pulse(&self) -> Option<Delivery> {
         self.last_delivered
@@ -2483,6 +2522,22 @@ impl SignalPair<'_> {
     pub fn set_rays_per_pulse(&mut self, rays: usize) {
         self.alice.rays_per_pulse = rays;
         self.bob.rays_per_pulse = rays;
+    }
+
+    /// Set how many pulses *either* transmission keeps at once, trimming both to it now.
+    ///
+    /// One control over both fields, for the reason `set_rays_per_pulse` is one control: two
+    /// transmissions holding different lengths of their own history would make the two pictures
+    /// incomparable, and the panel offers one slider. This is the only way the app writes
+    /// `SignalField::max_pulses`, so the two cannot fall out of step.
+    ///
+    /// It differs from the ray count in when it lands. A ray count is a request about the next
+    /// emission and is pushed in on the way into a step; a cap is a statement about what is on the
+    /// screen right now, so the app pushes this one in once a frame, played or paused, and the
+    /// trim happens in `SignalField::set_max_pulses` as it goes.
+    pub fn set_max_pulses(&mut self, pulses: usize) {
+        self.alice.set_max_pulses(pulses);
+        self.bob.set_max_pulses(pulses);
     }
 
     /// Drop both transmissions and put both clocks back to zero: the reset that re-dropping the
@@ -4965,6 +5020,62 @@ mod tests {
         alice.step(&metric, t + dt, dt);
         field.emit_if_due(&metric, &alice);
         assert_eq!(field.pulses.len(), 1);
+    }
+
+    #[test]
+    fn test_the_pulse_cap_trims_the_oldest_and_bites_the_moment_it_moves() {
+        // The "Wavefronts kept" slider is the other half of what a frame costs, and it is not a
+        // standing request the way the ray count is: it says how many fronts the field holds now.
+        // So lowering it evicts on the spot rather than at the next emission, what it evicts is
+        // always the oldest, and raising it again gives nothing back.
+        let metric = KerrSchild::new(1.0, 0.65);
+        let params = WorldlineParams::default();
+        let mut alice = Observer::new_with_phi(&metric, "Alice", 0.0, 4.5, 0.0, 0.25, params);
+        let mut field = SignalField::default();
+        assert_eq!(field.max_pulses, MAX_PULSES, "the default is the named constant");
+
+        // An emitter sending for a whole infall sends far more than a low cap keeps.
+        field.max_pulses = 4;
+        let (mut t, dt) = (0.0, 0.02);
+        for _ in 0..500 {
+            t += dt;
+            alice.step(&metric, t, dt);
+            field.advance(&metric, dt);
+            field.emit_if_due(&metric, &alice);
+        }
+        let newest = field.next_index - 1;
+        assert!(newest >= 8, "expected a transmission of some length: {} pulses sent", newest + 1);
+        assert_eq!(field.pulses.len(), 4, "the emission trims to the cap");
+        assert_eq!(
+            field.pulses.iter().map(|p| p.index).collect::<Vec<_>>(),
+            ((newest - 3)..=newest).collect::<Vec<_>>(),
+            "and what it keeps is the newest four"
+        );
+        let heard = field.receptions().count();
+
+        // Down: an eviction now, with no step and no emission in between to carry it.
+        field.set_max_pulses(2);
+        assert_eq!(field.pulses.len(), 2, "lowering the cap trims there and then");
+        assert_eq!(
+            field.pulses.iter().map(|p| p.index).collect::<Vec<_>>(),
+            vec![newest - 1, newest],
+            "and again it is the oldest that go"
+        );
+
+        // Up: the window widens from here on. The two pulses let go are gone, and nothing is
+        // re-emitted to fill the room made for them.
+        field.set_max_pulses(MAX_PULSES);
+        assert_eq!(field.pulses.len(), 2, "raising the cap restores nothing");
+
+        // A cap of zero is not reachable from the panel, whose slider stops at one, and would
+        // leave a transmitting emitter with nothing in flight at all.
+        field.set_max_pulses(0);
+        assert_eq!(field.pulses.len(), 1, "the floor is one front, not none");
+        assert_eq!(field.pulses[0].index, newest, "and the one that survives is the newest");
+
+        // What no cap can erase is what the transmission measured. An arrival is an event that
+        // happened, and the record of it lives outside the pulses.
+        assert_eq!(field.receptions().count(), heard, "the receptions outlive every eviction");
     }
 
     #[test]
