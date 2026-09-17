@@ -1,0 +1,14 @@
+LICENSE.TXT
+  h_5b3f31968f5853 1-674
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d53a06b63fd6771b79f14c22a37cd5391f7d0e07",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
