@@ -1079,7 +1079,7 @@ const MAX_ARC_STEP: f64 = 0.05;
 ///
 /// Nothing in the physics bounds that separation. A ray let go on very nearly the critical impact
 /// parameter hangs on one of the unstable circular photon orbits outside r+ (at a = 0.90 the
-/// equatorial ones are at r = 1.56 prograde and r = 3.89 retrograde) for as long as it takes to
+/// equatorial ones are at r = 1.56 prograde and r = 3.91 retrograde) for as long as it takes to
 /// fall off them, going round and round while the neighbour it was emitted next to escapes or
 /// falls in; the difference between the two grows for as long as that lasts, and all of it is
 /// front. `test_a_wound_front_of_a_real_pulse_is_drawn_over_its_raw_azimuth_difference` measures
@@ -2703,7 +2703,7 @@ mod tests {
         // A whole light cone is let go at r = 2.0 at a = 0.90 and integrated for 60 M of
         // coordinate time at the frame step. What winds a front there is the unstable circular
         // photon orbits outside r+ (at a = 0.90 the equatorial ones sit at r = 1.56 prograde and
-        // r = 3.89 retrograde): a ray let go on very nearly the critical impact parameter hangs at
+        // r = 3.91 retrograde): a ray let go on very nearly the critical impact parameter hangs at
         // one of them for tens of M, going round and round, while the neighbour it was emitted
         // next to has long since escaped outward or spiralled in. Their azimuths are then several
         // whole turns apart, and the segment of front between them is that whole spiral. It is one

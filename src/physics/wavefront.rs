@@ -4536,7 +4536,7 @@ mod tests {
         //
         // A whole light cone is let go at r = 2.0 at a = 0.90 and run for 60 M at the frame step.
         // The winding comes from the unstable circular photon orbits outside r+ (r = 1.56 prograde
-        // and r = 3.89 retrograde at this spin): a ray on very nearly the critical impact parameter
+        // and r = 3.91 retrograde at this spin): a ray on very nearly the critical impact parameter
         // hangs at one of them for tens of M while the neighbour it was emitted next to has escaped
         // or fallen in.
         let metric = KerrSchild::new(1.0, 0.90);
