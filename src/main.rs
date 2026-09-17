@@ -16,14 +16,14 @@ fn main() -> eframe::Result<()> {
     // Native window options
     let native_options = NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Relativistic Spacetime & Cauchy Horizon Visualizer")
+            .with_title("Black Hole Lab")
             .with_inner_size([1280.0, 820.0])
             .with_min_inner_size([900.0, 600.0]),
         ..Default::default()
     };
 
     eframe::run_native(
-        "Relativistic Spacetime & Cauchy Horizon Visualizer",
+        "Black Hole Lab",
         native_options,
         Box::new(|cc| {
             install_fonts(&cc.egui_ctx);

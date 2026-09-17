@@ -283,7 +283,7 @@ impl eframe::App for SpacetimeApp {
         // Bob) that the user never reached for: the equatorial view's right-click menu centres on
         // either observer and on the hole, and both canvases zoom on the wheel.
         egui::Panel::top("top_bar").show(ui, |ui| {
-            ui.label(egui::RichText::new("SPACETIME LAB").heading().strong().color(Theme::HORIZON_OUTER));
+            ui.label(egui::RichText::new("BLACK HOLE LAB").heading().strong().color(Theme::HORIZON_OUTER));
         });
 
         // 2. Bottom Panel: Cauchy Effects HUD
