@@ -625,11 +625,7 @@ pub const SIGNAL_BOX_TIP: &str = "The other observer's transmission read as a wa
 pub const SURFACE_BOX_TIP: &str =
 "What the surface is, read straight off the slope of its line in this frame. Steeper than 45 degrees is timelike - the world-tube of observers holding that radius, something a rocket can stay off. Exactly 45 degrees is null. Flatter than 45 degrees is spacelike: not a place at all but a moment of your history, which arrives whatever you do. Nothing about the tilt is put in by hand; it comes from the sign of g^rr at your own radius through the dual tetrad, so the reading is exact at the dot.
 
-tilt — the angle of the line, quoted so that a 41.8 degree surface is not mistaken for a 45 degree one.
-
-moving at / closing at — for a timelike surface, the speed its world-tube crosses this frame at; for a spacelike one, your speed relative to the observers whose simultaneity slice it is. Both are read off the same slope.
-
-ξ¹ and τ — where the line cuts your axes: how far out the surface is at your own moment, and when it meets your worldline. Both are marked (1st order) because this chart is linear. The tetrad is exact at the dot, so orientations there are exact, but a finite offset is a straight-line extrapolation through curved geometry and reads low - measured against the exact integral it is short by about 7% for an infaller at 4.5M, by 38% for a hoverer at 4M, and by 63% deep inside r₋. The two horizons do not use it: their boxes integrate the geodesic and the worldline instead, and carry no such tag.";
+Moving at / closing at - for a timelike surface, the speed its world-tube crosses this frame at; for a spacelike one, your speed relative to the observers whose simultaneity slice it is. Both are read off the same slope.";
 
 /// The Cauchy box's border. Red rather than the magenta of the r₋ line itself: the line is the
 /// geometry, the box is the warning.
@@ -871,6 +867,12 @@ pub struct SpacetimeCanvas {
     pub keep_surface_framed: bool,
     /// Where the user has dragged each info box on this canvas, per diagram and per observer.
     pub telemetry: TelemetryBoxes,
+    /// Which surfaces' boxes are currently hung off the top margin as "steep" lines rather than
+    /// parked at the right margin as "flat" ones, by box name. A line near 45 degrees - a
+    /// horizon on the approach, which is null - would otherwise flip between the two rules every
+    /// frame as the drawn slope crosses 1, and its box would jump between two corners of the
+    /// canvas. See `steep_with_hysteresis`.
+    steep_boxes: std::collections::HashSet<String>,
 }
 
 impl Default for SpacetimeCanvas {
@@ -883,8 +885,21 @@ impl Default for SpacetimeCanvas {
             frame_max_r: FRAME_MAX_R_DEFAULT,
             keep_surface_framed: true,
             telemetry: TelemetryBoxes::default(),
+            steep_boxes: std::collections::HashSet::new(),
         }
     }
+}
+
+/// Whether a surface's box is hung off the top margin (steep line) or parked at the right margin
+/// (flat line), given where it was last frame and the line's drawn |slope| now.
+///
+/// The rule is |slope| >= 1, with a band of hysteresis either side of it: a box that was steep
+/// stays steep down to 0.8, one that was flat stays flat up to 1.25. A null surface is exactly
+/// |slope| = 1, and an observer on the approach to a horizon draws one for frame after frame,
+/// wobbling about 1 by less than the band; without the hysteresis the box jumped between the two
+/// margins as the slope crossed 1 each way. Seen in the app on the Cauchy box.
+pub(crate) fn steep_with_hysteresis(was_steep: bool, slope_abs: f64) -> bool {
+    if was_steep { slope_abs >= 0.8 } else { slope_abs >= 1.25 }
 }
 
 impl SpacetimeCanvas {
@@ -2016,7 +2031,7 @@ Tick Enable Observer on Alice's or Bob's card",
         let surfaces: [DrawnSurface; 4] = [
             (
                 metric.ergosphere_equatorial(),
-                "Static Limit 2M",
+                "Ergosphere",
                 ergo_faint,
                 1.4,
                 Theme::ERGOSPHERE_LINE,
@@ -2040,7 +2055,7 @@ Tick Enable Observer on Alice's or Bob's card",
             ),
             (
                 0.0,
-                "Ring Singularity r = 0",
+                "Ring Singularity (r=0)",
                 Theme::SINGULARITY_LINE,
                 3.0,
                 Theme::SINGULARITY_LINE,
@@ -2060,7 +2075,13 @@ Tick Enable Observer on Alice's or Bob's card",
             };
             painter.line_segment([end_a, end_b], Stroke::new(width, color));
 
-            let (label_pos, align) = if line.slope().abs() >= 1.0 {
+            let steep = steep_with_hysteresis(self.steep_boxes.contains(title), line.slope().abs());
+            if steep {
+                self.steep_boxes.insert(title.to_string());
+            } else {
+                self.steep_boxes.remove(title);
+            }
+            let (label_pos, align) = if steep {
                 // Steep line: hang the label off it, stacked down the top margin.
                 let y = (head_bottom + 8.0 + 36.0 * font_scale * (idx as f32)).min(rect.bottom() - 40.0);
                 let x = segment_x_at_y(end_a, end_b, y)
@@ -2077,39 +2098,29 @@ Tick Enable Observer on Alice's or Bob's card",
             // a timelike surface, = 1 a null one, < 1 a spacelike one. The 2e-3 tolerance is a
             // display band on that comparison, not a physical fudge.
             let note = match line.character(2e-3) {
-                SurfaceCharacter::Null => "null surface (crossing now)",
-                SurfaceCharacter::Timelike => "timelike surface (can be avoided)",
+                SurfaceCharacter::Null => "Null Surface (crossing now)",
+                SurfaceCharacter::Timelike => "Timelike Surface (avoidable)",
                 SurfaceCharacter::Spacelike => {
                     if line.xi0_at_axis().unwrap_or(0.0) >= 0.0 {
-                        "spacelike surface (in your future)"
+                        "Spacelike Surface (in your future)"
                     } else {
-                        "spacelike surface (in your past)"
+                        "Spacelike Surface (in your past)"
                     }
                 }
             };
 
-            // Quantify the tilt so a 41.8-degree surface is not mistaken for a 45-degree one.
-            // A timelike surface is the worldsheet of observers hovering at that r; in this frame it
-            // moves at 1/|slope| (a boosted vertical line has slope 1/v). A spacelike surface is
-            // a simultaneity slice of the E = 0 observers there; the focus observer's speed relative
-            // to them is |slope|, and the surface crosses this worldline at tau = xi^0 on the axis.
+            // The one number the box keeps: a timelike surface is the world-tube of observers
+            // hovering at that r, and in this frame it moves at 1/|slope| (a boosted vertical
+            // line has slope 1/v); a spacelike surface is a simultaneity slice of the observers
+            // there, closing at |slope|; a null one moves at c.
             let slope_abs = line.slope().abs();
-            let tilt_deg = if slope_abs.is_finite() { slope_abs.atan().to_degrees() } else { 90.0 };
             let detail = match line.character(2e-3) {
                 SurfaceCharacter::Timelike => {
-                    let xi1 = if line.dir[1].abs() > 1e-12 {
-                        line.point[0] - line.dir[0] * line.point[1] / line.dir[1]
-                    } else {
-                        line.point[0]
-                    };
                     let speed = if slope_abs.is_finite() { 1.0 / slope_abs.max(1e-9) } else { 0.0 };
-                    format!("tilt {:.1}° • moving at {:.2}c • ξ¹ ≈ {:+.2} M (1st order)", tilt_deg, speed, xi1)
+                    format!("Moving at {speed:.2}c")
                 }
-                SurfaceCharacter::Null => format!("tilt {:.1}°", tilt_deg),
-                SurfaceCharacter::Spacelike => {
-                    let xi0 = line.xi0_at_axis().unwrap_or(0.0);
-                    format!("tilt {:.1}° • closing at {:.2}c • on your worldline at τ ≈ {:+.2} M (1st order)", tilt_deg, slope_abs, xi0)
-                }
+                SurfaceCharacter::Null => "Moving at 1.00c".to_string(),
+                SurfaceCharacter::Spacelike => format!("Closing at {slope_abs:.2}c"),
             };
 
             // Every surface answers in a box now. A horizon reports what it is to this observer -
@@ -3331,6 +3342,21 @@ mod canvas_tests {
             crests.crests.iter().any(|c| !c.received),
             "and the pulses still on their way to him are drawn too"
         );
+    }
+
+    #[test]
+    fn test_a_surface_box_changes_margin_only_when_the_slope_is_well_past_one() {
+        // Seen in the app: on the approach to r- the Cauchy line is null, |slope| = 1 give or
+        // take a little each frame, and its box jumped between the top margin and the right one
+        // as the slope crossed 1. With the band it changes side only when the line has clearly
+        // become the other kind.
+        for slope in [0.81, 0.95, 1.0, 1.05, 1.24] {
+            assert!(steep_with_hysteresis(true, slope), "a steep box stays steep at {slope}");
+            assert!(!steep_with_hysteresis(false, slope), "a flat box stays flat at {slope}");
+        }
+        assert!(!steep_with_hysteresis(true, 0.79), "and lets go below the band");
+        assert!(steep_with_hysteresis(false, 1.26), "and takes hold above it");
+        assert!(steep_with_hysteresis(true, f64::INFINITY) && steep_with_hysteresis(false, f64::INFINITY));
     }
 
     #[test]
