@@ -46,6 +46,24 @@ pub enum Release {
     /// which is what "fell from far away" means, and they are then a member of the E = 1,
     /// L = 0 raindrop congruence every shift in the app is quoted against.
     FromInfinity,
+    /// On the circular geodesic at the drop radius, in the sense of the hole's spin: both E and
+    /// L are fixed by the radius (`KerrSchild::circular_orbit`), and the card's L is ignored. The
+    /// only thrust-free orbit there is. Where none exists - inside the photon orbit - the release
+    /// falls back to the raindrop, and the card says so.
+    CircularPrograde,
+    /// The same, against the spin.
+    CircularRetrograde,
+}
+
+impl Release {
+    /// Whether this release is one of the two circular orbits, and if so which sense.
+    pub fn circular_sense(self) -> Option<bool> {
+        match self {
+            Self::CircularPrograde => Some(true),
+            Self::CircularRetrograde => Some(false),
+            Self::AtRest | Self::FromInfinity => None,
+        }
+    }
 }
 
 /// The conserved energy of a worldline with angular momentum `l_ang` released at radius `r` under
@@ -63,6 +81,19 @@ pub fn release_energy(metric: &KerrSchild, r: f64, l_ang: f64, release: Release)
             let floor = GeodesicState::energy_floor(metric, r, l_ang);
             if floor > 0.0 { floor } else { 1.0 }
         }
+        Release::CircularPrograde | Release::CircularRetrograde => {
+            release_constants(metric, r, l_ang, release).0
+        }
+    }
+}
+
+/// (E, L) of a release at `r`. A circular release with no orbit at that radius - inside the
+/// photon orbit - is the raindrop, E = 1 and L = 0, which is the one release that means
+/// something everywhere.
+fn release_constants(metric: &KerrSchild, r: f64, l_ang: f64, release: Release) -> (f64, f64) {
+    match release.circular_sense() {
+        Some(prograde) => metric.circular_orbit(r, prograde).unwrap_or((1.0, 0.0)),
+        None => (release_energy(metric, r, l_ang, release), l_ang),
     }
 }
 
@@ -110,12 +141,8 @@ impl WorldlineParams {
     /// The worldline a release at `r` with angular momentum `l_ang` puts an observer on. This is
     /// the app's own path: the card says where and how, and E follows.
     pub fn released(metric: &KerrSchild, r: f64, l_ang: f64, release: Release) -> Self {
-        Self {
-            energy: release_energy(metric, r, l_ang, release),
-            l_ang,
-            outgoing: false,
-            release,
-        }
+        let (energy, l_ang) = release_constants(metric, r, l_ang, release);
+        Self { energy, l_ang, outgoing: false, release }
     }
 }
 
@@ -363,8 +390,10 @@ impl Observer {
     /// radius it should have been hanging at.
     pub fn release_from_drag(&mut self, metric: &KerrSchild, mode: ObserverMode) {
         if let Some(old) = self.geodesic {
-            let energy = release_energy(metric, self.r, old.l_ang, self.release);
-            let mut geo = GeodesicState::new_infall(metric, self.t, self.r, energy, old.l_ang);
+            // Both constants are re-read: L is carried across as the user's own choice, except
+            // for a circular release, where it belongs to the radius.
+            let (energy, l_ang) = release_constants(metric, self.r, old.l_ang, self.release);
+            let mut geo = GeodesicState::new_infall(metric, self.t, self.r, energy, l_ang);
             geo.phi = self.phi;
             geo.tau = self.tau;
             self.geodesic = Some(geo);

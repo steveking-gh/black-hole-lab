@@ -422,6 +422,9 @@ const FREE_FALL_TIP: &str = "A timelike geodesic: the observer falls with no thr
 const DROP_RADIUS_TIP: &str = "Where this observer is dropped from, and where ⏮ Reset builds them. It is the same number as the position of their marker at t = 0: drag the marker while the clock reads zero and this slider follows, move this slider and the next drop lands there, because there is one drop radius per observer and two ways to say it. While the clock reads zero it takes effect at once, since the run has not started and there is nothing for it to contradict; once the clock is running it is a standing request like everything else on the card, waiting for the next ⏮ Reset rather than teleporting a run already under way. It also sets their energy, since E is whatever the release at that radius implies: released at rest, a drop from further out has more of it, and E → 1 as the drop radius runs to infinity, which is the raindrop. The slider is logarithmic because the interesting range spans the ring at 0.05M and the far field at 30M, and nothing stops you dropping somebody inside a horizon: there they cannot be at rest, and the card says what it does instead.";
 const DROP_AZIMUTH_TIP: &str = "Where round the hole this observer is dropped, in the chart angle ϕ. It is the coordinate the drop radius does not cover, and a marker dragged on the equatorial view sets both at once. Nothing about the worldline depends on it on its own: Kerr is axisymmetric, so ϕ is a cyclic coordinate and rotating an observer changes none of their constants — E, L, the effective potential and the whole radial problem are exactly as they were. What does depend on it is the *pair*. The difference between the two azimuths is how far apart they stand around the hole, so it sets how long light takes to cross between them and from which side; and inside r₊ it decides how much of the other's frozen light the crosser actually meets, since each pulse's E − Ω₋L < 0 arc settles onto a band of r₋ and co-rotates there at Ω₋ rather than covering every azimuth. Put them on opposite sides and Bob crosses somewhere Alice's stack has not reached. The marker is not drawn at this angle: the embedding x + iy = (r + ia)e^{iϕ} turns it a further atan2(a, r) round — 11° at r = 4.5M, 42° at r = 1M for a = 0.90 — and the line below the sliders reports where the dot actually lands.";
 const AT_REST_TIP: &str = "The observer is at rest at the moment they are released: dr/dτ = 0, and the worldline starts exactly on a turning point of the radial potential, R(r) = 0. Their energy is then whatever that costs — E = V(r, L), the effective potential at the drop radius, which at 4.5M with L = 0 and a = 0.90 is 0.7504 — so E is reported rather than dialled, and it moves when the drop radius or L moves. This is the release a user usually means by \"dropped\": the run begins when the engines are cut. It is also the only release that joins the hover before it without a jump: while they wait they hold that same four-velocity under thrust, so nothing in their motion changes at the release except that the thrust stops. At rest means at rest in r; with L = 0 in Kerr they are still carried round at the frame-dragging rate, which is the ZAMO. Between the horizons nothing can hold a radius at all and the release falls back to the raindrop.";
+const CIRCULAR_ORBIT_TIP: &str = "The circular geodesic at the drop radius, prograde in the sense of the hole's spin or retrograde against it: the one orbit that needs no thrust at all. Both constants are fixed by the radius once the sense is chosen (Bardeen, Press and Teukolsky 1972), so E and L are reported rather than dialled and the L slider is greyed out. Outside the innermost stable circular orbit the orbit is stable; between the ISCO and the circular photon orbit it exists but is unstable, and the integrator's own rounding will eventually tip it in or out, which is the honest picture of an unstable orbit; inside the photon orbit there is no circular orbit at any energy and the release falls back to the raindrop. An orbit inside the ergosphere is still perfectly realizable - an orbiting observer co-rotates, and nothing asks them to stand still - and at high spin the prograde ISCO is in there. A Release Delay in front of a circular release is a jump, as it is for the raindrop: they cannot hover and then be in orbit without a kick.";
+const ISCO_TIP: &str = "Put the drop radius on the innermost stable circular orbit of that sense and select the circular release: 6M with no spin, 1M prograde and 9M retrograde at the extreme spin, and in between whatever the formula says. The single most-quoted orbit in black hole physics, in one click.";
+
 const FROM_INFINITY_TIP: &str = "The observer arrives having fallen from rest infinitely far away: E = 1 exactly, whatever radius they are dropped at, which means they are already moving when the run starts. At 4.5M that is two thirds of the speed of light inward past a static observer — nothing accelerated them to it, it is what the initial condition says about their history. With L = 0 this is the raindrop, a member of the E = 1 congruence that every wavefront colour and every measured shift in the app is quoted against. The price is that a Release Delay in front of it is a fiction: they cannot hover and then be moving at 0.667c without an infinite acceleration, so the release is a genuine discontinuity in the worldline, which is the honest statement that they did not come from here. Choose At rest here if you want the wait and the fall to join.";
 const ANGULAR_MOMENTUM_TIP: &str = "The conserved angular momentum per unit mass, L = u_ϕ, in units of M. It is the one constant of the motion set directly, because it is the one the app's central result is stated in: which branch of the inner horizon an infaller reaches is decided by the sign of E − Ω₋L, with Ω₋ = a/(r₋²+a²) = 0.798/M at a = 0.90. Released at rest from 4.5M the crossover sits at L = 0.985 — below it they cross the near branch of r₋ at finite coordinate time, above it they settle onto the far branch, where t → ∞ and their own clock reaches r₋ in finite proper time while the outside universe's whole future arrives at once. Walk the slider across that value and the picture changes character. L also decides whether they fall at all: from rest, enough of it and the centrifugal barrier throws them outward instead, and past about L = 4 at 4.5M the energy that costs exceeds 1 and they escape to infinity. Prograde is positive, retrograde negative, and the two are not mirror images around a spinning hole.";
 const STATIC_TIP: &str = "The observer hovers: fixed r and fixed ϕ, station-keeping against the distant stars, with a four-velocity along the time-translation Killing vector ∂/∂t normalised to unit length. The thrust that costs is real, it is what the telemetry reports as a_prop, and it grows without bound as they near the static limit. That worldline exists only where ∂/∂t is timelike, g_tt < 0, which on the equator means r > 2M — outside the ergosphere, not merely outside the horizon. Inside the ergosphere the frame dragging is total: holding ϕ fixed is a spacelike motion there and no rocket, however powerful, can do it. The selection is kept rather than refused, because it is a standing request and resumes by itself the moment they are somewhere it can exist again, but what they actually do in the meantime is fall freely — in position as much as in velocity — and this panel and their telemetry box both read “Static impossible here (r ≤ 2M): falling freely” while that lasts. It is the mode for the exterior: gravitational blueshift, the redshift of an infaller's signal and the weight of the hole are all statements about what a static observer measures.";
@@ -653,7 +656,7 @@ impl ObserverCard {
                 settings.drop_phi = degrees.to_radians();
             }
 
-            // How they are let go of, which is what fixes E.
+            // How they are let go of, which is what fixes E - and, for a circular orbit, L too.
             ui.horizontal(|ui| {
                 ui.label("Release:");
                 for (release, label, tip) in [
@@ -665,8 +668,37 @@ impl ObserverCard {
                     }
                 }
             });
+            ui.horizontal(|ui| {
+                ui.label("Orbit:");
+                for (release, label) in [
+                    (Release::CircularPrograde, "Circular, prograde"),
+                    (Release::CircularRetrograde, "Circular, retrograde"),
+                ] {
+                    if chip(ui, settings.release == release, label)
+                        .on_hover_text(CIRCULAR_ORBIT_TIP)
+                        .clicked()
+                    {
+                        settings.release = release;
+                    }
+                }
+                // The innermost stable orbit of either sense, in one click: the drop radius and
+                // the release together.
+                for (prograde, label) in [(true, "ISCO prograde"), (false, "ISCO retrograde")] {
+                    if ui.small_button(label).on_hover_text(ISCO_TIP).clicked() {
+                        settings.drop_r = metric.isco(prograde);
+                        settings.release = if prograde {
+                            Release::CircularPrograde
+                        } else {
+                            Release::CircularRetrograde
+                        };
+                    }
+                }
+            });
 
-            ui.add(
+            let circular = settings.release.circular_sense();
+            // On a circular orbit L is the orbit's, not the slider's: shown, not dialled.
+            ui.add_enabled(
+                circular.is_none(),
                 egui::Slider::new(&mut settings.l_ang, -4.0..=4.0)
                     .text("Angular momentum L (per unit mass, M)"),
             )
@@ -697,6 +729,45 @@ impl ObserverCard {
                 .small()
                 .color(Theme::TEXT_MUTED),
             );
+            // The orbit's own numbers: its L, its period on both clocks, and whether it is stable.
+            // The stability is read off the ISCO, and the existence off the photon orbit; where
+            // there is no orbit the release fell back to the raindrop and this says so.
+            if let Some(prograde) = circular {
+                let r = settings.drop_r;
+                let (photon, isco) = (metric.photon_orbit(prograde), metric.isco(prograde));
+                let text = match (
+                    metric.circular_orbit(r, prograde),
+                    metric.orbital_angular_velocity(r, prograde),
+                    metric.circular_orbit_dilation(r, prograde),
+                ) {
+                    (Some((_, l_ang)), Some(omega), Some(dilation)) => {
+                        let period = std::f64::consts::TAU / omega.abs();
+                        let fmt = |m: f64| {
+                            if use_km { metric.format_physical_time(m) } else { format!("{m:.2} M") }
+                        };
+                        let stability = if r >= isco {
+                            format!("stable (ISCO at {:.3} M)", isco)
+                        } else {
+                            format!(
+                                "UNSTABLE: between the photon orbit ({:.3} M) and the ISCO ({:.3} M)",
+                                photon, isco
+                            )
+                        };
+                        format!(
+                            "L = {l_ang:.4} M — one orbit takes {} on the distant clock, {} on their \
+                             own — {stability}",
+                            fmt(period),
+                            fmt(period / dilation),
+                        )
+                    }
+                    _ => format!(
+                        "No circular orbit inside the photon orbit ({:.3} M): released as a \
+                         raindrop (E = 1, L = 0)",
+                        photon
+                    ),
+                };
+                ui.label(egui::RichText::new(text).small().color(Theme::TEXT_MUTED));
+            }
             // Where that lands on the equatorial view, which is not where the naive polar reading
             // of (r, phi) would put it: the embedding x + iy = (r + ia)e^{i phi} turns the marker a
             // further atan2(a, r) round and draws it at radius sqrt(r^2 + a^2). The card says the

@@ -1671,6 +1671,48 @@ mod tests {
     }
 
     #[test]
+    fn test_a_circular_release_puts_the_observer_on_a_circle_and_keeps_them_there() {
+        // The card's own path, end to end: choose the prograde circular release at 6 M, drop,
+        // play a few thousand M of coordinate time, and the observer is still at 6 M and has gone
+        // round several times, with no thrust anywhere in it. Then the retrograde one, which
+        // goes round the other way.
+        let metric = KerrSchild::new(1.0, 0.9);
+        for (release, prograde) in [
+            (Release::CircularPrograde, true),
+            (Release::CircularRetrograde, false),
+        ] {
+            let mut app = SpacetimeApp { metric: KerrSchild::new(1.0, 0.9), ..SpacetimeApp::default() };
+            app.controls.is_playing = false;
+            app.controls.bob.enabled = true;
+            app.controls.bob.drop_r = 6.0;
+            app.controls.bob.delta_t_delay = 0.0;
+            app.controls.bob.release = release;
+            app.controls.bob.l_ang = 3.0; // ignored: the orbit's own L is used
+            drop_observers(&mut app);
+            let expected_l = metric.circular_orbit(6.0, prograde).unwrap().1;
+            let geo = bob_of(&app).geodesic.expect("a free-fall worldline");
+            assert!((geo.l_ang - expected_l).abs() < 1e-12, "L is the orbit's: {} vs {expected_l}", geo.l_ang);
+            let period = std::f64::consts::TAU / metric.orbital_angular_velocity(6.0, prograde).unwrap().abs();
+            // One orbit, stepping the worldline itself: the card's path is what is under test,
+            // and the transmissions the app would carry along cost a hundred times as much.
+            let phi0 = bob_of(&app).phi;
+            let mut worst = 0.0f64;
+            let (mut t, dt) = (app.current_time, 0.1);
+            while t < app.current_time + period {
+                t += dt;
+                app.bob.as_mut().unwrap().step(&metric, t, dt);
+                worst = worst.max((bob_of(&app).r - 6.0).abs());
+            }
+            let turned = bob_of(&app).phi - phi0;
+            println!(
+                "{release:?}: one period of {period:.2} M, r wandered {worst:.2e} M, phi moved {turned:.3}"
+            );
+            assert!(worst < 2e-3, "{release:?} stays at 6 M: wandered {worst}");
+            assert!(bob_of(&app).is_active, "and is in free fall");
+        }
+    }
+
+    #[test]
     fn test_the_watch_step_is_u_t_times_the_proper_step_until_the_cap() {
         // Watch mode asks for a step of the focus observer's own proper time and converts it with
         // the one exact factor there is: dτ/dt = 1/u^t along their worldline.

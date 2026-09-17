@@ -345,6 +345,80 @@ impl KerrSchild {
         (2.0 * self.m * self.a * r) / sigma.max(1e-9)
     }
 
+    /// The conserved (E, L) of the equatorial circular geodesic at radius r, prograde (the sense
+    /// of the spin) or retrograde, or None where no circular orbit exists.
+    ///
+    /// Bardeen, Press and Teukolsky (1972), with x = r/M and a in units of M:
+    ///
+    ///     E = (x^{3/2} - 2 x^{1/2} ± a) / (x^{3/4} sqrt(x^{3/2} - 3 x^{1/2} ± 2a))
+    ///     L = ± M (x^2 ∓ 2a x^{1/2} + a^2) / (x^{3/4} sqrt(x^{3/2} - 3 x^{1/2} ± 2a))
+    ///
+    /// upper signs prograde. The square root's argument vanishes on the circular photon orbit,
+    /// inside which no timelike circular orbit exists at any energy; between there and the ISCO
+    /// the orbit exists but is unstable to the smallest push. These are the only thrust-free
+    /// orbits there are, and both numbers are fixed by the radius once the sense is chosen. The
+    /// coordinate time is Boyer-Lindquist's here, but a circular orbit has dr = 0 and the two
+    /// charts differ by a function of r alone, so E, L and the angular velocity are the same in
+    /// the ingoing chart the app integrates in.
+    pub fn circular_orbit(&self, r: f64, prograde: bool) -> Option<(f64, f64)> {
+        let m = self.m.max(1e-12);
+        let x = r / m;
+        if x.is_nan() || x <= 0.0 {
+            return None;
+        }
+        let a = self.a / m;
+        let sign = if prograde { 1.0 } else { -1.0 };
+        let (x12, x32, x34) = (x.sqrt(), x.powf(1.5), x.powf(0.75));
+        let under = x32 - 3.0 * x12 + sign * 2.0 * a;
+        if under.is_nan() || under <= 0.0 {
+            return None;
+        }
+        let root = x34 * under.sqrt();
+        let energy = (x32 - 2.0 * x12 + sign * a) / root;
+        let l_ang = sign * m * (x * x - sign * 2.0 * a * x12 + a * a) / root;
+        (energy.is_finite() && l_ang.is_finite()).then_some((energy, l_ang))
+    }
+
+    /// Radius of the equatorial circular photon orbit, prograde or retrograde:
+    /// r = 2M {1 + cos[(2/3) arccos(∓a/M)]}. Inside it no circular timelike orbit exists.
+    pub fn photon_orbit(&self, prograde: bool) -> f64 {
+        let a = (self.a / self.m.max(1e-12)).clamp(-1.0, 1.0);
+        let arg = if prograde { -a } else { a };
+        2.0 * self.m * (1.0 + (2.0 / 3.0 * arg.acos()).cos())
+    }
+
+    /// Radius of the innermost stable circular orbit, prograde or retrograde (Bardeen, Press and
+    /// Teukolsky 1972): with Z1 = 1 + (1 - a^2)^{1/3} [(1 + a)^{1/3} + (1 - a)^{1/3}] and
+    /// Z2 = sqrt(3 a^2 + Z1^2), r = M [3 + Z2 ∓ sqrt((3 - Z1)(3 + Z1 + 2 Z2))]. Six M for no spin,
+    /// one M prograde and nine M retrograde at a = M.
+    pub fn isco(&self, prograde: bool) -> f64 {
+        let a = (self.a / self.m.max(1e-12)).clamp(-1.0, 1.0);
+        let z1 = 1.0 + (1.0 - a * a).cbrt() * ((1.0 + a).cbrt() + (1.0 - a).cbrt());
+        let z2 = (3.0 * a * a + z1 * z1).sqrt();
+        let inner = ((3.0 - z1) * (3.0 + z1 + 2.0 * z2)).max(0.0).sqrt();
+        let x = if prograde { 3.0 + z2 - inner } else { 3.0 + z2 + inner };
+        x * self.m
+    }
+
+    /// Coordinate angular velocity dphi/dt of the circular orbit at r, prograde or retrograde:
+    /// Ω = ± M^{1/2} / (r^{3/2} ± a M^{1/2}). None where the orbit does not exist.
+    pub fn orbital_angular_velocity(&self, r: f64, prograde: bool) -> Option<f64> {
+        self.circular_orbit(r, prograde)?;
+        let sqrt_m = self.m.max(1e-12).sqrt();
+        let sign = if prograde { 1.0 } else { -1.0 };
+        Some(sign * sqrt_m / (r.powf(1.5) + sign * self.a * sqrt_m))
+    }
+
+    /// dt/dtau on the circular orbit at r: the dilation between the distant clock and the
+    /// orbiting observer's own, from the norm of (1, 0, Ω) in the (t, phi) block of the metric,
+    /// which is the same block in both charts since dr = 0.
+    pub fn circular_orbit_dilation(&self, r: f64, prograde: bool) -> Option<f64> {
+        let omega = self.orbital_angular_velocity(r, prograde)?;
+        let g = self.metric_components(r);
+        let norm = -(g[0][0] + 2.0 * g[0][2] * omega + g[2][2] * omega * omega);
+        (norm > 0.0).then(|| 1.0 / norm.sqrt())
+    }
+
     /// Cartesian radius rho of the chart radius r in the equatorial plane.
     ///
     /// The equatorial plane is embedded in Kerr-Schild Cartesian coordinates as
@@ -1256,6 +1330,72 @@ mod tests {
                 // -k_mu k^mu must vanish: the ray is null, so its "frequency" for itself is zero.
                 assert!(ks.ingoing_frequency_ratio(r, &k_up).abs() < 1e-10);
             }
+        }
+    }
+
+    #[test]
+    fn test_circular_orbits_of_a_schwarzschild_hole_match_their_closed_forms() {
+        // With no spin the two senses are the same orbit run the other way:
+        // E = (1 - 2M/r) / sqrt(1 - 3M/r), L = ± sqrt(M r) / sqrt(1 - 3M/r), the photon orbit
+        // at 3M and the ISCO at 6M.
+        let ks = KerrSchild::new(1.0, 0.0);
+        for &r in &[3.5f64, 4.0, 6.0, 10.0, 50.0] {
+            let want_e = (1.0 - 2.0 / r) / (1.0 - 3.0 / r).sqrt();
+            let want_l = r.sqrt() / (1.0 - 3.0 / r).sqrt();
+            let (e, l) = ks.circular_orbit(r, true).expect("a circular orbit outside 3M");
+            assert!((e - want_e).abs() < 1e-12, "E({r}) = {e} vs {want_e}");
+            assert!((l - want_l).abs() < 1e-12, "L({r}) = {l} vs {want_l}");
+            let (e_r, l_r) = ks.circular_orbit(r, false).expect("and retrograde");
+            assert!((e_r - want_e).abs() < 1e-12 && (l_r + want_l).abs() < 1e-12);
+            let omega = ks.orbital_angular_velocity(r, true).unwrap();
+            assert!((omega - r.powf(-1.5)).abs() < 1e-12, "Kepler's law: {omega}");
+        }
+        assert!(ks.circular_orbit(2.9, true).is_none(), "nothing inside the photon orbit");
+        assert!((ks.photon_orbit(true) - 3.0).abs() < 1e-12);
+        assert!((ks.isco(true) - 6.0).abs() < 1e-12 && (ks.isco(false) - 6.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_kerr_circular_orbits_have_the_textbook_radii_and_sit_on_the_apps_own_potential() {
+        // The extreme hole's famous numbers, and a consistency check on the two functions the
+        // app already has: a circular orbit is a turning point of R(r), so its E is exactly the
+        // energy floor at that L, and a geodesic started there with the app's own integrator
+        // stays at that radius.
+        use crate::physics::geodesic::GeodesicState;
+        // The constructor stops the spin a hair short of extremal (a = 0.9999 M), which moves the
+        // prograde radii off their extremal values of exactly M by a few percent and leaves the
+        // retrograde ones, which are insensitive there, at 9 M and 4 M.
+        let extreme = KerrSchild::new(1.0, 1.0);
+        println!(
+            "a = {}: ISCO {:.4} / {:.4} M, photon orbit {:.4} / {:.4} M (prograde / retrograde)",
+            extreme.a, extreme.isco(true), extreme.isco(false), extreme.photon_orbit(true), extreme.photon_orbit(false)
+        );
+        assert!(extreme.isco(true) > 1.0 && extreme.isco(true) < 1.1, "prograde ISCO near M");
+        assert!((extreme.isco(false) - 9.0).abs() < 0.02, "retrograde ISCO at 9M");
+        assert!(extreme.photon_orbit(true) > 1.0 && extreme.photon_orbit(true) < 1.05);
+        assert!((extreme.photon_orbit(false) - 4.0).abs() < 0.01);
+
+        let ks = KerrSchild::new(1.0, 0.9);
+        let (isco_p, isco_r) = (ks.isco(true), ks.isco(false));
+        println!("a = 0.9: prograde ISCO {isco_p:.4} M, retrograde {isco_r:.4} M");
+        assert!(isco_p > 2.3 && isco_p < 2.35 && isco_r > 8.6 && isco_r < 8.8);
+        for (r, prograde) in [(6.0, true), (3.0, true), (12.0, false)] {
+            let (e, l) = ks.circular_orbit(r, prograde).expect("stable orbits at these radii");
+            let floor = GeodesicState::energy_floor(&ks, r, l);
+            assert!((e - floor).abs() < 1e-9, "E = {e} is the floor V(r, L) = {floor} at r = {r}");
+            let mut geo = GeodesicState::new_infall(&ks, 0.0, r, e, l);
+            let period = std::f64::consts::TAU / ks.orbital_angular_velocity(r, prograde).unwrap().abs();
+            let mut t = 0.0;
+            let mut worst = 0.0f64;
+            while t < 2.0 * period {
+                geo.step_coord_time(&ks, 0.05);
+                t += 0.05;
+                worst = worst.max((geo.r - r).abs());
+            }
+            println!("r = {r} {}: two periods of {period:.2} M, radius wandered {worst:.2e} M", if prograde { "prograde" } else { "retrograde" });
+            assert!(worst < 1e-3, "a circular orbit stays circular: {worst}");
+            let dilation = ks.circular_orbit_dilation(r, prograde).unwrap();
+            assert!(dilation > 1.0 && dilation.is_finite(), "dt/dtau = {dilation}");
         }
     }
 
