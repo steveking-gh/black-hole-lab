@@ -205,7 +205,7 @@ impl eframe::App for SpacetimeApp {
         // to thin a crowded picture is most likely to be. Raising it only widens the window from
         // here on: the pulses already evicted are gone. See `SignalField::max_pulses`.
         SignalPair { alice: &mut self.signal, bob: &mut self.bob_signal }
-            .set_max_pulses(self.controls.max_pulses);
+            .set_max_pulses(&self.metric, self.controls.max_pulses);
 
         // Advance simulation if playing
         if self.controls.is_playing {

@@ -647,7 +647,9 @@ type DrawnSurface<'a> = (f64, &'a str, Color32, f32, Color32, bool);
 /// Hover tip for the static limit's and the ring's boxes, whose two lines read the drawn line
 /// rather than integrating anything.
 /// The hover text of the signal box in an observer's frame.
-pub const SIGNAL_BOX_TIP: &str = "The other observer's transmission, read as a wave at this worldline. Their pulses are the crests, drawn as null strokes through the arrivals on the worldline. The receive frequency is one over the proper time between the last two arrivals of consecutive pulses, on this observer's own clock; the transmit frequency is one over the proper time between those two emissions, on the sender's clock; and the blueshift is the ratio of the two - a ratio of two measured intervals, not a formula. On the approach to r- the arrivals crowd together without limit, and the blueshift runs away with them.";
+pub const SIGNAL_BOX_TIP: &str = "The other observer's transmission, read as a wave at this worldline. Their pulses are the crests, drawn as null strokes through the arrivals on the worldline. The receive frequency is one over the proper time between the last two arrivals of consecutive pulses, on this observer's own clock; the transmit frequency is one over the proper time between those two emissions, on the sender's clock; and the blueshift is the ratio of the two - a ratio of two measured intervals, not a formula. On the approach to r- the arrivals crowd together without limit, and the blueshift runs away with them.
+
+An \"Incomplete\" line means the Wavefronts kept cap has evicted pulses that could still have arrived, so this box is reading a trimmed run: arrivals are missing, and a receive frequency measured across the gap they left is wrong rather than merely coarse. The count is how many went. Raise Wavefronts kept to stop losing them - the evicted ones do not come back, so a run that matters wants the cap raised before it starts. The count is exact for a receiver who stays outside r+ and a floor for one who crosses, since a crosser also meets the frozen arcs standing on r-, which this test treats as already past arriving.";
 
 pub const SURFACE_BOX_TIP: &str =
 "What the surface is, read straight off the slope of the surface's line in this frame. Steeper than 45 degrees means timelike - the world-tube of observers holding that radius, something a rocket can stay off. Exactly 45 degrees means null. Flatter than 45 degrees means spacelike: not a place at all but a moment of your history, which arrives whatever you do. Nothing about the tilt goes in by hand; the tilt follows from the sign of g^rr at your own radius through the dual tetrad, so the reading stays exact at the dot.
@@ -2352,6 +2354,22 @@ Tick Enable Observer on Alice's or Bob's card",
                     lines.push(line(format!("Blueshift: {ratio:.3}")));
                 }
                 _ => lines.push(line(format!("Blueshift: {ray:.3} (last ray)"))),
+            }
+            // What the wavefront cap has cost this reading, on the runs where it has cost it
+            // anything. Every number above is measured off the pulses the field still holds, so a
+            // pulse evicted while it could still have arrived is an arrival that never happened
+            // and a receive frequency measured across a gap that was not there. The reading is then
+            // a lower bound and says so, which beats quietly reporting a trimmed range: at the
+            // default cap a transmitting orbit loses five arrivals in six. See
+            // `SignalField::dropped_in_flight`.
+            let dropped = sender_field.dropped_in_flight();
+            if dropped > 0 {
+                lines.push(TelemetryLine {
+                    text: format!("Incomplete: {dropped} fronts dropped in flight"),
+                    color: Theme::WARNING_RED,
+                    is_title: false,
+                    bold: true,
+                });
             }
             // Anchored at the bottom right of the canvas until it is dragged somewhere else.
             let size = telemetry_box_size(painter, &lines, font_scale);

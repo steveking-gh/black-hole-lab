@@ -1493,6 +1493,24 @@ fn side_at(mark: &FrontMark, segment: usize, turn: i64) -> Option<f64> {
 }
 
 impl Pulse {
+    /// Whether this pulse can still reach a receiver in the exterior.
+    ///
+    /// A live ray outside r+ can still climb, turn or sweep onto an exterior worldline, so a pulse
+    /// holding one is a pulse that has not finished arriving. A pulse whose every live ray is at or
+    /// inside r+ cannot: nothing at or inside the outer horizon ever reaches `R_ESCAPE`, which is
+    /// the same statement as nothing climbing back out, so what is left of the front is the frozen
+    /// family standing on r- and the only worldlines that will ever meet it are the ones that cross
+    /// r+ to get there.
+    ///
+    /// That is exactly the question the cap has to ask before it evicts anything, and it is the
+    /// reason the answer is geometric rather than a lookup of where the receiver happens to be: an
+    /// eviction happens on the emitter's cadence, in `emit_if_due`, which knows nothing of who is
+    /// listening. See `SignalField::dropped_in_flight`.
+    fn can_still_arrive(&self, metric: &KerrSchild) -> bool {
+        let rp = metric.outer_horizon();
+        self.rays.iter().any(|ray| ray.alive() && ray.r > rp)
+    }
+
     /// The radial interval the pulse's front spans right now, or None once no ray of it is alive.
     ///
     /// The front is a closed curve in (r, phi) and its projection onto the r axis is exactly this
@@ -2112,6 +2130,36 @@ pub struct SignalField {
     /// life of this field. See `RayStep::BudgetExhausted`: it is a safety net that should never
     /// fire, so the count is kept rather than discarded and the tests assert it is zero.
     budget_exhausted: usize,
+    /// Pulses the cap evicted while they could still have been heard, over the whole life of this
+    /// field. Zero means every arrival this transmission was ever going to make has been made.
+    ///
+    /// The cap is a cost bound, and the cost it bounds is real; what it must not do is quietly
+    /// decide the physics. It does, and by a lot. Measured with Alice transmitting from the
+    /// prograde ISCO of an a = 0.9 hole and Bob receiving on the retrograde ISCO, 429 pulses over
+    /// 120 M: at the default cap of 64 the run records 130 arrivals and reports measured shifts
+    /// from 0.2472 to 1.3381, where holding every pulse records 969 and reports 0.1935 to 2.2960.
+    /// So five arrivals in six are lost and both ends of the read-out are wrong - and nothing said
+    /// so. A slider labelled as a drawing budget was setting a physical result.
+    ///
+    /// Raising the cap fixes it (256 records all 969, the default layout's forty-pulse infall never
+    /// reaches the cap at all), but no value is right for every run, because a pulse is never
+    /// finished: of 144 rays, 33 reach the ring and 93 escape within 62 M, and the 18 of the frozen
+    /// family that settle onto r- are still alive after 1 002 M. So the honest thing is to say when
+    /// the field is incomplete, and this is the number that says it. See `Pulse::can_still_arrive`.
+    ///
+    /// What it counts is an eviction of a pulse still holding a live ray outside r+. That ray can
+    /// still reach a receiver in the exterior, so its pulse has not finished arriving and the loss
+    /// is a real one. A pulse whose only survivors are frozen on r- is not counted: nothing that
+    /// stands inside r+ ever climbs back out, so an exterior receiver can no longer hear it and
+    /// letting it go costs them nothing. That makes the count exact for a receiver who stays
+    /// outside r+ and a lower bound for one who crosses, since a crosser does meet the frozen
+    /// arcs - which is the reading this app exists to show, so the bound is stated rather than
+    /// papered over.
+    ///
+    /// It is never wound back. `step_back` undoes the transmission, but an eviction is not part of
+    /// the transmission: the pulse is gone from the field and no rewind brings it back, so a run
+    /// that has lost arrivals goes on having lost them and goes on saying so.
+    dropped_in_flight: usize,
 }
 
 impl Default for SignalField {
@@ -2127,6 +2175,7 @@ impl Default for SignalField {
             last_delivered: None,
             heard: Vec::new(),
             budget_exhausted: 0,
+            dropped_in_flight: 0,
         }
     }
 }
@@ -2203,7 +2252,14 @@ impl SignalField {
         });
         self.next_index += 1;
         self.last_emit_tau = Some(emitter.tau);
-        self.trim_to_cap();
+        self.trim_to_cap(metric);
+    }
+
+    /// Pulses the cap evicted while they could still have been heard. See `dropped_in_flight`:
+    /// zero means this transmission has made every arrival it was ever going to make, and anything
+    /// else means the measured shifts and the arrival count are a trimmed view of the run.
+    pub fn dropped_in_flight(&self) -> usize {
+        self.dropped_in_flight
     }
 
     /// Drop the oldest pulses until the field is inside its own `max_pulses`.
@@ -2217,8 +2273,15 @@ impl SignalField {
     /// full field down one moved 14 KB at the default cap of 64 and 28 KB at the panel's top of
     /// 128 - once per emission rather than once per step, so a tenth of a megabyte a second at
     /// worst, but there was never anything to buy it with.
-    fn trim_to_cap(&mut self) {
+    fn trim_to_cap(&mut self, metric: &KerrSchild) {
         while self.pulses.len() > self.max_pulses.max(1) {
+            // Counted before it goes, because afterwards there is nothing left to ask. See
+            // `dropped_in_flight` for what the count means and what it deliberately does not.
+            if let Some(pulse) = self.pulses.front()
+                && pulse.can_still_arrive(metric)
+            {
+                self.dropped_in_flight += 1;
+            }
             self.pulses.pop_front();
         }
     }
@@ -2226,9 +2289,9 @@ impl SignalField {
     /// Set this field's pulse cap, dropping the oldest pulses down to it at once. See `max_pulses`
     /// for why the trim is immediate rather than deferred to the next emission, and why it cannot
     /// be undone.
-    pub fn set_max_pulses(&mut self, pulses: usize) {
+    pub fn set_max_pulses(&mut self, metric: &KerrSchild, pulses: usize) {
         self.max_pulses = pulses;
-        self.trim_to_cap();
+        self.trim_to_cap(metric);
     }
 
     /// Advance every live ray by dt of coordinate time, then record how far each pulse's radial
@@ -2680,9 +2743,9 @@ impl SignalPair<'_> {
     /// emission and is pushed in on the way into a step; a cap is a statement about what is on the
     /// screen right now, so the app pushes this one in once a frame, played or paused, and the
     /// trim happens in `SignalField::set_max_pulses` as it goes.
-    pub fn set_max_pulses(&mut self, pulses: usize) {
-        self.alice.set_max_pulses(pulses);
-        self.bob.set_max_pulses(pulses);
+    pub fn set_max_pulses(&mut self, metric: &KerrSchild, pulses: usize) {
+        self.alice.set_max_pulses(metric, pulses);
+        self.bob.set_max_pulses(metric, pulses);
     }
 
     /// Drop both transmissions and put both clocks back to zero: the reset that re-dropping the
@@ -5410,7 +5473,7 @@ mod tests {
         let heard = field.receptions().count();
 
         // Down: an eviction now, with no step and no emission in between to carry it.
-        field.set_max_pulses(2);
+        field.set_max_pulses(&metric, 2);
         assert_eq!(field.pulses.len(), 2, "lowering the cap trims there and then");
         assert_eq!(
             field.pulses.iter().map(|p| p.index).collect::<Vec<_>>(),
@@ -5420,12 +5483,12 @@ mod tests {
 
         // Up: the window widens from here on. The two pulses let go are gone, and nothing is
         // re-emitted to fill the room made for them.
-        field.set_max_pulses(MAX_PULSES);
+        field.set_max_pulses(&metric, MAX_PULSES);
         assert_eq!(field.pulses.len(), 2, "raising the cap restores nothing");
 
         // A cap of zero is not reachable from the panel, whose slider stops at one, and would
         // leave a transmitting emitter with nothing in flight at all.
-        field.set_max_pulses(0);
+        field.set_max_pulses(&metric, 0);
         assert_eq!(field.pulses.len(), 1, "the floor is one front, not none");
         assert_eq!(field.pulses[0].index, newest, "and the one that survives is the newest");
 
@@ -5544,6 +5607,95 @@ mod tests {
     /// r- waiting for Alice: she is ahead of him, so the only rays of his that reach her are the
     /// ones that outrun her, and they sweep over her out in the open where a fixed hundredth of an
     /// M resolves them easily.
+    #[test]
+    fn test_the_field_says_when_the_cap_has_cost_it_arrivals() {
+        // The cap bounds cost, which is fair, but it was deciding physics and saying nothing. Alice
+        // transmitting from the prograde ISCO of an a = 0.9 hole and Bob receiving on the
+        // retrograde one is the counter-rotating pair the user was running when arrivals went
+        // missing: an emitter that never stops, which the default forty-pulse infall never is.
+        //
+        // The property asserted is the one that matters: `dropped_in_flight` is zero exactly when
+        // the run has lost nothing. At a cap that trims the field it is positive and the arrivals
+        // are short; at a cap that holds the whole transmission it is zero and every arrival is
+        // there. So the read-out can be trusted when it is silent, which is the whole point of it.
+        //
+        // Measured below at 36 rays a pulse over 120 M, 429 pulses sent: at the default cap of 64
+        // the run records 130 arrivals and reports shifts from 0.2472 to 1.3381, having dropped 365
+        // pulses that could still have arrived; holding all 429 it records 969 arrivals and reports
+        // 0.1935 to 2.2960. Five arrivals in six, and both ends of the read-out.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let r_a = metric.isco(true);
+        let r_b = metric.isco(false);
+        let (e_a, l_a) = metric.circular_orbit(r_a, true).expect("a prograde ISCO orbit");
+        let (e_b, l_b) = metric.circular_orbit(r_b, false).expect("a retrograde ISCO orbit");
+
+        // (arrivals, dropped, shift range) for one cap, everything else held fixed.
+        let run = |cap: usize| {
+            let pa = WorldlineParams {
+                energy: e_a,
+                l_ang: l_a,
+                outgoing: false,
+                ..WorldlineParams::default()
+            };
+            let pb = WorldlineParams {
+                energy: e_b,
+                l_ang: l_b,
+                outgoing: false,
+                ..WorldlineParams::default()
+            };
+            let mut alice = Observer::new_with_phi(&metric, "Alice", 0.0, r_a, 0.0, 0.0, pa);
+            let mut bob =
+                Observer::new_with_phi(&metric, "Bob", 0.0, r_b, 0.0, std::f64::consts::PI, pb);
+            let mut field = SignalField { max_pulses: cap, ..SignalField::default() };
+            // Fewer rays than the app sends, to keep a 120 M run of two orbiters inside a test's
+            // patience. The cap is what is under test and it counts pulses, not rays.
+            field.rays_per_pulse = 36;
+            let dt = 0.02;
+            for i in 0..6_000 {
+                let t = ((i + 1) as f64) * dt;
+                alice.step(&metric, t, dt);
+                bob.step(&metric, t, dt);
+                field.advance(&metric, dt);
+                field.emit_if_due(&metric, &alice);
+                field.detect_receptions(&metric, &bob);
+            }
+            let ratios: Vec<f64> = field.receptions().map(|r| r.ratio).collect();
+            let lo = ratios.iter().copied().fold(f64::MAX, f64::min);
+            let hi = ratios.iter().copied().fold(f64::MIN, f64::max);
+            let sent = field.pulses.back().map(|p| p.index + 1).unwrap_or(0);
+            println!(
+                "cap {cap:4}: {sent} sent, {:4} held, {:4} arrivals, {:4} dropped in flight, \
+                 shift {lo:.4} to {hi:.4}",
+                field.pulses.len(),
+                field.received_count(),
+                field.dropped_in_flight()
+            );
+            (field.received_count(), field.dropped_in_flight(), lo, hi)
+        };
+
+        let (heard_capped, dropped_capped, lo_capped, hi_capped) = run(MAX_PULSES);
+        let (heard_full, dropped_full, lo_full, hi_full) = run(1_024);
+
+        // The cap that holds the whole transmission loses nothing and says so.
+        assert_eq!(dropped_full, 0, "nothing was evicted, so nothing can have been lost");
+        // The default cap loses a great deal and says that too.
+        assert!(
+            dropped_capped > 0,
+            "the default cap evicted pulses that could still arrive, and must report it"
+        );
+        assert!(
+            heard_capped * 2 < heard_full,
+            "the loss is the point: {heard_capped} arrivals against {heard_full}"
+        );
+        // And the loss is not only of count. Both ends of the measured range go with it, which is
+        // how a drawing budget came to be setting a physical result.
+        assert!(
+            lo_full < lo_capped && hi_full > hi_capped,
+            "the trimmed field reports a narrower range: {lo_capped:.4}..{hi_capped:.4} \
+             against {lo_full:.4}..{hi_full:.4}"
+        );
+    }
+
     pub(super) fn run_return_transmission(
         metric: &KerrSchild,
         delta_t: f64,
