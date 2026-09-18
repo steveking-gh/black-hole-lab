@@ -1,0 +1,30 @@
+src/app.rs
+  s_99085f80de58c0::t_f4c5cbf90ec8e5 208
+src/physics/wavefront.rs
+  s_99085f80de58c0::t_c6816aca87e7b7 1496-1513,2133-2150,2153-2162,2178,2255-2262,2276,2278-2284,2292,2294,2746-2748
+  s_99085f80de58c0::t_151f98e3b51da5 5610-5621,5626-5646,5649-5666,5669-5693,5696-5698
+  s_99085f80de58c0::t_33150e830db5e1 5622-5625
+  s_99085f80de58c0::t_957147427acb59 5694-5695
+  s_99085f80de58c0::t_46816a08d5701a 5667-5668
+  s_99085f80de58c0::t_0d0299cc7ee98f 2151-2152
+  s_99085f80de58c0::t_62987594387c85 5476,5486,5491,5647-5648
+src/gui/spacetime_canvas.rs
+  s_99085f80de58c0::t_952189ebfa21be 650-652,2358-2372
+  s_99085f80de58c0::t_5e8d7f69d231a7 2373
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e04becc24fac1a9b23cbc356b5cc481c38210fd4",
+  "prompts": {},
+  "sessions": {
+    "s_99085f80de58c0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b270d59c-b282-4517-83fc-8b530cf1e304",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
