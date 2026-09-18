@@ -391,8 +391,12 @@ fn bucket_series(frame_ms: &[f64]) -> Vec<Bucket> {
 
 /// Replay a scenario `REPLAY_RUNS` times (once in quick mode) and keep the fastest, reporting the
 /// spread across the runs beside it.
-pub(crate) fn replay(scenario: &Scenario, mode: Mode, quick: bool) -> ReplayResult {
-    let runs = match (quick, mode) {
+///
+/// `once` plays the full length a single time. The timings then have no spread behind them, but the
+/// fingerprint is the one any number of passes would end on, which is all a check that a refactor
+/// left the physics alone is asking for.
+pub(crate) fn replay(scenario: &Scenario, mode: Mode, quick: bool, once: bool) -> ReplayResult {
+    let runs = match (quick || once, mode) {
         (true, _) => 1,
         (false, Mode::Sim) => SIM_RUNS,
         (false, Mode::Frame) => FRAME_RUNS,
@@ -506,8 +510,8 @@ mod tests {
         // ever stop agreeing then something in the step depends on the wall clock or on an
         // iteration order that is not fixed, which would make every comparison meaningless.
         let scenario = scenarios().into_iter().find(|s| s.name == "default-infall").unwrap();
-        let first = replay(&scenario, Mode::Sim, true);
-        let second = replay(&scenario, Mode::Sim, true);
+        let first = replay(&scenario, Mode::Sim, true, false);
+        let second = replay(&scenario, Mode::Sim, true, false);
         assert_eq!(
             first.fingerprint, second.fingerprint,
             "two runs of {} disagree about the state they ended in",

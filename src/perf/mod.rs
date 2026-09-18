@@ -43,6 +43,7 @@
 //! --perf [micro|sim|frame]...   which tiers to run (default: all three)
 //! --filter <substr>             only benchmarks and scenarios whose name contains substr
 //! --quick                       fewer samples and much shorter replays: a smoke run, not a measurement
+//! --once                        one pass of each replay instead of the best of several
 //! --list                        print the names and what each one measures, then exit
 //! --save <name>                 write the results to target/perf/<name>.json
 //! --compare <name>              compare against target/perf/<name>.json; exit 1 on a regression
@@ -56,6 +57,13 @@
 //! fail would be a coin toss dressed as a check, and a check that is a coin toss gets switched off.
 //! Use `--quick` to see that the harness runs and that the fingerprints still match; drop it to
 //! decide anything.
+//!
+//! `--once` is for the question a refactor asks, which is not "how fast" but "is the physics still
+//! bit-identical". A fingerprint is the same on every pass, so replaying each scenario three times
+//! to steady the timings buys it nothing: `--perf sim --once --compare <name>` plays every scenario
+//! to its full length once, about forty seconds instead of two minutes, and the fingerprints it
+//! prints are exactly the ones a full run would. Its timings are a single pass with no spread to
+//! judge them by, so like `--quick` it prints its verdicts and never exits 1 on them.
 //!
 //! `--save` and `--compare` combine, which is what an A/B session actually does: measure, compare
 //! with the baseline, and keep the result under a new name. `target/perf` is resolved against the
@@ -197,6 +205,11 @@ pub(crate) struct Report {
     pub cpu: String,
     pub os: String,
     pub quick: bool,
+    /// True if each replay was played once rather than best-of-several: the fingerprints are as
+    /// good as any, the timings have no spread behind them. Absent from reports written before the
+    /// flag existed, which were never single-pass.
+    #[serde(default)]
+    pub once: bool,
     /// True if the harness was built with debug assertions, in which case every number in the
     /// document is worthless for comparison and this is the flag that says so.
     pub debug_assertions: bool,
@@ -220,6 +233,7 @@ struct Options {
     tiers: Vec<Tier>,
     filter: Option<String>,
     quick: bool,
+    once: bool,
     list: bool,
     save: Option<String>,
     compare: Option<String>,
@@ -245,6 +259,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         tiers: Vec::new(),
         filter: None,
         quick: false,
+        once: false,
         list: false,
         save: None,
         compare: None,
@@ -280,6 +295,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 opts.threshold = percent / 100.0;
             }
             "--quick" => opts.quick = true,
+            "--once" => opts.once = true,
             "--list" => opts.list = true,
             "--help" | "-h" => opts.help = true,
             other => return Err(format!("unknown argument `{other}`")),
@@ -305,6 +321,9 @@ Black Hole Lab performance harness.
   --filter <substr>             only benchmarks and scenarios whose name contains substr
   --quick                       fewer samples and much shorter replays: a smoke run, not a measurement
                                 (a --compare with a quick run on either side never exits 1)
+  --once                        one pass of each replay instead of the best of several: all a
+                                fingerprint check needs (--perf sim --once --compare <name>,
+                                about 40 s). Never exits 1 on its timings either
   --list                        print the names and what each one measures, then exit
   --save <name>                 write the results to target/perf/<name>.json
   --compare <name>              compare against target/perf/<name>.json; exit 1 on a regression
@@ -443,7 +462,7 @@ pub(crate) fn run(args: &[String]) -> i32 {
                 println!("\n== {} ===========================================================", mode.label());
                 printed_header = true;
             }
-            let result = replay::replay(&scenario, mode, opts.quick);
+            let result = replay::replay(&scenario, mode, opts.quick, opts.once);
             print_replay(&result);
             replay_results.push(result);
         }
@@ -477,6 +496,7 @@ pub(crate) fn run(args: &[String]) -> i32 {
         cpu: std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_else(|_| "unknown".to_string()),
         os: std::env::consts::OS.to_string(),
         quick: opts.quick,
+        once: opts.once,
         debug_assertions: cfg!(debug_assertions),
         drift_percent,
         micro: micro_results,
@@ -729,6 +749,16 @@ fn compare(base: &Report, new: &Report, threshold: f64) -> i32 {
         );
         return 0;
     }
+    // The same for a single-pass run, for a narrower reason: its replays have no spread across
+    // runs, so their band is the bare threshold and one descheduled pass would cross it. What a
+    // `--once` run is for is the fingerprint table above, which is exact on any number of passes.
+    if base.once || new.once {
+        println!(
+            "Not failing on any of that: one side of this comparison is a --once run, whose \
+             replay timings are a single pass. The fingerprints above are what it is for."
+        );
+        return 0;
+    }
     i32::from(regressions > 0)
 }
 
@@ -884,7 +914,8 @@ mod tests {
         };
         let all = parse_of("--perf").unwrap();
         assert_eq!(all.tiers.len(), 3, "no tier named means all three");
-        assert!(!all.quick && all.filter.is_none());
+        assert!(!all.quick && !all.once && all.filter.is_none());
+        assert!(parse_of("--perf sim --once").unwrap().once);
 
         let one = parse_of("--perf micro sim --quick --filter ray --threshold 12").unwrap();
         assert_eq!(one.tiers, vec![Tier::Micro, Tier::Sim]);
