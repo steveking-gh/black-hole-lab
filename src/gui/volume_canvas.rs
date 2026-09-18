@@ -1,3 +1,6 @@
+use std::collections::VecDeque;
+use std::ops::Range;
+
 use crate::gui::controls::{ReferenceFrame, SignalViews};
 use crate::gui::spacetime_canvas::{CHART_BANNER, COARSE_ZOOM_STEPS, TelemetryBoxes};
 use crate::gui::spatial_canvas::{
@@ -6,7 +9,7 @@ use crate::gui::spatial_canvas::{
 };
 use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
-use crate::physics::observer::Observer;
+use crate::physics::observer::{Observer, TrailPoint};
 use crate::physics::wavefront::{NullRay, RaySample, SignalField};
 use egui::{Color32, Pos2, Stroke, Vec2};
 
@@ -1459,17 +1462,19 @@ impl VolumeCanvas {
             if self.show_ghost_cones {
                 let k_lo = t_min.ceil() as i64;
                 let k_hi = current_time.ceil() as i64 - 1;
+                // The stretch of trail inside the window, found once rather than filtered for at
+                // every whole M. The trail is recorded in order, so it is sorted in t and both ends
+                // of the window are `partition_point` questions.
+                let lo = obs.trail.partition_point(|p| p.t < t_min);
+                let hi = obs.trail.partition_point(|p| p.t < current_time);
                 for k in k_lo..=k_hi {
                     let t = k as f64;
                     // The nearest recorded event to that whole M. The trail is what the run
                     // actually integrated, so a ghost stands on a computed event rather than on an
                     // interpolation between two of them; a whole M the trail does not reach within
                     // one M gets no cone rather than one dragged over to it.
-                    let nearest = obs
-                        .trail
-                        .iter()
-                        .filter(|p| p.t >= t_min && p.t < current_time)
-                        .min_by(|a, b| (a.t - t).abs().total_cmp(&(b.t - t).abs()));
+                    //
+                    let nearest = nearest_recorded(&obs.trail, lo..hi, t);
                     let Some(p) = nearest.filter(|p| (p.t - t).abs() <= 1.0) else {
                         continue;
                     };
@@ -2047,10 +2052,116 @@ impl VolumeCanvas {
     }
 }
 
+/// The recorded event nearest `t` among the trail entries in `range`, or None when that stretch of
+/// trail is empty.
+///
+/// A trail is recorded in order, so it is sorted in t, and on a sorted trail the entry nearest `t`
+/// is always one of the two that bracket it. So this is the standard library's `partition_point`
+/// for the first entry at or after `t`, and a look either side of that - O(log n) against the O(n)
+/// of scanning the trail, and the same answer.
+///
+/// `range` is the stretch of trail inside the view's time window, which the caller finds once by
+/// the same means. Clamping the bracketing index into it before looking either side is what makes
+/// the answer the nearest entry *of that stretch* for any `t` at all, rather than only for a `t`
+/// inside the window: a `t` past either end of the window returns that end of it, which is what a
+/// scan of the stretch would return too. An empty stretch has no nearest entry.
+fn nearest_recorded(trail: &VecDeque<TrailPoint>, range: Range<usize>, t: f64) -> Option<&TrailPoint> {
+    if range.is_empty() {
+        return None;
+    }
+    let at = trail.partition_point(|point| point.t < t).clamp(range.start, range.end);
+    [at.checked_sub(1), Some(at)]
+        .into_iter()
+        .flatten()
+        .filter(|index| range.contains(index))
+        .map(|index| &trail[index])
+        .min_by(|a, b| (a.t - t).abs().total_cmp(&(b.t - t).abs()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    /// The nearest recorded event, found by scanning: what `nearest_recorded` has to agree with.
+    fn nearest_by_scan(
+        trail: &VecDeque<TrailPoint>,
+        t_min: f64,
+        t_max: f64,
+        t: f64,
+    ) -> Option<&TrailPoint> {
+        trail
+            .iter()
+            .filter(|p| p.t >= t_min && p.t < t_max)
+            .min_by(|a, b| (a.t - t).abs().total_cmp(&(b.t - t).abs()))
+    }
+
+    #[test]
+    fn test_the_nearest_recorded_event_is_the_one_a_scan_would_find() {
+        // The ghost cones stand on recorded events, one per whole M of the window, and which event
+        // that is used to be answered by filtering the whole trail and taking a minimum - per whole
+        // M, so O(trail) times O(window). The trail is sorted in t, so it is a binary search and a
+        // look either side. This is that refactor pinned: the same answer for every whole M of
+        // every window tried, including the windows whose ends fall between recorded events and the
+        // ones that exclude the trail altogether.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let params = crate::physics::observer::WorldlineParams::default();
+        let mut obs = Observer::new_with_phi(&metric, "Bob", 0.0, 20.0, 0.0, 0.0, params);
+        // An uneven cadence on purpose: a real run's step varies with the play mode and with
+        // Distance mode's own refinement, so the trail is not a uniform grid in t.
+        let mut dt = 0.37;
+        while obs.t < 26.0 {
+            obs.step(&metric, obs.t + dt, dt);
+            dt = if dt > 0.05 { dt * 0.93 } else { 0.41 };
+        }
+        let span = obs.trail.back().expect("a trail").t - obs.trail.front().expect("a trail").t;
+        println!(
+            "{} recorded events spanning {:.2} M, from t = {:.3} to {:.3}",
+            obs.trail.len(),
+            span,
+            obs.trail.front().expect("a trail").t,
+            obs.trail.back().expect("a trail").t
+        );
+        assert!(obs.trail.len() > 50, "the walk should record plenty: {}", obs.trail.len());
+
+        let mut checked = 0;
+        for &(t_min, t_max) in &[
+            (0.0, 26.0),
+            (0.0, 1.0),
+            (3.5, 9.5),
+            (4.25, 4.75),
+            (12.0, 26.0),
+            (25.999, 26.0),
+            (26.5, 30.0),
+            (-5.0, 0.5),
+        ] {
+            let lo = obs.trail.partition_point(|p| p.t < t_min);
+            let hi = obs.trail.partition_point(|p| p.t < t_max);
+            // Every whole M the renderer would ask about, plus the half-M offsets in between, which
+            // land a target exactly between two recorded events far more often.
+            let mut targets: Vec<f64> = Vec::new();
+            let mut t = t_min.floor() - 1.0;
+            while t <= t_max.ceil() + 1.0 {
+                targets.push(t);
+                targets.push(t + 0.5);
+                t += 1.0;
+            }
+            for t in targets {
+                let fast = nearest_recorded(&obs.trail, lo..hi, t);
+                let slow = nearest_by_scan(&obs.trail, t_min, t_max, t);
+                assert_eq!(
+                    fast.map(|p| (p.t, p.r, p.phi)),
+                    slow.map(|p| (p.t, p.r, p.phi)),
+                    "window [{t_min}, {t_max}) at t = {t}: binary search {:?} against scan {:?}",
+                    fast.map(|p| p.t),
+                    slow.map(|p| p.t)
+                );
+                checked += 1;
+            }
+        }
+        println!("{checked} (window, whole M) pairs agree with the scan");
+        assert!(checked > 100, "the sweep should cover plenty of cases: {checked}");
+    }
 
     /// One shape the painter emitted, reduced to what a test about the scene has to ask of it.
     /// Kept as owned data because the `FullOutput` the shapes live in has to be dropped before the

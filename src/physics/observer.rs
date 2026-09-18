@@ -1019,12 +1019,12 @@ impl Observer {
         self.is_active = true;
         match self.effective_mode(metric) {
             ObserverMode::FreeFall => {
-                let keep = self
-                    .trail
-                    .iter()
-                    .take_while(|point| point.t <= t_target + 1e-9)
-                    .count()
-                    .max(1);
+                // The trail is recorded in order, so it is sorted in t and the events to keep are
+                // a prefix of it: `partition_point` is the standard library's binary search for
+                // exactly that, and it answers in O(log n) where walking the prefix was O(n).
+                // The floor of one is the case where the target precedes every event still held -
+                // the trail has a cap - and it lands the worldline on the oldest event kept.
+                let keep = self.trail.partition_point(|point| point.t <= t_target + 1e-9).max(1);
                 self.trail.truncate(keep);
                 let last = self.trail[keep - 1];
                 self.restore(last);
