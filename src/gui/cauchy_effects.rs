@@ -46,7 +46,7 @@ impl CauchyEffects {
         metric: &KerrSchild,
         bob: &Option<Observer>,
         alice: &Option<Observer>,
-        signal: &SignalField,
+        alice_signal: &SignalField,
         bob_signal: &SignalField,
         release_gap: f64,
         current_time: f64,
@@ -138,9 +138,9 @@ impl CauchyEffects {
                 // exp(kappa_- Delta t) that the crossing of the stack on r- is measured against.
                 if alice.is_some() && bob.is_some() {
                     ui.horizontal(|ui| {
-                        let received = signal.received_count();
+                        let received = alice_signal.received_count();
                         let scale = fmt_shift(limiting_blueshift(metric, release_gap));
-                        match (signal.last_reception(), signal.max_ratio()) {
+                        match (alice_signal.last_reception(), alice_signal.max_ratio()) {
                             (Some(r), Some(max)) => {
                                 ui.label(format!("Alice → Bob: {} receptions, last ν_B/ν_A = ", received));
                                 ui.label(

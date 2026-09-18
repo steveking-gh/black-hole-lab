@@ -102,7 +102,7 @@ impl Fixtures {
         let until = if quick { FIXTURE_UNTIL_QUICK } else { FIXTURE_UNTIL };
         replay::play_sim(&mut app, until);
         let metric = app.metric;
-        let mut alice_field_unheard = app.signal.clone();
+        let mut alice_field_unheard = app.alice_signal.clone();
         alice_field_unheard.advance(&metric, FRAME_DT);
         let mut bob_next = app.bob.clone().expect("the ISCO pair has Bob in it");
         bob_next.step(&metric, app.current_time + FRAME_DT, FRAME_DT);
@@ -113,7 +113,7 @@ impl Fixtures {
             clock: app.current_time,
             alice: app.alice.clone().expect("the ISCO pair has Alice in it"),
             bob: app.bob.clone().expect("the ISCO pair has Bob in it"),
-            alice_field: app.signal.clone(),
+            alice_field: app.alice_signal.clone(),
             bob_field: app.bob_signal.clone(),
             alice_field_unheard,
             bob_next,

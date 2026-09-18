@@ -213,12 +213,14 @@ fn far_branch_freeze(app: &mut SpacetimeApp) {
 /// do and what the app's own startup does. A scenario states its cards and calls this rather than
 /// assembling observers behind the panel's back, so a replay is a run the user could have set up.
 fn drop_observers(app: &mut SpacetimeApp) {
-    let SpacetimeApp { metric, alice, bob, signal, bob_signal, controls, current_time, .. } = app;
+    let SpacetimeApp {
+        metric, alice, bob, alice_signal, bob_signal, controls, current_time, ..
+    } = app;
     controls.drop_observers(
         metric,
         alice,
         bob,
-        &mut SignalPair { alice: signal, bob: bob_signal },
+        &mut SignalPair { alice: alice_signal, bob: bob_signal },
         current_time,
     );
     controls.view_reset_requested = false;
@@ -239,7 +241,7 @@ pub(crate) fn app_for_fixtures() -> SpacetimeApp {
 /// never sees the slider; the play loop does, once a frame, before it steps. A scenario that sets
 /// the cap to 128 would otherwise be simulated at 64 in `sim` mode and at 128 in `frame` mode.
 fn sim_frame(app: &mut SpacetimeApp) {
-    SignalPair { alice: &mut app.signal, bob: &mut app.bob_signal }
+    SignalPair { alice: &mut app.alice_signal, bob: &mut app.bob_signal }
         .set_max_pulses(&app.metric, app.controls.max_pulses);
     app.step_forward(FRAME_DT);
 }
@@ -328,14 +330,14 @@ fn counters(app: &SpacetimeApp) -> Counters {
         field.pulses.iter().flat_map(|p| p.rays.iter()).filter(|ray| ray.alive()).count()
     };
     Counters {
-        pulses_alice: app.signal.pulses.len(),
+        pulses_alice: app.alice_signal.pulses.len(),
         pulses_bob: app.bob_signal.pulses.len(),
-        live_rays_alice: live(&app.signal),
+        live_rays_alice: live(&app.alice_signal),
         live_rays_bob: live(&app.bob_signal),
-        heard_by_bob: app.signal.received_count(),
+        heard_by_bob: app.alice_signal.received_count(),
         heard_by_alice: app.bob_signal.received_count(),
-        budget_exhausted: app.signal.budget_exhausted() + app.bob_signal.budget_exhausted(),
-        dropped_in_flight: app.signal.dropped_in_flight() + app.bob_signal.dropped_in_flight(),
+        budget_exhausted: app.alice_signal.budget_exhausted() + app.bob_signal.budget_exhausted(),
+        dropped_in_flight: app.alice_signal.dropped_in_flight() + app.bob_signal.dropped_in_flight(),
     }
 }
 
@@ -398,7 +400,7 @@ fn fingerprint(app: &SpacetimeApp) -> u64 {
             None => h.bits(0),
         }
     }
-    for field in [&app.signal, &app.bob_signal] {
+    for field in [&app.alice_signal, &app.bob_signal] {
         h.f64(field.t);
         h.bits(field.pulses.len() as u64);
         for pulse in field.pulses.iter() {
