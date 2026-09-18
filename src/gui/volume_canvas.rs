@@ -997,6 +997,44 @@ impl VolumeCanvas {
         self.camera.pan = self.focus_offset - (at - Pos2::ZERO);
     }
 
+    /// Where the view's anchor would project to under a given standing request, in screen pixels:
+    /// the offset `render` subtracts to place the canvas, as `focus_offset` records it for the
+    /// request that frame was drawn with. Pan-independent, the projection being taken about the
+    /// origin.
+    fn tracking(
+        &self,
+        metric: &KerrSchild,
+        bob: Option<&Observer>,
+        alice: Option<&Observer>,
+        centred: Option<Who>,
+    ) -> Vec2 {
+        frame_focus(centred, ReferenceFrame::GlobalVolume, bob, alice).map_or(Vec2::ZERO, |obs| {
+            let (x, y) = obs.cartesian_position(metric);
+            self.camera.project(Pos2::ZERO, [x, y, 0.0]).0 - Pos2::ZERO
+        })
+    }
+
+    /// Keep `who` in the middle of the view, or stop doing so: this canvas's half of the rule
+    /// `SpatialCanvas::re_anchor` states in full, which is where the reasoning lives. Taking hold
+    /// brings the new anchor to the middle; letting go keeps the same floor point there so that the
+    /// picture does not jump.
+    pub(crate) fn hold_observer(
+        &mut self,
+        metric: &KerrSchild,
+        bob: Option<&Observer>,
+        alice: Option<&Observer>,
+        who: Who,
+        hold: bool,
+    ) {
+        let want = hold.then_some(who);
+        // The frame now drawing has already recorded the offset it was placed with, which is the
+        // anchor being let go of; the one being taken up has to be projected.
+        let before = self.focus_offset;
+        let after = self.tracking(metric, bob, alice, want);
+        self.centred_on = want;
+        self.camera.pan = if hold { Vec2::ZERO } else { self.camera.pan + after - before };
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
@@ -1850,7 +1888,7 @@ impl VolumeCanvas {
                 let mut centred = self.centred_on == Some(who);
                 let label = format!("Keep {} Centered", who.name());
                 if ui.add_enabled(in_run, egui::Checkbox::new(&mut centred, label)).changed() {
-                    self.centred_on = centred.then_some(who);
+                    self.hold_observer(metric, bob, alice, who, centred);
                     ui.close();
                 }
             }

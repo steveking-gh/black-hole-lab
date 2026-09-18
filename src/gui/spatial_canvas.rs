@@ -237,6 +237,25 @@ impl SpatialCanvas {
         )
     }
 
+    /// Where the view's anchor sits in the drawn plane, in screen pixels.
+    ///
+    /// This is the offset `render` subtracts to place the canvas, and it is what every pan is
+    /// measured against: the world point in the middle of the canvas is the one whose own offset is
+    /// `tracking - pan_offset`.
+    fn tracking(
+        &self,
+        metric: &KerrSchild,
+        bob: &Option<Observer>,
+        alice: &Option<Observer>,
+        frame_of_ref: ReferenceFrame,
+    ) -> Vec2 {
+        let zoom = self.zoom;
+        self.followed(bob, alice, frame_of_ref).map_or(Vec2::ZERO, |obs| {
+            let (x, y) = obs.cartesian_position(metric);
+            Vec2::new(x as f32 * zoom, -(y as f32) * zoom)
+        })
+    }
+
     /// Pan the view so that the point `target` of the equatorial plane - Cartesian, in M, as
     /// `Observer::cartesian_position` gives it - sits in the middle of the canvas.
     ///
@@ -253,11 +272,86 @@ impl SpatialCanvas {
         target: (f64, f64),
     ) {
         let zoom = self.zoom;
-        let to_offset = |(x, y): (f64, f64)| Vec2::new(x as f32 * zoom, -(y as f32) * zoom);
-        let tracking = self
-            .followed(bob, alice, frame_of_ref)
-            .map_or(Vec2::ZERO, |obs| to_offset(obs.cartesian_position(metric)));
-        self.pan_offset = tracking - to_offset(target);
+        let tracking = self.tracking(metric, bob, alice, frame_of_ref);
+        self.pan_offset =
+            tracking - Vec2::new(target.0 as f32 * zoom, -(target.1 as f32) * zoom);
+    }
+
+    /// Change what the view is anchored to, and answer for the pan while doing it.
+    ///
+    /// The anchor enters the placement as `centre = rect.center() + pan_offset - tracking`, which
+    /// puts the anchor itself at `rect.center() + pan_offset`. So moving the anchor and leaving the
+    /// pan alone does two things the user did not ask for: it slides the whole picture by however
+    /// far the new anchor is from the old one, and it leaves whatever was just taken hold of
+    /// sitting at the accumulated pan rather than in the middle. The pan is not usually zero - a
+    /// drag writes it, and so does every wheel zoom about a cursor that is not dead centre, which
+    /// compounds as the view zooms in - so "Keep Bob Centered" could put Bob clean off the canvas.
+    /// Taking hold of an anchor has to state where the view should then be looking.
+    ///
+    /// Two answers, and the caller says which:
+    ///
+    /// * Taking hold brings the new anchor to the middle, so the pan measured from it is zero.
+    ///   "Keep Bob Centered" means Bob in the middle, whatever the view was doing beforehand.
+    /// * Letting go keeps the same world point in the middle, so the view stays where the user was
+    ///   looking and the observer drifts out of it, rather than the hole snapping back under the
+    ///   cursor. That point's offset is `tracking - pan_offset`, so holding it still across the
+    ///   change means `pan_offset += tracking_after - tracking_before`.
+    ///
+    /// A Goto is neither of those and stays `look_at`: it moves the view once and changes no
+    /// anchor, so nothing about what the view holds on to is being restated.
+    fn re_anchor(
+        &mut self,
+        metric: &KerrSchild,
+        bob: &Option<Observer>,
+        alice: &Option<Observer>,
+        frame_of_ref: ReferenceFrame,
+        take_hold: bool,
+        change: impl FnOnce(&mut Self),
+    ) {
+        let before = self.tracking(metric, bob, alice, frame_of_ref);
+        change(self);
+        let after = self.tracking(metric, bob, alice, frame_of_ref);
+        self.pan_offset =
+            if take_hold { Vec2::ZERO } else { self.pan_offset + after - before };
+    }
+
+    /// Keep `who` in the middle of the view, or stop doing so: the right-click menu's "Keep
+    /// Centered" checkbox for an observer, and the one place the rule lives so that the menu and
+    /// the tests cannot disagree about it. Taking hold of an observer lets go of the hole, the two
+    /// being exclusive.
+    pub(crate) fn hold_observer(
+        &mut self,
+        metric: &KerrSchild,
+        bob: &Option<Observer>,
+        alice: &Option<Observer>,
+        frame_of_ref: ReferenceFrame,
+        who: Who,
+        hold: bool,
+    ) {
+        self.re_anchor(metric, bob, alice, frame_of_ref, hold, |canvas| {
+            canvas.centred_on = hold.then_some(who);
+            if hold {
+                canvas.keep_hole_centred = false;
+            }
+        });
+    }
+
+    /// Keep the hole in the middle of the view, or stop doing so. The hole is always there to be
+    /// held, and holding it lets go of anybody else.
+    pub(crate) fn hold_hole(
+        &mut self,
+        metric: &KerrSchild,
+        bob: &Option<Observer>,
+        alice: &Option<Observer>,
+        frame_of_ref: ReferenceFrame,
+        hold: bool,
+    ) {
+        self.re_anchor(metric, bob, alice, frame_of_ref, hold, |canvas| {
+            canvas.keep_hole_centred = hold;
+            if hold {
+                canvas.centred_on = None;
+            }
+        });
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -694,18 +788,13 @@ impl SpatialCanvas {
                 let mut centred = self.centred_on == Some(who);
                 let label = format!("Keep {} Centered", who.name());
                 if ui.add_enabled(present, egui::Checkbox::new(&mut centred, label)).changed() {
-                    self.centred_on = centred.then_some(who);
-                    if centred {
-                        self.keep_hole_centred = false;
-                    }
+                    self.hold_observer(metric, bob, alice, frame_of_ref, who, centred);
                     ui.close();
                 }
             }
-            // The hole is always there to be held, and holding it lets go of anybody else.
-            if ui.checkbox(&mut self.keep_hole_centred, "Keep Black Hole Centered").changed() {
-                if self.keep_hole_centred {
-                    self.centred_on = None;
-                }
+            let mut hole = self.keep_hole_centred;
+            if ui.checkbox(&mut hole, "Keep Black Hole Centered").changed() {
+                self.hold_hole(metric, bob, alice, frame_of_ref, hole);
                 ui.close();
             }
         });
@@ -1799,6 +1888,82 @@ mod tests {
         assert!(
             (hole_of(&released) - hole_of(&parked)).length() < 1e-3,
             "and the hole is back to standing still"
+        );
+    }
+
+    #[test]
+    fn test_keeping_an_observer_centred_brings_them_to_the_middle_from_any_pan() {
+        // Taking hold used to set the standing request and nothing else. The view's placement is
+        // `rect.center() + pan_offset - tracking`, which puts the observer being held at
+        // `rect.center() + pan_offset`, so the pan had to be zero for "Keep Bob Centered" to mean
+        // what it says. It usually is not: a drag writes it, and so does every wheel zoom about a
+        // cursor that is not dead centre, which compounds as the view zooms in. Taking hold
+        // therefore slid the whole picture by Bob's own offset and then left him at the accumulated
+        // pan - off an 800 x 600 canvas entirely for a pan of a few hundred pixels, which is the
+        // reported "jumped into space where Bob was not visible".
+        //
+        // Nothing here steps the clock after the fall: the whole defect is in the view, and it
+        // showed up with the run paused.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let mut canvas = SpatialCanvas::default();
+        let params = crate::physics::observer::WorldlineParams::default();
+        let mut alice: Option<Observer> = None;
+        let mut bob = Some(Observer::new_with_phi(&metric, "Bob", 0.0, 8.0, 0.0, 0.0, params));
+        let dropped = bob.as_mut().expect("Bob is in this run");
+        for _ in 0..20 {
+            dropped.step(&metric, dropped.t + 0.05, 0.05);
+        }
+        let centre = Pos2::new(400.0, 300.0);
+        let frame = ReferenceFrame::DistantObserver;
+
+        // The pan the user's dragging and zooming had accumulated by then, set directly here for
+        // the same reason the hole's case sets it directly: what is under test is the hold, not the
+        // arithmetic of the wheel.
+        canvas.pan_offset = Vec2::new(520.0, -260.0);
+        let (panned, _) = spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
+        let adrift = (marker_of(&panned, Who::Bob) - centre).length();
+        assert!(adrift > 300.0, "the pan has carried Bob {adrift} px off the middle");
+
+        // Held, he is in the middle, and the pan that was measured against the old anchor is spent.
+        let pan_before = canvas.pan_offset;
+        canvas.hold_observer(&metric, &bob, &alice, frame, Who::Bob, true);
+        let (held, _) = spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
+        let at = marker_of(&held, Who::Bob);
+        println!(
+            "a pan of {pan_before:?} left Bob {adrift:.0} px off centre; held, he is at {at:?} \
+             against the middle {centre:?}"
+        );
+        assert!((at - centre).length() < 1.0, "Bob is in the middle: {at:?}");
+        assert_eq!(canvas.centred_on, Some(Who::Bob), "and the view is holding him");
+
+        // Letting go does not jump the picture either: the same world point stays in the middle,
+        // so the view is left looking where the user was looking and Bob drifts out of it from
+        // there, which is the difference from a Goto that this keeps.
+        let hole_held = hole_of(&held);
+        canvas.hold_observer(&metric, &bob, &alice, frame, Who::Bob, false);
+        let (freed, _) = spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
+        let hole_freed = hole_of(&freed);
+        println!("let go, the hole stays at {hole_freed:?} against {hole_held:?}");
+        assert!(
+            (hole_freed - hole_held).length() < 1.0,
+            "letting go leaves the view where it was: the hole moved {hole_held:?} -> {hole_freed:?}"
+        );
+        assert_eq!(canvas.centred_on, None, "and nobody is held any more");
+
+        // The hole's own hold answers for the pan the same way: it comes to the middle whatever the
+        // pan was, and it takes over from Bob.
+        canvas.pan_offset = Vec2::new(-310.0, 190.0);
+        canvas.hold_observer(&metric, &bob, &alice, frame, Who::Bob, true);
+        canvas.hold_hole(&metric, &bob, &alice, frame, true);
+        let (hole_held_now, _) =
+            spatial_frame(&mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
+        assert_eq!(canvas.centred_on, None, "holding the hole lets go of Bob");
+        assert!(
+            (hole_of(&hole_held_now) - centre).length() < 1.0,
+            "and puts the hole in the middle: {:?}",
+            hole_of(&hole_held_now)
         );
     }
 
