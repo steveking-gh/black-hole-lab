@@ -1,0 +1,25 @@
+src/gui/volume_canvas.rs
+  s_99085f80de58c0::t_3d47f8ee3a1aeb 2086-2165
+  s_99085f80de58c0::t_d04629615acc50 2061-2067,2069-2072
+  s_99085f80de58c0::t_2c27feca117a09 1-3,12,1477,2055-2060,2068,2073-2078
+  s_99085f80de58c0::t_9fce8478ac294d 1465-1469,1476
+  s_99085f80de58c0::t_ab65c0eba01816 2079-2080
+src/physics/observer.rs
+  s_99085f80de58c0::t_9fce8478ac294d 1022-1027
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "afa3ada796a5ba27ada750f0831941188abb50d5",
+  "prompts": {},
+  "sessions": {
+    "s_99085f80de58c0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b270d59c-b282-4517-83fc-8b530cf1e304",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
