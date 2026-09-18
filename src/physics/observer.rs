@@ -224,9 +224,28 @@ pub struct TrailPoint {
 }
 
 /// Trail entries kept for a moving worldline, and for a dragged one. Past these the oldest entry
-/// is dropped, which bounds the drawing and, with it, how far back a rewind can reach: the
+/// is dropped, which bounds the memory and, with it, how far back a rewind can reach: the
 /// reversible window is the window the trail keeps, exactly as it is for `SignalField`.
-const TRAIL_MAX_POINTS: usize = 800;
+///
+/// Ten thousand entries is 640 KB an observer and 1.3 MB for the pair, a `TrailPoint` being 64
+/// bytes, and it buys about three minutes of continuous play. Note the unit that is: an event is
+/// recorded once per stepped frame, so the depth is counted in frames and not in M, and what it
+/// comes to in coordinate time is whatever the play speed says. At the default 1 M/s it is 167 M;
+/// the slider runs from 0.05 to 20 M/s, so the same buffer is worth 8 M at the slow end and 3 300
+/// at the fast one. No depth makes the floor unreachable, which is why `ObserverPair::rewind_floor`
+/// exists and says so on the button instead of the number being chosen to hide it.
+///
+/// Nothing else scales with the depth any more, which is what lets this be 10 000 rather than the
+/// 800 it was. Recording and eviction are O(1) on a `VecDeque` (see `record`); every search of a
+/// trail is a `partition_point`; and the drawing is thinned to the resolution of the screen before
+/// it reaches a polyline (see `gui::polyline`), so a worldline costs what it covers on the canvas
+/// whatever is held behind it. The number is therefore a statement about how much history is worth
+/// keeping, and no longer one about what a frame costs.
+///
+/// A dragged worldline keeps fewer and wants to: its entries come from mouse motion rather than
+/// from the integrator, and `rewind_to` moves a dragged observer analytically without reading the
+/// trail at all, so the depth buys a picture and nothing else.
+const TRAIL_MAX_POINTS: usize = 10_000;
 const TRAIL_MAX_DRAG_POINTS: usize = 500;
 
 #[derive(Debug, Clone)]

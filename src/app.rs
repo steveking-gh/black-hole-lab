@@ -990,23 +990,39 @@ mod tests {
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
         // Dropped high, so neither reaches the ring inside a run long enough to overflow the
-        // trail: from 60 M the fall lasts 219 M and this run is 20.
+        // trail: from 60 M the fall lasts 219 M and this run is 170.
         app.controls.alice.drop_r = 60.0;
         app.controls.bob.drop_r = 60.0;
         drop_observers(&mut app);
-        // One recorded event per step, at the step a played frame takes, for longer than the cap.
-        for _ in 0..1_200 {
+        // Played on until the trails have evicted their own start, at the step a played frame
+        // takes. Driven by the floor itself rather than by a step count, so that the test says
+        // what it means and goes on meaning it whatever `TRAIL_MAX_POINTS` is set to.
+        let floor_now = |app: &mut SpacetimeApp| {
+            ObserverPair { bob: app.bob.as_mut(), alice: app.alice.as_mut() }
+                .rewind_floor(&app.metric)
+        };
+        let mut floor = 0.0;
+        let mut steps = 0;
+        while floor <= 0.0 {
             app.step_forward(0.0167);
+            steps += 1;
+            assert!(steps < 200_000, "the trail never evicted its own start");
+            floor = floor_now(&mut app);
         }
-        let floor = ObserverPair { bob: app.bob.as_mut(), alice: app.alice.as_mut() }
-            .rewind_floor(&app.metric);
-        assert!(floor > 0.0, "a run past the cap has lost its own start: floor = {floor}");
-        assert!(floor < app.current_time, "and the floor is behind the clock: {floor}");
+        println!(
+            "{steps} recorded events later, the history reaches back only to t = {floor:.4} M of \
+             a run that has reached {:.4}",
+            app.current_time
+        );
+        assert!(floor < app.current_time, "the floor is behind the clock: {floor}");
 
-        // All the way down, and then some: at every step both worldlines are on the clock, which
-        // is the invariant the freeze broke.
-        for _ in 0..2_000 {
-            app.step_backward(0.05);
+        // All the way down: at every step both worldlines are on the clock, which is the invariant
+        // the freeze broke.
+        let mut backsteps = 0;
+        while app.current_time > floor + 1e-9 {
+            app.step_backward(5.0);
+            backsteps += 1;
+            assert!(backsteps < 100_000, "the clock never reached the floor");
             for obs in [alice_of(&app), bob_of(&app)] {
                 assert!(
                     (obs.t - app.current_time).abs() < 1e-9,
@@ -1017,9 +1033,12 @@ mod tests {
                 );
             }
         }
-        println!(
-            "the clock stopped at t = {:.4} M, the oldest event the trails still hold",
-            app.current_time
+        // The floor does not move as the clock comes down to it: a rewind truncates a trail from
+        // the back, so the oldest event held is the oldest event held throughout.
+        assert!(
+            (floor_now(&mut app) - floor).abs() < 1e-12,
+            "the floor moved under the rewind: {} against {floor}",
+            floor_now(&mut app)
         );
         assert!(
             (app.current_time - floor).abs() < 1e-9,

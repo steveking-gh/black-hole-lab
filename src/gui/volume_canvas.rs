@@ -1323,10 +1323,14 @@ impl VolumeCanvas {
             // follows the drawn length of the worldline and not the depth of the buffer. The
             // thinning is in screen space but keeps the world point and the time, which the depth
             // sort and the fade still need. See `thin_to_pixels`.
+            // The stretch of trail inside the view's time window. A trail is sorted in t, so
+            // both ends are `partition_point` questions and the window is a `range` rather than a
+            // filter that has to look at every event held to draw the few thousand on screen.
+            let lo = obs.trail.partition_point(|p| p.t < t_min);
+            let hi = obs.trail.partition_point(|p| p.t <= current_time);
             let points: Vec<(f64, [f64; 3])> = thin_to_pixels(
                 obs.trail
-                    .iter()
-                    .filter(|p| p.t >= t_min && p.t <= current_time)
+                    .range(lo..hi)
                     .map(|p| (p.t, chart.world(metric, p.t, p.r, p.phi, t_scale)))
                     // A trail point that maps to an infinity is dropped rather than drawn: the
                     // rest of the worldline is still the worldline.
