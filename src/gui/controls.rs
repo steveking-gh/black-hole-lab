@@ -365,6 +365,26 @@ pub struct AppControls {
     /// canvases in its hands as well, so that one button could reach into both, is a wider door
     /// than this needs.
     pub view_reset_requested: bool,
+    /// Standing request from the panel for a file to be written or opened, or None.
+    ///
+    /// Raised by the Save and Load buttons and by Ctrl+S and Ctrl+O, and consumed once, in
+    /// `SpacetimeApp::ui`, through `take_file_request`. The reason is `view_reset_requested`'s
+    /// reason and a stronger form of it: the panel is handed the run and not the three canvases, and
+    /// a save has to write all four. The app is the only thing that holds all four, so the app is
+    /// what opens the dialog and what calls `SpacetimeApp::save_to` and `SpacetimeApp::load_from`.
+    ///
+    /// A transient, like the flash on a transport button and unlike every setting around it:
+    /// `crate::save` does not write the request to a file and `save::convert::controls_from_v1`
+    /// leaves the request at None, because a request that outlived the frame it was made in would
+    /// open a dialog in front of a user who had asked for nothing.
+    pub file_request: Option<FileRequest>,
+    /// What the last save or load did, printed under the two buttons, or None while the session has
+    /// done neither.
+    ///
+    /// A transient for the same reason as `file_request`: what the last file action did is a fact
+    /// about this session and not a setting of the panel, so it is neither written to a file nor
+    /// read back out of one.
+    pub file_status: Option<FileStatus>,
 }
 
 impl Default for AppControls {
@@ -401,6 +421,8 @@ impl Default for AppControls {
             show_distant_clock_grid: true,
             font_scale: 1.0,
             view_reset_requested: false,
+            file_request: None,
+            file_status: None,
         }
     }
 }
@@ -1029,6 +1051,45 @@ pub enum TransportPress {
     StepForward,
 }
 
+/// Which file the user has asked for. See `AppControls::file_request` for why the panel raises a
+/// request instead of doing the work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileRequest {
+    /// Write this run to a file the user picks.
+    Save,
+    /// Replace this run with one out of a file the user picks.
+    Load,
+}
+
+/// What the last save or load did, in one line fit to print under the buttons.
+///
+/// `failed` picks the colour rather than the wording, so that the same sentence the status line
+/// shows is also the sentence `main` prints on stderr when a save named on the command line will
+/// not open. A failure stays on the panel until the next file action: an error that faded on a
+/// timer would be an error the user could look away from and never see.
+#[derive(Debug, Clone)]
+pub struct FileStatus {
+    pub text: String,
+    pub failed: bool,
+}
+
+/// What the Save button says it does.
+const SAVE_TIP: &str = "Write the whole run to a file: the clock, both observers with their trails, \
+every wavefront in flight with every ray and every arrival, the panel's settings, and what each of \
+the three views is looking at. A native dialog asks where the file goes and offers a name that \
+carries the spin and the clock. The run stands still while the dialog is open, so the state you \
+pick a name for is the state the file gets. Shortcut: Ctrl+S.";
+
+/// What the Load button says it does, and what a load costs.
+const LOAD_TIP: &str = "Open a saved run. A native dialog asks which file to open, and that file \
+replaces the run in progress: the clock, both observers, all the light in flight, the panel's \
+settings and all three views become the saved run's. The restored run comes up paused, whatever \
+that run was doing at the moment somebody saved it. A load that goes wrong - the wrong file, a \
+truncated one, a file somebody has edited - changes nothing at all and says why. Before a load \
+replaces a run whose clock has moved, Black Hole Lab writes that run to autosave-before-load.bhl \
+in your own data directory, so a mis-click loses nothing. Dropping a save file on this window does \
+exactly what the Load button does. Shortcut: Ctrl+O.";
+
 /// Corner radius of a transport button, matching the panel's chips so that the two rows of
 /// controls read as the same family of things to press.
 const TRANSPORT_CORNER: f32 = 8.0;
@@ -1183,6 +1244,13 @@ impl AppControls {
     /// clearing the request. Called once a frame by `SpacetimeApp::ui`, after the panel has run.
     pub fn take_view_reset(&mut self) -> bool {
         std::mem::take(&mut self.view_reset_requested)
+    }
+
+    /// Which file action has been asked for since this was last called, clearing the request.
+    /// Called once a frame by `SpacetimeApp::ui`, after the panel has run, for the same reason
+    /// `take_view_reset` is: the panel raises the request and the app owns what a save has to write.
+    pub fn take_file_request(&mut self) -> Option<FileRequest> {
+        self.file_request.take()
     }
 
     /// The gap between the two releases, which is the Δt the blueshift scale exp(κ₋Δt) is quoted
@@ -1422,6 +1490,28 @@ impl AppControls {
                     sim.step_forward(current_step, self.transmit());
                 }
             });
+            // The file pair, on a row of their own: `TRANSPORT_BUTTON` is sized so that four of
+            // them span the 300 point panel, and the row above already holds four.
+            //
+            // Neither of these flashes. A flash is the tail of a press on a button with no state to
+            // show, held for `TRANSPORT_FLASH_SECONDS`; both of these open a modal dialog that
+            // stands in front of the window for as long as the user takes to pick a file, so the
+            // flash would always have expired unseen by the time the panel was drawn again. The
+            // status line below says what happened instead, and stays.
+            ui.horizontal(|ui| {
+                if transport_button(ui, "💾", "Save", SAVE_TIP, false) {
+                    self.file_request = Some(FileRequest::Save);
+                }
+                if transport_button(ui, "📁", "Load", LOAD_TIP, false) {
+                    self.file_request = Some(FileRequest::Load);
+                }
+            });
+            // What the last file action did, until the next one. See `FileStatus`.
+            if let Some(status) = self.file_status.as_ref() {
+                let colour =
+                    if status.failed { Theme::WARNING_RED } else { Theme::TEXT_MUTED };
+                ui.label(egui::RichText::new(&status.text).small().color(colour));
+            }
         });
 
         ui.add_space(4.0);

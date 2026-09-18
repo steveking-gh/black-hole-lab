@@ -1,7 +1,7 @@
 use crate::gui::cauchy_effects::CauchyEffects;
 use crate::gui::controls::{
-    AppControls, DISTANT_CLOCK_GRID_TIP, GLOBAL_VOLUME_TIP, OPENING_SPIN, ReferenceFrame, SignalViews,
-    StepMode, VIEW_TIP,
+    AppControls, DISTANT_CLOCK_GRID_TIP, FileRequest, FileStatus, GLOBAL_VOLUME_TIP, OPENING_SPIN,
+    ReferenceFrame, SignalViews, StepMode, VIEW_TIP,
 };
 use crate::gui::spacetime_canvas::{KEEP_SURFACE_FRAMED_TIP, REST_FRAME_TIP, SpacetimeCanvas};
 use crate::gui::spatial_canvas::{FrontStyle, SpatialCanvas};
@@ -124,7 +124,6 @@ impl SpacetimeApp {
 
     /// The whole of this app as a save document: the run, the panel's settings and what each canvas
     /// is looking at. See `crate::save` for what a save holds and what it deliberately does not.
-    #[allow(dead_code)] // the Save button is the next phase's; the save tests are the caller
     pub(crate) fn snapshot(&self, note: &str) -> crate::save::v1::Save {
         crate::save::document(
             &self.sim,
@@ -137,7 +136,6 @@ impl SpacetimeApp {
     }
 
     /// Write this state to a file, gzipped, through a sibling temporary and a rename.
-    #[allow(dead_code)] // as `snapshot`
     pub(crate) fn save_to(
         &self,
         path: &std::path::Path,
@@ -161,10 +159,14 @@ impl SpacetimeApp {
     /// tenth of a second of clamped playback taken on a run the user has not looked at yet. And the
     /// equatorial view's marker drag is ended, because the observers it was holding have just been
     /// replaced.
+    ///
+    /// What comes back is the file's own provenance, which is the one thing the caller cannot read
+    /// off the app afterwards: the document has been consumed by then, and the status line under
+    /// the buttons quotes which build wrote the file and when.
     pub(crate) fn load_from(
         &mut self,
         path: &std::path::Path,
-    ) -> Result<(), crate::save::Error> {
+    ) -> Result<crate::save::Provenance, crate::save::Error> {
         let bytes = crate::save::read_file(path)?;
         let document = crate::save::read_document(&bytes)?;
         let loaded = crate::save::rebuild(&document)?;
@@ -179,13 +181,182 @@ impl SpacetimeApp {
             &mut self.volume_canvas,
         );
         self.spatial_canvas.end_drag();
+        self.restart_frame_clock();
+        Ok(crate::save::Provenance {
+            app_version: document.written_by.app_version,
+            saved_at_utc: document.saved_at_utc,
+        })
+    }
+
+    /// Start the frame interval afresh from now.
+    ///
+    /// Called wherever real time has passed that the simulation must not be charged for: a load,
+    /// and every return from a native file dialog, which stands in front of the window for as long
+    /// as the user takes to pick a file or to decide against picking one. Without it the frame after
+    /// a ten-second dialog would measure ten seconds, clamp to a tenth of one, and play a tenth of a
+    /// second of a run the user had not looked at yet - and a *cancelled* dialog would do it to a
+    /// run they had not asked to change at all.
+    fn restart_frame_clock(&mut self) {
         self.last_update = Instant::now();
-        Ok(())
+    }
+
+    /// The name the Save dialog opens on: the spin and the clock, which are the two numbers that
+    /// tell one save of a session apart from the next.
+    fn suggested_save_name(&self) -> String {
+        format!(
+            "bhl-a{:.2}-t{:.1}.{}",
+            self.sim.metric.a / self.sim.metric.m,
+            self.sim.clock,
+            crate::save::EXTENSION
+        )
+    }
+
+    /// Write this run to a path the user has already chosen, and say so on the panel.
+    ///
+    /// The half of a save that happens after the dialog has returned, which is the half that can be
+    /// tested: a native dialog cannot be driven from a test and everything worth checking is on this
+    /// side of it.
+    pub(crate) fn save_chosen(&mut self, path: &std::path::Path) {
+        let name = file_name_of(path);
+        self.controls.file_status = Some(match self.save_to(path, "") {
+            // The size is read back off the file rather than counted in memory, because what the
+            // status line is answering is how much disk the run just cost.
+            Ok(()) => {
+                let on_disk = std::fs::metadata(path).map(|m| m.len() as usize).unwrap_or(0);
+                FileStatus {
+                    text: format!("Saved {name} ({}).", crate::save::human_bytes(on_disk)),
+                    failed: false,
+                }
+            }
+            Err(why) => FileStatus { text: format!("Could not save {name}: {why}"), failed: true },
+        });
+    }
+
+    /// Become the run in a path the user has already chosen, keeping a copy of the run being
+    /// replaced, and say so on the panel.
+    ///
+    /// `autosave_into` is the directory the replaced run is written to before the load, and is a
+    /// parameter rather than something read in here so that a test can point it at a temporary
+    /// directory instead of at the user's own. `SpacetimeApp::ui` passes `data_directory()`; `main`
+    /// passes None for a save named on the command line, where the run being replaced is the one the
+    /// app has just built and has never stepped.
+    ///
+    /// The autosave cannot stop the load. A user who has asked for a file has asked for it whether
+    /// or not this program can find somewhere to put a copy of what they are leaving, so a failure
+    /// here is reported in the status line and the load goes ahead.
+    pub(crate) fn load_chosen(
+        &mut self,
+        path: &std::path::Path,
+        autosave_into: Option<&std::path::Path>,
+    ) {
+        let name = file_name_of(path);
+        let autosave_failure = autosave_into
+            .filter(|_| self.sim.clock > 0.0)
+            .and_then(|dir| self.autosave_before_load(dir).err())
+            .map(|why| format!(" The autosave of the replaced run failed: {why}"));
+        // The status is written after the load and not before it, because a load that succeeds
+        // replaces `self.controls` - status line and all - with the panel out of the file.
+        let status = match self.load_from(path) {
+            Ok(from) => FileStatus {
+                text: format!(
+                    "Loaded {name} (saved by {} on {}). The run is paused.{}",
+                    from.app_version,
+                    from.date(),
+                    autosave_failure.unwrap_or_default()
+                ),
+                failed: false,
+            },
+            Err(why) => {
+                FileStatus { text: format!("Could not load {name}: {why}"), failed: true }
+            }
+        };
+        self.controls.file_status = Some(status);
+    }
+
+    /// Put a native file dialog in front of the user and do what they choose.
+    ///
+    /// The dialog is `rfd`'s synchronous one, opened on the UI thread from inside the frame, and it
+    /// blocks this thread until the user answers. That is the behaviour wanted rather than a cost
+    /// paid: while the dialog is up no frame is drawn and no step is taken, so the state the user is
+    /// naming a file for is the state the file gets, and a run cannot play on underneath a window
+    /// they cannot see. It is also what keeps this phase free of a background thread, an async
+    /// runtime and a state machine holding a load half done.
+    ///
+    /// The dialog is parented to this window through `eframe::Frame`, which carries the window and
+    /// display handles; on Windows that is what makes the dialog modal to the app rather than a
+    /// second top-level window the user can lose behind it.
+    ///
+    /// A cancelled dialog does nothing and says nothing - there is no failure to report, because
+    /// nothing was attempted - but the frame clock still restarts, because the wall clock ran while
+    /// the dialog was up whatever the user decided. See `restart_frame_clock`.
+    fn run_file_request(&mut self, request: FileRequest, frame: &eframe::Frame) {
+        let dialog = rfd::FileDialog::new()
+            .add_filter("Black Hole Lab save", &[crate::save::EXTENSION])
+            .set_parent(frame);
+        match request {
+            FileRequest::Save => {
+                if let Some(path) = dialog.set_file_name(self.suggested_save_name()).save_file() {
+                    self.save_chosen(&path);
+                }
+            }
+            FileRequest::Load => {
+                if let Some(path) = dialog.pick_file() {
+                    self.load_chosen(&path, data_directory().as_deref());
+                }
+            }
+        }
+        self.restart_frame_clock();
+    }
+
+    /// Write the run about to be replaced into `dir`, under one name that the next load overwrites.
+    ///
+    /// One name and not a series of them. This is a net under a mis-click - the user meant Save and
+    /// pressed Load, or dropped the wrong file on the window - and a net is wanted for exactly as
+    /// long as it takes to notice, which is the next thing the user does. A dated file per load
+    /// would fill a directory nobody looks in with megabyte snapshots of runs nobody wanted.
+    fn autosave_before_load(&self, dir: &std::path::Path) -> Result<(), crate::save::Error> {
+        self.save_to(&dir.join(AUTOSAVE_NAME), "the run replaced by a load")
     }
 }
 
+/// The name a save is written under before a load replaces the run in progress.
+const AUTOSAVE_NAME: &str = "autosave-before-load.bhl";
+
+/// A path's last component, for a status line that has no room for the directory the OS dialog is
+/// remembering on the user's behalf.
+fn file_name_of(path: &std::path::Path) -> String {
+    path.file_name().unwrap_or(path.as_os_str()).to_string_lossy().into_owned()
+}
+
+/// Where this program may keep files of its own, read out of the environment and nothing else.
+///
+/// Three conventions, one per platform: `%APPDATA%\black-hole-lab` on Windows,
+/// `~/Library/Application Support/black-hole-lab` on macOS, and `$XDG_DATA_HOME/black-hole-lab` or,
+/// where that variable is unset, `~/.local/share/black-hole-lab` everywhere else. None where the
+/// variable a platform's convention is built on is missing, which is a real state - a service
+/// account, a stripped environment - and not an error: the one caller treats None as "no autosave"
+/// and carries on.
+///
+/// The environment is read directly rather than through a crate because these three rules are the
+/// whole of what the crates for this do on the platforms this program runs on, and a dependency is
+/// a larger thing to take on than six lines. Nothing is created here; `save::write_atomically`
+/// makes the directory on its way past.
+fn data_directory() -> Option<std::path::PathBuf> {
+    let home = || std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let base = if cfg!(windows) {
+        std::env::var_os("APPDATA").map(std::path::PathBuf::from)
+    } else if cfg!(target_os = "macos") {
+        home().map(|h| h.join("Library/Application Support"))
+    } else {
+        std::env::var_os("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| home().map(|h| h.join(".local/share")))
+    };
+    base.map(|dir| dir.join("black-hole-lab"))
+}
+
 impl eframe::App for SpacetimeApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
         // Calculate frame delta time. A headless frame may have been given one to use instead of
@@ -266,6 +437,37 @@ impl eframe::App for SpacetimeApp {
             self.step_forward(self.arrow_step());
             ctx.request_repaint();
         }
+
+        // Ctrl+S and Ctrl+O - Cmd on macOS, which is what `COMMAND` means - raise exactly the
+        // requests the Save and Load buttons raise, so the keyboard and the panel cannot come to
+        // mean different things by a save.
+        //
+        // Both are held back while something on screen wants the keyboard, which is what stops
+        // Ctrl+S reaching this while the user is typing into a `DragValue`'s edit box. The three
+        // keys above are deliberately left alone: Space, Left and Right have been unguarded since
+        // they were written, and putting a new condition on them is a change to how the app plays
+        // rather than part of adding a file dialog.
+        if !ctx.egui_wants_keyboard_input() {
+            let (save, load) = ctx.input_mut(|i| {
+                (
+                    i.consume_key(egui::Modifiers::COMMAND, egui::Key::S),
+                    i.consume_key(egui::Modifiers::COMMAND, egui::Key::O),
+                )
+            });
+            if save {
+                self.controls.file_request = Some(FileRequest::Save);
+            } else if load {
+                self.controls.file_request = Some(FileRequest::Load);
+            }
+        }
+
+        // A save file dropped on the window. Read here, with the rest of the input, and acted on
+        // below with the panel's own request, so that a drop and the Load button go down one path:
+        // the same autosave of the run being replaced, the same build-validate-swap, the same
+        // status line. Only the first file of a drop, because a load replaces the whole run and
+        // loading a second file would do nothing but throw the first one away.
+        let dropped: Option<std::path::PathBuf> =
+            ctx.input(|i| i.raw.dropped_files.first().map(|file| file.path().to_path_buf()));
 
         // Nothing in the UI prints below the size a telemetry box titles itself at. egui's own
         // styles are fixed points, so the canvases had grown past them: its default Small is 9 pt
@@ -361,6 +563,18 @@ impl eframe::App for SpacetimeApp {
             // the old worldline is not carried into the new run: both markers are pickable again
             // from the moment the reset lands.
             self.spatial_canvas.end_drag();
+        }
+
+        // Every file action of this frame, answered in one place and after the panel has been
+        // drawn: a native dialog is modal and blocks this thread until the user has answered it,
+        // and the panel the user is looking at while they decide is the panel of the run as it
+        // stood. A load lands before the canvases below draw, so the restored run is on screen in
+        // the same frame it was asked for.
+        if let Some(request) = self.controls.take_file_request() {
+            self.run_file_request(request, frame);
+        }
+        if let Some(path) = dropped {
+            self.load_chosen(&path, data_directory().as_deref());
         }
 
         // 4. Central Panel: Split View between Spacetime (t, r) and Spatial (x, y)

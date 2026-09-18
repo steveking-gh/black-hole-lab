@@ -106,7 +106,6 @@ pub const FORMAT: &str = "black-hole-lab-save";
 pub const VERSION: u32 = 1;
 
 /// The extension a save is written with.
-#[allow(dead_code)] // named for the file dialog the next phase adds; the tests use it meanwhile
 pub const EXTENSION: &str = "bhl";
 
 /// Everything that can go wrong reading or writing a save, with a message fit to put in front of a
@@ -185,10 +184,30 @@ pub struct Loaded {
     pub view: v1::View,
 }
 
+/// Who wrote a file and when, kept back from a document that a load has already consumed.
+///
+/// A load swallows the document: the run, the panel and the views are taken out of it and the rest
+/// is dropped. These two fields are the rest, and they are the two the status line quotes, so
+/// `SpacetimeApp::load_from` hands them back rather than making its caller parse the file a second
+/// time to find out what it had just opened.
+#[derive(Debug)]
+pub struct Provenance {
+    /// The `app_version` of the build that wrote the file.
+    pub app_version: String,
+    /// When the file was written, as the document spells it: `2026-09-18T11:04:07Z`.
+    pub saved_at_utc: String,
+}
+
+impl Provenance {
+    /// The date alone, for a status line with no room for the hour. The instant is ISO 8601 with
+    /// the date first, so the date is its first ten characters; anything shorter than that is not
+    /// one of ours and is quoted whole rather than sliced into.
+    pub fn date(&self) -> &str {
+        self.saved_at_utc.get(..10).unwrap_or(&self.saved_at_utc)
+    }
+}
+
 /// The whole state of a run as a document, ready to be written.
-#[allow(dead_code)] // the writing half of the format. Phase 1 is the format, the
-// conversions and the tests that prove them; the Save button that calls this is the next phase's,
-// and until it lands the tests and the golden-file generator are the only callers
 pub fn document(
     sim: &Simulation,
     controls: &AppControls,
@@ -219,7 +238,6 @@ pub fn document(
 /// that somebody can look at it, and gzip removes the indentation's cost along with the repeated
 /// keys. Measured on a steady-state field the pretty form compresses to within a few percent of the
 /// compact one.
-#[allow(dead_code)] // as `document`
 pub fn to_bytes(save: &v1::Save) -> Result<Vec<u8>, Error> {
     let json = serde_json::to_vec_pretty(save).map_err(|e| Error::Json(e.to_string()))?;
     let mut encoder =
@@ -229,7 +247,8 @@ pub fn to_bytes(save: &v1::Save) -> Result<Vec<u8>, Error> {
 }
 
 /// The JSON of a document, uncompressed and readable. What the golden file is written with.
-#[allow(dead_code)] // as `document`
+#[allow(dead_code)] // the readable half of the writer: `--save-info` and the golden-file
+// generator are its callers, and the app itself always writes the compressed form
 pub fn to_json(save: &v1::Save) -> Result<String, Error> {
     serde_json::to_string_pretty(save).map_err(|e| Error::Json(e.to_string()))
 }
@@ -320,7 +339,6 @@ pub fn rebuild(save: &v1::Save) -> Result<Loaded, Error> {
 /// crash half way through leaves them with neither the old file nor the new one. The temporary
 /// sits beside the target rather than in the system temp directory so that the rename is within one
 /// filesystem and is therefore the atomic operation it is being relied on to be.
-#[allow(dead_code)] // as `document`
 pub fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent).map_err(Error::Io)?;
@@ -419,7 +437,7 @@ pub fn describe(path: &Path) -> Result<String, Error> {
 
 /// A byte count as somebody would say it, in powers of a thousand because that is what the prefix
 /// on the unit means and because a file size is being quoted rather than an allocation.
-fn human_bytes(bytes: usize) -> String {
+pub(crate) fn human_bytes(bytes: usize) -> String {
     let n = bytes as f64;
     if n >= 1e6 {
         format!("{:.2} MB", n / 1e6)

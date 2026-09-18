@@ -1,4 +1,4 @@
-//! What a save has to be true of, in five tests.
+//! What a save has to be true of, in seven tests.
 //!
 //! The first is the one that matters and the one the others lean on: a run saved half way through,
 //! loaded into a fresh app and played on, must end on the same fingerprint as the run that was
@@ -7,15 +7,17 @@
 //! divergence a few hundred frames later without anybody having had to think of it.
 //!
 //! The rest cover what a fingerprint cannot see (the panel, the views, the trails and the counters),
-//! the spelling of the numbers JSON has no spelling for, the refusals, and one file committed to
-//! the repository that this build has to go on being able to open.
+//! the spelling of the numbers JSON has no spelling for, the refusals, one file committed to the
+//! repository that this build has to go on being able to open, and the two methods the Save and
+//! Load buttons call once a path has been chosen - which is as far into those buttons as a test can
+//! reach, because nothing headless can answer a native dialog.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;
 use crate::app::SpacetimeApp;
-use crate::gui::controls::{ReferenceFrame, StepMode};
+use crate::gui::controls::{FileRequest, FileStatus, ReferenceFrame, StepMode};
 use crate::gui::spacetime_canvas::{BoxId, Canvas, Placement};
 use crate::perf::replay::{FRAME_DT, app_for_fixtures, play_sim};
 use crate::physics::observer::{ObserverMode, Release, Who};
@@ -355,6 +357,81 @@ fn test_a_bad_file_is_refused_with_something_a_user_can_read() {
     let _ = std::fs::remove_file(&path);
     assert!(complaint.contains("not readable"), "{complaint:?}");
     assert_eq!(running.sim.fingerprint(), standing, "a failed load left the run alone");
+}
+
+#[test]
+fn test_a_load_the_user_asked_for_that_fails_says_so_and_changes_nothing() {
+    // `load_chosen` is the whole of the Load button except the dialog: what happens once a path has
+    // been chosen, whether the user chose it in the dialog, dropped the file on the window or named
+    // it on the command line. A native dialog cannot be driven from a test, so this is the seam the
+    // button is cut at and this is what a test can hold to account.
+    let mut app = default_app();
+    play_sim(&mut app, 1.0);
+    app.controls.is_playing = true;
+    let standing = app.sim.fingerprint();
+    let path = scratch_file();
+    std::fs::write(&path, b"not a save").expect("the scratch file");
+
+    // No autosave directory, so this test writes nowhere but its own scratch file. That is the
+    // reason the directory is a parameter: the window passes the user's own and a test does not.
+    app.load_chosen(&path, None);
+    let _ = std::fs::remove_file(&path);
+
+    let status = app.controls.file_status.as_ref().expect("the panel is told what happened");
+    assert!(status.failed, "and told that the load failed: {:?}", status.text);
+    assert!(
+        status.text.contains("Could not load") && status.text.contains("not readable"),
+        "in the words the error itself uses: {:?}",
+        status.text
+    );
+    assert_eq!(app.sim.fingerprint(), standing, "the run is the run that was standing");
+    assert!(app.controls.is_playing, "and a run that was playing is playing still");
+}
+
+#[test]
+fn test_the_two_buttons_round_trip_a_run_and_keep_their_own_state_out_of_the_file() {
+    let mut app = default_app();
+    play_sim(&mut app, 2.0);
+    let standing = app.sim.fingerprint();
+    // A request standing on the panel and a status line left by an earlier action. Both are
+    // transients of this session; neither is a setting, and neither may reach the file.
+    app.controls.file_request = Some(FileRequest::Save);
+    app.controls.file_status =
+        Some(FileStatus { text: "Saved some earlier file".to_string(), failed: false });
+
+    let path = scratch_file();
+    app.save_chosen(&path);
+    let saved = app.controls.file_status.as_ref().expect("the panel is told what happened");
+    assert!(!saved.failed, "the save should succeed and says {:?}", saved.text);
+    assert!(saved.text.starts_with("Saved "), "and say so: {:?}", saved.text);
+
+    // The schema itself, as text. `v1::Controls` has no field for either transient, so the two
+    // strings below appear nowhere in a document - and neither does the status the panel was
+    // carrying when the snapshot was taken.
+    let json = to_json(&app.snapshot("")).expect("writable");
+    for absent in ["file_request", "file_status", "Saved some earlier file"] {
+        assert!(!json.contains(absent), "a document must not carry {absent:?}");
+    }
+
+    let mut restored = default_app();
+    restored.controls.is_playing = true;
+    restored.controls.file_request = Some(FileRequest::Load);
+    restored.load_chosen(&path, None);
+    let _ = std::fs::remove_file(&path);
+
+    let status = restored.controls.file_status.as_ref().expect("the panel is told what happened");
+    assert!(!status.failed, "the load should succeed and says {:?}", status.text);
+    assert!(
+        status.text.starts_with("Loaded ") && status.text.contains("The run is paused."),
+        "and name the file and say what a load did to the run: {:?}",
+        status.text
+    );
+    assert_eq!(restored.sim.fingerprint(), standing, "the run is the run that was saved");
+    assert!(!restored.controls.is_playing, "and a load comes up paused");
+    assert!(
+        restored.controls.file_request.is_none(),
+        "and `controls_from_v1` leaves the request at its default rather than at the file's"
+    );
 }
 
 /// Where the committed golden file lives, for the generator below.

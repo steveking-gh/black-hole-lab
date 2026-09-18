@@ -85,10 +85,16 @@ fn main() -> eframe::Result<()> {
         Box::new(move |cc| {
             install_fonts(&cc.egui_ctx);
             let mut app = SpacetimeApp::default();
-            if let Some(path) = opening.as_ref()
-                && let Err(message) = app.load_from(path)
-            {
-                eprintln!("{}: {message}", path.display());
+            if let Some(path) = opening.as_ref() {
+                // Through exactly the path the Load button takes, so that a window opened on a
+                // save comes up with the same line under the buttons that a load from inside the
+                // app leaves - and, when the file will not open, says why there rather than only on
+                // a stderr nobody launching from a desktop icon ever sees. Nothing is autosaved:
+                // the run being replaced is the one `default` has just built and never stepped.
+                app.load_chosen(path, None);
+                if let Some(status) = app.controls.file_status.as_ref().filter(|s| s.failed) {
+                    eprintln!("{}", status.text);
+                }
             }
             Ok(Box::new(app))
         }),

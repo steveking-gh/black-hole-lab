@@ -12,6 +12,10 @@ egui = "0.36.2"
 # compressed and why the reader still accepts plain JSON.
 flate2 = "1.1"
 nalgebra = "0.35.0"
+# The native Save and Load dialogs, used through their synchronous API on the UI thread. A modal
+# dialog blocking the frame is the behaviour wanted rather than a cost paid: the run cannot move
+# under the user while they are choosing a file. See `SpacetimeApp::run_file_request`.
+rfd = "0.17"
 serde = { version = "1.0.229", features = ["derive"] }
 # `float_roundtrip` is not optional for this crate. Without it serde_json's parser takes a fast
 # path that can land an ulp away from the decimal it was given, and a restored run has to be the
