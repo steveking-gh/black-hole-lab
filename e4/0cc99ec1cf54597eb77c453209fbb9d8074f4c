@@ -1,0 +1,62 @@
+src/physics/observer.rs
+  s_1fbbbb8a53c367::t_0d365f1c844d62 251-289
+src/gui/spacetime_canvas.rs
+  s_1fbbbb8a53c367::t_a06524206819e0 517-518,521,528,534-535,546-547
+  s_1fbbbb8a53c367::t_bcfea6acea05e5 1123
+  s_1fbbbb8a53c367::t_5a9c5b2dedd46a 558-559,567
+  s_1fbbbb8a53c367::t_33e2c661033d48 774-778
+  s_1fbbbb8a53c367::t_8b73e879be076b 2600-2601
+  s_1fbbbb8a53c367::t_2d415634e149d4 2289,2298,2307,2316
+  s_1fbbbb8a53c367::t_2629d70c15b4c4 2135,2137
+  s_1fbbbb8a53c367::t_8fe802e6381aa2 384-404,409-421,423-450,454-480,482-488,491
+  s_1fbbbb8a53c367::t_707660efc6ac6c 7
+  s_1fbbbb8a53c367::t_7349d4980e273f 2328
+  s_1fbbbb8a53c367::t_2c285bebc234de 1712,1714
+  s_1fbbbb8a53c367::t_16c5849ff80f73 2520
+  s_1fbbbb8a53c367::t_f3156ba005a723 1959,1963-1964,1968-1969
+  s_1fbbbb8a53c367::t_431595fc123b90 2004
+  s_1fbbbb8a53c367::t_9309c928dafdf2 1933-1934
+  s_1fbbbb8a53c367::t_84a417a4fc40a1 610-612
+  s_1fbbbb8a53c367::t_38b0a127f7fbc0 576
+  s_1fbbbb8a53c367::t_68756f0c82cfd7 1470,2530,2620
+  s_1fbbbb8a53c367::t_531de9987f07e7 1744,1746
+  s_1fbbbb8a53c367::t_2dd28e13bc783b 1983,1991
+  s_1fbbbb8a53c367::t_4c702b8c00938a 573
+  s_1fbbbb8a53c367::t_64d3a4a4dcc761 2433
+  s_1fbbbb8a53c367::t_879530110825c4 2650
+  s_1fbbbb8a53c367::t_10c2e1c77e37e3 2680-2681,2683-2684,2688-2689
+  s_1fbbbb8a53c367::t_a6c2a2fb41f114 2406
+  s_1fbbbb8a53c367::t_f3f0fe3012bfe4 1117-1119
+  s_1fbbbb8a53c367::t_eccb19847b16c1 2434,2436,2438
+  s_1fbbbb8a53c367::t_6483d68d9c2aef 2587
+  s_1fbbbb8a53c367::t_8f1387ab496175 3135-3181
+  s_1fbbbb8a53c367::t_27bdc264d6b911 405-408,422,451-453,481
+  s_1fbbbb8a53c367::t_04cb2b79b765c0 2337,2339,2341
+src/gui/theme.rs
+  s_1fbbbb8a53c367::t_534f6083f94e98 90-91
+  s_1fbbbb8a53c367::t_f25485269063b1 81-84
+  s_1fbbbb8a53c367::t_6e6c104a692912 1
+src/gui/spatial_canvas.rs
+  s_1fbbbb8a53c367::t_8634074178cdfa 3,8-10
+  s_1fbbbb8a53c367::t_2cff1b6c449dd4 940-941,946-947
+src/gui/volume_canvas.rs
+  s_1fbbbb8a53c367::t_5d1ea81a841e74 2060-2061
+  s_1fbbbb8a53c367::t_ce1ef4ed820688 6
+  s_1fbbbb8a53c367::t_68756f0c82cfd7 1476,1557,2652,2692,3057,3358
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e40cc99ec1cf54597eb77c453209fbb9d8074f4c",
+  "prompts": {},
+  "sessions": {
+    "s_1fbbbb8a53c367": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ed2f15a7-41d1-4dd6-ba98-d9aaeb4cd695",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
