@@ -1044,6 +1044,38 @@ impl Observer {
         }
     }
 
+    /// The event this worldline stood at when the simulation clock read `t`, re-integrated rather
+    /// than interpolated.
+    ///
+    /// `Pulse::sweep` locates a reception somewhere strictly inside a detection pass interval, and
+    /// then has to say where on the receiver's worldline that was. Interpolating between the two
+    /// ends of the interval is first-order accurate and gets phi outright wrong whenever the
+    /// receiver crossed the seam at phi = 2 pi inside it, because the integrator hands out phi
+    /// folded into [0, 2 pi) and the average of 6.28 and 0.01 is the opposite side of the hole.
+    /// This answers the question properly instead: put a copy of the observer back on the last
+    /// recorded event at or before `t` and integrate it the rest of the way with `advance`, which
+    /// is the same equation, the same integrator and the same guards that got the worldline there
+    /// in the first place. `rewind_to` already does exactly that, so this is that landing with the
+    /// result read off instead of kept.
+    ///
+    /// The cost is a clone of the observer and one short integration, which is why the caller only
+    /// asks once a crossing has been found rather than once per pass: a pass that crosses nobody
+    /// never calls this at all, and the arithmetic of finding the crossing needs none of it.
+    ///
+    /// Two limits, both inherited from the trail rather than from here. A `t` at or after the
+    /// observer's own clock returns the current event, since there is nothing to wind back. A `t`
+    /// earlier than the oldest event the trail still keeps lands on that oldest event instead,
+    /// exactly as a rewind that far back would: the reversible window is the window the trail
+    /// keeps.
+    pub fn event_at(&self, metric: &KerrSchild, t: f64) -> TrailPoint {
+        if t >= self.t {
+            return self.current_point();
+        }
+        let mut probe = self.clone();
+        probe.rewind_to(metric, t);
+        probe.current_point()
+    }
+
     /// Wind an observer back to before their release, onto the hovering worldline.
     ///
     /// `hover` holds them at the radius they were created at and ticks their clock at the rate of

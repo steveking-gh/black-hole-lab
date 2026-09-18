@@ -289,6 +289,27 @@ fn minus_inner(metric: &KerrSchild, r: f64, a: &[f64; 3], b: &[f64; 3]) -> f64 {
 /// so dividing by it is safe everywhere in the chart, horizons included. Because E is the same
 /// number at every event of a ray, the quotient of this factor at two events on the same ray is
 /// the exact frequency ratio between them: that is all `NullRay` has to carry.
+/// nu(`u` at this event) / nu(emitter at emission) for a ray passing through r with direction `v`,
+/// whose `f_factor` at the emission event was `f_emit`.
+///
+/// The one statement of the measured shift, so that `NullRay::frequency_ratio` - which asks it of a
+/// live ray - and `Pulse::arrival` - which asks it of a `RayMark`, a ray as it stood at a pass
+/// already gone by - cannot answer it differently. `f_emit` is a constant of the ray, fixed as the
+/// pulse left, and a zero one means the emitter measured nothing to shift: the quotient is then not
+/// a measurement and 1 is the only harmless answer.
+fn measured_shift(
+    metric: &KerrSchild,
+    r: f64,
+    v: &[f64; 3],
+    f_emit: f64,
+    u_observer: &[f64; 3],
+) -> f64 {
+    if f_emit.abs() < 1e-300 {
+        return 1.0;
+    }
+    f_factor(metric, r, v, u_observer) / f_emit
+}
+
 pub(crate) fn f_factor(metric: &KerrSchild, r: f64, v: &[f64; 3], u: &[f64; 3]) -> f64 {
     let g = metric.metric_components(r);
     let e_over_kt = -(g[0][0] * v[0] + g[0][1] * v[1] + g[0][2] * v[2]);
@@ -430,11 +451,14 @@ impl NullRay {
     /// nu(observer) / nu(emission) for this ray: `f_factor` here over `f_emit` there. Both the
     /// affine scale of the ray and its conserved energy cancel out of the quotient, so this is the
     /// exact measured shift, finite and positive at and inside both horizons.
+    ///
+    /// The app goes through `measured_shift` from a `RayMark` instead, because a reception is
+    /// interpolated between two passes and one of them is already gone by the time it is wanted.
+    /// This is the same quantity asked of a live ray, which is what the closed-form checks compare
+    /// against.
+    #[allow(dead_code)]
     pub fn frequency_ratio(&self, metric: &KerrSchild, u_observer: &[f64; 3]) -> f64 {
-        if self.f_emit.abs() < 1e-300 {
-            return 1.0;
-        }
-        f_factor(metric, self.r, &self.direction(), u_observer) / self.f_emit
+        measured_shift(metric, self.r, &self.direction(), self.f_emit, u_observer)
     }
 
     /// nu(`u_now_observer` here) / nu(`u_emit_observer` at the emission event) for this ray: the
@@ -1069,11 +1093,11 @@ pub struct Reception {
     /// Coordinate time of the crossing event.
     ///
     /// Every number in this record is stamped with the *crossing*, not with the detection pass
-    /// that noticed it. A sheet is found to have swept over the receiver when the sign of
-    /// receiver.r - r_front differs between two consecutive passes, which puts the crossing
-    /// somewhere inside that interval; the whole record is the linear interpolation of the two
-    /// passes in the side value, so it is the crossing event to first order in the pass interval
-    /// rather than the event of whichever pass happened to look. See `Pulse::scan`.
+    /// that noticed it. `Pulse::sweep` locates the crossing by intersecting the receiver's
+    /// worldline with the patch each segment of the front sweeps between two passes, which puts it
+    /// at a definite point inside that interval; the receiver's own (r, phi, tau) then come from
+    /// `Observer::event_at`, which re-integrates the worldline onto that time instead of
+    /// interpolating between the two passes. See `Pulse::sweep`.
     ///
     /// That is what makes an arrival reproducible across a rewind. Stamped with the pass, an
     /// arrival that happened just before the time being rewound to but was noticed just after it
@@ -1088,42 +1112,47 @@ pub struct Reception {
     /// The (t, r) diagram has no use for it; the equatorial view needs it to put the arrival where
     /// it happened, which for the frozen family is a point on the r- circle.
     pub phi: f64,
-    /// nu(receiver) / nu(emitter at emission) for the ray that reached them, interpolated between
-    /// the two passes exactly as the event is.
+    /// nu(receiver) / nu(emitter at emission) for the ray that reached them. The four bracketing
+    /// samples, which are the two rays either side of the crossing each taken at either end of the
+    /// pass interval, carried to the crossing over both parameters at once. Each of the four is an
+    /// exact measurement at its own event, and the crossing lies inside their hull.
     pub ratio: f64,
-    /// The receiving ray's coordinate slopes (dr/dt, dphi/dt) at the pass that found the crossing:
-    /// the direction the crest was moving in as it swept over the receiver, which is what places
-    /// its trace through the arrival in the receiver's own frame. Of the two rays bracketing the
-    /// crossing, the one nearer the receiver's azimuth, as `frozen_family` is.
+    /// The receiving ray's coordinate slopes (dr/dt, dphi/dt) *at the crossing*: the direction the
+    /// crest was moving in as it swept over the receiver, which is what places its trace through
+    /// the arrival in the receiver's own frame. Carried to the crossing over the same two
+    /// parameters as `ratio`, rather than read off whichever bracketing ray happened to be nearer
+    /// at whichever pass happened to notice.
     pub dr_dt: f64,
     pub dphi_dt: f64,
     /// Whether the receiving ray belongs to the frozen family, E - Omega_- L < 0, which never
     /// crosses r- and piles onto it, rather than to the crossing family that passes straight
-    /// through. Decided by `NullRay::inner_horizon_energy` on whichever of the two bracketing rays
-    /// is nearer to the receiver's azimuth.
+    /// through. A classification and not a quantity, so `NullRay::inner_horizon_energy` decides it
+    /// on whichever bracketing ray the crossing fell nearer to rather than anything interpolating
+    /// between the two. E - Omega_- L is a constant of each ray, so which pass it is read at does
+    /// not enter.
     pub frozen_family: bool,
-    /// Which segment of the front's polyline carried the crossing. A record of the event, not a
-    /// key: the segment straddling a fixed azimuth changes as the front deforms, which is what
-    /// `loop_s` is for.
+    /// Which segment of the front's polyline - which pair of neighbouring rays - swept over the
+    /// receiver. This is exactly reproducible, unlike the segment that happens to straddle a fixed
+    /// azimuth at a given instant, because it names the pair whose swept patch the worldline
+    /// passed through rather than the pair that stood across an azimuth when somebody looked.
     segment: usize,
-    /// Where along the ray loop the crossing happened, on the same continuous coordinate
-    /// `SheetSide::loop_s` carries. `Pulse::retract_unseen` matches a standing arrival to a sheet
-    /// by this, so that a rewind whose priming pass finds the sheet one segment along from where
-    /// the crossing was recorded still recognises it as the same sheet.
-    loop_s: f64,
-    /// receiver.r - r_front for that sheet on the pass that found the crossing: which side of the
-    /// sheet the crossing left the receiver on.
+    /// Which turn of the receiver's azimuth the crossing happened at. A front that has wound
+    /// passes over the receiver again at phi + 2 pi k, and each of those is a separate piece of
+    /// front at its own radius, so the turn is part of naming the crossing.
+    turn: i64,
+    /// receiver.r - r_front on that segment at the end of the pass interval: which side of the
+    /// front the crossing left the receiver on. Only the sign of it is ever read.
     side_after: f64,
-    /// Coordinate time of the *pass* that found the crossing, as against `t`, the interpolated
-    /// crossing itself. The two differ by up to one pass interval.
+    /// Coordinate time of the *pass* that found the crossing, as against `t`, the crossing itself.
+    /// The two differ by up to one pass interval.
     ///
-    /// None of these three is drawn or reported; they exist for one job, done in
-    /// `SignalField::prime`. A rewind decides what to keep by the interpolated `t`, which is only
-    /// first-order accurate, so a target landing in the O(dt^2) window between `t` and the true
-    /// crossing keeps an arrival whose crossing has not happened yet at the rewound state. The
-    /// three together say so exactly: the pass that noticed it is inside the interval being undone
-    /// (`t_pass` after the target) and the primed side is still the near one (opposite to
-    /// `side_after`) on the sheet it belongs to (`segment`).
+    /// None of these four is drawn or reported; they exist for one job, done in
+    /// `SignalField::prime`. A rewind decides what to keep by `t`, which is as accurate as the
+    /// bilinear model of one pass interval, so a target landing inside that uncertainty keeps an
+    /// arrival whose crossing has not happened yet at the rewound state. The four together say so
+    /// exactly: the pass that noticed the arrival is inside the interval being undone (`t_pass`
+    /// after the target) and the primed front still has the receiver on the near side of that
+    /// (`segment`, `turn`), the side opposite to `side_after`.
     t_pass: f64,
 }
 
@@ -1347,48 +1376,118 @@ pub struct Pulse {
     /// emission event, extended at every `SignalField::advance` by `Pulse::extend_history`, and cut
     /// back by `SignalField::step_back` alongside the extent track.
     history: Option<RingHistory>,
-    /// One entry per sheet of the front that stood across the receiver's azimuth on the previous
-    /// detection pass, carrying the side they were on and the event they were at. A sheet is
-    /// identified from pass to pass by where it sits along the ray loop rather than by which
-    /// segment happens to carry it, so folds and windings are tracked independently instead of
-    /// collapsing into one number, and a sheet that stops straddling them drops out of the list.
-    sheets: Vec<SheetSide>,
+    /// The front and the receiver as both stood at the previous detection pass, or None before
+    /// this pulse has had one. It is the other half of every reception: a crossing is a statement
+    /// about an interval, and this is the near end of it. See `Pulse::sweep`.
+    prev: Option<FrontMark>,
     /// Every crossing of the receiver's worldline by this pulse, in the order they met them.
     pub receptions: Vec<Reception>,
 }
 
-/// Where one sheet of a wavefront stood relative to the receiver at the previous detection pass,
-/// and where and when the receiver was.
+/// Where one ray of a front stood at a detection pass, and which way it was going.
 ///
-/// The receiver's event is kept alongside the side because a reception is stamped with the crossing
-/// rather than with the pass that found it: the two bracketing passes are interpolated in the side
-/// value, so the earlier of the two has to be on hand in full. See `Pulse::scan`.
+/// Five numbers per ray per pulse. That is the whole of the state the reception test carries from
+/// one pass to the next, and it replaces the tracked-sheet bookkeeping that used to be carried
+/// instead: a crossing is found by intersecting the receiver's worldline with the patch a segment
+/// sweeps, so what has to be remembered is where the segment was, not which sheet of the front
+/// anybody had called it.
 #[derive(Debug, Clone, Copy)]
-struct SheetSide {
-    /// Index of the polyline segment (the ray pair) carrying this sheet at that pass. Kept for the
-    /// record and for the tests; it is `loop_s` and not this that says which sheet this is.
-    segment: usize,
-    /// Where the sheet sits along the closed ray loop: s = i + w, the index of the segment carrying
-    /// it plus the fraction of the way along that segment at which it crosses the receiver's
-    /// azimuth. It runs over [0, n) and is cyclic, n being the number of rays, and it moves
-    /// continuously as the front deforms, which the segment index does not: see `Pulse::scan`.
-    loop_s: f64,
-    /// receiver.r - r_front for this sheet, as both stood at that pass. Storing the side rather
-    /// than r_front alone is what makes the receiver's own motion count: inside r+ the front has
-    /// all but stopped and it is the receiver who does the crossing.
-    side: f64,
+struct RayMark {
+    /// Radius of the ray at that pass.
+    r: f64,
+    /// The ray's azimuth *relative to the receiver*, unwrapped along the ray loop so that the
+    /// polyline stays continuous however many turns frame dragging has put into it, and pinned to
+    /// the previous pass's branch so that "turn k" names the same turn at both ends of an interval.
+    /// The receiver sits at rel = 0, and equally at every rel = 2 pi k. See `Pulse::scan`.
+    rel: f64,
+    /// dr/dt of the ray at that pass.
+    dr_dt: f64,
+    /// dphi/dt of the ray at that pass.
+    dphi_dt: f64,
+    /// Whether the ray was still running. A segment with a dead end at either pass bounds no
+    /// resolved piece of front over the interval between them, and nothing sweeps it.
+    alive: bool,
+}
+
+/// One pulse's front, and the receiver, as both stood at one detection pass.
+///
+/// The receiver's radius and 4-velocity are kept beside the rays because a crossing is measured
+/// against the receiver at *both* ends of the interval: the offset that changes sign is
+/// receiver.r - r_ray, and the shift a bracketing sample carries is the one that receiver measured,
+/// with their own 4-velocity, at their own event.
+#[derive(Debug, Clone)]
+struct FrontMark {
+    /// One entry per ray of the pulse, in ray order.
+    rays: Vec<RayMark>,
     /// The receiver's coordinate time at that pass.
     t: f64,
     /// The receiver's radius at that pass.
     r: f64,
-    /// The receiver's azimuth at that pass.
-    phi: f64,
-    /// The receiver's proper time at that pass.
-    tau: f64,
-    /// The shift this sheet carried at that pass, by the same interpolation along the segment that
-    /// a crossing uses. It is evaluated on every pass, not only on a crossing, so that the shift of
-    /// a crossing can be interpolated between the two passes exactly as the event is.
-    ratio: f64,
+    /// The receiver's 4-velocity at that pass, which is what the shift of a sample is measured
+    /// against. Kept so that the shift of a crossing can be evaluated from the stored marks once
+    /// one is found, rather than for every ray on every pass when almost none of them cross.
+    u_receiver: [f64; 3],
+}
+
+/// The roots of c2 v^2 + c1 v + c0 = 0 that lie in [0, 1), in increasing order.
+///
+/// Half-open on purpose. `Pulse::sweep` accepts both of its parameters on [0, 1), so a crossing
+/// landing exactly on the boundary between two patches - the ray shared by two neighbouring
+/// segments, or the pass shared by two consecutive intervals - belongs to one of them and not to
+/// both. That is what keeps the sampled front watertight: without the convention a crossing through
+/// a shared edge is recorded twice, and one that excluded both ends would drop it instead.
+///
+/// Two roots are an answer and not a failure: a front that sweeps over the receiver and back inside
+/// one interval arrived twice, and the quadratic says so.
+fn unit_roots(c2: f64, c1: f64, c0: f64) -> Vec<f64> {
+    let keep = |v: f64| (0.0..1.0).contains(&v);
+    // Degenerate in the quadratic term: the patch is ruled closely enough that the exact solve is
+    // the linear one, and the quadratic formula would divide by nearly nothing to say so.
+    if c2.abs() <= 1e-14 * (c1.abs() + c0.abs()) {
+        if c1 == 0.0 {
+            return Vec::new();
+        }
+        let v = -c0 / c1;
+        return if keep(v) { vec![v] } else { Vec::new() };
+    }
+    let disc = c1 * c1 - 4.0 * c2 * c0;
+    if disc < 0.0 {
+        return Vec::new();
+    }
+    // The stable pairing: take the root the formula gives without cancellation, and get the other
+    // one from the product of the roots rather than from the formula a second time.
+    let q = -0.5 * (c1 + c1.signum() * disc.sqrt());
+    let (mut lo, mut hi) = if q == 0.0 { (0.0, -c1 / c2) } else { (q / c2, c0 / q) };
+    if lo > hi {
+        std::mem::swap(&mut lo, &mut hi);
+    }
+    [lo, hi].into_iter().filter(|v| keep(*v)).collect()
+}
+
+/// Which side of one segment of a front the receiver stands on at turn `turn` of their azimuth, or
+/// None when that segment does not reach that turn at all.
+///
+/// This is the single-pass question, and `Pulse::retract_unseen` is the only caller: a crossing
+/// takes two passes and is `Pulse::sweep`'s job. The segment and the turn are named exactly, off
+/// the record of the arrival being tested, so there is nothing to match and no window to get wrong.
+fn side_at(mark: &FrontMark, segment: usize, turn: i64) -> Option<f64> {
+    let n = mark.rays.len();
+    if n < 2 || segment >= n {
+        return None;
+    }
+    let (near, far) = (mark.rays[segment], mark.rays[(segment + 1) % n]);
+    if !near.alive || !far.alive {
+        return None;
+    }
+    let span = far.rel - near.rel;
+    if span == 0.0 {
+        return None;
+    }
+    let w = (std::f64::consts::TAU * (turn as f64) - near.rel) / span;
+    if !(0.0..=1.0).contains(&w) {
+        return None;
+    }
+    Some(mark.r - (near.r + w * (far.r - near.r)))
 }
 
 impl Pulse {
@@ -1584,104 +1683,36 @@ impl Pulse {
         }
     }
 
-    /// Record every crossing of the receiver's worldline by this wavefront on this pass.
+    /// Take this pulse's front and the receiver as they now stand, and record every crossing the
+    /// interval since the previous pass contains.
     ///
-    /// The rays of a pulse are a closed polyline in the (r, phi) plane, ordered by their emission
-    /// angle: the emitter broadcasts into their whole light cone, so the last ray joins back to the
-    /// first and that closing segment is a sheet like any other. The receiver is located on the
-    /// polyline through the *unwrapped* azimuth of each ray relative to theirs.
+    /// A reception is one thing: the receiver's worldline passing through the surface a pulse's
+    /// front sweeps out. `scan` writes down where the front and the receiver are, `Pulse::sweep`
+    /// intersects one pass interval's worth of that surface with the worldline, and nothing else
+    /// tracks anything from pass to pass. `record` says whether the pass may record: a pass with it
+    /// false takes the mark and nothing else, which is what a field has to do after a rewind before
+    /// it can call anything a crossing. See `SignalField::prime`.
     ///
-    /// Only the first ray is placed against the receiver, and only because it has to be: the
-    /// receiver's own azimuth is an angle, kept in [0, 2 pi) by `Observer`, so folding
-    /// rays[0].phi - receiver.phi into [-pi, pi] is a choice of which turn to call zero and nothing
-    /// more. Every step after it is the *raw* difference of two integrated azimuths, and that is
-    /// exact rather than a convention. Every ray of the pulse left the emission event at the
-    /// emitter's own azimuth, and `NullRay::phi` is integrated continuously and never reduced mod
-    /// 2 pi, so the difference between two neighbouring rays is a continuous function of time
-    /// starting at zero: the integrated phi already is the unwrapped coordinate, and the raw
-    /// difference already is the physical winding between the pair. Folding it into [-pi, pi]
-    /// agrees with that only while the pair are less than half a turn apart, and a front that has
-    /// wound - a ray hung on a circular photon orbit for tens of M while the neighbour it was
-    /// emitted next to fell in, say - is exactly the case that violates it: past half a turn the
-    /// fold flips the sign of the step and lays that piece of the front down on the wrong side of
-    /// the hole. The raw steps also telescope, so the loop closes back on rel[0] exactly, which is
-    /// the statement that a front is a closed curve.
+    /// The one fold is here. A ray's azimuth is integrated continuously and never folded, so a
+    /// front that has wound keeps winding in the numbers; the receiver's azimuth is folded into
+    /// [0, 2 pi) by their own integrator. So ray 0's azimuth relative to the receiver is brought
+    /// onto the branch the *previous* pass put it on, and every later ray is that value plus the
+    /// raw differences along the loop. Two consequences, both load-bearing:
     ///
-    /// On that unwrapped axis the receiver is not one angle but the whole family 0, +/-2 pi,
-    /// +/-4 pi, ..., because a front that has wound one turn further passes over them again. Each
-    /// crossing of one of those angles by a polyline segment is one *sheet* of the front standing
-    /// across their azimuth. A segment whose two rays have wound several turns apart crosses
-    /// several of them and carries a sheet at each: those are real, separate pieces of front
-    /// standing across the receiver's azimuth at their own radii, and each is tracked on its own.
+    /// * The raw differences telescope, so the chain closes back onto ray 0 exactly, which is the
+    ///   statement that a front is a closed curve. Folding each difference into [-pi, pi] instead
+    ///   agrees with that only while neighbouring rays are less than half a turn apart, and a ray
+    ///   hung on a circular photon orbit for tens of M while the ray emitted next to it fell in is
+    ///   exactly the case that violates it: past half a turn the fold flips the sign of the step
+    ///   and lays that piece of front down on the wrong side of the hole.
+    /// * Pinning ray 0 to the previous branch is what makes "turn k" name the same turn at both
+    ///   ends of an interval. Fold each pass independently and the labels jump by one whenever ray
+    ///   0 drifts across the seam, which would set the two ends of a swept patch a whole turn apart
+    ///   for no physical reason at all.
     ///
-    /// One consequence is worth stating on its own, because the fold got it wrong the other way. A
-    /// loop all of whose rays are alive crosses the receiver's azimuth an *even* number of times:
-    /// the raw steps telescope to zero round the loop, so such a front has no net winding, and
-    /// every sheet is paired with the one the loop makes coming back - the near side and the far
-    /// side of the same front, which is what a receiver at a fixed azimuth is actually swept by. A
-    /// front that genuinely encircles the hole is not a counter-example: to enclose it some ray of
-    /// the loop has to have gone into it, and that ray is dead, so both of its segments are skipped
-    /// and what is left is an open arc of live rays that may span any number of turns. The fold
-    /// used to invent a net winding for any loop whose rays happened to span a full turn, and drop
-    /// the returning sheet.
-    ///
-    /// A sheet is identified from one pass to the next by *where it is*, not by which segment
-    /// carries it. Its position is the loop coordinate
-    ///
-    ///     s = i + w,     i the segment index, w in [0, 1] the fraction along that segment,
-    ///
-    /// which runs over [0, n) cyclically and moves continuously as the front deforms, while the
-    /// integer part of it - the old key - steps. A sheet on this pass is matched to the sheet of
-    /// the previous pass at the smallest cyclic distance in s, provided that distance is under a
-    /// window of n/4, and each previous sheet is claimed at most once, nearest pair first.
-    ///
-    /// Keying by the segment index instead lost arrivals, and not only in the deep interior. An
-    /// off-centre circle expanding in the weak field sweeps its segment indices past a fixed
-    /// azimuth as it grows - no winding is needed for that at all, just the front moving - so the
-    /// straddling segment hands over to a neighbour every so often, and the pass on which it did so
-    /// had no remembered side for the new key. A crossing inside that step was simply not seen:
-    /// regular gaps in the reception ticks along both worldlines, and worse inside r+, where frame
-    /// dragging shifts the segments faster.
-    ///
-    /// The window is generous on purpose. A quarter of the loop is far more than the handover of a
-    /// segment or two that this is for, and it is still far less than the separation of genuinely
-    /// distinct sheets, which are the two sides of a front (half a loop apart) or two folds of one
-    /// inside r+ (a fold being a whole arc of rays). Where two sheets do approach each other they
-    /// are approaching a tangency, at which they merge and vanish together: the front grazes the
-    /// receiver's azimuth without sweeping over it, both sheets stop straddling, and no crossing is
-    /// invented for either. Nearest-first matching keeps the pairing of two nearby sheets stable
-    /// until then.
-    ///
-    /// A sheet gives r_front by linear interpolation along the segment, and the shift by the same
-    /// linear interpolation of the two bracketing rays' own frequency ratios, each evaluated at its
-    /// own event against the receiver's 4-velocity. Interpolating the finished ratios rather than
-    /// the raw factors keeps the answer between two numbers that are both exact measurements, which
-    /// matters once the ratios span orders of magnitude. The family the arrival belongs to is read
-    /// off the nearer of the two bracketing rays with `NullRay::inner_horizon_energy`.
-    ///
-    /// A reception is a sign change of receiver.r - r_front for one sheet between two consecutive
-    /// passes on which that same sheet stood across them. Tracking sheets separately rather than
-    /// reducing the front to a single representative radius is what makes both arrivals of a pulse
-    /// show up where both happen: the crossing family sweeping past a trailing receiver high above
-    /// r-, and the frozen family waiting on r- for them to fall through it. A sheet whose rays have
-    /// reached the ring is retired with them, since only segments with both ends still alive can be
-    /// interpolated; that sheet simply stops being tracked, and no crossing is invented for it.
-    ///
-    /// The arrival is recorded at the *crossing*, not at the pass that found it. The side value is
-    /// interpolated linearly between the two bracketing passes,
-    ///
-    ///     t_cross = t_prev + (t_now - t_prev) side_prev / (side_prev - side_now),
-    ///
-    /// and the receiver's (r, phi, tau) and the sheet's shift are interpolated at the same
-    /// fraction, so the whole record is the crossing event to first order in the pass interval.
-    /// Stamping the pass instead made an arrival depend on where the passes happened to fall, which
-    /// a rewind changes: a crossing that had happened before the time being rewound to but was
-    /// noticed after it was dropped by the rewind and then never re-detected, because the side
-    /// re-established on the way forward was already the far one.
-    ///
-    /// `record` says whether the pass may record anything. A pass with it false establishes the
-    /// sides and nothing else, which is what a field has to do after a rewind before it can call
-    /// any later sign change a crossing: see `SignalField::prime`.
+    /// On that unwrapped axis the receiver is not one azimuth but the whole family 0, +/-2 pi,
+    /// +/-4 pi, ..., because a front that has wound one turn further stands over them again at its
+    /// own radius. Every turn is swept separately.
     fn scan(
         &mut self,
         metric: &KerrSchild,
@@ -1689,190 +1720,284 @@ impl Pulse {
         u_receiver: &[f64; 3],
         record: bool,
     ) {
-        if self.rays.len() < 2 {
-            self.sheets.clear();
+        let n = self.rays.len();
+        if n < 2 {
+            self.prev = None;
             return;
         }
-        let n = self.rays.len();
-        let two_pi = 2.0 * std::f64::consts::PI;
-        // The one fold: which turn of the receiver's azimuth to call zero. Everything after it is
-        // the raw difference of two continuously integrated azimuths, which is already unwrapped.
-        let wrap = |d: f64| d - two_pi * (d / two_pi).round();
+        let two_pi = std::f64::consts::TAU;
+        let before = self.prev.take();
+        let pinned = before.as_ref().filter(|mark| mark.rays.len() == n);
+        let raw = self.rays[0].phi - receiver.phi;
+        let base = match pinned {
+            Some(mark) => raw - two_pi * ((raw - mark.rays[0].rel) / two_pi).round(),
+            None => raw - two_pi * (raw / two_pi).round(),
+        };
         let mut rel = Vec::with_capacity(n);
-        rel.push(wrap(self.rays[0].phi - receiver.phi));
+        rel.push(base);
         for i in 1..n {
             rel.push(rel[i - 1] + (self.rays[i].phi - self.rays[i - 1].phi));
         }
+        let now = FrontMark {
+            rays: (0..n)
+                .map(|i| RayMark {
+                    r: self.rays[i].r,
+                    rel: rel[i],
+                    dr_dt: self.rays[i].dr_dt,
+                    dphi_dt: self.rays[i].dphi_dt,
+                    alive: self.rays[i].alive(),
+                })
+                .collect(),
+            t: receiver.t,
+            r: receiver.r,
+            u_receiver: *u_receiver,
+        };
+        if record && let Some(prev) = pinned {
+            self.sweep(metric, prev, &now, receiver);
+        }
+        self.prev = Some(now);
+    }
 
-        // The closing segment runs from the last ray back to the first, over the raw difference
-        // like every other step. Those steps telescope, so this lands back on rel[0] to within
-        // rounding: the loop of rays is closed, and stays closed however far it has wound.
-        let closing = rel[n - 1] + (self.rays[0].phi - self.rays[n - 1].phi);
-        let mut sheets: Vec<SheetSide> = Vec::new();
+    /// Intersect the receiver's worldline with the surface this pulse's front swept between the
+    /// previous detection pass and this one, and record an arrival at every crossing.
+    ///
+    /// Each segment of the front - one neighbouring pair of rays - sweeps a patch over the
+    /// interval, with four corners: ray i and ray i+1, each at either end. Take u across the front
+    /// and v through the interval, so (0, 0) is ray i at the previous pass and (1, 1) is ray i+1 at
+    /// this one, and bilinear interpolation gives the patch. Two functions on it vanish together
+    /// exactly at a crossing:
+    ///
+    ///     A(u, v) = rel(u, v) - 2 pi k      the azimuth gap to turn k of the receiver
+    ///     S(u, v) = r_receiver(v) - r(u, v)  the radial offset from the receiver
+    ///
+    /// Both are bilinear, because the receiver's own (r, phi) enter linearly in v and are already
+    /// folded into `rel`. So A = 0 gives u as a function of v, substituting that into S = 0 and
+    /// clearing the denominator leaves a quadratic in v, and its roots on [0, 1) with u on [0, 1)
+    /// are the crossings. That is the whole test.
+    ///
+    /// Why it is this and not a tracked sign change. A reception used to be a change in the sign of
+    /// S on a *sheet* - a piece of front standing across the receiver's azimuth - between two
+    /// passes on which the same sheet was identified, by continuity of where it sat on the loop.
+    /// That needs the sheet to exist at both ends, and at a fold it does not. Where the front is
+    /// folded in azimuth - and the ingoing half of a cone wrapping the strong field is folded - the
+    /// tip of the fold sweeps onto the receiver's azimuth and past their radius inside one pass, so
+    /// two sheets appear at once already straddling them, with no predecessor to change sign
+    /// against, and the arrival was silently dropped. Measured at a = 0.90 with the receiver on an
+    /// eccentric orbit at r = 3M and the emitter circling at 6M, that lost about one arrival in six
+    /// hundred, and refining the pass interval to a quarter recovered it - the mark of a resolution
+    /// artefact rather than a piece of physics. Asking the question about the swept surface instead
+    /// of about a tracked sheet settles it: a birth, a death, a fold, a tangency and a handover
+    /// from one segment to its neighbour are all just the patch the worldline did or did not pass
+    /// through, and none of them is a special case.
+    ///
+    /// Three properties are worth stating because they are consequences rather than rules:
+    ///
+    /// * A graze invents nothing. A front that touches the receiver's azimuth without sweeping over
+    ///   them gives a quadratic with no root in range, or a double root the half-open convention
+    ///   takes once at most.
+    /// * A front that sweeps over the receiver and back inside one interval arrived *twice*, and
+    ///   the two roots of the quadratic say so. The old test could not represent that at all.
+    /// * A closed loop of live rays crosses the receiver's azimuth an even number of times, since
+    ///   the raw steps telescope to zero round the loop. A front genuinely encircling the hole is
+    ///   no counter-example: to enclose the hole some ray must have gone into it, that ray is
+    ///   dead, and what is left is an open arc of live rays spanning any number of turns.
+    ///
+    /// Watertightness is the one thing to be got right by hand rather than by construction.
+    /// Neighbouring segments share a ray and consecutive intervals share a pass, so a crossing
+    /// landing exactly on a shared edge is offered to two patches. `unit_roots` and the u test are
+    /// half-open at both ends, which gives it to exactly one.
+    fn sweep(
+        &mut self,
+        metric: &KerrSchild,
+        prev: &FrontMark,
+        now: &FrontMark,
+        receiver: &Observer,
+    ) {
+        if now.t <= prev.t {
+            return;
+        }
+        let n = self.rays.len();
+        let two_pi = std::f64::consts::TAU;
+        let mut found: Vec<Reception> = Vec::new();
         for i in 0..n {
             let j = (i + 1) % n;
-            if !self.rays[i].alive() || !self.rays[j].alive() {
+            // A segment bounds a resolved piece of front over the whole interval only if both of
+            // its rays were running at both ends of it. A ray that died inside the interval is left
+            // standing at its death event, which is not where the front was when the interval
+            // ended, so nothing is swept through it: clamping the patch to the death time would
+            // recover those, and they are the one class of crossing this test still cannot see.
+            let ends = [prev.rays[i], prev.rays[j], now.rays[i], now.rays[j]];
+            if ends.iter().any(|mark| !mark.alive) {
                 continue;
             }
-            let (a, b) = (rel[i], if i + 1 < n { rel[i + 1] } else { closing });
-            let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
-            let first = (lo / two_pi).ceil() as i64;
-            let last = (hi / two_pi).floor() as i64;
-            for turn in first..=last {
-                let target = (turn as f64) * two_pi;
-                let span = b - a;
-                let w = if span.abs() < 1e-15 {
-                    0.0
-                } else {
-                    ((target - a) / span).clamp(0.0, 1.0)
-                };
-                let r_front = self.rays[i].r + w * (self.rays[j].r - self.rays[i].r);
-                // The shift this sheet carries right now, by the same interpolation along the
-                // segment: the two bracketing rays' own frequency ratios, each evaluated at its own
-                // event. It is wanted on every pass, not only on a crossing, because the crossing's
-                // shift is interpolated between two passes like everything else about the event.
-                let f0 = self.rays[i].frequency_ratio(metric, u_receiver);
-                let f1 = self.rays[j].frequency_ratio(metric, u_receiver);
-                sheets.push(SheetSide {
-                    segment: i,
-                    loop_s: (i as f64) + w,
-                    side: receiver.r - r_front,
-                    t: receiver.t,
-                    r: receiver.r,
-                    phi: receiver.phi,
-                    tau: receiver.tau,
-                    ratio: f0 + w * (f1 - f0),
-                });
+            let (a00, a10, a01, a11) = (ends[0].rel, ends[1].rel, ends[2].rel, ends[3].rel);
+            let (s00, s10) = (prev.r - ends[0].r, prev.r - ends[1].r);
+            let (s01, s11) = (now.r - ends[2].r, now.r - ends[3].r);
+            // A bilinear function on the square takes its extremes at the corners, so four
+            // same-signed corners put the receiver wholly on one side of this patch and there is
+            // nothing to solve. Almost every segment of almost every pulse leaves here.
+            if s00.min(s10).min(s01).min(s11) > 0.0 || s00.max(s10).max(s01).max(s11) < 0.0 {
+                continue;
             }
-        }
-
-        // Which sheet of the previous pass each of these is, by continuity of the loop coordinate:
-        // nearest pair first, each previous sheet claimed at most once, nothing paired across more
-        // than a quarter of the loop. Sorting the pairs by distance is what makes the assignment
-        // independent of the order the sheets happen to be found in.
-        let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
-        for (now, sheet) in sheets.iter().enumerate() {
-            for (before, prev) in self.sheets.iter().enumerate() {
-                let d = self.loop_distance(sheet.loop_s, prev.loop_s);
-                if d < self.sheet_window() {
-                    pairs.push((d, now, before));
+            let (s0, s1, s2, s3) = (s00, s10 - s00, s01 - s00, s00 - s10 - s01 + s11);
+            let (b1, b2, b3) = (a10 - a00, a01 - a00, a00 - a10 - a01 + a11);
+            let lo = a00.min(a10).min(a01).min(a11);
+            let hi = a00.max(a10).max(a01).max(a11);
+            for turn in (lo / two_pi).ceil() as i64..=(hi / two_pi).floor() as i64 {
+                let a0 = a00 - two_pi * (turn as f64);
+                let c0 = s0 * b1 - s1 * a0;
+                let c1 = s0 * b3 + s2 * b1 - s1 * b2 - s3 * a0;
+                let c2 = s2 * b3 - s3 * b2;
+                for v in unit_roots(c2, c1, c0) {
+                    let denom = b1 + b3 * v;
+                    if denom == 0.0 {
+                        // The patch runs along this turn of the receiver's azimuth here rather than
+                        // across it, so u is not determined: a graze, and not a crossing.
+                        continue;
+                    }
+                    let u = -(a0 + b2 * v) / denom;
+                    if !(0.0..1.0).contains(&u) {
+                        continue;
+                    }
+                    let pair = [i, j];
+                    if let Some(hit) = self.arrival(metric, prev, now, receiver, pair, turn, u, v) {
+                        found.push(hit);
+                    }
                 }
             }
         }
-        pairs.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)).then(x.2.cmp(&y.2)));
-        let mut was: Vec<Option<SheetSide>> = vec![None; sheets.len()];
-        let mut claimed = vec![false; self.sheets.len()];
-        for (_, now, before) in pairs {
-            if was[now].is_none() && !claimed[before] {
-                was[now] = Some(self.sheets[before]);
-                claimed[before] = true;
-            }
-        }
-
-        // A sign change on a sheet that was tracked at the previous pass is a crossing, and nothing
-        // here second-guesses it. A sheet drops out of straddling the receiver and comes back as
-        // the front winds, and while it is away the receiver can pass it by another part of the
-        // loop, so no rule that compares this crossing with the last one recorded on the same sheet
-        // is safe: it would suppress a real arrival every time a sheet handed the receiver over to
-        // a neighbour and took them back. The one case where the same crossing can be offered twice
-        // is a rewind, and it is settled there, at the rewound state, by `SignalField::prime`.
-        if record {
-            for (sheet, prev) in sheets.iter().zip(was.iter()) {
-                let Some(prev) = prev else { continue };
-                if prev.side * sheet.side >= 0.0 {
-                    continue;
-                }
-                // Where in the interval between the two passes the side changed sign.
-                let fraction = prev.side / (prev.side - sheet.side);
-                let at = |before: f64, now: f64| before + fraction * (now - before);
-                let crossing_ratio = at(prev.ratio, sheet.ratio);
-                if !crossing_ratio.is_finite() || crossing_ratio <= 0.0 {
-                    continue;
-                }
-                let i = sheet.segment;
-                let nearer = if sheet.loop_s - (i as f64) < 0.5 { i } else { (i + 1) % n };
-                self.receptions.push(Reception {
-                    pulse_index: self.index,
-                    t: at(prev.t, receiver.t),
-                    tau_receiver: at(prev.tau, receiver.tau),
-                    r: at(prev.r, receiver.r),
-                    phi: at(prev.phi, receiver.phi),
-                    ratio: crossing_ratio,
-                    dr_dt: self.rays[nearer].dr_dt,
-                    dphi_dt: self.rays[nearer].dphi_dt,
-                    frozen_family: self.rays[nearer].frozen(metric),
-                    segment: i,
-                    loop_s: sheet.loop_s,
-                    side_after: sheet.side,
-                    t_pass: receiver.t,
-                });
-            }
-        }
-        self.sheets = sheets;
+        // The segments are walked in ray order and one segment can be crossed twice, so the
+        // crossings of a single pass do not come out in time order. They are a record of events on
+        // a worldline, so they are put into that order before they join it.
+        found.sort_by(|x, y| x.t.total_cmp(&y.t));
+        self.receptions.append(&mut found);
     }
 
-    /// The distance between two loop coordinates of this pulse, the loop being closed: never more
-    /// than half the number of rays.
-    fn loop_distance(&self, a: f64, b: f64) -> f64 {
-        let span = self.rays.len() as f64;
-        let d = (a - b).rem_euclid(span);
-        d.min(span - d)
-    }
-
-    /// How far apart along the loop two sightings of a sheet may be and still be the same sheet: a
-    /// quarter of the loop, which is stated and argued for in `Pulse::scan`.
-    fn sheet_window(&self) -> f64 {
-        self.rays.len() as f64 / 4.0
+    /// One crossing, as the record of an event. The patch parameters say where across the front and
+    /// when in the interval, and every number in the record follows from them.
+    #[allow(clippy::too_many_arguments)] // seven of them are the crossing; naming a struct for a
+    // value that exists for four lines would move the argument list rather than shorten it
+    fn arrival(
+        &self,
+        metric: &KerrSchild,
+        prev: &FrontMark,
+        now: &FrontMark,
+        receiver: &Observer,
+        pair: [usize; 2],
+        turn: i64,
+        u: f64,
+        v: f64,
+    ) -> Option<Reception> {
+        let [i, j] = pair;
+        // Anything that varies smoothly across the front and along the interval is carried to the
+        // crossing over both parameters at once: four exact samples, one interpolation, and no
+        // preference for either pass or either ray.
+        let carry = |q: [f64; 4]| {
+            (1.0 - u) * (1.0 - v) * q[0]
+                + u * (1.0 - v) * q[1]
+                + (1.0 - u) * v * q[2]
+                + u * v * q[3]
+        };
+        // The shift one bracketing sample carries: the frequency the receiver measured on that ray
+        // at that event, over the frequency the emitter measured as the pulse left. Evaluated here,
+        // from the mark, rather than stored for every ray on every pass - almost no ray ever
+        // crosses anybody, and this is the only place the answer is wanted.
+        let shift = |mark: &FrontMark, k: usize| {
+            let ray = mark.rays[k];
+            let v_ray = [1.0, ray.dr_dt, ray.dphi_dt];
+            measured_shift(metric, ray.r, &v_ray, self.rays[k].f_emit, &mark.u_receiver)
+        };
+        let ratio = carry([shift(prev, i), shift(prev, j), shift(now, i), shift(now, j)]);
+        if !ratio.is_finite() || ratio <= 0.0 {
+            return None;
+        }
+        let t = prev.t + v * (now.t - prev.t);
+        // The one calculation a crossing pays for and a pass does not: the receiver's own event at
+        // the crossing, re-integrated along their worldline rather than interpolated between the
+        // two passes. It also settles a question interpolation cannot: phi comes off the integrator
+        // folded into [0, 2 pi), so a receiver who crossed the seam inside the interval had the two
+        // ends of it averaged into the wrong half of the sky. See `Observer::event_at`.
+        let at = receiver.event_at(metric, t);
+        // Which side of this segment the receiver ends the interval on. Only the sign is ever read,
+        // by `Pulse::retract_unseen`, and where that segment stands at the far end of the interval
+        // is where to read it; if the segment no longer reaches this turn at all, the patch's own
+        // radial offset at the crossing's u says the same thing.
+        let side_after = side_at(now, i, turn)
+            .unwrap_or((1.0 - u) * (now.r - now.rays[i].r) + u * (now.r - now.rays[j].r));
+        Some(Reception {
+            pulse_index: self.index,
+            t,
+            tau_receiver: at.tau,
+            r: at.r,
+            phi: at.phi,
+            ratio,
+            dr_dt: carry([
+                prev.rays[i].dr_dt,
+                prev.rays[j].dr_dt,
+                now.rays[i].dr_dt,
+                now.rays[j].dr_dt,
+            ]),
+            dphi_dt: carry([
+                prev.rays[i].dphi_dt,
+                prev.rays[j].dphi_dt,
+                now.rays[i].dphi_dt,
+                now.rays[j].dphi_dt,
+            ]),
+            // A classification, so the nearer ray decides it rather than an average of the two.
+            frozen_family: self.rays[if u < 0.5 { i } else { j }].frozen(metric),
+            segment: i,
+            turn,
+            side_after,
+            t_pass: now.t,
+        })
     }
 
     /// Drop the arrivals that the state just primed says have not happened yet, and return them.
     ///
-    /// Called only from `SignalField::prime`, immediately after a priming pass has filled `sheets`
-    /// with the sides at the rewound state, and only for a rewind to `target_t`.
+    /// Called only from `SignalField::prime`, immediately after a priming pass has left `prev`
+    /// holding the front and the receiver at the rewound state, and only for a rewind to
+    /// `target_t`.
     ///
-    /// A rewind keeps the arrivals whose interpolated crossing time is at or before its target.
-    /// That stamp is first-order accurate in the pass interval, so for a target inside the O(dt^2)
-    /// window between the stamp and the crossing it actually estimates, the record says an arrival
-    /// has happened while the geometry at the rewound state says the receiver has not reached the
-    /// sheet yet. Left alone, the next step forward finds that same change of side and records the
-    /// arrival a second time.
+    /// A rewind keeps the arrivals whose crossing time is at or before its target. That time is as
+    /// accurate as the bilinear model of one pass interval, so for a target inside that uncertainty
+    /// the record says an arrival has happened while the geometry at the rewound state says the
+    /// receiver has not reached the front yet. Left alone, the next step forward sweeps the same
+    /// crossing and records it a second time.
     ///
-    /// The disagreement is exactly detectable, and only in that window. For each sheet standing
-    /// across the receiver now, the last arrival recorded on it is retracted when both of these
-    /// hold:
+    /// The disagreement is exactly detectable, and only in that window. An arrival is retracted
+    /// when both of these hold:
     ///
     /// * the pass that noticed it is inside the interval being undone (`t_pass` after `target_t`),
     ///   so the rewind has taken the field back to before the observation itself; and
-    /// * the primed side is opposite to the side that arrival left the receiver on, so the crossing
-    ///   has not happened at the rewound state.
+    /// * on the segment and at the turn the arrival was recorded at, the primed front still has the
+    ///   receiver on the side opposite to the one the crossing left them on, so it has not
+    ///   happened at the rewound state.
+    ///
+    /// The segment and the turn come off the record and name the front exactly, so there is no
+    /// matching here and nothing to tune: the sheet-continuity window this used to need was only
+    /// ever needed because a sheet had no name of its own. Where the primed segment no longer
+    /// reaches that turn the question has no answer, and the arrival is left alone.
     ///
     /// An arrival noticed at or before the target is consistent with the primed state by
-    /// construction and is left alone, whatever side it left the receiver on. A retracted arrival
-    /// is not lost: the next step forward brackets the same crossing and records it again, from the
-    /// primed pass instead of the one the rewind undid, which moves it by the O(dt^2) the stamp was
-    /// uncertain by in the first place.
+    /// construction and is also left alone, whichever side it left the receiver on. A retracted
+    /// arrival is not lost: the next step forward sweeps the same crossing and records it again,
+    /// from the primed pass instead of the one the rewind undid, which moves it by the uncertainty
+    /// the stamp had in the first place.
     fn retract_unseen(&mut self, target_t: f64) -> Vec<Reception> {
-        let mut doomed: Vec<usize> = Vec::new();
-        for sheet in self.sheets.iter() {
-            // The sheet is matched to the arrival by the same continuity rule `Pulse::scan` tracks
-            // it with, and for the same reason: the priming pass stands up to one step away from
-            // the pass that recorded the arrival, which is long enough for the straddling segment
-            // to have handed over. Matching the segment index exactly would let exactly the
-            // handovers this is meant to survive defeat the retraction as well.
-            let last = self
+        let doomed: Vec<usize> = match self.prev.as_ref() {
+            None => return Vec::new(),
+            Some(primed) => self
                 .receptions
                 .iter()
                 .enumerate()
-                .rfind(|(_, rec)| {
-                    self.loop_distance(rec.loop_s, sheet.loop_s) < self.sheet_window()
-                });
-            if let Some((index, rec)) = last
-                && rec.t_pass > target_t
-                && rec.side_after * sheet.side < 0.0
-            {
-                doomed.push(index);
-            }
-        }
+                .filter(|(_, rec)| {
+                    rec.t_pass > target_t
+                        && side_at(primed, rec.segment, rec.turn)
+                            .is_some_and(|side| rec.side_after * side < 0.0)
+                })
+                .map(|(index, _)| index)
+                .collect(),
+        };
         if doomed.is_empty() {
             return Vec::new();
         }
@@ -1946,8 +2071,8 @@ pub struct SignalField {
     /// the pulses sent from then on and leaves the standing ones exactly as they are, and a field
     /// can hold several counts at once. Nothing downstream needs to be told which: the closed
     /// polyline the equatorial view draws, the loop coordinate of `Pulse::scan` (taken mod n), the
-    /// neighbouring pairs of `Pulse::radial_extent` and the width of `Pulse::sheet_window` all read
-    /// the pulse's own `rays.len()`.
+    /// neighbouring pairs of `Pulse::radial_extent` and the segment loop of `Pulse::sweep` all
+    /// read the pulse's own `rays.len()`.
     ///
     /// Whatever n is, the emission angles are alpha = 2 pi i / n, so alpha = 0 - the emitter's own
     /// outward radial leg - is ray zero of every pulse and the spacing is 360/n degrees.
@@ -2066,7 +2191,7 @@ impl SignalField {
                 .next_index
                 .is_multiple_of(HISTORY_PULSE_STRIDE)
                 .then(|| RingHistory::seeded(n, emitter.t, emitter.r, emitter.phi)),
-            sheets: Vec::new(),
+            prev: None,
             receptions: Vec::new(),
         });
         self.next_index += 1;
@@ -2193,7 +2318,9 @@ impl SignalField {
                 history.rows.truncate(keep);
             }
             pulse.receptions.retain(|rec| rec.t <= target_t);
-            pulse.sheets.clear();
+            // A mark is a statement about where the front and the receiver were, and the rewind has
+            // just moved both: the priming pass takes a fresh one at the rewound state.
+            pulse.prev = None;
         }
         self.budget_exhausted += exhausted;
         self.heard.retain(|rec| rec.t <= target_t);
@@ -2218,10 +2345,10 @@ impl SignalField {
     /// Outside r+ a front overtakes a receiver from below as it climbs outward; inside r+
     /// everything falls and it is a trailing receiver who overtakes a front that has all but
     /// stopped against r-. A receiver *ahead* of the emitter is caught only by the ingoing part of
-    /// each front, which runs at up to dr/dt = -1 and so outruns any timelike worldline. The
-    /// per-sheet sign change of `Pulse::scan` catches all of these, and catches them for each
-    /// sheet of a folded front separately, which is why a single pulse can be received more than
-    /// once.
+    /// each front, which runs at up to dr/dt = -1 and so outruns any timelike worldline. The swept
+    /// patches of `Pulse::sweep` catch all of these, and catch them separately for each fold of a
+    /// folded front and each turn of a wound one, which is why a single pulse can be received more
+    /// than once.
     pub fn detect_receptions(&mut self, metric: &KerrSchild, receiver: &Observer) {
         let u_receiver = signalling_four_velocity(metric, receiver);
         for pulse in self.pulses.iter_mut() {
@@ -2240,14 +2367,14 @@ impl SignalField {
         }
     }
 
-    /// Establish which side of every sheet the receiver stands on, recording nothing.
+    /// Mark where the front and the receiver stand, recording nothing.
     ///
-    /// This is the other half of `step_back`. A rewind drops the per-sheet sides, because a side is
-    /// a statement about two events and cannot be wound back; but a field left with no sides at all
-    /// cannot see a crossing that happens inside the first step forward, since that step is spent
-    /// finding out which side the receiver was on to begin with. Priming does that at the rewound
-    /// state, where the answer is known, so the first step forward is a step like any other and the
-    /// arrivals it makes are the arrivals the run made the first time through.
+    /// This is the other half of `step_back`. A rewind drops each pulse's mark of the last pass,
+    /// because a mark says where the front and the receiver were and the rewind has moved both; but
+    /// a field left with no mark at all cannot see a crossing inside the first step forward, since
+    /// that step is spent taking the mark the crossing would have been measured against. Priming
+    /// takes it at the rewound state instead, so the first step forward is an ordinary step and
+    /// the arrivals it makes are the arrivals the run made the first time through.
     ///
     /// It must be called with the receiver already rewound, which is why `SignalPair::step_back`
     /// takes the observers and why both call sites wind the worldlines back before the fields.
@@ -3488,7 +3615,7 @@ mod tests {
             extent_track: vec![(0.0, r0, r0)],
             track_dt: TRACK_MIN_DT,
             history: None,
-            sheets: Vec::new(),
+            prev: None,
             receptions: Vec::new(),
         };
 
@@ -3697,7 +3824,7 @@ mod tests {
             extent_track: vec![(0.0, r0, r0)],
             track_dt: TRACK_MIN_DT,
             history: None,
-            sheets: Vec::new(),
+            prev: None,
             receptions: Vec::new(),
         };
         // Two thinnings' worth of coordinate time, with the rays left standing: what is being
@@ -4067,18 +4194,25 @@ mod tests {
     }
 
     #[test]
-    fn test_a_reception_is_stamped_with_the_interpolated_crossing_event() {
-        // An arrival is stamped with the *crossing*, not with the pass that noticed it. A sheet is
-        // seen to have swept over the receiver when the sign of receiver.r - r_front differs
-        // between two consecutive passes, which puts the crossing somewhere inside that interval;
-        // every number of the record - t, r, phi, tau and the shift - is the linear interpolation
-        // of the two passes at the fraction where the side value vanishes.
+    fn test_a_reception_is_stamped_with_the_re_integrated_crossing_event() {
+        // An arrival is stamped with the *crossing*, not with the pass that noticed it, and the
+        // receiver's own event at the crossing is re-integrated rather than interpolated.
+        // `Pulse::sweep` locates the crossing somewhere strictly inside the pass interval, and
+        // `Observer::event_at` then puts a copy of the observer back on the last recorded event at
+        // or before that time and integrates it the rest of the way.
         //
-        // Two things are asserted about that. The event lies inside the interval, on the receiver's
-        // own segment of worldline between the two passes, which is what lets the equatorial view
-        // put a tick on their trail rather than near it. And all five numbers are interpolated at
-        // the *same* fraction, which is what makes the record one event rather than five: the
-        // fraction recovered from t and the fraction recovered from r agree to round-off.
+        // Three things are asserted. The event lies inside the interval, on the receiver's own
+        // segment of worldline between the two passes, which is what lets the equatorial view put a
+        // tick *on* their trail rather than near it. The stamp is genuinely inside the interval and
+        // not the pass event. And the recorded (r, phi, tau) is the state the observer's own
+        // integrator reaches at that time: the check integrates forward from the previous pass with
+        // `Observer::step`, which is a different route to the same worldline than the rewind
+        // `event_at` takes, so an arrival stamped off the wrong pass or read off the wrong field
+        // would not survive it.
+        //
+        // The gap between the re-integrated event and the linear interpolation the record used to
+        // carry is printed rather than asserted on: it is the size of the correction, and it is
+        // bounded above because a refinement of one pass interval is what it has to be.
         let metric = KerrSchild::new(1.0, 0.9);
         let params = WorldlineParams::default();
         let mut alice = Observer::new_with_phi(&metric, "Alice", 0.0, 4.5, 0.0, 0.25, params);
@@ -4089,9 +4223,12 @@ mod tests {
         let mut t = 0.0;
         let mut checked = 0;
         let mut worst_offset = 0.0f64;
-        let mut worst_fraction_gap = 0.0f64;
+        let mut worst_reintegration = 0.0f64;
+        let mut worst_correction = 0.0f64;
+        let mut wraps = 0;
         while t < 16.0 {
-            let before_event = (bob.t, bob.r, bob.phi, bob.tau);
+            let was = bob.clone();
+            let before_event = (was.t, was.r, was.tau);
             t += dt;
             alice.step(&metric, t, dt);
             bob.step(&metric, t, dt);
@@ -4099,8 +4236,14 @@ mod tests {
             field.emit_if_due(&metric, &alice);
             let before = field.received_count();
             field.detect_receptions(&metric, &bob);
+            // Did the receiver's azimuth wrap through 2 pi inside this interval? The old record
+            // averaged the two ends of the interval, so a wrap put the arrival on the far side of
+            // the hole; the re-integrated one cannot, since it never looks at the two ends.
+            if bob.phi < was.phi - std::f64::consts::PI {
+                wraps += 1;
+            }
             for reception in field.receptions().skip(before) {
-                let (t0, r0, phi0, tau0) = before_event;
+                let (t0, r0, tau0) = before_event;
                 assert!(
                     reception.t > t0 - 1e-12 && reception.t <= bob.t + 1e-12,
                     "an arrival at t = {} is outside the pass interval ({t0}, {}]",
@@ -4109,7 +4252,6 @@ mod tests {
                 );
                 for (value, a, b, what) in [
                     (reception.r, r0, bob.r, "r"),
-                    (reception.phi, phi0, bob.phi, "phi"),
                     (reception.tau_receiver, tau0, bob.tau, "tau"),
                 ] {
                     let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
@@ -4119,16 +4261,38 @@ mod tests {
                          [{lo}, {hi}]"
                     );
                 }
-                // One event, five numbers: the same fraction of the interval in each of them.
-                let fraction_t = (reception.t - t0) / (bob.t - t0);
-                if (bob.r - r0).abs() > 1e-9 {
-                    let fraction_r = (reception.r - r0) / (bob.r - r0);
-                    worst_fraction_gap = worst_fraction_gap.max((fraction_t - fraction_r).abs());
-                    assert!(
-                        (fraction_t - fraction_r).abs() < 1e-9,
-                        "t and r were interpolated at different fractions: {fraction_t} vs \
-                         {fraction_r}"
-                    );
+                // The same worldline, reached the other way: one step of exactly the crossing's
+                // own length, forward from the previous pass.
+                let mut probe = was.clone();
+                probe.step(&metric, reception.t, reception.t - t0);
+                let phi_gap = {
+                    let d = (probe.phi - reception.phi).rem_euclid(std::f64::consts::TAU);
+                    d.min(std::f64::consts::TAU - d)
+                };
+                let gap = (probe.r - reception.r)
+                    .abs()
+                    .max((probe.tau - reception.tau_receiver).abs())
+                    .max(phi_gap);
+                worst_reintegration = worst_reintegration.max(gap);
+                assert!(
+                    gap < 1e-9,
+                    "the arrival's event is not the one the integrator reaches at t = {}: \
+                     recorded (r, phi, tau) = ({}, {}, {}) against ({}, {}, {})",
+                    reception.t,
+                    reception.r,
+                    reception.phi,
+                    reception.tau_receiver,
+                    probe.r,
+                    probe.phi,
+                    probe.tau
+                );
+                // How far the re-integration moved the event off the straight line between the two
+                // passes. A correction of one pass interval's curvature, and nothing like a
+                // relocation.
+                if (bob.t - t0).abs() > 1e-12 {
+                    let fraction = (reception.t - t0) / (bob.t - t0);
+                    let linear = r0 + fraction * (bob.r - r0);
+                    worst_correction = worst_correction.max((linear - reception.r).abs());
                 }
                 worst_offset = worst_offset.max(bob.t - reception.t);
                 checked += 1;
@@ -4136,14 +4300,21 @@ mod tests {
         }
         assert!(checked > 5, "the run should record several arrivals: {checked}");
         println!(
-            "{checked} arrivals stamped at the crossing: the furthest was {worst_offset:.3e} M of \
-             coordinate time before the pass that found it (the pass interval is {dt}), and the \
-             worst disagreement between the fraction read off t and the one read off r was \
-             {worst_fraction_gap:.3e}"
+            "{checked} arrivals stamped at the re-integrated crossing: the furthest was \
+             {worst_offset:.3e} M of coordinate time before the pass that found it (the pass \
+             interval is {dt}); the event agrees with a forward step of the same length to \
+             {worst_reintegration:.3e}, and sits {worst_correction:.3e} M off the straight line \
+             between the two passes. The receiver's azimuth wrapped through 2 pi inside a pass \
+             {wraps} times in this run"
         );
         assert!(
             worst_offset > 1e-6,
-            "the stamp must be an interpolation, not the pass event: worst offset {worst_offset}"
+            "the stamp must be the crossing, not the pass event: worst offset {worst_offset}"
+        );
+        assert!(
+            worst_correction < 1e-4,
+            "re-integrating is a refinement of one pass interval, not a relocation: \
+             {worst_correction}"
         );
 
         // The frozen family is received where it waits, on r-, so those ticks land on the r-
@@ -4242,7 +4413,7 @@ mod tests {
             extent_track: vec![(0.0, r_receiver, r_receiver)],
             track_dt: TRACK_MIN_DT,
             history: None,
-            sheets: Vec::new(),
+            prev: None,
             receptions: Vec::new(),
         };
 
@@ -4257,36 +4428,43 @@ mod tests {
             }
             bob.t = t;
             bob.tau = 0.8 * t;
+            let before = pulse.receptions.len();
             pulse.scan(&metric, bob, &u_receiver, true);
-            pulse.sheets.iter().map(|sheet| sheet.segment).collect::<Vec<_>>()
+            pulse.receptions[before..].iter().map(|rec| rec.segment).collect::<Vec<_>>()
         };
 
-        // 1. Segment 1 carries the near sheet: the front starts inside the receiver and sweeps out
-        //    past them. Segment 5, the closing one, carries the far sheet the whole way through.
+        // 1. The front starts inside the receiver and sweeps out past them, on segment 1.
         assert_eq!(
             pass(&mut pulse, &mut bob, 0.1, 2.9, 0.0),
-            vec![1, 5],
-            "the near sheet on segment 1, the far one on the closing segment"
+            Vec::<usize>::new(),
+            "the first pass has nothing to sweep against and cannot record anything"
         );
-        assert!(pulse.receptions.is_empty(), "the first pass only establishes the sides");
-        assert_eq!(pass(&mut pulse, &mut bob, 0.2, 3.1, 0.0), vec![1, 5]);
+        assert!(pulse.receptions.is_empty(), "the first pass only takes the mark");
+        assert_eq!(pass(&mut pulse, &mut bob, 0.2, 3.1, 0.0), vec![1]);
         assert_eq!(pulse.receptions.len(), 1, "the front swept out past the receiver");
 
-        // 2. The loop rotates: segment 0 takes over, and the receiver passes back through the
-        //    front by that segment instead.
+        // 2. The loop rotates a quarter of a radian with the front standing still in r, and then
+        //    sweeps back in past the receiver. The rotation on its own moves no part of the front
+        //    across them, so only the second of the two passes is an arrival - and it is carried by
+        //    segment 0, the loop having turned.
         assert_eq!(
             pass(&mut pulse, &mut bob, 0.3, 3.1, 0.25),
-            vec![0, 5],
-            "segment 0 should carry the near sheet now"
+            Vec::<usize>::new(),
+            "turning the loop is not a crossing"
         );
         assert_eq!(pulse.receptions.len(), 1, "the handoff itself is not a crossing");
-        assert_eq!(pass(&mut pulse, &mut bob, 0.4, 2.9, 0.25), vec![0, 5]);
+        assert_eq!(pass(&mut pulse, &mut bob, 0.4, 2.9, 0.25), vec![0]);
         assert_eq!(pulse.receptions.len(), 2, "the front swept back in past the receiver");
 
-        // 3. The loop rotates back and segment 1 sweeps out past the receiver a second time.
-        assert_eq!(pass(&mut pulse, &mut bob, 0.5, 2.9, 0.0), vec![1, 5], "segment 1 again");
-        assert_eq!(pulse.receptions.len(), 2, "coming back is not a crossing either");
-        assert_eq!(pass(&mut pulse, &mut bob, 0.6, 3.1, 0.0), vec![1, 5]);
+        // 3. The loop rotates back and the front sweeps out past the receiver a second time, by
+        //    segment 1 again.
+        assert_eq!(
+            pass(&mut pulse, &mut bob, 0.5, 2.9, 0.0),
+            Vec::<usize>::new(),
+            "coming back is not a crossing either"
+        );
+        assert_eq!(pulse.receptions.len(), 2);
+        assert_eq!(pass(&mut pulse, &mut bob, 0.6, 3.1, 0.0), vec![1]);
         assert_eq!(
             pulse.receptions.len(),
             3,
@@ -4314,11 +4492,16 @@ mod tests {
 
     #[test]
     fn test_a_two_segment_handover_still_records_the_crossing() {
-        // The handover that the segment key lost. A sheet is tracked from pass to pass by where it
-        // sits along the ray loop, so the segment carrying it may move - and here it moves by two
-        // indices in the very step in which the front sweeps over the receiver, which is the case
-        // that used to be dropped: the new key had no remembered side, so nothing compared the two
-        // sides and no arrival was recorded.
+        // The handover that a segment key loses. Which segment of the polyline stands across the
+        // receiver's azimuth is a property of an instant, and here it moves by two indices in the
+        // very step in which the front sweeps over the receiver. Keyed to that segment, the step
+        // had no remembered side to compare against and no arrival was recorded at all.
+        //
+        // Sweeping the patch each segment covers asks a different question and does not care: the
+        // crossing is carried by the segment whose swept patch the worldline actually passes
+        // through, which here is segment 1 - *neither* of the two that straddle the receiver's
+        // azimuth at the two passes. That is the clearest statement of why the old key was the
+        // wrong one.
         //
         // Twelve rays. Six of them are the near part of the front, evenly spaced 0.2 rad apart at
         // the radius the receiver is about to be swept by; six are the far part, out at r = 30.
@@ -4349,7 +4532,7 @@ mod tests {
             extent_track: vec![(0.0, r_receiver, r_receiver)],
             track_dt: TRACK_MIN_DT,
             history: None,
-            sheets: Vec::new(),
+            prev: None,
             receptions: Vec::new(),
         };
 
@@ -4367,42 +4550,178 @@ mod tests {
             bob.t = t;
             bob.tau = 0.8 * t;
             pulse.scan(&metric, bob, &u_receiver, true);
-            pulse.sheets.iter().map(|sheet| (sheet.segment, sheet.loop_s)).collect::<Vec<_>>()
         };
 
-        let before = pass(&mut pulse, &mut bob, 0.1, 2.9, 0.0);
-        assert_eq!(before.len(), 2, "the near sheet and the far one: {before:?}");
-        assert_eq!(before[0].0, 2, "the near sheet is on segment 2: {before:?}");
-        assert_eq!(before[1].0, 11, "and the far one on the closing segment: {before:?}");
-        assert!(pulse.receptions.is_empty(), "the first pass only establishes the sides");
+        // Which segments stand across the receiver's azimuth at this instant, on the raw unwrapped
+        // differences. This is the old key, computed here only so that the case can state what it
+        // is about: the answer moves by two between the two passes.
+        let two_pi = std::f64::consts::TAU;
+        let straddling = |pulse: &Pulse, receiver_phi: f64| {
+            let n = pulse.rays.len();
+            let first = pulse.rays[0].phi - receiver_phi;
+            let mut rel = vec![first - two_pi * (first / two_pi).round()];
+            for i in 1..n {
+                rel.push(rel[i - 1] + (pulse.rays[i].phi - pulse.rays[i - 1].phi));
+            }
+            (0..n)
+                .filter(|&i| {
+                    let (a, b) = (rel[i], rel[(i + 1) % n]);
+                    (a <= 0.0) != (b <= 0.0)
+                })
+                .collect::<Vec<usize>>()
+        };
 
-        let after = pass(&mut pulse, &mut bob, 0.2, 3.1, 2.0 * step);
-        assert_eq!(after.len(), 2, "still two sheets: {after:?}");
-        assert_eq!(after[0].0, 0, "carried now by the segment two round the loop: {after:?}");
-        assert_eq!(after[1].0, 11, "the far sheet has not moved segment: {after:?}");
+        pass(&mut pulse, &mut bob, 0.1, 2.9, 0.0);
+        let before = straddling(&pulse, bob.phi);
+        assert_eq!(before, vec![2, 11], "near arc on segment 2, far one closing: {before:?}");
+        assert!(pulse.receptions.is_empty(), "the first pass only takes the mark");
+
+        pass(&mut pulse, &mut bob, 0.2, 3.1, 2.0 * step);
+        let after = straddling(&pulse, bob.phi);
+        assert_eq!(after, vec![0, 11], "the near arc is two segments round now: {after:?}");
         assert_eq!(
             pulse.receptions.len(),
             1,
             "the near part of the front swept out past the receiver and that is an arrival, \
-             whichever segment was carrying it; the far sheet never came near them: {:?}",
+             whichever segment happened to straddle them at either end; the far arc never came \
+             near them: {:?}",
             pulse.receptions
         );
-        assert_eq!(pulse.receptions[0].segment, 0, "recorded on the segment that now carries it");
-        let moved = (after[0].1 - before[0].1).rem_euclid(12.0);
+        let rec = pulse.receptions[0];
         println!(
-            "a sheet handed from segment {} to segment {} in one pass - two indices, a loop \
-             coordinate of {:.3} against {:.3} - still records its crossing at t = {:.4}",
-            before[0].0,
-            after[0].0,
-            after[0].1,
-            before[0].1,
-            pulse.receptions[0].t
+            "the straddling segment moved from {} to {} in one pass - two indices - and the \
+             crossing is recorded on segment {}, the one whose swept patch the worldline went \
+             through, at t = {:.4}",
+            before[0], after[0], rec.segment, rec.t
         );
+        assert_eq!(
+            rec.segment, 1,
+            "the crossing belongs to the segment that swept over the receiver, which is neither \
+             of the two that straddled them at the passes: {rec:?}"
+        );
+        assert!((before[0] as i64 - after[0] as i64).abs() == 2, "{before:?} against {after:?}");
+        assert!(rec.t > 0.1 && rec.t < 0.2, "{rec:?}");
+    }
+
+    #[test]
+    fn test_a_fold_arriving_inside_one_pass_is_still_an_arrival() {
+        // The arrival that the tracked-sheet test dropped, and the reason this file no longer has
+        // tracked sheets.
+        //
+        // A front folded in azimuth - which the ingoing half of a cone wrapping the strong field
+        // always is - reaches a receiver tip first. At the previous pass no part of the front
+        // stands across the receiver's azimuth. One pass later the tip has swept past that azimuth
+        // *and* past the receiver's radius, so two pieces of front stand across it, one either side
+        // of the receiver, and the front has swept over them in between. Keyed to a tracked sheet
+        // there is nothing to compare: both pieces are new, neither has a remembered side, and the
+        // arrival was silently dropped. Sweeping the patch each segment covers has no such
+        // dependence on what existed before, and finds it.
+        //
+        // Five rays, positioned by hand in the shape measured in the run that first showed this:
+        // the fold tip is ray 2, which starts inside the receiver at r = 2.8 and a quarter of a
+        // radian short of their azimuth, and ends outside them at r = 3.6 having crossed it. The
+        // legs are asymmetric so that the two pieces of front end up straddling the receiver, at
+        // -0.45 and +0.15 of radius, exactly as the measured case did.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let params = WorldlineParams::default();
+        let r_receiver = 3.0;
+        let mut bob = Observer::new_with_phi(&metric, "Bob", 0.0, r_receiver, 0.0, 0.0, params);
+        let u_receiver = signalling_four_velocity(&metric, &bob);
+        let u = raindrop(&metric, r_receiver);
+        let tetrad = Tetrad::from_four_velocity(&metric, r_receiver, &u);
+        let rays: Vec<NullRay> = (0..5)
+            .map(|i| {
+                let alpha = std::f64::consts::TAU * (i as f64) / 5.0;
+                NullRay::from_local_direction(&metric, 0.0, r_receiver, 0.0, &tetrad, alpha, &u)
+            })
+            .collect();
+        let mut pulse = Pulse {
+            index: 0,
+            emitted_t: 0.0,
+            emitted_tau: 0.0,
+            emitted_r: r_receiver,
+            emitted_phi: 0.0,
+            rays,
+            extent_track: vec![(0.0, r_receiver, r_receiver)],
+            track_dt: TRACK_MIN_DT,
+            history: None,
+            prev: None,
+            receptions: Vec::new(),
+        };
+
+        let pass = |pulse: &mut Pulse, bob: &mut Observer, t: f64, rel: [f64; 5], r: [f64; 5]| {
+            for (k, ray) in pulse.rays.iter_mut().enumerate() {
+                ray.t = t;
+                ray.r = r[k];
+                ray.phi = rel[k];
+            }
+            bob.t = t;
+            bob.tau = 0.8 * t;
+            pulse.scan(&metric, bob, &u_receiver, true);
+        };
+
+        // How many pieces of front stand across the receiver's azimuth right now: the tracked-sheet
+        // count, computed here only to show that it is zero at the first pass and two at the
+        // second, which is what left the old rule with nothing to compare.
+        let standing = |pulse: &Pulse, receiver_phi: f64| {
+            let n = pulse.rays.len();
+            let first = pulse.rays[0].phi - receiver_phi;
+            let two_pi = std::f64::consts::TAU;
+            let mut chain = vec![first - two_pi * (first / two_pi).round()];
+            for i in 1..n {
+                chain.push(chain[i - 1] + (pulse.rays[i].phi - pulse.rays[i - 1].phi));
+            }
+            (0..n)
+                .filter(|&i| {
+                    let (a, b) = (chain[i], chain[(i + 1) % n]);
+                    (a <= 0.0) != (b <= 0.0)
+                })
+                .map(|i| {
+                    let (a, b) = (chain[i], chain[(i + 1) % n]);
+                    let w = (0.0 - a) / (b - a);
+                    let far = pulse.rays[(i + 1) % n].r;
+                    let side = r_receiver - (pulse.rays[i].r + w * (far - pulse.rays[i].r));
+                    (i, (side * 1e4).round() / 1e4)
+                })
+                .collect::<Vec<(usize, f64)>>()
+        };
+
+        pass(&mut pulse, &mut bob, 0.1, [0.5, 0.35, 0.25, 0.35, 0.5], [2.0, 2.4, 2.8, 2.4, 2.0]);
+        let before = standing(&pulse, bob.phi);
         assert!(
-            (moved.min(12.0 - moved) - 2.0).abs() < 1e-9,
-            "the sheet must have moved two segments along the loop: {moved}"
+            before.is_empty(),
+            "no part of the front reaches the receiver's azimuth yet: {before:?}"
         );
-        assert!(pulse.receptions[0].t > 0.1 && pulse.receptions[0].t < 0.2);
+        assert!(pulse.receptions.is_empty(), "the first pass only takes the mark");
+
+        pass(&mut pulse, &mut bob, 0.2, [0.4, 0.05, -0.15, 0.05, 0.4], [2.2, 3.4, 3.6, 2.6, 2.2]);
+        let after = standing(&pulse, bob.phi);
+        assert_eq!(after.len(), 2, "two pieces of front stand across them now: {after:?}");
+        assert!(
+            after[0].1 < 0.0 && after[1].1 > 0.0,
+            "and the receiver is between them, one outside and one inside: {after:?}"
+        );
+        assert_eq!(
+            pulse.receptions.len(),
+            1,
+            "the fold swept over the receiver inside that pass and that is an arrival, even though \
+             neither piece of front existed at the pass before: {:?}",
+            pulse.receptions
+        );
+        let rec = pulse.receptions[0];
+        println!(
+            "a fold arriving inside one pass: {} pieces of front across the receiver's azimuth \
+             before, {} after at sides {:?} - and the crossing recorded on segment {} at \
+             t = {:.4}, shift {:.4}",
+            before.len(),
+            after.len(),
+            after.iter().map(|(_, side)| *side).collect::<Vec<f64>>(),
+            rec.segment,
+            rec.t,
+            rec.ratio
+        );
+        assert!(rec.t > 0.1 && rec.t < 0.2, "stamped inside the pass interval: {rec:?}");
+        assert!(rec.ratio.is_finite() && rec.ratio > 0.0, "{rec:?}");
     }
 
     #[test]
@@ -4444,7 +4763,7 @@ mod tests {
             extent_track: vec![(0.0, r_receiver, r_receiver)],
             track_dt: TRACK_MIN_DT,
             history: None,
-            sheets: Vec::new(),
+            prev: None,
             receptions: Vec::new(),
         };
 
@@ -4463,7 +4782,24 @@ mod tests {
             bob.t = t;
             bob.tau = 0.8 * t;
             pulse.scan(&metric, bob, &u_receiver, true);
-            pulse.sheets.iter().map(|sheet| (sheet.segment, sheet.side)).collect::<Vec<_>>()
+        };
+
+        // How many pieces of front stand across the receiver's azimuth: the multiples of 2 pi the
+        // raw unwrapped polyline straddles, counted the way `Pulse::sweep` enumerates turns.
+        let raw_sheets = |pulse: &Pulse, receiver_phi: f64| {
+            let n = pulse.rays.len();
+            let first = pulse.rays[0].phi - receiver_phi;
+            let mut rel = vec![first - two_pi * (first / two_pi).round()];
+            for i in 1..n {
+                rel.push(rel[i - 1] + (pulse.rays[i].phi - pulse.rays[i - 1].phi));
+            }
+            let mut count = 0;
+            for i in 0..n {
+                let (a, b) = (rel[i], rel[(i + 1) % n]);
+                let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+                count += ((hi / two_pi).floor() as i64 - (lo / two_pi).ceil() as i64 + 1).max(0);
+            }
+            count
         };
 
         // What the fold would have made of the same four rays, on both passes: the polyline built
@@ -4485,18 +4821,18 @@ mod tests {
             (rel, count)
         };
 
-        let first = pass(&mut pulse, &mut bob, 0.1, 4.5);
+        pass(&mut pulse, &mut bob, 0.1, 4.5);
         let (folded_rel, folded_count) = folded_sheets(&pulse, bob.phi);
+        let first = raw_sheets(&pulse, bob.phi);
         assert_eq!(
-            first.len(),
-            6,
-            "three turns out and three back: six sheets stand across the receiver's azimuth, \
-             {first:?}"
+            first, 6,
+            "three turns out and three back: six pieces of front stand across the receiver's \
+             azimuth, not {first}"
         );
-        assert!(pulse.receptions.is_empty(), "the first pass only establishes the sides");
+        assert!(pulse.receptions.is_empty(), "the first pass only takes the mark");
 
-        let second = pass(&mut pulse, &mut bob, 0.2, 5.0);
-        assert_eq!(second.len(), 6, "the same six: {second:?}");
+        pass(&mut pulse, &mut bob, 0.2, 5.0);
+        assert_eq!(raw_sheets(&pulse, bob.phi), 6, "the same six");
         assert_eq!(
             pulse.receptions.len(),
             1,
@@ -4507,10 +4843,10 @@ mod tests {
         assert!(rec.t > 0.1 && rec.t < 0.2, "{rec:?}");
         assert!(rec.ratio.is_finite() && rec.ratio > 0.0, "{rec:?}");
         println!(
-            "a front wound three turns: {} sheets on the raw polyline, one of them crossing the \
-             receiver at t = {:.4}; the folded polyline is {:?} and straddles {folded_count} \
-             multiples of 2 pi",
-            first.len(),
+            "a front wound three turns: {} pieces of front on the raw polyline, one of them \
+             crossing the receiver at t = {:.4}; the folded polyline is {:?} and straddles \
+             {folded_count} multiples of 2 pi",
+            first,
             rec.t,
             folded_rel.iter().map(|x| (x * 1e3).round() / 1e3).collect::<Vec<_>>()
         );
