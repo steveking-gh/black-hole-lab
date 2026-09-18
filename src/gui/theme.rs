@@ -1,3 +1,4 @@
+use crate::physics::observer::Who;
 use egui::Color32;
 
 pub struct Theme;
@@ -77,17 +78,17 @@ impl Theme {
     pub const ALICE_CONE_PAST_RGB: [u8; 3] = [255, 195, 120]; // light orange
     pub const ALICE_CONE_EDGE_RGB: [u8; 3] = [255, 215, 130];
 
-    /// The (future fill, past fill, edge) triple belonging to an observer, by name. Anything that
-    /// is not Alice draws in Bob's blue/purple.
-    pub fn cone_colours(name: &str) -> (Color32, Color32, Color32) {
-        Self::cone_colours_at(name, Self::CONE_FILL_ALPHA)
+    /// The (future fill, past fill, edge) triple belonging to an observer. Anything that is not
+    /// Alice - including an observer `Who::of` cannot place - draws in Bob's blue/purple.
+    pub fn cone_colours(who: Option<Who>) -> (Color32, Color32, Color32) {
+        Self::cone_colours_at(who, Self::CONE_FILL_ALPHA)
     }
 
     /// The same triple with the two fills at a chosen alpha: the volume view draws the cone as a
     /// surface rather than as a wedge and needs it denser, but in the same hues, so that a cone
     /// keeps its identity between the two pictures.
-    pub fn cone_colours_at(name: &str, fill_alpha: u8) -> (Color32, Color32, Color32) {
-        let (future, past, edge) = if name == "Alice" {
+    pub fn cone_colours_at(who: Option<Who>, fill_alpha: u8) -> (Color32, Color32, Color32) {
+        let (future, past, edge) = if who == Some(Who::Alice) {
             (Self::ALICE_CONE_FUTURE_RGB, Self::ALICE_CONE_PAST_RGB, Self::ALICE_CONE_EDGE_RGB)
         } else {
             (Self::BOB_CONE_FUTURE_RGB, Self::BOB_CONE_PAST_RGB, Self::BOB_CONE_EDGE_RGB)

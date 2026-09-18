@@ -1,10 +1,13 @@
 use crate::gui::controls::{ReferenceFrame, SignalViews};
 use crate::gui::polyline::{SCREEN_SPACING, thin_to_pixels};
-use crate::gui::spacetime_canvas::TelemetryBoxes;
+use crate::gui::spacetime_canvas::{BoxId, Canvas, TelemetryBoxes};
 use crate::gui::theme::Theme;
 use crate::physics::geodesic::GeodesicState;
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::{Observer, ObserverMode};
+/// Which of the two observers, re-exported here because the equatorial view is where most of the
+/// per-observer drawing is and every user of it in the gui reaches it through this module.
+pub use crate::physics::observer::Who;
 use crate::physics::wavefront::SignalField;
 use egui::{Color32, Pos2, Stroke, Vec2};
 
@@ -28,22 +31,7 @@ pub struct FrontStyle {
     pub hide_wound: bool,
 }
 
-/// One of the two observers, named for the things the equatorial view does per observer rather
-/// than per frame of reference.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Who {
-    Alice,
-    Bob,
-}
-
 impl Who {
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            Self::Alice => "Alice",
-            Self::Bob => "Bob",
-        }
-    }
-
     /// The drawn radius of this observer's marker on the equatorial view, which also sets how
     /// close the pointer has to come to open their menu.
     pub(crate) fn marker_radius(self) -> f32 {
@@ -949,14 +937,14 @@ impl SpatialCanvas {
         // 8. Draggable info boxes, registered last so they take the drag instead of the canvas.
         if let (Some(al), Some(al_pos)) = (alice.as_ref(), alice_box) {
             self.telemetry.show(
-                ui, &painter, "spatial", rect, al_pos, "Alice", Theme::ALICE_COLOR, al, metric, use_physical_units,
-                font_scale,
+                ui, &painter, Canvas::Spatial, BoxId::Observer(Who::Alice), rect, al_pos, "Alice", Theme::ALICE_COLOR,
+                al, metric, use_physical_units, font_scale,
             );
         }
         if let (Some(b), Some(bob_pos)) = (bob.as_ref(), bob_box) {
             self.telemetry.show(
-                ui, &painter, "spatial", rect, bob_pos, "Bob", Theme::BOB_COLOR, b, metric, use_physical_units,
-                font_scale,
+                ui, &painter, Canvas::Spatial, BoxId::Observer(Who::Bob), rect, bob_pos, "Bob", Theme::BOB_COLOR,
+                b, metric, use_physical_units, font_scale,
             );
         }
     }

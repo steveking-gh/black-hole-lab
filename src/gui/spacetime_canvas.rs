@@ -4,7 +4,7 @@ use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::geodesic::proper_time_between;
 use crate::physics::local_frame::{ruler_distance, LocalFrame, SurfaceCharacter};
-use crate::physics::observer::{LocalRestFrame, LocalSpeed, Observer, ObserverMode};
+use crate::physics::observer::{LocalRestFrame, LocalSpeed, Observer, ObserverMode, Who};
 use crate::physics::wavefront::{NullRay, Reception, SignalField};
 use egui::{epaint::PathShape, Color32, Pos2, Rect, Stroke, Vec2};
 use std::collections::HashMap;
@@ -381,11 +381,114 @@ fn remembered_placement(
     }
 }
 
-/// The remembered positions of the hovering telemetry boxes on one canvas, keyed by canvas tag
-/// and observer name so that the same observer can have a different box position in each diagram.
+/// Which diagram a telemetry box stands on. Half of a box's identity: the same observer keeps a
+/// separate dragged position on each picture, so a box is a canvas and a subject together.
+///
+/// `key` is how that identity is spelled outside the program - in a save file, which is what will
+/// hold a user's dragged box positions between runs. Those slugs are therefore fixed once a save
+/// format version has shipped: renaming a variant here, or rewording the View selector, must not
+/// orphan placements somebody has already saved. Nothing on screen reads them, so the titles the
+/// boxes are drawn with stay free to change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Canvas {
+    /// The (t, r) global foliation chart.
+    Spacetime,
+    /// An observer's own rest frame, the 1D+1 local inertial chart.
+    RestFrame,
+    /// The equatorial view.
+    Spatial,
+    /// The 2D+1 volume.
+    Volume,
+}
+
+impl Canvas {
+    /// Every canvas there is, for iterating the set. The reading half of the identity - this and
+    /// `from_key` - is what the save module will come in through; nothing in the app turns a slug
+    /// back into a canvas yet, so until then the round-trip test below is their only caller.
+    #[allow(dead_code)]
+    pub const ALL: [Self; 4] = [Self::Spacetime, Self::RestFrame, Self::Spatial, Self::Volume];
+
+    /// This canvas's slug. See the type's own comment before touching one of these strings.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Spacetime => "spacetime",
+            Self::RestFrame => "restframe",
+            Self::Spatial => "spatial",
+            Self::Volume => "volume",
+        }
+    }
+
+    /// The canvas a slug names, or None for one this version has never written.
+    #[allow(dead_code)]
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|c| c.key() == key)
+    }
+}
+
+/// Which box on that canvas: the subject it reads, never the words it prints. The other half of a
+/// box's identity, and the half that outlives every rewording of a title - the Cauchy box titles
+/// itself with the current r₋ in kilometres, and is this same box whatever that says.
+///
+/// Its `key` carries the same promise, and the same warning, as `Canvas::key`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BoxId {
+    /// One observer's telemetry, read off their own worldline.
+    Observer(Who),
+    /// What the named observer's transmission measures as a wave at the observer whose frame is
+    /// drawn: the sender is the subject, so the box is theirs.
+    Signal(Who),
+    /// The outer horizon r₊, as a place or a moment for whoever the box quotes.
+    OuterHorizon,
+    /// The Cauchy horizon r₋, likewise.
+    CauchyHorizon,
+    /// The static limit, which reports the causal character of its own drawn line.
+    Ergosphere,
+    /// The ring singularity r = 0, likewise.
+    RingSingularity,
+}
+
+impl BoxId {
+    /// Every box there is, for iterating the set. Unread in the app for now, exactly as
+    /// `Canvas::ALL` is.
+    #[allow(dead_code)]
+    pub const ALL: [Self; 8] = [
+        Self::Observer(Who::Alice),
+        Self::Observer(Who::Bob),
+        Self::Signal(Who::Alice),
+        Self::Signal(Who::Bob),
+        Self::OuterHorizon,
+        Self::CauchyHorizon,
+        Self::Ergosphere,
+        Self::RingSingularity,
+    ];
+
+    /// This box's slug, the payload of the two per-observer variants spelled into it. See the
+    /// type's own comment before touching one of these strings.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Observer(Who::Alice) => "alice",
+            Self::Observer(Who::Bob) => "bob",
+            Self::Signal(Who::Alice) => "alice-signal",
+            Self::Signal(Who::Bob) => "bob-signal",
+            Self::OuterHorizon => "outer-horizon",
+            Self::CauchyHorizon => "cauchy-horizon",
+            Self::Ergosphere => "ergosphere",
+            Self::RingSingularity => "ring-singularity",
+        }
+    }
+
+    /// The box a slug names, or None for one this version has never written.
+    #[allow(dead_code)]
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|b| b.key() == key)
+    }
+}
+
+/// The remembered positions of the hovering telemetry boxes on one canvas, keyed by the canvas and
+/// the box's subject so that the same observer can have a different box position in each diagram.
 #[derive(Default)]
 pub struct TelemetryBoxes {
-    placements: HashMap<String, Placement>,
+    placements: HashMap<(Canvas, BoxId), Placement>,
     /// Whether a drag pins the box to the canvas where it was dropped (the equatorial view), or
     /// keeps it following the observer at the dragged offset (the (t, r) diagram, the default).
     pin_on_drag: bool,
@@ -411,24 +514,25 @@ impl TelemetryBoxes {
         &mut self,
         ui: &mut egui::Ui,
         painter: &egui::Painter,
-        canvas_tag: &str,
+        canvas: Canvas,
+        id: BoxId,
         canvas_rect: Rect,
         pos: Pos2,
-        name: &str,
+        title: &str,
         color: Color32,
         obs: &Observer,
         metric: &KerrSchild,
         use_physical_units: bool,
         font_scale: f32,
     ) -> egui::Response {
-        let lines = telemetry_lines(name, color, obs, metric, use_physical_units);
+        let lines = telemetry_lines(title, color, obs, metric, use_physical_units);
         let size = telemetry_box_size(painter, &lines, font_scale);
         let anchored = default_badge_pos(canvas_rect, pos, size);
         self.show_lines(
             ui,
             painter,
-            canvas_tag,
-            name,
+            canvas,
+            id,
             canvas_rect,
             anchored,
             &lines,
@@ -439,8 +543,8 @@ impl TelemetryBoxes {
     }
 
     /// Whether this box has been dragged somewhere and left there.
-    pub fn is_placed(&self, canvas_tag: &str, name: &str) -> bool {
-        self.placements.contains_key(&format!("{canvas_tag}:{name}"))
+    pub fn is_placed(&self, canvas: Canvas, id: BoxId) -> bool {
+        self.placements.contains_key(&(canvas, id))
     }
 
     /// Draw one box of arbitrary content at `anchored`, with the drag, the double-click reset and
@@ -451,8 +555,8 @@ impl TelemetryBoxes {
         &mut self,
         ui: &mut egui::Ui,
         painter: &egui::Painter,
-        canvas_tag: &str,
-        name: &str,
+        canvas: Canvas,
+        id: BoxId,
         canvas_rect: Rect,
         anchored: Pos2,
         lines: &[TelemetryLine],
@@ -460,16 +564,16 @@ impl TelemetryBoxes {
         font_scale: f32,
         tip: &'static str,
     ) -> egui::Response {
-        let key = format!("{canvas_tag}:{name}");
+        let key = (canvas, id);
         let previous = self.placements.get(&key).copied();
         let size = telemetry_box_size(painter, lines, font_scale);
         let placed = resolve_placement(previous, anchored, canvas_rect.min);
         let badge_rect = clamp_into(Rect::from_min_size(placed, size), canvas_rect);
 
-        let id = ui.id().with(("telemetry", canvas_tag, name));
+        let widget_id = ui.id().with(("telemetry", canvas.key(), id.key()));
         // click_and_drag rather than drag alone: egui only reports a double-click on a widget that
         // senses clicks, and the double-click is what resets the offset.
-        let response = ui.interact(badge_rect, id, egui::Sense::click_and_drag());
+        let response = ui.interact(badge_rect, widget_id, egui::Sense::click_and_drag());
 
         let badge_rect = if response.double_clicked() {
             self.placements.remove(&key);
@@ -503,8 +607,9 @@ impl TelemetryBoxes {
 /// on the canvas is down. Deferring them is what makes the opaque fill mean anything: a box painted
 /// in the middle of the pass gets a worldline, a light cone or a grid line drawn straight across it.
 struct PendingBox {
-    /// Also the key its remembered position is filed under, so it has to be unique per canvas.
-    name: String,
+    /// Also what its remembered position is filed under, so it has to be unique per canvas. The
+    /// title the box prints is the first of its `lines` and is no part of this.
+    id: BoxId,
     anchor: Pos2,
     lines: Vec<TelemetryLine>,
     color: Color32,
@@ -666,11 +771,11 @@ fn paint_telemetry_box(
     }
 }
 
-/// One surface drawn across the rest-frame view: its radius, the title of its box, the colour and
-/// width of its line, the colour its box is outlined in, and whether that box is a horizon's - the
-/// two horizons report a place-or-moment reading, the static limit and the ring report the causal
-/// character of the drawn line.
-type DrawnSurface<'a> = (f64, &'a str, Color32, f32, Color32, bool);
+/// One surface drawn across the rest-frame view: its radius, the identity of its box, the title
+/// that box prints, the colour and width of its line, the colour its box is outlined in, and
+/// whether that box is a horizon's - the two horizons report a place-or-moment reading, the static
+/// limit and the ring report the causal character of the drawn line.
+type DrawnSurface<'a> = (f64, BoxId, &'a str, Color32, f32, Color32, bool);
 
 /// Hover tip for the two horizon boxes, which name the methodology their third line uses.
 /// Hover tip for the static limit's and the ring's boxes, whose two lines read the drawn line
@@ -1009,11 +1114,13 @@ pub struct SpacetimeCanvas {
     /// Where the user has dragged each info box on this canvas, per diagram and per observer.
     pub telemetry: TelemetryBoxes,
     /// Which surfaces' boxes are currently hung off the top margin as "steep" lines rather than
-    /// parked at the right margin as "flat" ones, by box name. A line near 45 degrees - a
+    /// parked at the right margin as "flat" ones. This is hysteresis for the session in hand and
+    /// nothing a save file would ever hold; it carries a `BoxId` because the loop that draws the
+    /// surfaces has one to hand, not because the key travels anywhere. A line near 45 degrees - a
     /// horizon on the approach, which is null - would otherwise flip between the two rules every
     /// frame as the drawn slope crosses 1, and its box would jump between two corners of the
     /// canvas. See `steep_with_hysteresis`.
-    steep_boxes: std::collections::HashSet<String>,
+    steep_boxes: std::collections::HashSet<BoxId>,
 }
 
 impl Default for SpacetimeCanvas {
@@ -1360,7 +1467,7 @@ Tick Enable Observer on Alice's or Bob's card",
         // One exact light cone in the (t, r) chart, drawn in the colours that belong to `obs`
         // rather than to the diagram, so a cone is identifiable in any frame.
         let draw_cone = |obs: &Observer| {
-            let (future_fill, past_fill, edge) = Theme::cone_colours(&obs.name);
+            let (future_fill, past_fill, edge) = Theme::cone_colours(Who::of(obs));
             let cone = obs.compute_lightcone_polygon(metric, cone_span);
             let cone_apex = Pos2::new(to_screen_x(cone.apex[1]), to_screen_y(cone.apex[0]));
             let p_fut_in = Pos2::new(to_screen_x(cone.future_in[1]), to_screen_y(cone.future_in[0]));
@@ -1602,9 +1709,9 @@ Tick Enable Observer on Alice's or Bob's card",
                 let box_lines =
                     horizon_box_lines(metric, obs, &obs.name, &rm_label, rm, HORIZON_BOX_RED);
                 pending_boxes.push(PendingBox {
-                    // A stable key, not the title: the title carries the radius and so changes with
+                    // The subject, not the title: the title carries the radius and so changes with
                     // the Mass and Spin sliders, which would lose a box the user had dragged.
-                    name: "Cauchy Horizon".to_string(),
+                    id: BoxId::CauchyHorizon,
                     anchor: Pos2::new(x_rm_actual + 4.0, rect.top() + 42.0),
                     lines: box_lines,
                     color: HORIZON_BOX_RED,
@@ -1634,9 +1741,9 @@ Tick Enable Observer on Alice's or Bob's card",
                 let box_lines =
                     horizon_box_lines(metric, obs, &obs.name, &rp_label, rp, Theme::HORIZON_OUTER);
                 pending_boxes.push(PendingBox {
-                    // A stable key, not the title: the title carries the radius and so changes with
+                    // The subject, not the title: the title carries the radius and so changes with
                     // the Mass and Spin sliders, which would lose a box the user had dragged.
-                    name: "Outer Horizon".to_string(),
+                    id: BoxId::OuterHorizon,
                     anchor: Pos2::new(x_rp_actual + 4.0, rect.top() + 42.0),
                     lines: box_lines,
                     color: Theme::HORIZON_OUTER,
@@ -1823,8 +1930,8 @@ Tick Enable Observer on Alice's or Bob's card",
         let Some(bob) = bob else {
             if let (Some(al), Some(alice_pos)) = (alice, alice_box) {
                 self.telemetry.show(
-                    ui, painter, "spacetime", rect, alice_pos, "Alice", Theme::ALICE_COLOR, al,
-                    metric, use_physical_units, font_scale,
+                    ui, painter, Canvas::Spacetime, BoxId::Observer(Who::Alice), rect, alice_pos,
+                    "Alice", Theme::ALICE_COLOR, al, metric, use_physical_units, font_scale,
                 );
             }
             return;
@@ -1849,16 +1956,17 @@ Tick Enable Observer on Alice's or Bob's card",
 
         // Every info box on this canvas is painted here, after everything else is down, so that
         // the opaque fill of a box actually blocks out what is behind it.
-        self.flush_pending_boxes(ui, painter, "spacetime", rect, &pending_boxes, font_scale);
+        self.flush_pending_boxes(ui, painter, Canvas::Spacetime, rect, &pending_boxes, font_scale);
 
         if let (Some(al), Some(alice_pos)) = (alice, alice_box) {
             self.telemetry.show(
-                ui, painter, "spacetime", rect, alice_pos, "Alice", Theme::ALICE_COLOR, al, metric, use_physical_units,
-                font_scale,
+                ui, painter, Canvas::Spacetime, BoxId::Observer(Who::Alice), rect, alice_pos, "Alice",
+                Theme::ALICE_COLOR, al, metric, use_physical_units, font_scale,
             );
         }
         self.telemetry.show(
-            ui, painter, "spacetime", rect, apex, "Bob", Theme::BOB_COLOR, bob, metric, use_physical_units, font_scale,
+            ui, painter, Canvas::Spacetime, BoxId::Observer(Who::Bob), rect, apex, "Bob", Theme::BOB_COLOR, bob,
+            metric, use_physical_units, font_scale,
         );
     }
 
@@ -1872,7 +1980,7 @@ Tick Enable Observer on Alice's or Bob's card",
         &mut self,
         ui: &mut egui::Ui,
         painter: &egui::Painter,
-        canvas_tag: &str,
+        canvas: Canvas,
         rect: Rect,
         pending: &[PendingBox],
         font_scale: f32,
@@ -1880,7 +1988,7 @@ Tick Enable Observer on Alice's or Bob's card",
         let mut occupied: Vec<Rect> = Vec::new();
         for b in pending {
             let size = telemetry_box_size(painter, &b.lines, font_scale);
-            let anchor = if self.telemetry.is_placed(canvas_tag, &b.name) {
+            let anchor = if self.telemetry.is_placed(canvas, b.id) {
                 b.anchor
             } else {
                 let mut r = clamp_into(Rect::from_min_size(b.anchor, size), rect);
@@ -1893,7 +2001,7 @@ Tick Enable Observer on Alice's or Bob's card",
                 r.min
             };
             let response = self.telemetry.show_lines(
-                ui, painter, canvas_tag, &b.name, rect, anchor, &b.lines, b.color, font_scale, b.tip,
+                ui, painter, canvas, b.id, rect, anchor, &b.lines, b.color, font_scale, b.tip,
             );
             occupied.push(response.rect);
         }
@@ -2024,8 +2132,9 @@ Tick Enable Observer on Alice's or Bob's card",
         // compares them, so the number the picture actually turns on is the one to print. It is set
         // in the same size as the pair it stands for, and its two sides carry their colours, so the
         // eye pairs "1" with the observer's reading and the ratio with the distant one.
+        let focus_who = Who::of(focus_obs).unwrap_or(Who::Bob);
         let obs_color =
-            if focus_obs.name == "Alice" { Theme::ALICE_COLOR } else { Theme::BOB_COLOR };
+            if focus_who == Who::Alice { Theme::ALICE_COLOR } else { Theme::BOB_COLOR };
         let (head_lines, head_bottom) = if show_distant_clock_grid
             && clock_proper_step.is_finite()
             && clock_proper_step > 0.0
@@ -2177,6 +2286,7 @@ Tick Enable Observer on Alice's or Bob's card",
         let surfaces: [DrawnSurface; 4] = [
             (
                 metric.ergosphere_equatorial(),
+                BoxId::Ergosphere,
                 "Ergosphere",
                 ergo_faint,
                 1.4,
@@ -2185,6 +2295,7 @@ Tick Enable Observer on Alice's or Bob's card",
             ),
             (
                 metric.outer_horizon(),
+                BoxId::OuterHorizon,
                 "Outer Horizon r₊",
                 Theme::HORIZON_OUTER,
                 2.5,
@@ -2193,6 +2304,7 @@ Tick Enable Observer on Alice's or Bob's card",
             ),
             (
                 metric.inner_horizon(),
+                BoxId::CauchyHorizon,
                 "Cauchy Horizon r₋",
                 Theme::HORIZON_CAUCHY,
                 2.5,
@@ -2201,6 +2313,7 @@ Tick Enable Observer on Alice's or Bob's card",
             ),
             (
                 0.0,
+                BoxId::RingSingularity,
                 "Ring Singularity (r=0)",
                 Theme::SINGULARITY_LINE,
                 3.0,
@@ -2212,7 +2325,7 @@ Tick Enable Observer on Alice's or Bob's card",
         // Worked out here, where the line geometry is; painted at the end of the pass.
         let mut pending_boxes: Vec<PendingBox> = Vec::new();
 
-        for (idx, &(r_h, title, color, width, border, is_horizon)) in surfaces.iter().enumerate() {
+        for (idx, &(r_h, id, title, color, width, border, is_horizon)) in surfaces.iter().enumerate() {
             let line = frame.surface_r_const(r_h);
             let anchor = to_screen(line.point[0], line.point[1]);
             let dir = Vec2::new(line.dir[0] as f32, -(line.dir[1] as f32));
@@ -2221,11 +2334,11 @@ Tick Enable Observer on Alice's or Bob's card",
             };
             painter.line_segment([end_a, end_b], Stroke::new(width, color));
 
-            let steep = steep_with_hysteresis(self.steep_boxes.contains(title), line.slope().abs());
+            let steep = steep_with_hysteresis(self.steep_boxes.contains(&id), line.slope().abs());
             if steep {
-                self.steep_boxes.insert(title.to_string());
+                self.steep_boxes.insert(id);
             } else {
-                self.steep_boxes.remove(title);
+                self.steep_boxes.remove(&id);
             }
             let (label_pos, align) = if steep {
                 // Steep line: hang the label off it, stacked down the top margin.
@@ -2290,7 +2403,7 @@ Tick Enable Observer on Alice's or Bob's card",
                 label_pos
             };
             pending_boxes.push(PendingBox {
-                name: title.to_string(),
+                id,
                 anchor: min,
                 lines: box_lines,
                 color: border,
@@ -2317,11 +2430,12 @@ Tick Enable Observer on Alice's or Bob's card",
         // received period on the observer's own clock, and against the emitter's spacing it is
         // the frequency ratio without a formula. On the approach to r- the rungs crowd together
         // without limit: the infinite blueshift, drawn as crests. See `wave_crests`.
-        let (sender_field, sender_name, crest_colour) = if focus_obs.name == "Alice" {
-            (signals.bob, "Bob", Theme::BOB_COLOR)
+        let (sender_field, sender, crest_colour) = if focus_who == Who::Alice {
+            (signals.bob, Who::Bob, Theme::BOB_COLOR)
         } else {
-            (signals.alice, "Alice", Theme::ALICE_COLOR)
+            (signals.alice, Who::Alice, Theme::ALICE_COLOR)
         };
+        let sender_name = sender.name();
         let crests = wave_crests(&frame, focus_obs, sender_field, self.frame_max_r);
         // A crest is drawn as a stroke through its anchor a third of the canvas long, not across
         // the whole plane: near the worldline the placement is exact and far from it the chart is
@@ -2403,7 +2517,7 @@ Tick Enable Observer on Alice's or Bob's card",
             // Anchored at the bottom right of the canvas until it is dragged somewhere else.
             let size = telemetry_box_size(painter, &lines, font_scale);
             pending_boxes.push(PendingBox {
-                name: format!("{sender_name} signal"),
+                id: BoxId::Signal(sender),
                 anchor: Pos2::new(rect.right() - 10.0 - size.x, rect.bottom() - 10.0 - size.y),
                 lines,
                 color: crest_colour,
@@ -2413,7 +2527,7 @@ Tick Enable Observer on Alice's or Bob's card",
 
         let cone_len = (rect.height() * 0.35).min(rect.width() * 0.35);
         let apex = center;
-        let (focus_future_fill, focus_past_fill, focus_edge) = Theme::cone_colours(&focus_obs.name);
+        let (focus_future_fill, focus_past_fill, focus_edge) = Theme::cone_colours(Some(focus_who));
 
         if focus_obs.r > 0.02 && focus_obs.is_active {
             let p_fut_out = apex + Vec2::new(cone_len, -cone_len);
@@ -2470,7 +2584,7 @@ Tick Enable Observer on Alice's or Bob's card",
         // 4. The other observer: their event, their worldline direction and their light cone, all
         // from the same linear map. The azimuthal component xi^2 is dropped from the picture and
         // printed instead, so the projection is on the record.
-        let mut other_box: Option<(&Observer, Pos2, Color32)> = None;
+        let mut other_box: Option<(&Observer, Who, Pos2, Color32)> = None;
         if let Some(other) = other_obs
             && other.is_active
     {
@@ -2483,7 +2597,8 @@ Tick Enable Observer on Alice's or Bob's card",
             let other_pos = to_screen(xi[1], xi[0]);
 
             if rect.contains(other_pos) {
-                let other_color = if other.name == "Alice" { Theme::ALICE_COLOR } else { Theme::BOB_COLOR };
+                let other_who = Who::of(other).unwrap_or(Who::Bob);
+                let other_color = if other_who == Who::Alice { Theme::ALICE_COLOR } else { Theme::BOB_COLOR };
                 // v^a = e^a_mu u_other^mu is their 4-velocity in this frame: the drawn tangent
                 // is (v^1, v^0) normalised, and |v^1 / v^0| is their radial speed relative to
                 // the focus observer.
@@ -2502,7 +2617,7 @@ Tick Enable Observer on Alice's or Bob's card",
                     let o_fut_out = other_pos + Vec2::new(other_cone_len, -other_cone_len);
                     let o_fut_in = other_pos + Vec2::new(-other_cone_len, -other_cone_len);
 
-                    let (other_future_fill, _, other_edge) = Theme::cone_colours(&other.name);
+                    let (other_future_fill, _, other_edge) = Theme::cone_colours(Some(other_who));
                     painter.add(PathShape::convex_polygon(
                         vec![other_pos, o_fut_in, o_fut_out],
                         other_future_fill,
@@ -2532,7 +2647,7 @@ Tick Enable Observer on Alice's or Bob's card",
                     Theme::TEXT_MUTED,
                 );
 
-                other_box = Some((other, other_pos, other_color));
+                other_box = Some((other, other_who, other_pos, other_color));
             }
         }
 
@@ -2562,16 +2677,16 @@ Tick Enable Observer on Alice's or Bob's card",
         // Every info box on this canvas goes here, after the head banner and everything else, so
         // that the opaque fill of a box blocks out what is behind it and dragging one wins over
         // the canvas's own drag response. The surfaces first, the observers over them.
-        self.flush_pending_boxes(ui, painter, "restframe", rect, &pending_boxes, font_scale);
-        if let Some((other, other_pos, other_color)) = other_box {
+        self.flush_pending_boxes(ui, painter, Canvas::RestFrame, rect, &pending_boxes, font_scale);
+        if let Some((other, other_who, other_pos, other_color)) = other_box {
             self.telemetry.show(
-                ui, painter, "restframe", rect, other_pos, &other.name, other_color, other, metric, use_physical_units,
-                font_scale,
+                ui, painter, Canvas::RestFrame, BoxId::Observer(other_who), rect, other_pos, &other.name, other_color,
+                other, metric, use_physical_units, font_scale,
             );
         }
         self.telemetry.show(
-            ui, painter, "restframe", rect, apex, &focus_obs.name, obs_color, focus_obs, metric, use_physical_units,
-            font_scale,
+            ui, painter, Canvas::RestFrame, BoxId::Observer(focus_who), rect, apex, &focus_obs.name, obs_color,
+            focus_obs, metric, use_physical_units, font_scale,
         );
     }
 }
@@ -3016,6 +3131,53 @@ mod telemetry_placement_tests {
             resolve_placement(placement, later_anchor, canvas_min),
             Pos2::new(330.0, 130.0)
         );
+    }
+
+    #[test]
+    fn test_every_canvas_and_box_has_its_own_slug_and_comes_back_from_it() {
+        // The slugs are the identity a save file will carry, so two of them being equal is a
+        // collision that silently merges two boxes' positions, and one that does not come back
+        // through `from_key` is a placement nothing can reload. Both are checked over the whole
+        // set rather than over the variants somebody remembered to list.
+        let mut seen: Vec<&'static str> = Vec::new();
+        for canvas in Canvas::ALL {
+            let key = canvas.key();
+            assert!(!seen.contains(&key), "{key} names two canvases");
+            seen.push(key);
+            assert_eq!(Canvas::from_key(key), Some(canvas), "{key} does not come back");
+        }
+        let mut seen: Vec<&'static str> = Vec::new();
+        for id in BoxId::ALL {
+            let key = id.key();
+            assert!(!seen.contains(&key), "{key} names two boxes");
+            seen.push(key);
+            assert_eq!(BoxId::from_key(key), Some(id), "{key} does not come back");
+        }
+        assert_eq!(Canvas::from_key("restframe "), None, "a slug is matched whole");
+        assert_eq!(BoxId::from_key("Alice"), None, "and in its own lowercase spelling");
+    }
+
+    #[test]
+    fn test_a_placement_belongs_to_one_box_on_one_canvas() {
+        // What the typed key buys: the same observer's box is a different box on every diagram,
+        // and the other subjects on the diagram it was dragged on are untouched. Dragging is the
+        // ui's business and is driven elsewhere; the placement itself is written here, since what
+        // is under test is the filing and not the drag.
+        let mut boxes = TelemetryBoxes::pinning();
+        boxes
+            .placements
+            .insert((Canvas::Spacetime, BoxId::Observer(Who::Alice)), Placement::Pinned(Vec2::new(12.0, 8.0)));
+        assert!(boxes.is_placed(Canvas::Spacetime, BoxId::Observer(Who::Alice)));
+        assert!(
+            !boxes.is_placed(Canvas::RestFrame, BoxId::Observer(Who::Alice)),
+            "her box on another diagram is another box"
+        );
+        assert!(
+            !boxes.is_placed(Canvas::Spacetime, BoxId::Observer(Who::Bob)),
+            "and so is his on the same one"
+        );
+        assert!(!boxes.is_placed(Canvas::Spacetime, BoxId::Signal(Who::Alice)));
+        assert!(!boxes.is_placed(Canvas::Spacetime, BoxId::CauchyHorizon));
     }
 }
 

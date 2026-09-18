@@ -3,7 +3,7 @@ use std::ops::Range;
 
 use crate::gui::controls::{ReferenceFrame, SignalViews};
 use crate::gui::polyline::{SCREEN_SPACING, thin_to_pixels};
-use crate::gui::spacetime_canvas::{CHART_BANNER, COARSE_ZOOM_STEPS, TelemetryBoxes};
+use crate::gui::spacetime_canvas::{CHART_BANNER, COARSE_ZOOM_STEPS, BoxId, Canvas, TelemetryBoxes};
 use crate::gui::spatial_canvas::{
     CENTRED_RING_GAP, FrontStyle, Who, draw_reception_tick, draw_signal_field, draw_spatial_trail,
     frame_focus,
@@ -1473,7 +1473,7 @@ impl VolumeCanvas {
         };
         for (obs, _) in present.iter().copied() {
             let (future_fill, past_fill, _) =
-                Theme::cone_colours_at(&obs.name, Theme::VOLUME_CONE_FILL_ALPHA);
+                Theme::cone_colours_at(Who::of(obs), Theme::VOLUME_CONE_FILL_ALPHA);
             push_cone(&mut buf, current_time, obs.r, obs.phi, (future_fill, past_fill), false);
             if self.show_ghost_cones {
                 let k_lo = t_min.ceil() as i64;
@@ -1554,7 +1554,7 @@ impl VolumeCanvas {
                 // deep rather than a single fan, and at the fan's alpha the overlap where it folds
                 // back on itself paints solid.
                 let (_, past_fill, edge) =
-                    Theme::cone_colours_at(&obs.name, Theme::VOLUME_CONE_FILL_ALPHA / 2);
+                    Theme::cone_colours_at(Who::of(obs), Theme::VOLUME_CONE_FILL_ALPHA / 2);
                 let n = cone.rays.len();
                 // Where sample k of generator i is drawn: the event's place in the volume, as
                 // everything else is.
@@ -2057,7 +2057,8 @@ impl VolumeCanvas {
             self.telemetry.show(
                 ui,
                 &painter,
-                "volume",
+                Canvas::Volume,
+                BoxId::Observer(who),
                 rect,
                 at,
                 who.name(),
@@ -2648,7 +2649,7 @@ mod tests {
         let shapes = volume_frame(&metric, Some(&bob), Preset::ThreeQuarter, false);
         let at = marker_of(&shapes);
         let (future_fill, past_fill, _) =
-            Theme::cone_colours_at("Bob", Theme::VOLUME_CONE_FILL_ALPHA);
+            Theme::cone_colours_at(Some(Who::Bob), Theme::VOLUME_CONE_FILL_ALPHA);
 
         for (half, fill) in [("future", future_fill), ("past", past_fill)] {
             let found = shapes
@@ -2688,7 +2689,7 @@ mod tests {
         let metric = KerrSchild::new(1.0, 0.9);
         let bob = bob_at(&metric, 9.0);
         let (future_fill, past_fill, _) =
-            Theme::cone_colours_at("Bob", Theme::VOLUME_CONE_FILL_ALPHA);
+            Theme::cone_colours_at(Some(Who::Bob), Theme::VOLUME_CONE_FILL_ALPHA);
         // Every stroke in a lip's hue: (closed, points, strength).
         let lip_of = |shapes: &[Painted], fill: Color32| -> Vec<(bool, usize, f32)> {
             let want = Theme::cone_rim_colour(fill).to_srgba_unmultiplied();
@@ -3053,7 +3054,7 @@ mod tests {
         // the most expensive thing in the scene.
         let metric = KerrSchild::new(1.0, 0.9);
         let bob = bob_at(&metric, 3.0);
-        let fill = Theme::cone_colours_at("Bob", Theme::VOLUME_CONE_FILL_ALPHA / 2).1;
+        let fill = Theme::cone_colours_at(Some(Who::Bob), Theme::VOLUME_CONE_FILL_ALPHA / 2).1;
 
         let shapes = volume_frame_past_cone(&metric, &bob, true);
         let floor = shapes
@@ -3354,7 +3355,7 @@ mod tests {
         };
         let shapes = volume_frame_on(&mut canvas, &metric, Some(&frozen), false);
         let (future_fill, past_fill, _) =
-            Theme::cone_colours_at("Bob", Theme::VOLUME_CONE_FILL_ALPHA);
+            Theme::cone_colours_at(Some(Who::Bob), Theme::VOLUME_CONE_FILL_ALPHA);
         let canvas_rect = egui::Rect::from_min_size(Pos2::ZERO, egui::Vec2::new(800.0, 700.0));
         for (half, fill) in [("future", future_fill), ("past", past_fill)] {
             let points = shapes

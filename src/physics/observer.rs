@@ -248,6 +248,45 @@ pub struct TrailPoint {
 const TRAIL_MAX_POINTS: usize = 10_000;
 const TRAIL_MAX_DRAG_POINTS: usize = 500;
 
+/// Which of the two observers a worldline is: the run's identity for Alice and Bob, carried as a
+/// value rather than as the text of their name.
+///
+/// A name is a label on the screen and in the panel; this is what the code decides by, so that a
+/// colour, a signal field or a dragged box position is never attached to a piece of display text.
+/// The drawing sizes that go with it live in `gui::spatial_canvas`, which is where they are used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Who {
+    Alice,
+    Bob,
+}
+
+impl Who {
+    /// The name this observer is built and drawn under.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Alice => "Alice",
+            Self::Bob => "Bob",
+        }
+    }
+
+    /// Which observer this worldline is, or None for one that is neither.
+    ///
+    /// The single place in the app that reads an observer's name as identity. It matches on the
+    /// name because the name is what `Observer::new_with_phi` is given and what the two observer
+    /// cards set - the alternative, a `Who` field on `Observer`, would rewrite every constructor
+    /// call in the physics tests for nothing the app can observe. Both observers the app itself
+    /// builds come off those cards, so the None case is unreachable outside a test; callers that
+    /// have to colour or file something for an unnamed observer fall back to Bob, which is what
+    /// the name comparisons this replaced did.
+    pub fn of(obs: &Observer) -> Option<Self> {
+        match obs.name.as_str() {
+            "Alice" => Some(Self::Alice),
+            "Bob" => Some(Self::Bob),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Observer {
     pub name: String,
