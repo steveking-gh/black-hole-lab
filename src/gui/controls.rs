@@ -1269,15 +1269,33 @@ impl AppControls {
                 // cannot disagree about what one step is.
                 let current_step =
                     self.step_for(metric, bob.as_ref(), alice.as_ref(), self.step_size);
-                if transport_button(
-                    ui,
-                    "←",
-                    "Step Back",
-                    "Step back by Step Size / Distance (Left Arrow key)",
-                ) {
-                    // The clock stops at t = 0, so everything that is stepped back with it is
-                    // stepped back by however much of the step is left above zero.
-                    let back = current_step.min(*current_time);
+                // How far back the clock can go, and why it can go no further: zero until a
+                // run is long enough for a trail to evict its own start, and that trail's oldest
+                // event afterwards. See `ObserverPair::rewind_floor`.
+                let floor =
+                    ObserverPair { bob: bob.as_mut(), alice: alice.as_mut() }.rewind_floor(metric);
+                let room = *current_time - floor;
+                let back_tip = if room > 1e-9 {
+                    "Step back by Step Size / Distance (Left Arrow key)".to_string()
+                } else if floor > 0.0 {
+                    format!(
+                        "The recorded worldlines reach back only to t = {floor:.2} M. Earlier \
+                         events have been evicted from the history, so there is nothing to put \
+                         the observers back on: use ⏮ Reset to run again from t = 0."
+                    )
+                } else {
+                    "Already at t = 0, the start of the run.".to_string()
+                };
+                // Disabled rather than silently doing nothing, so that the arrow key and this
+                // button agree with each other and with what the clock is about to do.
+                let step_back = ui
+                    .add_enabled_ui(room > 1e-9, |ui| {
+                        transport_button(ui, "←", "Step Back", &back_tip)
+                    })
+                    .inner;
+                if step_back {
+                    // Stepped back by however much of the step is left above the floor.
+                    let back = current_step.min(room).max(0.0);
                     *current_time -= back;
                     // The worldlines first, by the same `ObserverPair::rewind_to` that
                     // `SpacetimeApp::step_backward` calls, then the fields, which are rewound

@@ -163,9 +163,17 @@ impl SpacetimeApp {
     /// a crossing that happens inside the next step forward is never seen. The panel's Step Back
     /// button runs the same two calls in the same order.
     fn step_backward(&mut self, step: f64) {
-        // The clock stops at t = 0, so whatever is wound back is wound back by however much of the
-        // step is left above zero, and the field's clock stays equal to the simulation clock.
-        let back = step.min(self.current_time);
+        // The clock stops at t = 0, and again at the oldest event the recorded worldlines can
+        // still be put back on: `ObserverPair::rewind_floor` is zero until a run is long enough to
+        // evict the start of a trail, and that trail's oldest event afterwards. Whatever is wound
+        // back is wound back by however much of the step is left above that floor, which is what
+        // keeps the field's clock equal to the simulation clock and both worldlines on both.
+        let floor = ObserverPair { bob: self.bob.as_mut(), alice: self.alice.as_mut() }
+            .rewind_floor(&self.metric);
+        let back = step.min(self.current_time - floor).max(0.0);
+        if back <= 0.0 {
+            return;
+        }
         self.current_time -= back;
         ObserverPair { bob: self.bob.as_mut(), alice: self.alice.as_mut() }
             .rewind_to(&self.metric, self.current_time);
@@ -967,6 +975,67 @@ mod tests {
     /// (t, r, phi, tau) of an observer, the four numbers a rewind has to get right.
     fn observer_state(obs: &Observer) -> (f64, f64, f64, f64) {
         (obs.t, obs.r, obs.phi, obs.tau)
+    }
+
+    #[test]
+    fn test_a_backstep_stops_where_the_recorded_history_stops() {
+        // The trail has a cap, so a run long enough to reach it evicts its own oldest events and
+        // there is a time below which no worldline can be put back at all. That floor used to be
+        // silent, and worse, it used to be each observer's own: `rewind_to` landed an observer on
+        // the oldest event it still held while the clock carried on down past it, so the observer
+        // came off the clock and stayed exactly where it was, redrawn in the same place for every
+        // further backstep - one worldline frozen while the other was still moving. It is now the
+        // clock's floor, asked for once for the pair, so the clock stops where the history stops
+        // and both worldlines stop on it.
+        let mut app = SpacetimeApp::default();
+        app.controls.is_playing = false;
+        // Dropped high, so neither reaches the ring inside a run long enough to overflow the
+        // trail: from 60 M the fall lasts 219 M and this run is 20.
+        app.controls.alice.drop_r = 60.0;
+        app.controls.bob.drop_r = 60.0;
+        drop_observers(&mut app);
+        // One recorded event per step, at the step a played frame takes, for longer than the cap.
+        for _ in 0..1_200 {
+            app.step_forward(0.0167);
+        }
+        let floor = ObserverPair { bob: app.bob.as_mut(), alice: app.alice.as_mut() }
+            .rewind_floor(&app.metric);
+        assert!(floor > 0.0, "a run past the cap has lost its own start: floor = {floor}");
+        assert!(floor < app.current_time, "and the floor is behind the clock: {floor}");
+
+        // All the way down, and then some: at every step both worldlines are on the clock, which
+        // is the invariant the freeze broke.
+        for _ in 0..2_000 {
+            app.step_backward(0.05);
+            for obs in [alice_of(&app), bob_of(&app)] {
+                assert!(
+                    (obs.t - app.current_time).abs() < 1e-9,
+                    "{} came off the clock: {} against {}",
+                    obs.name,
+                    obs.t,
+                    app.current_time
+                );
+            }
+        }
+        println!(
+            "the clock stopped at t = {:.4} M, the oldest event the trails still hold",
+            app.current_time
+        );
+        assert!(
+            (app.current_time - floor).abs() < 1e-9,
+            "the clock stops on the floor rather than below it: {} against {floor}",
+            app.current_time
+        );
+
+        // And at the floor a backstep does nothing at all, rather than moving the clock and
+        // leaving the observers behind. Nothing to undo is nothing to undo.
+        let held = (app.current_time, observer_state(alice_of(&app)), observer_state(bob_of(&app)));
+        app.step_backward(5.0);
+        assert_eq!(
+            (app.current_time, observer_state(alice_of(&app)), observer_state(bob_of(&app))),
+            held,
+            "a backstep at the floor moved something"
+        );
     }
 
     #[test]

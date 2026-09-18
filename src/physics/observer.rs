@@ -1022,8 +1022,11 @@ impl Observer {
                 // The trail is recorded in order, so it is sorted in t and the events to keep are
                 // a prefix of it: `partition_point` is the standard library's binary search for
                 // exactly that, and it answers in O(log n) where walking the prefix was O(n).
-                // The floor of one is the case where the target precedes every event still held -
-                // the trail has a cap - and it lands the worldline on the oldest event kept.
+                // The floor of one is the case where the target precedes every event still
+                // held - the trail has a cap - and it lands the worldline on the oldest event kept
+                // rather than on the target. The transport does not ask for that: it clamps the
+                // clock to `ObserverPair::rewind_floor` first, so the case is a guard against a
+                // caller that has not, and not a rewind anybody sees.
                 let keep = self.trail.partition_point(|point| point.t <= t_target + 1e-9).max(1);
                 self.trail.truncate(keep);
                 let last = self.trail[keep - 1];
@@ -1055,6 +1058,26 @@ impl Observer {
             }
             ObserverMode::ManualDrag => self.t = t_target,
         }
+    }
+
+    /// The earliest coordinate time this worldline can still be put back on, or None where a
+    /// rewind does not read the trail and there is nothing for the trail to bound.
+    ///
+    /// The trail has a cap, so a run long enough to reach it evicts its own oldest events and the
+    /// history stops reaching all the way back. Past that point `rewind_to` cannot answer: there is
+    /// no event at or before the target to restore from, and no honest way to invent one. So the
+    /// transport asks first and stops the clock here instead - see `ObserverPair::rewind_floor`.
+    ///
+    /// None has two cases, and both mean unbounded rather than unknown. The fixed-r modes are wound
+    /// back analytically, by subtracting exactly what a forward step of the same interval added, so
+    /// they read no trail; and a trail still holding its release event still reaches the hover,
+    /// below which `rewind_into_hover` answers in closed form at any time at all.
+    pub fn earliest_rewind(&self, metric: &KerrSchild) -> Option<f64> {
+        if self.effective_mode(metric) != ObserverMode::FreeFall {
+            return None;
+        }
+        let oldest = self.trail.front()?.t;
+        (oldest > self.release_t).then_some(oldest)
     }
 
     /// The event this worldline stood at when the simulation clock read `t`, re-integrated rather
@@ -1343,6 +1366,25 @@ impl ObserverPair<'_> {
         {
             obs.step(metric, current_sim_time, dt);
         }
+    }
+
+    /// The earliest time the clock can be wound back to with both worldlines still on it: the
+    /// later of the two floors, since a target below either one is a target one of them cannot
+    /// reach. Zero when neither is bounded, the clock having its own floor there.
+    ///
+    /// It belongs to the pair and not to an observer because it is the *clock* that gets clamped.
+    /// Winding each worldline back as far as its own history goes and letting the clock run on
+    /// below is what used to happen, and it is what the frozen-observer bug was: `rewind_to` landed
+    /// each observer on the oldest event it still held, the clock kept descending, and the two came
+    /// apart - one worldline stuck and redrawn in the same place for every further backstep while
+    /// the other was still moving. One floor for the pair keeps the picture honest: the clock stops
+    /// where the recorded history stops, and both observers stop on it.
+    pub fn rewind_floor(&self, metric: &KerrSchild) -> f64 {
+        [self.bob.as_deref(), self.alice.as_deref()]
+            .into_iter()
+            .flatten()
+            .filter_map(|obs| obs.earliest_rewind(metric))
+            .fold(0.0, f64::max)
     }
 
     /// Put both worldlines back where they stood when the clock read `t_target`. See
