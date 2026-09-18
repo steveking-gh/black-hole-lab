@@ -2099,8 +2099,9 @@ pub struct SignalField {
     /// carries the time of the field as a whole, so that a step backwards does not have to
     /// interrogate every pulse for it, and it is what an empty field falls back on.
     pub t: f64,
-    /// Serial number the next pulse will carry.
-    next_index: usize,
+    /// Serial number the next pulse will carry. Visible to the crate for one reader:
+    /// `Simulation::check_invariants`, which states that every pulse held is below it.
+    pub(crate) next_index: usize,
     /// The emitter's proper time at the last emission, or None before they have sent anything.
     last_emit_tau: Option<f64>,
     /// The emitter's proper-time interval between pulses.

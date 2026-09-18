@@ -101,20 +101,20 @@ impl Fixtures {
         let mut app = replay::app_for_fixtures();
         let until = if quick { FIXTURE_UNTIL_QUICK } else { FIXTURE_UNTIL };
         replay::play_sim(&mut app, until);
-        let metric = app.metric;
-        let mut alice_field_unheard = app.alice_signal.clone();
+        let metric = app.sim.metric;
+        let mut alice_field_unheard = app.sim.alice_signal.clone();
         alice_field_unheard.advance(&metric, FRAME_DT);
-        let mut bob_next = app.bob.clone().expect("the ISCO pair has Bob in it");
-        bob_next.step(&metric, app.current_time + FRAME_DT, FRAME_DT);
+        let mut bob_next = app.sim.bob.clone().expect("the ISCO pair has Bob in it");
+        bob_next.step(&metric, app.sim.clock + FRAME_DT, FRAME_DT);
         let (escaping, infalling, frozen) = representative_rays(&metric);
         let stiff_state: RayState = [infalling.r, infalling.phi, infalling.dr_dt, infalling.dphi_dt];
         let stiff_slope = ray_rhs(&metric, &stiff_state);
         Self {
-            clock: app.current_time,
-            alice: app.alice.clone().expect("the ISCO pair has Alice in it"),
-            bob: app.bob.clone().expect("the ISCO pair has Bob in it"),
-            alice_field: app.alice_signal.clone(),
-            bob_field: app.bob_signal.clone(),
+            clock: app.sim.clock,
+            alice: app.sim.alice.clone().expect("the ISCO pair has Alice in it"),
+            bob: app.sim.bob.clone().expect("the ISCO pair has Bob in it"),
+            alice_field: app.sim.alice_signal.clone(),
+            bob_field: app.sim.bob_signal.clone(),
             alice_field_unheard,
             bob_next,
             metric,

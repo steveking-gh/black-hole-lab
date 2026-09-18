@@ -4,6 +4,7 @@ pub mod tetrad;
 pub mod observer;
 pub mod geodesic;
 pub mod wavefront;
+pub mod simulation;
 
 #[allow(unused_imports)]
 pub use kerr_schild::KerrSchild;

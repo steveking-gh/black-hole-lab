@@ -8,8 +8,7 @@ use crate::gui::spatial_canvas::{FrontStyle, SpatialCanvas};
 use crate::gui::volume_canvas::VolumeCanvas;
 use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
-use crate::physics::observer::{Observer, ObserverPair};
-use crate::physics::wavefront::{Endpoint, SignalField, SignalPair};
+use crate::physics::simulation::Simulation;
 use std::time::Instant;
 
 /// The height of the View row that heads the foliation column: one combo box and one checkbox,
@@ -17,20 +16,20 @@ use std::time::Instant;
 /// added above the picture rather than pushing the foot of it out of the window.
 const FRAME_ROW_HEIGHT: f32 = 26.0;
 
-/// Everything the run is: the geometry, the two worldlines, the two transmissions, the clock, the
-/// panel's settings and the three canvases.
+/// Everything the app is: the run, the panel's settings and the three canvases.
+///
+/// The run itself - the geometry, the two worldlines, the two transmissions and the clock - is one
+/// object, `Simulation`, rather than six fields here. That is what lets a whole state be
+/// fingerprinted, checked and put back by assignment; see that type for what a step of the
+/// simulation is and for the order it takes.
 ///
 /// Several of the fields below are visible to the crate rather than private, and all of them are so
 /// for one reason: the performance harness (`crate::perf`) scripts this object the way the panel
 /// does - set the cards, drop the observers, step - and reads the state back out to fingerprint it.
 /// Nothing else outside this file writes any of them.
 pub struct SpacetimeApp {
-    pub(crate) metric: KerrSchild,
-    /// The two observers, either of whom may be out of the simulation: the "Enable Observer" box
-    /// on a card unticked means there is no worldline at all rather than a hidden one, and the two
-    /// are optional in the same way because the cards are the same card twice.
-    pub(crate) bob: Option<Observer>,
-    pub(crate) alice: Option<Observer>,
+    /// The run: everything that is physics rather than presentation.
+    pub(crate) sim: Simulation,
     spacetime_canvas: SpacetimeCanvas,
     /// The same foliation drawn as a volume: the equatorial plane as a floor and coordinate time
     /// standing up out of it. It stands in for `spacetime_canvas` in the left column while the View
@@ -38,14 +37,7 @@ pub struct SpacetimeApp {
     /// is not being drawn, so that switching back and forth does not throw the view away.
     volume_canvas: VolumeCanvas,
     spatial_canvas: SpatialCanvas,
-    /// Alice's signal pulses, which Bob receives. They live here rather than in a canvas because
-    /// they are advanced on the simulation clock and read by both diagrams and the HUD.
-    pub(crate) alice_signal: SignalField,
-    /// Bob's transmission, which Alice receives. It is the same object driven the other way
-    /// round, and the two are advanced, rewound and cleared together through `SignalPair`.
-    pub(crate) bob_signal: SignalField,
     pub(crate) controls: AppControls,
-    pub(crate) current_time: f64,
     last_update: Instant,
     /// The frame interval to use instead of the wall clock, or None - which is what the app is
     /// built with and what a window always runs on.
@@ -74,32 +66,18 @@ impl Default for SpacetimeApp {
         // where a run starts: Alice in free fall on the prograde ISCO, Bob a raindrop from
         // r = 4.5M, both let go at once.
         let mut controls = AppControls::default();
-        let (mut alice, mut bob) = (None, None);
-        let mut alice_signal = SignalField::default();
-        let mut bob_signal = SignalField::default();
-        let mut current_time = 0.0;
-        controls.drop_observers(
-            &metric,
-            &mut alice,
-            &mut bob,
-            &mut SignalPair { alice: &mut alice_signal, bob: &mut bob_signal },
-            &mut current_time,
-        );
+        let mut sim = Simulation::new(metric);
+        controls.drop_observers(&mut sim);
         // A view that has never been panned has nothing to put back; the request a drop raises is
         // for the buttons, which are pressed part-way through a run.
         controls.view_reset_requested = false;
 
         Self {
-            metric,
-            bob,
-            alice,
+            sim,
             spacetime_canvas: SpacetimeCanvas::default(),
             volume_canvas: VolumeCanvas::default(),
             spatial_canvas: SpatialCanvas::default(),
-            alice_signal,
-            bob_signal,
             controls,
-            current_time,
             last_update: Instant::now(),
             fixed_frame_dt: None,
         }
@@ -107,35 +85,6 @@ impl Default for SpacetimeApp {
 }
 
 impl SpacetimeApp {
-    /// Carry both transmissions forward by dt of the simulation clock. `SignalPair::advance` owns
-    /// the order - carry the light, then emit, then listen - and the panel's Step Fwd button goes
-    /// through the same call, so the two paths cannot drift apart.
-    fn advance_signal(&mut self, dt: f64) {
-        let mut signals = SignalPair {
-            alice: &mut self.alice_signal,
-            bob: &mut self.bob_signal,
-        };
-        // The panel's Wavefront points slider is a standing request about the next emission, so it
-        // is pushed into both fields here, on the way into the step, rather than at the click that
-        // moved it: that way a played frame, an arrow key and a test that steps the app by hand all
-        // emit at the count the panel is currently showing, and the two transmissions cannot end up
-        // sampled differently. It reaches the emission and nothing else - pulses already in flight
-        // keep their own count.
-        signals.set_rays_per_pulse(self.controls.rays_per_pulse);
-        signals.advance(
-            &self.metric,
-            dt,
-            Endpoint {
-                observer: self.alice.as_ref(),
-                transmitting: self.controls.alice.transmit,
-            },
-            Endpoint {
-                observer: self.bob.as_ref(),
-                transmitting: self.controls.bob.transmit,
-            },
-        );
-    }
-
     /// What one press of an arrow key is worth in coordinate time: the Δt slider in Time mode, in
     /// Distance mode the time an observer who is moving needs to cover the requested Δr at their
     /// current coordinate speed, and in Watch mode the coordinate time the focus observer's own
@@ -149,58 +98,27 @@ impl SpacetimeApp {
     /// click and a played frame cannot mean different intervals.
     fn arrow_step(&self) -> f64 {
         self.controls.step_for(
-            &self.metric,
-            self.bob.as_ref(),
-            self.alice.as_ref(),
+            &self.sim.metric,
+            self.sim.bob.as_ref(),
+            self.sim.alice.as_ref(),
             self.controls.step_size,
         )
     }
 
-    /// One step forward by hand, in the same order as a played frame.
+    /// One step forward by hand, with what the panel currently says about the next emission.
+    ///
+    /// The step itself is `Simulation::step_forward`, which every other path forward - the play
+    /// loop below, the panel's Step Fwd button, a scripted replay - goes through as well; all this
+    /// adds is the reading of the panel. See `AppControls::transmit`.
     pub(crate) fn step_forward(&mut self, step: f64) {
-        self.current_time += step;
-        // Both worldlines move as one object, so that this path, the play loop and the panel's
-        // buttons cannot mean different things by a step. See `ObserverPair`.
-        ObserverPair { bob: self.bob.as_mut(), alice: self.alice.as_mut() }
-            .step(&self.metric, self.current_time, step);
-        self.advance_signal(step);
+        self.sim.step_forward(step, self.controls.transmit());
     }
 
-    /// One step back by hand, undoing a step forward rather than approximating one.
-    ///
-    /// The observers and both transmissions are integrated backwards: `SignalField::step_back`
-    /// runs every ray back along the null geodesic it came in on, revives the ones that reached the
-    /// ring inside the interval, and un-sends the pulses emitted inside it, while
-    /// `ObserverPair::rewind_to` puts both worldlines back on the clock's new value. The observers
-    /// are given the *target time* rather than the interval, which is what keeps them locked to
-    /// the clock when the two differ - the clock stops at zero, a Distance-mode step can be
-    /// hundreds of M, and a worldline that has already ended has no interval left to undo.
-    ///
-    /// The worldlines go first and the fields second. A worldline needs nothing from a field to be
-    /// wound back, and a field needs its receiver at the rewound state to re-establish which side
-    /// of each wavefront they stand on - `SignalPair::step_back` does that priming, without which
-    /// a crossing that happens inside the next step forward is never seen. The panel's Step Back
-    /// button runs the same two calls in the same order.
+    /// One step back by hand, undoing a step forward rather than approximating one. The panel's
+    /// Step Back button is the same call; `Simulation::step_back` is what both of them do, and why
+    /// the worldlines are wound back before the light.
     fn step_backward(&mut self, step: f64) {
-        // The clock stops at t = 0, and again at the oldest event the recorded worldlines can
-        // still be put back on: `ObserverPair::rewind_floor` is zero until a run is long enough to
-        // evict the start of a trail, and that trail's oldest event afterwards. Whatever is wound
-        // back is wound back by however much of the step is left above that floor, which is what
-        // keeps the field's clock equal to the simulation clock and both worldlines on both.
-        let floor = ObserverPair { bob: self.bob.as_mut(), alice: self.alice.as_mut() }
-            .rewind_floor(&self.metric);
-        let back = step.min(self.current_time - floor).max(0.0);
-        if back <= 0.0 {
-            return;
-        }
-        self.current_time -= back;
-        ObserverPair { bob: self.bob.as_mut(), alice: self.alice.as_mut() }
-            .rewind_to(&self.metric, self.current_time);
-        SignalPair {
-            alice: &mut self.alice_signal,
-            bob: &mut self.bob_signal,
-        }
-        .step_back(&self.metric, back, self.alice.as_ref(), self.bob.as_ref());
+        self.sim.step_back(step);
     }
 }
 
@@ -227,8 +145,7 @@ impl eframe::App for SpacetimeApp {
         // what makes lowering it bite while the run is paused, which is when a user reaching for it
         // to thin a crowded picture is most likely to be. Raising it only widens the window from
         // here on: the pulses already evicted are gone. See `SignalField::max_pulses`.
-        SignalPair { alice: &mut self.alice_signal, bob: &mut self.bob_signal }
-            .set_max_pulses(&self.metric, self.controls.max_pulses);
+        self.sim.set_max_pulses(self.controls.max_pulses);
 
         // Advance simulation if playing
         if self.controls.is_playing {
@@ -240,9 +157,9 @@ impl eframe::App for SpacetimeApp {
             // pause and step by hand.
             let base = dt * self.controls.play_speed;
             let mut sim_dt = self.controls.step_for(
-                &self.metric,
-                self.bob.as_ref(),
-                self.alice.as_ref(),
+                &self.sim.metric,
+                self.sim.bob.as_ref(),
+                self.sim.alice.as_ref(),
                 base,
             );
             match self.controls.step_mode {
@@ -254,9 +171,9 @@ impl eframe::App for SpacetimeApp {
                 // `watch_step` `step_for` just used, so the figure reported is the step taken.
                 StepMode::Watch => {
                     let watch = self.controls.watch_step(
-                        &self.metric,
-                        self.bob.as_ref(),
-                        self.alice.as_ref(),
+                        &self.sim.metric,
+                        self.sim.bob.as_ref(),
+                        self.sim.alice.as_ref(),
                         base,
                     );
                     let asked = watch.u_t * base;
@@ -266,10 +183,9 @@ impl eframe::App for SpacetimeApp {
                 StepMode::Time => {}
             }
 
-            self.current_time += sim_dt;
-            ObserverPair { bob: self.bob.as_mut(), alice: self.alice.as_mut() }
-                .step(&self.metric, self.current_time, sim_dt);
-            self.advance_signal(sim_dt);
+            // The played step is the step every other path takes, down to the order the clock, the
+            // worldlines and the light move in: see `Simulation::step_forward`.
+            self.step_forward(sim_dt);
             ctx.request_repaint();
         }
 
@@ -330,13 +246,13 @@ impl eframe::App for SpacetimeApp {
         egui::Panel::bottom("bottom_hud").default_size(68.0).show(ui, |ui| {
             CauchyEffects::render_hud(
                 ui,
-                &self.metric,
-                &self.bob,
-                &self.alice,
-                &self.alice_signal,
-                &self.bob_signal,
+                &self.sim.metric,
+                &self.sim.bob,
+                &self.sim.alice,
+                &self.sim.alice_signal,
+                &self.sim.bob_signal,
                 self.controls.release_gap(),
-                self.current_time,
+                self.sim.clock,
                 self.controls.use_physical_units,
             );
         });
@@ -353,25 +269,15 @@ impl eframe::App for SpacetimeApp {
         // depends on which of them the user touched last, which is exactly what neither of them can
         // see. See `AppControls::remember_drop_positions` and `ObserverCard::describes`.
         self.controls.remember_drop_positions(
-            self.alice.as_ref(),
-            self.bob.as_ref(),
-            self.current_time,
+            self.sim.alice.as_ref(),
+            self.sim.bob.as_ref(),
+            self.sim.clock,
         );
 
         // 3. Left Dock Panel: Controls
         egui::Panel::left("controls_panel").default_size(300.0).show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                self.controls.render_panel(
-                    ui,
-                    &mut self.metric,
-                    &mut self.alice,
-                    &mut self.bob,
-                    SignalPair {
-                        alice: &mut self.alice_signal,
-                        bob: &mut self.bob_signal,
-                    },
-                    &mut self.current_time,
-                );
+                self.controls.render_panel(ui, &mut self.sim);
             });
         });
         // Reset and a preset change both put the clock back to zero, and the (t, r)
@@ -481,14 +387,14 @@ impl eframe::App for SpacetimeApp {
                         if self.controls.frame_of_ref == ReferenceFrame::GlobalVolume {
                             self.volume_canvas.render(
                                 ui,
-                                &self.metric,
-                                self.bob.as_ref(),
-                                self.alice.as_ref(),
-                                self.current_time,
+                                &self.sim.metric,
+                                self.sim.bob.as_ref(),
+                                self.sim.alice.as_ref(),
+                                self.sim.clock,
                                 canvas_height,
                                 self.controls.use_physical_units,
                                 self.controls.font_scale,
-                                SignalViews { alice: &self.alice_signal, bob: &self.bob_signal },
+                                SignalViews { alice: &self.sim.alice_signal, bob: &self.sim.bob_signal },
                                 self.controls.show_distant_clock_grid,
                                 FrontStyle {
                                     arcs: self.controls.draw_front_arcs,
@@ -498,15 +404,15 @@ impl eframe::App for SpacetimeApp {
                         } else {
                             self.spacetime_canvas.render(
                                 ui,
-                                &self.metric,
-                                self.bob.as_ref(),
-                                self.alice.as_ref(),
-                                self.current_time,
+                                &self.sim.metric,
+                                self.sim.bob.as_ref(),
+                                self.sim.alice.as_ref(),
+                                self.sim.clock,
                                 canvas_height,
                                 self.controls.use_physical_units,
                                 self.controls.frame_of_ref,
                                 self.controls.font_scale,
-                                SignalViews { alice: &self.alice_signal, bob: &self.bob_signal },
+                                SignalViews { alice: &self.sim.alice_signal, bob: &self.sim.bob_signal },
                                 self.controls.show_distant_clock_grid,
                             );
                         }
@@ -528,11 +434,11 @@ impl eframe::App for SpacetimeApp {
                         });
                         self.spatial_canvas.render(
                             ui,
-                            &self.metric,
-                            &mut self.bob,
-                            &mut self.alice,
-                            self.current_time,
-                            SignalViews { alice: &self.alice_signal, bob: &self.bob_signal },
+                            &self.sim.metric,
+                            &mut self.sim.bob,
+                            &mut self.sim.alice,
+                            self.sim.clock,
+                            SignalViews { alice: &self.sim.alice_signal, bob: &self.sim.bob_signal },
                             canvas_height,
                             self.controls.use_physical_units,
                             self.controls.frame_of_ref,
@@ -604,35 +510,26 @@ mod tests {
     use super::*;
     use crate::gui::controls::{WATCH_DT_CAP, active_preset};
     use crate::physics::geodesic::GeodesicState;
-    use crate::physics::observer::{ObserverMode, Release, WorldlineParams};
-    use crate::physics::wavefront::Pulse;
+    use crate::physics::observer::{Observer, ObserverMode, Release, WorldlineParams};
+    use crate::physics::wavefront::{Pulse, SignalField};
     use eframe::App;
 
     /// Bob, in a test that has him in the simulation. Either observer's card can be unticked now,
     /// which takes them out of the run entirely, so the tests say once - here - that they expect
     /// him to be there instead of unwrapping the Option on every line.
     fn bob_of(app: &SpacetimeApp) -> &Observer {
-        app.bob.as_ref().expect("Bob's card is ticked in this test")
+        app.sim.bob.as_ref().expect("Bob's card is ticked in this test")
     }
 
     /// Alice, the same way.
     fn alice_of(app: &SpacetimeApp) -> &Observer {
-        app.alice.as_ref().expect("Alice's card is ticked in this test")
+        app.sim.alice.as_ref().expect("Alice's card is ticked in this test")
     }
 
     /// Rebuild the run from the two cards, which is what Reset and the app's own startup do. A test that wants a layout other than the default one sets the cards and
     /// calls this, rather than assembling observers by hand behind the panel's back.
     fn drop_observers(app: &mut SpacetimeApp) {
-        let SpacetimeApp {
-            metric, alice, bob, alice_signal, bob_signal, controls, current_time, ..
-        } = app;
-        controls.drop_observers(
-            metric,
-            alice,
-            bob,
-            &mut SignalPair { alice: alice_signal, bob: bob_signal },
-            current_time,
-        );
+        app.controls.drop_observers(&mut app.sim);
     }
 
     /// The layout most of these tests were written against: both observers dropped as raindrops,
@@ -674,10 +571,10 @@ mod tests {
         // Motion is the one thing a re-drop inherits from the observer being replaced rather
         // than reading off the card, so it is set on the observers themselves, as
         // `set_free_fall` does.
-        if let Some(alice) = app.alice.as_mut() {
+        if let Some(alice) = app.sim.alice.as_mut() {
             alice.mode = ObserverMode::Zamo;
         }
-        if let Some(bob) = app.bob.as_mut() {
+        if let Some(bob) = app.sim.bob.as_mut() {
             bob.mode = ObserverMode::FreeFall;
         }
     }
@@ -689,7 +586,7 @@ mod tests {
     /// Reset never answers a question about how somebody moves that the user has not asked (see
     /// `ObserverCard::redropped`). A card's `mode` is only what a *fresh* observer starts on.
     fn set_free_fall(app: &mut SpacetimeApp) {
-        for obs in [app.alice.as_mut(), app.bob.as_mut()].into_iter().flatten() {
+        for obs in [app.sim.alice.as_mut(), app.sim.bob.as_mut()].into_iter().flatten() {
             obs.mode = ObserverMode::FreeFall;
         }
     }
@@ -740,10 +637,10 @@ mod tests {
     /// The layout the app opens on, as one row per observer: what "startup, Reset and Drop
     /// Observers agree" is measured on.
     fn layout(app: &SpacetimeApp) -> Vec<LayoutRow> {
-        [app.alice.as_ref(), app.bob.as_ref()]
+        [app.sim.alice.as_ref(), app.sim.bob.as_ref()]
             .into_iter()
             .flatten()
-            .zip([&app.alice_signal, &app.bob_signal])
+            .zip([&app.sim.alice_signal, &app.sim.bob_signal])
             .map(|(obs, field)| {
                 (
                     obs.name.clone(),
@@ -793,7 +690,7 @@ mod tests {
 
         // The Reset button's own action, through the panel rather than around it.
         drop_observers(&mut app);
-        assert_eq!(app.current_time, 0.0, "the reset puts the clock back");
+        assert_eq!(app.sim.clock, 0.0, "the reset puts the clock back");
         assert!(app.controls.view_reset_requested, "and asks for the view to go back with it");
         assert_eq!(
             app.spacetime_canvas.time_offset, 2.0,
@@ -921,16 +818,16 @@ mod tests {
         // The highlight in the control panel's preset row is read off the metric, so this is also
         // the assertion that the app opens with that row lit.
         let app = SpacetimeApp::default();
-        assert_eq!(active_preset(&app.metric), Some("Sagittarius A* (4.15M M☉)"));
-        assert!((app.metric.a_star() - 0.90).abs() < 1e-12);
-        assert!((app.metric.m_solar - 4.15e6).abs() < 1.0);
+        assert_eq!(active_preset(&app.sim.metric), Some("Sagittarius A* (4.15M M☉)"));
+        assert!((app.sim.metric.a_star() - 0.90).abs() < 1e-12);
+        assert!((app.sim.metric.m_solar - 4.15e6).abs() < 1.0);
         // The horizons every other default-metric test is measured against: r+- = M +- sqrt(M^2 -
         // a^2) = 1 +- 0.43589.
-        assert!((app.metric.outer_horizon() - 1.43589).abs() < 1e-5, "{}", app.metric.outer_horizon());
-        assert!((app.metric.inner_horizon() - 0.56411).abs() < 1e-5, "{}", app.metric.inner_horizon());
+        assert!((app.sim.metric.outer_horizon() - 1.43589).abs() < 1e-5, "{}", app.sim.metric.outer_horizon());
+        assert!((app.sim.metric.inner_horizon() - 0.56411).abs() < 1e-5, "{}", app.sim.metric.inner_horizon());
         // 1 M is 6.1e6 km at this mass, which is what the km readouts and the Distance step mode
         // are scaled by.
-        assert!((app.metric.r_grav_km() / 6.13e6 - 1.0).abs() < 0.01, "{}", app.metric.r_grav_km());
+        assert!((app.sim.metric.r_grav_km() / 6.13e6 - 1.0).abs() < 0.01, "{}", app.sim.metric.r_grav_km());
 
         // Distance step mode still has room to work at that scale. The default 1,000 km step is
         // 1.63e-4 M here rather than the 0.068 M it was at ten solar masses, and the arrow step it
@@ -939,12 +836,12 @@ mod tests {
         // max = max(r_grav_km * 2, 1e5) = 1.2e7 km), so all four quick-picks, 10 km included, stay
         // inside it.
         let mut app = app;
-        assert!((app.metric.km_to_r(1000.0) / 1.63e-4 - 1.0).abs() < 0.01);
+        assert!((app.sim.metric.km_to_r(1000.0) / 1.63e-4 - 1.0).abs() < 0.01);
         app.controls.step_mode = StepMode::Distance;
         app.controls.step_distance_km = 1000.0;
         let step = app.arrow_step();
         assert!(step > 1e-8 && step < 500.0, "the distance step is clamped: {step}");
-        assert!((app.metric.r_grav_km() * 1e-6) < 10.0, "the 10 km quick-pick is below the slider floor");
+        assert!((app.sim.metric.r_grav_km() * 1e-6) < 10.0, "the 10 km quick-pick is below the slider floor");
     }
 
     #[test]
@@ -975,7 +872,7 @@ mod tests {
 
         app.step_forward(step);
         assert!(alice_of(&app).r < initial.1, "Stepping forward should advance inward infall");
-        assert!((alice_of(&app).t - app.current_time).abs() < 1e-12, "and stay on the clock");
+        assert!((alice_of(&app).t - app.sim.clock).abs() < 1e-12, "and stay on the clock");
         assert!(
             !bob_of(&app).is_active && (bob_of(&app).r - 4.5).abs() < 1e-12,
             "Bob is still hovering at r = {}",
@@ -983,7 +880,7 @@ mod tests {
         );
 
         app.step_backward(step);
-        assert!((app.current_time - initial.0).abs() < 1e-12, "the clock comes back: {}", app.current_time);
+        assert!((app.sim.clock - initial.0).abs() < 1e-12, "the clock comes back: {}", app.sim.clock);
         let al = alice_of(&app);
         let back = (al.t, al.r, al.phi, al.tau);
         for (a, b, what) in [
@@ -1021,10 +918,7 @@ mod tests {
         // Played on until the trails have evicted their own start, at the step a played frame
         // takes. Driven by the floor itself rather than by a step count, so that the test says
         // what it means and goes on meaning it whatever `TRAIL_MAX_POINTS` is set to.
-        let floor_now = |app: &mut SpacetimeApp| {
-            ObserverPair { bob: app.bob.as_mut(), alice: app.alice.as_mut() }
-                .rewind_floor(&app.metric)
-        };
+        let floor_now = |app: &mut SpacetimeApp| app.sim.rewind_floor();
         let mut floor = 0.0;
         let mut steps = 0;
         while floor <= 0.0 {
@@ -1036,24 +930,24 @@ mod tests {
         println!(
             "{steps} recorded events later, the history reaches back only to t = {floor:.4} M of \
              a run that has reached {:.4}",
-            app.current_time
+            app.sim.clock
         );
-        assert!(floor < app.current_time, "the floor is behind the clock: {floor}");
+        assert!(floor < app.sim.clock, "the floor is behind the clock: {floor}");
 
         // All the way down: at every step both worldlines are on the clock, which is the invariant
         // the freeze broke.
         let mut backsteps = 0;
-        while app.current_time > floor + 1e-9 {
+        while app.sim.clock > floor + 1e-9 {
             app.step_backward(5.0);
             backsteps += 1;
             assert!(backsteps < 100_000, "the clock never reached the floor");
             for obs in [alice_of(&app), bob_of(&app)] {
                 assert!(
-                    (obs.t - app.current_time).abs() < 1e-9,
+                    (obs.t - app.sim.clock).abs() < 1e-9,
                     "{} came off the clock: {} against {}",
                     obs.name,
                     obs.t,
-                    app.current_time
+                    app.sim.clock
                 );
             }
         }
@@ -1065,17 +959,17 @@ mod tests {
             floor_now(&mut app)
         );
         assert!(
-            (app.current_time - floor).abs() < 1e-9,
+            (app.sim.clock - floor).abs() < 1e-9,
             "the clock stops on the floor rather than below it: {} against {floor}",
-            app.current_time
+            app.sim.clock
         );
 
         // And at the floor a backstep does nothing at all, rather than moving the clock and
         // leaving the observers behind. Nothing to undo is nothing to undo.
-        let held = (app.current_time, observer_state(alice_of(&app)), observer_state(bob_of(&app)));
+        let held = (app.sim.clock, observer_state(alice_of(&app)), observer_state(bob_of(&app)));
         app.step_backward(5.0);
         assert_eq!(
-            (app.current_time, observer_state(alice_of(&app)), observer_state(bob_of(&app))),
+            (app.sim.clock, observer_state(alice_of(&app)), observer_state(bob_of(&app))),
             held,
             "a backstep at the floor moved something"
         );
@@ -1096,7 +990,7 @@ mod tests {
         for _ in 0..20 {
             app.step_forward(0.3);
         }
-        assert!((app.current_time - 6.0).abs() < 1e-9);
+        assert!((app.sim.clock - 6.0).abs() < 1e-9);
         let alice_before = observer_state(alice_of(&app));
         let bob_before = observer_state(bob_of(&app));
         let alice_ended = alice_of(&app).has_ended();
@@ -1105,35 +999,35 @@ mod tests {
         println!(
             "back 0.1 from t = 6.0: clock {:.4}; Alice {:?} (ended {alice_ended}) -> {:?}; \
              Bob {:?} (ended {bob_ended}) -> {:?}",
-            app.current_time,
+            app.sim.clock,
             alice_before,
             observer_state(alice_of(&app)),
             bob_before,
             observer_state(bob_of(&app))
         );
-        assert!((app.current_time - 5.9).abs() < 1e-9);
+        assert!((app.sim.clock - 5.9).abs() < 1e-9);
         // An observer that has ended before the target does not move at all; one that has not is
         // on the clock, to the last bit.
         for (obs, before, ended) in [
             (alice_of(&app), alice_before, alice_ended),
             (bob_of(&app), bob_before, bob_ended),
         ] {
-            if ended && before.0 <= app.current_time {
+            if ended && before.0 <= app.sim.clock {
                 assert_eq!(
                     observer_state(obs),
                     before,
                     "{} ended at t = {} and must not be moved by a rewind to t = {}",
                     obs.name,
                     before.0,
-                    app.current_time
+                    app.sim.clock
                 );
             } else {
                 assert!(
-                    (obs.t - app.current_time).abs() < 1e-12,
+                    (obs.t - app.sim.clock).abs() < 1e-12,
                     "{} is at t = {} with the clock at {}",
                     obs.name,
                     obs.t,
-                    app.current_time
+                    app.sim.clock
                 );
             }
         }
@@ -1147,7 +1041,7 @@ mod tests {
         for _ in 0..100 {
             app.step_forward(0.1);
         }
-        assert!((app.current_time - 10.0).abs() < 1e-9);
+        assert!((app.sim.clock - 10.0).abs() < 1e-9);
         let alice = alice_of(&app);
         assert!(alice.has_ended(), "Alice must have reached the ring: r = {}", alice.r);
         let ended_at = observer_state(alice);
@@ -1158,7 +1052,7 @@ mod tests {
              t = {:.4}, r = {:.4}",
             ended_at.0,
             ended_at.1,
-            app.current_time,
+            app.sim.clock,
             alice_of(&app).t,
             alice_of(&app).r
         );
@@ -1166,21 +1060,21 @@ mod tests {
             observer_state(alice_of(&app)),
             ended_at,
             "a rewind to t = {} is still past her end at t = {}: she stays on the ring",
-            app.current_time,
+            app.sim.clock,
             ended_at.0
         );
         // Now back past the end of her worldline: she comes off the ring, and onto the clock.
-        while app.current_time > ended_at.0 - 0.25 {
+        while app.sim.clock > ended_at.0 - 0.25 {
             app.step_backward(0.1);
         }
         let alice = alice_of(&app);
         assert!(!alice.has_ended(), "below her end she is falling again: r = {}", alice.r);
         assert!(alice.r > ended_at.1, "and above the ring: r = {}", alice.r);
         assert!(
-            (alice.t - app.current_time).abs() < 1e-12,
+            (alice.t - app.sim.clock).abs() < 1e-12,
             "on the clock: {} vs {}",
             alice.t,
-            app.current_time
+            app.sim.clock
         );
 
         // 3. One backstep far longer than any step that built the trail, which is what Distance
@@ -1193,7 +1087,7 @@ mod tests {
             app.step_forward(0.3);
         }
         app.step_backward(4.0);
-        assert!((app.current_time - 2.0).abs() < 1e-9);
+        assert!((app.sim.clock - 2.0).abs() < 1e-9);
         let wound = observer_state(alice_of(&app));
         assert!((wound.0 - 2.0).abs() < 1e-12, "Alice lands on the clock: {}", wound.0);
         assert!(
@@ -1271,21 +1165,21 @@ mod tests {
             }
         });
 
-        assert!(!app.alice_signal.pulses.is_empty(), "Alice should have pulses in flight");
+        assert!(!app.sim.alice_signal.pulses.is_empty(), "Alice should have pulses in flight");
         assert!(
-            app.alice_signal.received_count() >= 4,
+            app.sim.alice_signal.received_count() >= 4,
             "Bob should have caught several of them by t = {}",
-            app.current_time
+            app.sim.clock
         );
-        let last = app.alice_signal.last_reception().expect("a reception was just asserted");
+        let last = app.sim.alice_signal.last_reception().expect("a reception was just asserted");
         assert!(last.ratio.is_finite() && last.ratio > 0.0, "{last:?}");
 
         // `clear` is the reset, not the rewind: it drops the field outright, which is what
         // re-dropping the observers or changing the geometry needs. The rewind is
         // `test_stepping_back_through_the_app_keeps_the_signal`.
-        app.alice_signal.clear();
-        assert_eq!(app.alice_signal.received_count(), 0);
-        assert_eq!(app.alice_signal.t, 0.0);
+        app.sim.alice_signal.clear();
+        assert_eq!(app.sim.alice_signal.received_count(), 0);
+        assert_eq!(app.sim.alice_signal.t, 0.0);
     }
 
     #[test]
@@ -1306,13 +1200,13 @@ mod tests {
                 app.ui(ui, &mut frame);
             }
         });
-        let forward_pulses = app.alice_signal.pulses.len();
-        assert!(forward_pulses > 0, "Alice should be transmitting by t = {}", app.current_time);
+        let forward_pulses = app.sim.alice_signal.pulses.len();
+        assert!(forward_pulses > 0, "Alice should be transmitting by t = {}", app.sim.clock);
         assert!(
-            (app.alice_signal.t - app.current_time).abs() < 1e-9,
+            (app.sim.alice_signal.t - app.sim.clock).abs() < 1e-9,
             "the field rides the simulation clock: {} vs {}",
-            app.alice_signal.t,
-            app.current_time
+            app.sim.alice_signal.t,
+            app.sim.clock
         );
 
         let step = app.arrow_step();
@@ -1321,34 +1215,34 @@ mod tests {
         }
 
         assert!(
-            !app.alice_signal.pulses.is_empty(),
+            !app.sim.alice_signal.pulses.is_empty(),
             "stepping back must rewind the signal, not delete it"
         );
         assert!(
-            (app.alice_signal.t - app.current_time).abs() < 1e-9,
+            (app.sim.alice_signal.t - app.sim.clock).abs() < 1e-9,
             "and must keep the field's clock on the simulation clock: {} vs {}",
-            app.alice_signal.t,
-            app.current_time
+            app.sim.alice_signal.t,
+            app.sim.clock
         );
         // The observers came back with the clock too. Fifty presses of the left arrow at a
         // step of 0.01 undo half an M, and each press moves the worldlines by exactly what it
         // moves the clock by, whatever the steps that built the trail were.
-        for obs in [app.bob.as_ref(), app.alice.as_ref()].into_iter().flatten() {
+        for obs in [app.sim.bob.as_ref(), app.sim.alice.as_ref()].into_iter().flatten() {
             assert!(
-                obs.has_ended() || (obs.t - app.current_time).abs() < 1e-12,
+                obs.has_ended() || (obs.t - app.sim.clock).abs() < 1e-12,
                 "{} is at t = {} with the clock at {}",
                 obs.name,
                 obs.t,
-                app.current_time
+                app.sim.clock
             );
         }
         // Nothing survives that had not been emitted by the time stepped back to.
-        for pulse in app.alice_signal.pulses.iter() {
+        for pulse in app.sim.alice_signal.pulses.iter() {
             assert!(
-                pulse.emitted_t <= app.current_time + 1e-9,
+                pulse.emitted_t <= app.sim.clock + 1e-9,
                 "a pulse emitted at t = {} is still in a field wound back to t = {}",
                 pulse.emitted_t,
-                app.current_time
+                app.sim.clock
             );
         }
     }
@@ -1363,7 +1257,8 @@ mod tests {
         assert!(!schwarzschild.inner_surface_gravity().is_finite());
         // The presets re-drop the observers when the geometry changes, because a 4-velocity
         // integrated in one metric is not a unit timelike vector in another; do the same here.
-        let mut app = SpacetimeApp { metric: schwarzschild, ..SpacetimeApp::default() };
+        let mut app = SpacetimeApp::default();
+        app.sim.metric = schwarzschild;
         drop_observers(&mut app);
         egui::__run_test_ui(|ui| {
             let mut frame = eframe::Frame::_new_kittest();
@@ -1375,7 +1270,7 @@ mod tests {
             app.controls.bob.transmit = false;
             app.ui(ui, &mut frame);
         });
-        assert!(app.alice_signal.pulses.is_empty() && app.bob_signal.pulses.is_empty());
+        assert!(app.sim.alice_signal.pulses.is_empty() && app.sim.bob_signal.pulses.is_empty());
     }
 
     #[test]
@@ -1425,7 +1320,7 @@ mod tests {
         assert!(al.l_ang.abs() < 1e-12, "and her L is still her own: {}", al.l_ang);
         // At rest means at rest: E is the effective potential at his own drop radius, and his
         // worldline starts on a turning point of it.
-        let floor = GeodesicState::energy_floor(&app.metric, 6.0, 1.0);
+        let floor = GeodesicState::energy_floor(&app.sim.metric, 6.0, 1.0);
         assert!((b.energy - floor).abs() < 1e-12, "Bob's E = {} against V(6, 1) = {floor}", b.energy);
         assert!((b.l_ang - 1.0).abs() < 1e-12, "and his L = {}", b.l_ang);
         assert!(b.u[1].abs() < 1e-6, "released at rest: dr/dtau = {}", b.u[1]);
@@ -1435,7 +1330,7 @@ mod tests {
         );
         for obs in [alice_of(&app), bob_of(&app)] {
             assert!(
-                (app.metric.norm(obs.r, &obs.four_velocity(&app.metric)) + 1.0).abs() < 1e-9,
+                (app.sim.metric.norm(obs.r, &obs.four_velocity(&app.sim.metric)) + 1.0).abs() < 1e-9,
                 "{}'s 4-velocity must stay a unit timelike vector",
                 obs.name
             );
@@ -1495,15 +1390,15 @@ mod tests {
     fn drag_bob_to(app: &mut SpacetimeApp, r: f64) {
         let mode = bob_of(app).mode;
         {
-            let SpacetimeApp { bob, current_time, .. } = app;
-            bob.as_mut().expect("Bob is in this run").set_drag_position(*current_time, r);
+            let Simulation { bob, clock, .. } = &mut app.sim;
+            bob.as_mut().expect("Bob is in this run").set_drag_position(*clock, r);
         }
         // A frame with the pointer still down. It is a real part of the gesture, not a detail of
         // the harness: a drag writes the observer, and it is this frame that folds the new position
         // into his card, where `ObserverCard::describes` will then keep it.
         painted_text(app);
         {
-            let SpacetimeApp { metric, bob, .. } = app;
+            let Simulation { metric, bob, .. } = &mut app.sim;
             bob.as_mut().expect("Bob is in this run").release_from_drag(metric, mode);
         }
         painted_text(app);
@@ -1517,7 +1412,7 @@ mod tests {
         // by the next Reset and the run always restarted at 4.5M, which made the drag useless for
         // the thing it is most wanted for - starting an observer from somewhere else.
         let mut app = SpacetimeApp::default();
-        assert_eq!(app.current_time, 0.0, "the app opens at the start of the run");
+        assert_eq!(app.sim.clock, 0.0, "the app opens at the start of the run");
         drag_bob_to(&mut app, 7.25);
         // One real frame, because it is the frame that takes the position: see
         // `AppControls::remember_drop_positions`.
@@ -1571,7 +1466,7 @@ mod tests {
         }
         drag_bob_to(&mut app, 9.0);
         let geo = bob_of(&app).geodesic.expect("a dragged observer keeps their geodesic");
-        let floor = GeodesicState::energy_floor(&app.metric, 9.0, 0.5);
+        let floor = GeodesicState::energy_floor(&app.sim.metric, 9.0, 0.5);
         println!("let go at 9M: E = {:.4} against V(9, 0.5) = {floor:.4}", geo.energy);
         assert!((geo.energy - floor).abs() < 1e-12, "released at rest there: E = {}", geo.energy);
         assert!(geo.u[1].abs() < 1e-6, "which is what at rest means: dr/dtau = {}", geo.u[1]);
@@ -1600,7 +1495,7 @@ mod tests {
         // that writing the field directly - a test, a keybinding, a preset - gets the same
         // simulation as a user dragging the widget.
         let mut app = SpacetimeApp::default();
-        assert_eq!(app.current_time, 0.0);
+        assert_eq!(app.sim.clock, 0.0);
         let alice_before = alice_of(&app).r;
 
         app.controls.bob.drop_r = 9.0;
@@ -1617,7 +1512,7 @@ mod tests {
         app.controls.bob.l_ang = 1.5;
         painted_text(&mut app);
         let geo = bob_of(&app).geodesic.expect("free-fall observers carry a geodesic state");
-        let floor = GeodesicState::energy_floor(&app.metric, 9.0, 1.5);
+        let floor = GeodesicState::energy_floor(&app.sim.metric, 9.0, 1.5);
         println!("restated to at-rest from 9M with L = 1.5: E = {:.4} against {floor:.4}", geo.energy);
         assert!((geo.energy - floor).abs() < 1e-12, "E follows the release: {}", geo.energy);
         assert!((geo.l_ang - 1.5).abs() < 1e-12, "L is his own: {}", geo.l_ang);
@@ -1659,7 +1554,7 @@ mod tests {
         let mut app = SpacetimeApp::default();
         drag_bob_to(&mut app, 9.0);
         assert!((bob_of(&app).r - 9.0).abs() < 1e-9, "the radius is his: {}", bob_of(&app).r);
-        assert_eq!(bob_of(&app).t, app.current_time, "and he still stands at the clock");
+        assert_eq!(bob_of(&app).t, app.sim.clock, "and he still stands at the clock");
         assert_eq!(bob_of(&app).t, alice_of(&app).t, "on the same line everybody else is on");
         assert_eq!(bob_of(&app).release_t, 0.0, "with the release his card asked for");
 
@@ -1668,7 +1563,7 @@ mod tests {
         for _ in 0..20 {
             app.step_forward(0.05);
         }
-        let clock = app.current_time;
+        let clock = app.sim.clock;
         drag_bob_to(&mut app, 3.0);
         assert!((bob_of(&app).r - 3.0).abs() < 1e-9, "moved in r: {}", bob_of(&app).r);
         assert!(
@@ -1712,7 +1607,7 @@ mod tests {
         app.controls.is_playing = false;
         app.controls.use_physical_units = true;
         app.controls.frame_of_ref = ReferenceFrame::DistantObserver;
-        assert!(app.alice.is_some(), "both cards are ticked out of the box");
+        assert!(app.sim.alice.is_some(), "both cards are ticked out of the box");
 
         egui::__run_test_ui(|ui| {
             let mut frame = eframe::Frame::_new_kittest();
@@ -1722,7 +1617,7 @@ mod tests {
             }
             // The held state a drag puts an observer in is the non-geodesic case, which prints
             // a_thrust and no E / L.
-            app.bob.as_mut().expect("Bob is enabled").mode = ObserverMode::ManualDrag;
+            app.sim.bob.as_mut().expect("Bob is enabled").mode = ObserverMode::ManualDrag;
             app.ui(ui, &mut frame);
         });
 
@@ -1746,13 +1641,13 @@ mod tests {
         let sim_dt = app.arrow_step();
 
         let initial_r = alice_of(&app).r;
-        app.alice.as_mut().expect("Alice is enabled").step(
-            &app.metric,
-            app.current_time + sim_dt,
+        app.sim.alice.as_mut().expect("Alice is enabled").step(
+            &app.sim.metric,
+            app.sim.clock + sim_dt,
             sim_dt,
         );
         let actual_dr = (initial_r - alice_of(&app).r).abs();
-        let actual_dr_km = app.metric.r_to_km(actual_dr);
+        let actual_dr_km = app.sim.metric.r_to_km(actual_dr);
 
         // Verify that stepping by distance moves Bob by approximately 1000 km (within numerical integration tolerance)
         assert!(
@@ -1780,7 +1675,7 @@ mod tests {
         set_free_fall(&mut app);
         app.step_forward(0.05);
         let falling = app.arrow_step();
-        assert!(bob_of(&app).velocity_c(&app.metric) < 0.0);
+        assert!(bob_of(&app).velocity_c(&app.sim.metric) < 0.0);
         assert!(falling > 1e-8 && falling < 500.0, "a real step: {falling}");
 
         // 2. Bob hovering, Alice falling: Alice's speed, and a step of the same order rather than
@@ -1789,12 +1684,12 @@ mod tests {
         drop_observers(&mut app);
         app.step_forward(0.5);
         assert!(
-            !bob_of(&app).is_active && bob_of(&app).velocity_c(&app.metric) == 0.0,
+            !bob_of(&app).is_active && bob_of(&app).velocity_c(&app.sim.metric) == 0.0,
             "he is hovering"
         );
         let alice_paced = app.arrow_step();
-        let alice_speed = alice_of(&app).velocity_c(&app.metric).abs();
-        let expected = app.metric.km_to_r(1000.0) / alice_speed.max(0.01);
+        let alice_speed = alice_of(&app).velocity_c(&app.sim.metric).abs();
+        let expected = app.sim.metric.km_to_r(1000.0) / alice_speed.max(0.01);
         assert!(
             (alice_paced - expected).abs() < 1e-12,
             "a hovering Bob is paced by Alice: {alice_paced} vs {expected}"
@@ -1804,26 +1699,26 @@ mod tests {
         // 3. Nobody moving in r: the fixed fallback, which claims nothing about a distance. An
         //    Alice who is not in the simulation at all leaves the chain the same way a hovering
         //    one does, and so does a Bob.
-        app.alice = None;
+        app.sim.alice = None;
         assert!((app.arrow_step() - 0.1).abs() < 1e-12, "step = {}", app.arrow_step());
-        app.bob = None;
+        app.sim.bob = None;
         assert!((app.arrow_step() - 0.1).abs() < 1e-12, "step = {}", app.arrow_step());
 
         // 4. A Static Bob outside the static limit holds his radius by choice, and is treated the
         //    same way: there is no time in which he covers Δr either.
-        let mut bob = Observer::new(&app.metric, "Bob", 0.0, 5.0, 0.0);
+        let mut bob = Observer::new(&app.sim.metric, "Bob", 0.0, 5.0, 0.0);
         bob.mode = ObserverMode::Static;
-        assert!(bob.mode_admissible(&app.metric) && bob.velocity_c(&app.metric) == 0.0);
-        app.bob = Some(bob);
+        assert!(bob.mode_admissible(&app.sim.metric) && bob.velocity_c(&app.sim.metric) == 0.0);
+        app.sim.bob = Some(bob);
         assert!((app.arrow_step() - 0.1).abs() < 1e-12);
 
         // 5. ...but a Static selection at a radius where it is impossible is falling, so it paces
         //    the step like any other faller.
-        let mut bob = Observer::new(&app.metric, "Bob", 0.0, 1.9, 0.0);
+        let mut bob = Observer::new(&app.sim.metric, "Bob", 0.0, 1.9, 0.0);
         bob.mode = ObserverMode::Static;
-        assert!(!bob.mode_admissible(&app.metric));
-        assert!(bob.velocity_c(&app.metric) < 0.0, "he is falling, and the step follows him");
-        app.bob = Some(bob);
+        assert!(!bob.mode_admissible(&app.sim.metric));
+        assert!(bob.velocity_c(&app.sim.metric) < 0.0, "he is falling, and the step follows him");
+        app.sim.bob = Some(bob);
         assert!(app.arrow_step() < 0.1);
     }
 
@@ -1838,7 +1733,8 @@ mod tests {
             (Release::CircularPrograde, true),
             (Release::CircularRetrograde, false),
         ] {
-            let mut app = SpacetimeApp { metric: KerrSchild::new(1.0, 0.9), ..SpacetimeApp::default() };
+            let mut app = SpacetimeApp::default();
+            app.sim.metric = KerrSchild::new(1.0, 0.9);
             app.controls.is_playing = false;
             app.controls.bob.enabled = true;
             app.controls.bob.drop_r = 6.0;
@@ -1854,10 +1750,10 @@ mod tests {
             // and the transmissions the app would carry along cost a hundred times as much.
             let phi0 = bob_of(&app).phi;
             let mut worst = 0.0f64;
-            let (mut t, dt) = (app.current_time, 0.1);
-            while t < app.current_time + period {
+            let (mut t, dt) = (app.sim.clock, 0.1);
+            while t < app.sim.clock + period {
                 t += dt;
-                app.bob.as_mut().unwrap().step(&metric, t, dt);
+                app.sim.bob.as_mut().unwrap().step(&metric, t, dt);
                 worst = worst.max((bob_of(&app).r - 6.0).abs());
             }
             let turned = bob_of(&app).phi - phi0;
@@ -1946,9 +1842,9 @@ mod tests {
         app.controls.is_playing = true;
         set_free_fall(&mut app);
 
-        let t0 = app.current_time;
+        let t0 = app.sim.clock;
         let tau0 = bob_of(&app).tau;
-        let u_t = bob_of(&app).four_velocity(&app.metric)[0];
+        let u_t = bob_of(&app).four_velocity(&app.sim.metric)[0];
         egui::__run_test_ui(|ui| {
             let mut frame = eframe::Frame::_new_kittest();
             app.ui(ui, &mut frame);
@@ -1961,7 +1857,7 @@ mod tests {
         );
         // And the clock really was advanced on Bob's watch rather than on the distant one: the
         // coordinate time the frame took is u^t times the proper time he aged over it.
-        let (d_t, d_tau) = (app.current_time - t0, bob_of(&app).tau - tau0);
+        let (d_t, d_tau) = (app.sim.clock - t0, bob_of(&app).tau - tau0);
         assert!(d_tau > 0.0 && d_t > d_tau, "Δt = {d_t}, Δτ = {d_tau}, u^t = {u_t}");
         assert!(
             (d_t / d_tau / u_t - 1.0).abs() < 0.02,
@@ -2097,7 +1993,7 @@ mod tests {
         // smaller than r itself, so this is where a projection that only works at the default
         // scale would show it.
         let mut app = SpacetimeApp::default();
-        let rm = app.metric.inner_horizon();
+        let rm = app.sim.metric.inner_horizon();
         app.spacetime_canvas.max_r = 0.05;
         app.spacetime_canvas.r_offset = rm - 0.025;
 
@@ -2115,8 +2011,8 @@ mod tests {
         // Alice-less pass checks the fallback to Bob.
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
-        let rp = app.metric.outer_horizon();
-        let rm = app.metric.inner_horizon();
+        let rp = app.sim.metric.outer_horizon();
+        let rm = app.sim.metric.inner_horizon();
         let radii = [4.5, rp, 0.5 * (rp + rm), 0.5 * rm];
 
         egui::__run_test_ui(|ui| {
@@ -2128,15 +2024,15 @@ mod tests {
             ] {
                 app.controls.frame_of_ref = frame_of_ref;
                 for &r in radii.iter() {
-                    app.bob.as_mut().expect("enabled").reset_with_phi(
-                        &app.metric,
+                    app.sim.bob.as_mut().expect("enabled").reset_with_phi(
+                        &app.sim.metric,
                         0.0,
                         r,
                         0.0,
                         WorldlineParams::default(),
                     );
-                    if let Some(ref mut al) = app.alice {
-                        al.reset_with_phi(&app.metric, 0.0, r * 1.08, 0.35, WorldlineParams::default());
+                    if let Some(ref mut al) = app.sim.alice {
+                        al.reset_with_phi(&app.sim.metric, 0.0, r * 1.08, 0.35, WorldlineParams::default());
                     }
                     app.ui(ui, &mut frame);
                     assert!(bob_of(&app).r > 0.0);
@@ -2149,8 +2045,8 @@ mod tests {
             app.controls.frame_of_ref = ReferenceFrame::Alice;
             app.controls.alice.enabled = false;
             for &r in radii.iter() {
-                app.bob.as_mut().expect("enabled").reset_with_phi(
-                    &app.metric,
+                app.sim.bob.as_mut().expect("enabled").reset_with_phi(
+                    &app.sim.metric,
                     0.0,
                     r,
                     0.0,
@@ -2166,7 +2062,7 @@ mod tests {
             app.ui(ui, &mut frame);
             app.controls.frame_of_ref = ReferenceFrame::Alice;
             app.ui(ui, &mut frame);
-            assert!(app.alice.is_none() && app.bob.is_none());
+            assert!(app.sim.alice.is_none() && app.sim.bob.is_none());
         });
     }
 
@@ -2205,10 +2101,11 @@ mod tests {
             app.ui(ui, &mut frame);
         });
 
-        assert!(!bob_of(&app).is_active, "Bob is still hovering at t = {}", app.current_time);
+        assert!(!bob_of(&app).is_active, "Bob is still hovering at t = {}", app.sim.clock);
         assert!((bob_of(&app).r - 4.5).abs() < 1e-12, "and has not moved: r = {}", bob_of(&app).r);
-        let heard = app.bob_signal.received_count();
+        let heard = app.sim.bob_signal.received_count();
         let emitted: Vec<(usize, f64, f64)> = app
+            .sim
             .bob_signal
             .pulses
             .iter()
@@ -2216,23 +2113,23 @@ mod tests {
             .collect();
         println!(
             "app loop to t = {:.2}: the hovering Bob has sent {} pulses, Alice has heard {heard}",
-            app.current_time,
+            app.sim.clock,
             emitted.len()
         );
         assert!(heard >= 3, "Alice should have caught several of his hover pulses: {heard}");
         assert!(emitted.len() >= 10, "and he should be transmitting steadily: {}", emitted.len());
         assert!(
-            emitted.iter().all(|&(_, t, _)| t <= app.current_time + 1e-9),
+            emitted.iter().all(|&(_, t, _)| t <= app.sim.clock + 1e-9),
             "no pulse can be dated after the clock: {emitted:?}"
         );
         assert!(
-            (app.bob_signal.t - app.current_time).abs() < 1e-9,
+            (app.sim.bob_signal.t - app.sim.clock).abs() < 1e-9,
             "Bob's field rides the simulation clock: {} vs {}",
-            app.bob_signal.t,
-            app.current_time
+            app.sim.bob_signal.t,
+            app.sim.clock
         );
-        let last_arrival = app.bob_signal.last_reception().expect("just asserted").t;
-        let forward_time = app.current_time;
+        let last_arrival = app.sim.bob_signal.last_reception().expect("just asserted").t;
+        let forward_time = app.sim.clock;
 
         // A full M of coordinate time back, one arrow press at a time: past the last arrival, and
         // past several of his emissions.
@@ -2241,69 +2138,69 @@ mod tests {
             app.step_backward(step);
         }
         assert!(
-            app.current_time < last_arrival,
+            app.sim.clock < last_arrival,
             "the rewind must go back past the arrival at t = {last_arrival}: now t = {}",
-            app.current_time
+            app.sim.clock
         );
         assert!(
             !bob_of(&app).is_active && (bob_of(&app).r - 4.5).abs() < 1e-12,
             "he is still hovering"
         );
         assert!(
-            (bob_of(&app).t - app.current_time).abs() < 1e-9,
+            (bob_of(&app).t - app.sim.clock).abs() < 1e-9,
             "and his own clock came back with the simulation's: {} vs {}",
             bob_of(&app).t,
-            app.current_time
+            app.sim.clock
         );
 
         // Alice is released and falling, so she is on the clock to the last bit as well.
         let alice = alice_of(&app);
         assert!(
-            (alice.t - app.current_time).abs() < 1e-12,
+            (alice.t - app.sim.clock).abs() < 1e-12,
             "Alice is at t = {} with the clock at {}",
             alice.t,
-            app.current_time
+            app.sim.clock
         );
         assert!(
-            !app.bob_signal.pulses.is_empty(),
+            !app.sim.bob_signal.pulses.is_empty(),
             "stepping back must rewind Bob's signal, not delete it"
         );
         assert!(
-            (app.bob_signal.t - app.current_time).abs() < 1e-9,
+            (app.sim.bob_signal.t - app.sim.clock).abs() < 1e-9,
             "and must keep its clock on the simulation clock: {} vs {}",
-            app.bob_signal.t,
-            app.current_time
+            app.sim.bob_signal.t,
+            app.sim.clock
         );
         assert!(
-            app.bob_signal.received_count() < heard,
+            app.sim.bob_signal.received_count() < heard,
             "the arrivals inside the rewound interval must be unrecorded: {} of {heard}",
-            app.bob_signal.received_count()
+            app.sim.bob_signal.received_count()
         );
         assert!(
-            app.bob_signal.pulses.len() + 5 <= emitted.len(),
+            app.sim.bob_signal.pulses.len() + 5 <= emitted.len(),
             "and the pulses emitted inside it un-sent: {} of {}",
-            app.bob_signal.pulses.len(),
+            app.sim.bob_signal.pulses.len(),
             emitted.len()
         );
-        for pulse in app.bob_signal.pulses.iter() {
+        for pulse in app.sim.bob_signal.pulses.iter() {
             assert!(
-                pulse.emitted_t <= app.current_time + 1e-9,
+                pulse.emitted_t <= app.sim.clock + 1e-9,
                 "a pulse emitted at t = {} is still in a field wound back to t = {}",
                 pulse.emitted_t,
-                app.current_time
+                app.sim.clock
             );
             for reception in pulse.receptions.iter() {
                 assert!(
-                    reception.t <= app.current_time + 1e-9,
+                    reception.t <= app.sim.clock + 1e-9,
                     "an arrival recorded at t = {} survived a rewind to t = {}",
                     reception.t,
-                    app.current_time
+                    app.sim.clock
                 );
             }
         }
-        for reception in app.bob_signal.receptions() {
+        for reception in app.sim.bob_signal.receptions() {
             assert!(
-                reception.t <= app.current_time + 1e-9,
+                reception.t <= app.sim.clock + 1e-9,
                 "the field's own record of an arrival at t = {} survived the rewind",
                 reception.t
             );
@@ -2316,11 +2213,12 @@ mod tests {
             app.step_forward(step);
         }
         assert!(
-            (app.current_time - forward_time).abs() < 1e-9,
+            (app.sim.clock - forward_time).abs() < 1e-9,
             "back to the same clock: {} vs {forward_time}",
-            app.current_time
+            app.sim.clock
         );
         let again: Vec<(usize, f64, f64)> = app
+            .sim
             .bob_signal
             .pulses
             .iter()
@@ -2355,8 +2253,8 @@ mod tests {
         let mut ended_at = None;
         for _ in 0..400 {
             app.step_forward(0.02);
-            if ended_at.is_none() && app.alice.as_ref().is_some_and(|al| al.has_ended()) {
-                ended_at = Some(app.current_time);
+            if ended_at.is_none() && app.sim.alice.as_ref().is_some_and(|al| al.has_ended()) {
+                ended_at = Some(app.sim.clock);
             }
         }
         egui::__run_test_ui(|ui| {
@@ -2367,10 +2265,11 @@ mod tests {
         let alice = alice_of(&app);
         assert!(alice.has_ended(), "the run must reach the end of Alice's worldline: r = {}", alice.r);
         let last = app
+            .sim
             .bob_signal
             .last_delivered_pulse()
             .expect("he transmits from t = 0 while he hovers, and the ingoing part of each cone catches her");
-        let never = app.bob_signal.pulses_after(last.pulse_index);
+        let never = app.sim.bob_signal.pulses_after(last.pulse_index);
         println!(
             "app loop: Alice ends at t = {:?}; last delivered #{} sent at t = {:.3}, r = {:.4},              Bob's tau = {:.3}, reaching her at t = {:.3}; {never} later pulses never arrive",
             ended_at,
@@ -2403,10 +2302,10 @@ mod tests {
         );
         assert!(never >= 40, "Bob goes on transmitting after the last delivery: {never}");
         assert!(
-            last.emitted_t < app.current_time,
+            last.emitted_t < app.sim.clock,
             "the boundary event is in the past of the current frame"
         );
-        for pulse in app.bob_signal.pulses.iter().filter(|p| p.index > last.pulse_index) {
+        for pulse in app.sim.bob_signal.pulses.iter().filter(|p| p.index > last.pulse_index) {
             assert!(pulse.receptions.is_empty(), "pulse {} cannot have arrived", pulse.index);
         }
     }
@@ -2487,9 +2386,9 @@ mod tests {
         for _ in 0..200 {
             app.step_forward(step);
         }
-        let forward_time = app.current_time;
-        let alice_then = reception_list(&app.alice_signal);
-        let bob_then = reception_list(&app.bob_signal);
+        let forward_time = app.sim.clock;
+        let alice_then = reception_list(&app.sim.alice_signal);
+        let bob_then = reception_list(&app.sim.bob_signal);
         assert!(
             alice_then.len() >= 8 && bob_then.len() >= 8,
             "both transmissions must have been heard by t = {forward_time}: {} and {}",
@@ -2512,27 +2411,27 @@ mod tests {
         }
         let in_the_first_step = alice_then
             .iter()
-            .filter(|rec| rec.1 > app.current_time && rec.1 < app.current_time + step)
+            .filter(|rec| rec.1 > app.sim.clock && rec.1 < app.sim.clock + step)
             .count();
         assert!(
             in_the_first_step >= 1,
             "the rewind must leave a crossing inside the first step forward from t = {}: \
              {alice_then:?}",
-            app.current_time
+            app.sim.clock
         );
-        let retracted_alice = alice_then.len() - app.alice_signal.received_count();
-        let retracted_bob = bob_then.len() - app.bob_signal.received_count();
+        let retracted_alice = alice_then.len() - app.sim.alice_signal.received_count();
+        let retracted_bob = bob_then.len() - app.sim.bob_signal.received_count();
         assert!(
             retracted_alice >= 2 && retracted_bob >= 2,
             "the rewind must reach past several arrivals: {retracted_alice} and {retracted_bob}"
         );
-        for (field, then) in [(&app.alice_signal, &alice_then), (&app.bob_signal, &bob_then)] {
+        for (field, then) in [(&app.sim.alice_signal, &alice_then), (&app.sim.bob_signal, &bob_then)] {
             for rec in field.receptions() {
                 assert!(
-                    rec.t <= app.current_time + 1e-12,
+                    rec.t <= app.sim.clock + 1e-12,
                     "an arrival at t = {} survived a rewind to t = {}",
                     rec.t,
-                    app.current_time
+                    app.sim.clock
                 );
             }
             let kept = reception_list(field);
@@ -2544,20 +2443,20 @@ mod tests {
             app.step_forward(step);
         }
         assert!(
-            (app.current_time - forward_time).abs() < 1e-9,
+            (app.sim.clock - forward_time).abs() < 1e-9,
             "back on the same clock: {} vs {forward_time}",
-            app.current_time
+            app.sim.clock
         );
         let (alice_t, alice_ratio) = assert_same_receptions(
             "Alice -> Bob",
-            &reception_list(&app.alice_signal),
+            &reception_list(&app.sim.alice_signal),
             &alice_then,
             1e-9,
             1e-6,
         );
         let (bob_t, bob_ratio) = assert_same_receptions(
             "Bob -> Alice",
-            &reception_list(&app.bob_signal),
+            &reception_list(&app.sim.bob_signal),
             &bob_then,
             1e-9,
             1e-6,
@@ -2600,9 +2499,9 @@ mod tests {
         for _ in 0..200 {
             app.step_forward(step);
         }
-        let forward_time = app.current_time;
-        let alice_then = reception_list(&app.alice_signal);
-        let bob_then = reception_list(&app.bob_signal);
+        let forward_time = app.sim.clock;
+        let alice_then = reception_list(&app.sim.alice_signal);
+        let bob_then = reception_list(&app.sim.bob_signal);
 
         // The last arrival of Alice's transmission that is far enough back for the rewind to be a
         // rewind of several steps, and its exact crossing time is the target.
@@ -2620,11 +2519,12 @@ mod tests {
         let interval = forward_time - target;
         app.step_backward(interval);
         assert!(
-            (app.current_time - target).abs() < 1e-12,
+            (app.sim.clock - target).abs() < 1e-12,
             "the clock must land on the arrival: {} vs {target}",
-            app.current_time
+            app.sim.clock
         );
         let on_the_boundary = app
+            .sim
             .alice_signal
             .receptions()
             .filter(|rec| (rec.t - target).abs() < 1e-9)
@@ -2644,16 +2544,16 @@ mod tests {
         // is a statement about the pass cadence rather than about the rewind. The grid is now
         // offset from the first run's by the fraction of a step the target sat at, which is what
         // makes the arrivals after it a genuine re-interpolation.
-        while app.current_time < forward_time - 1e-12 {
-            app.step_forward(step.min(forward_time - app.current_time));
+        while app.sim.clock < forward_time - 1e-12 {
+            app.step_forward(step.min(forward_time - app.sim.clock));
         }
         assert!(
-            (app.current_time - forward_time).abs() < 1e-9,
+            (app.sim.clock - forward_time).abs() < 1e-9,
             "back on the same clock: {} vs {forward_time}",
-            app.current_time
+            app.sim.clock
         );
-        let alice_now = reception_list(&app.alice_signal);
-        let bob_now = reception_list(&app.bob_signal);
+        let alice_now = reception_list(&app.sim.alice_signal);
+        let bob_now = reception_list(&app.sim.bob_signal);
         let boundary: Vec<_> = alice_now
             .iter()
             .filter(|rec| (rec.1 - target).abs() < 1e-3)
@@ -2730,7 +2630,7 @@ mod tests {
         let opening = layout(&app);
         assert_eq!(opening.len(), 2, "both cards are ticked out of the box");
         assert_eq!(opening[0].0, "Alice");
-        let isco = app.metric.isco(true);
+        let isco = app.sim.metric.isco(true);
         assert!((opening[0].2 - isco).abs() < 1e-12, "Alice drops onto the prograde ISCO");
         assert!(opening[0].5 == 0.0 && opening[0].6, "released at once");
         assert!((opening[1].2 - 4.5).abs() < 1e-12, "and Bob from r = 4.5M");
@@ -2746,11 +2646,11 @@ mod tests {
         for _ in 0..120 {
             app.step_forward(0.05);
         }
-        assert!(bob_of(&app).r < 2.0 && !app.alice_signal.pulses.is_empty(), "a run in progress");
+        assert!(bob_of(&app).r < 2.0 && !app.sim.alice_signal.pulses.is_empty(), "a run in progress");
 
         // The action behind Reset, and behind the preset row.
         drop_observers(&mut app);
-        assert_eq!(app.current_time, 0.0, "the clock goes back with it");
+        assert_eq!(app.sim.clock, 0.0, "the clock goes back with it");
         assert_same_layout("Reset vs startup", &layout(&app), &opening);
 
         // And again from the rebuilt state: a Reset of a Reset is the same Reset.
@@ -2774,7 +2674,7 @@ mod tests {
         app.controls.bob.enabled = false;
         // The panel is what applies a card, so one frame has to run before he goes.
         let opening = painted_text(&mut app);
-        assert!(app.bob.is_none(), "the unticked card takes him out of the run");
+        assert!(app.sim.bob.is_none(), "the unticked card takes him out of the run");
         assert!(opening.contains("OBSERVER BOB"), "his card is still there to tick back on");
 
         for _ in 0..150 {
@@ -2785,17 +2685,17 @@ mod tests {
             "3 M with Bob's card unticked: Alice at r = {:.4} with {} pulses in flight; Bob's \
              field holds {} pulses and {} arrivals, hers {} arrivals",
             alice_of(&app).r,
-            app.alice_signal.pulses.len(),
-            app.bob_signal.pulses.len(),
-            app.bob_signal.received_count(),
-            app.alice_signal.received_count()
+            app.sim.alice_signal.pulses.len(),
+            app.sim.bob_signal.pulses.len(),
+            app.sim.bob_signal.received_count(),
+            app.sim.alice_signal.received_count()
         );
 
-        assert!(app.bob.is_none(), "and keeps him out of it");
-        assert!(app.bob_signal.pulses.is_empty(), "he transmits nothing");
-        assert_eq!(app.bob_signal.received_count(), 0, "and there is nothing of his to hear");
-        assert_eq!(app.alice_signal.received_count(), 0, "nobody is there to hear Alice either");
-        assert!(!app.alice_signal.pulses.is_empty(), "though she goes on transmitting");
+        assert!(app.sim.bob.is_none(), "and keeps him out of it");
+        assert!(app.sim.bob_signal.pulses.is_empty(), "he transmits nothing");
+        assert_eq!(app.sim.bob_signal.received_count(), 0, "and there is nothing of his to hear");
+        assert_eq!(app.sim.alice_signal.received_count(), 0, "nobody is there to hear Alice either");
+        assert!(!app.sim.alice_signal.pulses.is_empty(), "though she goes on transmitting");
         assert!(alice_of(&app).r < 4.0, "and goes on falling: r = {}", alice_of(&app).r);
 
         // What the frame says. "Alice [Reg II (Trapped)]" is the title line of a telemetry box and
@@ -2813,13 +2713,13 @@ mod tests {
         app.controls.bob.enabled = true;
         let painted = painted_text(&mut app);
         let bob = bob_of(&app);
-        assert!((bob.t - app.current_time).abs() < 1e-12, "he starts on the clock: {}", bob.t);
+        assert!((bob.t - app.sim.clock).abs() < 1e-12, "he starts on the clock: {}", bob.t);
         assert!((bob.r - 4.5).abs() < 1e-12, "at the drop radius: {}", bob.r);
         assert!(
-            (bob.release_t - (app.current_time + 8.0)).abs() < 1e-12,
+            (bob.release_t - (app.sim.clock + 8.0)).abs() < 1e-12,
             "released his own delay later: {} with the clock at {}",
             bob.release_t,
-            app.current_time
+            app.sim.clock
         );
         assert!(painted.contains("Bob ["), "and he is back in the telemetry: {painted}");
     }
@@ -2836,8 +2736,8 @@ mod tests {
         for _ in 0..100 {
             app.step_forward(0.02);
         }
-        let heard = app.alice_signal.received_count();
-        assert!(heard > 0 && !app.alice_signal.pulses.is_empty(), "Bob has been hearing her: {heard}");
+        let heard = app.sim.alice_signal.received_count();
+        assert!(heard > 0 && !app.sim.alice_signal.pulses.is_empty(), "Bob has been hearing her: {heard}");
 
         app.controls.alice.transmit = false;
         for _ in 0..100 {
@@ -2846,24 +2746,24 @@ mod tests {
         println!(
             "2 M after Alice's transmission was switched off: her field holds {} pulses and {} \
              arrivals (it held {heard}), his {} pulses and {} arrivals",
-            app.alice_signal.pulses.len(),
-            app.alice_signal.received_count(),
-            app.bob_signal.pulses.len(),
-            app.bob_signal.received_count()
+            app.sim.alice_signal.pulses.len(),
+            app.sim.alice_signal.received_count(),
+            app.sim.bob_signal.pulses.len(),
+            app.sim.bob_signal.received_count()
         );
-        assert!(app.alice_signal.pulses.is_empty(), "her field is dropped and stays empty");
-        assert_eq!(app.alice_signal.received_count(), 0, "and the arrivals go with the light");
+        assert!(app.sim.alice_signal.pulses.is_empty(), "her field is dropped and stays empty");
+        assert_eq!(app.sim.alice_signal.received_count(), 0, "and the arrivals go with the light");
         assert!(
-            (app.alice_signal.t - app.current_time).abs() < 1e-9,
+            (app.sim.alice_signal.t - app.sim.clock).abs() < 1e-9,
             "a silent field still rides the simulation clock: {} vs {}",
-            app.alice_signal.t,
-            app.current_time
+            app.sim.alice_signal.t,
+            app.sim.clock
         );
 
         // She is otherwise exactly where she would have been, and still hearing him.
         assert!(alice_of(&app).r < 4.0 && !alice_of(&app).has_ended());
-        assert!(!app.bob_signal.pulses.is_empty(), "he is still transmitting");
-        assert!(app.bob_signal.received_count() > 0, "and she is still hearing him");
+        assert!(!app.sim.bob_signal.pulses.is_empty(), "he is still transmitting");
+        assert!(app.sim.bob_signal.received_count() > 0, "and she is still hearing him");
 
         // Nothing of hers is left to draw, and the frame still renders.
         let painted = painted_text(&mut app);
@@ -2874,8 +2774,8 @@ mod tests {
         for _ in 0..20 {
             app.step_forward(0.02);
         }
-        assert!(!app.alice_signal.pulses.is_empty(), "the transmission resumes");
-        for pulse in app.alice_signal.pulses.iter() {
+        assert!(!app.sim.alice_signal.pulses.is_empty(), "the transmission resumes");
+        for pulse in app.sim.alice_signal.pulses.iter() {
             assert!(
                 pulse.emitted_t > 4.0 - 1e-9,
                 "and everything in the field was sent after the silence, not before it: {}",
@@ -2906,15 +2806,15 @@ mod tests {
                     for use_physical_units in [true, false] {
                         app.controls.use_physical_units = use_physical_units;
                         let painted = painted_text(&mut app);
-                        assert_eq!(app.alice.is_some(), alice_on, "Alice's card is the authority");
-                        assert_eq!(app.bob.is_some(), bob_on, "and Bob's is his");
+                        assert_eq!(app.sim.alice.is_some(), alice_on, "Alice's card is the authority");
+                        assert_eq!(app.sim.bob.is_some(), bob_on, "and Bob's is his");
                         assert!(
                             painted.contains("OBSERVER ALICE") && painted.contains("OBSERVER BOB"),
                             "both cards are always on the panel: {painted}"
                         );
                         // And with both of them in the held state a marker drag puts them in,
                         // which no control selects any more but every drag passes through.
-                        for obs in [app.alice.as_mut(), app.bob.as_mut()].into_iter().flatten() {
+                        for obs in [app.sim.alice.as_mut(), app.sim.bob.as_mut()].into_iter().flatten() {
                             obs.mode = ObserverMode::ManualDrag;
                         }
                         painted_text(&mut app);
@@ -2941,23 +2841,23 @@ mod tests {
         app.controls.rays_per_pulse = 64;
         app.step_forward(0.05);
         let first: Vec<usize> =
-            [&app.alice_signal, &app.bob_signal].iter().map(|f| f.pulses.len()).collect();
+            [&app.sim.alice_signal, &app.sim.bob_signal].iter().map(|f| f.pulses.len()).collect();
         assert_eq!(first, vec![1, 1], "Alice falling and Bob hovering both transmit at once");
-        assert_eq!(app.alice_signal.pulses[0].rays.len(), 64);
-        assert_eq!(app.bob_signal.pulses[0].rays.len(), 64);
+        assert_eq!(app.sim.alice_signal.pulses[0].rays.len(), 64);
+        assert_eq!(app.sim.bob_signal.pulses[0].rays.len(), 64);
 
         // Turned up part-way through the run. Bob is still hovering, so his clock runs slower than
         // Alice's and his second pulse is a little later than hers; stepping until both fields hold
         // two pulses is what "the next pulse of each" means.
         app.controls.rays_per_pulse = 256;
         for _ in 0..40 {
-            if app.alice_signal.pulses.len() > 1 && app.bob_signal.pulses.len() > 1 {
+            if app.sim.alice_signal.pulses.len() > 1 && app.sim.bob_signal.pulses.len() > 1 {
                 break;
             }
             app.step_forward(0.05);
         }
-        for (who, field) in [("Alice", &app.alice_signal), ("Bob", &app.bob_signal)] {
-            assert!(field.pulses.len() > 1, "{who} sent a second pulse by t = {}", app.current_time);
+        for (who, field) in [("Alice", &app.sim.alice_signal), ("Bob", &app.sim.bob_signal)] {
+            assert!(field.pulses.len() > 1, "{who} sent a second pulse by t = {}", app.sim.clock);
             assert_eq!(
                 field.pulses.back().unwrap().rays.len(),
                 256,
@@ -2983,8 +2883,8 @@ mod tests {
             let painted = painted_text(&mut app);
             assert!(painted.contains("Wavefront points"), "the slider is on the panel: {painted}");
             app.step_forward(0.05);
-            assert_eq!(app.alice_signal.pulses[0].rays.len(), rays);
-            assert_eq!(app.bob_signal.pulses[0].rays.len(), rays);
+            assert_eq!(app.sim.alice_signal.pulses[0].rays.len(), rays);
+            assert_eq!(app.sim.bob_signal.pulses[0].rays.len(), rays);
             // And a frame with that pulse standing in both fields, which is the drawing path.
             painted_text(&mut app);
         }

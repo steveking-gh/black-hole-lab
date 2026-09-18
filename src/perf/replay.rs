@@ -24,7 +24,8 @@
 //!
 //! **The fingerprint.** At the end of every replay a 64-bit FNV-1a hash is taken over the bit
 //! patterns of the whole simulated state: the clock, both worldlines, every ray of every pulse of
-//! both transmissions, and every arrival either side recorded. An optimisation that claims to
+//! both transmissions, and every arrival either side recorded. It is `Simulation::fingerprint`,
+//! which is where the state is, rather than anything this module knows. An optimisation that claims to
 //! change only the speed must leave this number alone, and `--compare` says for each scenario
 //! whether it did. A mismatch is reported rather than failed, because deliberately changing the
 //! physics is allowed - what is not allowed is comparing timings across it without noticing.
@@ -38,7 +39,7 @@ use crate::gui::controls::{ReferenceFrame, StepMode};
 use crate::perf::harness::{median_of, percentile_of, relative_spread};
 use crate::perf::{headless_context, raw_input};
 use crate::physics::observer::{ObserverMode, Release};
-use crate::physics::wavefront::{SignalField, SignalPair};
+use crate::physics::wavefront::SignalField;
 
 /// The step every replay takes, in M of coordinate time: one frame of a 60 Hz playback at the
 /// app's default play speed of 1 M per second.
@@ -173,7 +174,7 @@ fn isco_pair(app: &mut SpacetimeApp, max_pulses: usize) {
         card.transmit = true;
         card.mode = ObserverMode::FreeFall;
         card.release = release;
-        card.drop_r = app.metric.isco(prograde);
+        card.drop_r = app.sim.metric.isco(prograde);
         card.delta_t_delay = 0.0;
         card.l_ang = 0.0;
     }
@@ -213,17 +214,8 @@ fn far_branch_freeze(app: &mut SpacetimeApp) {
 /// do and what the app's own startup does. A scenario states its cards and calls this rather than
 /// assembling observers behind the panel's back, so a replay is a run the user could have set up.
 fn drop_observers(app: &mut SpacetimeApp) {
-    let SpacetimeApp {
-        metric, alice, bob, alice_signal, bob_signal, controls, current_time, ..
-    } = app;
-    controls.drop_observers(
-        metric,
-        alice,
-        bob,
-        &mut SignalPair { alice: alice_signal, bob: bob_signal },
-        current_time,
-    );
-    controls.view_reset_requested = false;
+    app.controls.drop_observers(&mut app.sim);
+    app.controls.view_reset_requested = false;
 }
 
 /// The app the micro tier's shared field is built from: the ISCO pair at the default cap.
@@ -241,8 +233,7 @@ pub(crate) fn app_for_fixtures() -> SpacetimeApp {
 /// never sees the slider; the play loop does, once a frame, before it steps. A scenario that sets
 /// the cap to 128 would otherwise be simulated at 64 in `sim` mode and at 128 in `frame` mode.
 fn sim_frame(app: &mut SpacetimeApp) {
-    SignalPair { alice: &mut app.alice_signal, bob: &mut app.bob_signal }
-        .set_max_pulses(&app.metric, app.controls.max_pulses);
+    app.sim.set_max_pulses(app.controls.max_pulses);
     app.step_forward(FRAME_DT);
 }
 
@@ -330,96 +321,17 @@ fn counters(app: &SpacetimeApp) -> Counters {
         field.pulses.iter().flat_map(|p| p.rays.iter()).filter(|ray| ray.alive()).count()
     };
     Counters {
-        pulses_alice: app.alice_signal.pulses.len(),
-        pulses_bob: app.bob_signal.pulses.len(),
-        live_rays_alice: live(&app.alice_signal),
-        live_rays_bob: live(&app.bob_signal),
-        heard_by_bob: app.alice_signal.received_count(),
-        heard_by_alice: app.bob_signal.received_count(),
-        budget_exhausted: app.alice_signal.budget_exhausted() + app.bob_signal.budget_exhausted(),
-        dropped_in_flight: app.alice_signal.dropped_in_flight() + app.bob_signal.dropped_in_flight(),
+        pulses_alice: app.sim.alice_signal.pulses.len(),
+        pulses_bob: app.sim.bob_signal.pulses.len(),
+        live_rays_alice: live(&app.sim.alice_signal),
+        live_rays_bob: live(&app.sim.bob_signal),
+        heard_by_bob: app.sim.alice_signal.received_count(),
+        heard_by_alice: app.sim.bob_signal.received_count(),
+        budget_exhausted: app.sim.alice_signal.budget_exhausted()
+            + app.sim.bob_signal.budget_exhausted(),
+        dropped_in_flight: app.sim.alice_signal.dropped_in_flight()
+            + app.sim.bob_signal.dropped_in_flight(),
     }
-}
-
-/// A 64-bit FNV-1a over the bit patterns of whatever it is fed.
-///
-/// Hand-written because the crate takes no dependency it does not need, and FNV because the job is
-/// to notice that two states differ, not to resist anybody trying to make them collide. The bits go
-/// in as bits rather than as rounded decimals: the claim a fingerprint is checking is that an
-/// optimisation left the arithmetic alone, and an optimisation that moved the last bit of a radius
-/// has not left the arithmetic alone.
-struct Fnv(u64);
-
-impl Fnv {
-    fn new() -> Self {
-        Self(0xcbf2_9ce4_8422_2325)
-    }
-
-    fn bits(&mut self, value: u64) {
-        for byte in value.to_le_bytes() {
-            self.0 ^= u64::from(byte);
-            self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-    }
-
-    fn f64(&mut self, value: f64) {
-        self.bits(value.to_bits());
-    }
-
-    /// An optional number goes in as a present/absent tag and then, if present, its bits, so that
-    /// a ray that has just died and one that died a moment ago cannot hash the same.
-    fn maybe(&mut self, value: Option<f64>) {
-        match value {
-            Some(v) => {
-                self.bits(1);
-                self.f64(v);
-            }
-            None => self.bits(0),
-        }
-    }
-}
-
-/// The 64-bit state hash of a replay: the clock, both worldlines, every ray of both transmissions
-/// and every arrival recorded.
-///
-/// Every number here is one the physics produced. Nothing about the drawing is in it - no camera,
-/// no zoom, no canvas state - so a change to a painter cannot move the fingerprint and a change to
-/// an integrator cannot fail to.
-fn fingerprint(app: &SpacetimeApp) -> u64 {
-    let mut h = Fnv::new();
-    h.f64(app.current_time);
-    for observer in [app.alice.as_ref(), app.bob.as_ref()] {
-        match observer {
-            Some(obs) => {
-                h.bits(1);
-                h.f64(obs.t);
-                h.f64(obs.r);
-                h.f64(obs.phi);
-                h.f64(obs.tau);
-            }
-            None => h.bits(0),
-        }
-    }
-    for field in [&app.alice_signal, &app.bob_signal] {
-        h.f64(field.t);
-        h.bits(field.pulses.len() as u64);
-        for pulse in field.pulses.iter() {
-            h.bits(pulse.index as u64);
-            for ray in pulse.rays.iter() {
-                h.f64(ray.r);
-                h.f64(ray.phi);
-                h.f64(ray.dr_dt);
-                h.f64(ray.dphi_dt);
-                h.maybe(ray.death_t);
-            }
-        }
-        for reception in field.receptions() {
-            h.f64(reception.t);
-            h.f64(reception.r);
-            h.f64(reception.ratio);
-        }
-    }
-    h.0
 }
 
 /// One pass of the frame timings into the numbers the report prints.
@@ -459,7 +371,7 @@ fn summarise_run(
         split,
         buckets,
         counters: counters(app),
-        fingerprint: format!("{:016x}", fingerprint(app)),
+        fingerprint: format!("{:016x}", app.sim.fingerprint()),
     }
 }
 

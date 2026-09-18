@@ -1,8 +1,9 @@
 use crate::gui::theme::Theme;
 use crate::physics::geodesic::GeodesicState;
 use crate::physics::kerr_schild::KerrSchild;
-use crate::physics::observer::{Observer, ObserverMode, ObserverPair, Release, WorldlineParams};
-use crate::physics::wavefront::{Endpoint, MAX_PULSES, RAYS_PER_PULSE, SignalField, SignalPair};
+use crate::physics::observer::{Observer, ObserverMode, Release, WorldlineParams};
+use crate::physics::simulation::{Simulation, Transmit};
+use crate::physics::wavefront::{MAX_PULSES, RAYS_PER_PULSE, SignalField};
 
 /// Why one M is a mass, a length and a duration at the same time.
 const M_UNITS_TIP: &str =
@@ -1130,18 +1131,13 @@ impl AppControls {
     /// harness that drives the pointer:
     /// `app::tests::test_resetting_the_run_puts_the_time_pan_back_to_the_start` calls the action
     /// the button calls and then runs a real frame of the app over it.
-    pub(crate) fn drop_observers(
-        &mut self,
-        metric: &KerrSchild,
-        alice: &mut Option<Observer>,
-        bob: &mut Option<Observer>,
-        signals: &mut SignalPair<'_>,
-        current_time: &mut f64,
-    ) {
-        *current_time = 0.0;
-        signals.clear();
-        *alice = ALICE_CARD.redropped(metric, &self.alice, alice.as_ref(), 0.0);
-        *bob = BOB_CARD.redropped(metric, &self.bob, bob.as_ref(), 0.0);
+    pub(crate) fn drop_observers(&mut self, sim: &mut Simulation) {
+        // Both observers are built before either is put in place, because `redropped` reads the
+        // observer it is replacing - Motion is inherited rather than read off the card - and the
+        // run cannot be restarted while it is still being asked what it was carrying.
+        let alice = ALICE_CARD.redropped(&sim.metric, &self.alice, sim.alice.as_ref(), 0.0);
+        let bob = BOB_CARD.redropped(&sim.metric, &self.bob, sim.bob.as_ref(), 0.0);
+        sim.restart(alice, bob);
         self.view_reset_requested = true;
     }
 
@@ -1313,27 +1309,19 @@ impl AppControls {
         self.transport_flash = Some((which, now));
     }
 
-    /// The two transmissions as `SignalPair` wants them: who is where, and who is sending.
-    fn endpoints<'a>(
-        &self,
-        alice: Option<&'a Observer>,
-        bob: Option<&'a Observer>,
-    ) -> (Endpoint<'a>, Endpoint<'a>) {
-        (
-            Endpoint { observer: alice, transmitting: self.alice.transmit },
-            Endpoint { observer: bob, transmitting: self.bob.transmit },
-        )
+    /// What the panel has to say about the next step forward: the two "Transmit Signal" boxes and
+    /// the Wavefront points slider, which is a standing request about the next emission. Who the
+    /// observers are is not the panel's business - `Simulation::step_forward` reads that off the
+    /// run - so this is the whole of what a step is told.
+    pub(crate) fn transmit(&self) -> Transmit {
+        Transmit {
+            rays_per_pulse: self.rays_per_pulse,
+            alice: self.alice.transmit,
+            bob: self.bob.transmit,
+        }
     }
 
-    pub fn render_panel(
-        &mut self,
-        ui: &mut egui::Ui,
-        metric: &mut KerrSchild,
-        alice: &mut Option<Observer>,
-        bob: &mut Option<Observer>,
-        mut signals: SignalPair<'_>,
-        current_time: &mut f64,
-    ) {
+    pub fn render_panel(&mut self, ui: &mut egui::Ui, sim: &mut Simulation) {
         ui.label(egui::RichText::new("Ingoing Kerr-Schild Foliation").small().color(Theme::TEXT_MUTED));
         ui.separator();
 
@@ -1375,18 +1363,17 @@ impl AppControls {
                     flashing == Some(TransportPress::Reset),
                 ) {
                     self.record_transport_press(TransportPress::Reset, now);
-                    self.drop_observers(metric, alice, bob, &mut signals, current_time);
+                    self.drop_observers(sim);
                 }
                 // The same `step_for` the arrow keys and the play loop ask, so the three paths
                 // cannot disagree about what one step is.
                 let current_step =
-                    self.step_for(metric, bob.as_ref(), alice.as_ref(), self.step_size);
+                    self.step_for(&sim.metric, sim.bob.as_ref(), sim.alice.as_ref(), self.step_size);
                 // How far back the clock can go, and why it can go no further: zero until a
                 // run is long enough for a trail to evict its own start, and that trail's oldest
-                // event afterwards. See `ObserverPair::rewind_floor`.
-                let floor =
-                    ObserverPair { bob: bob.as_mut(), alice: alice.as_mut() }.rewind_floor(metric);
-                let room = *current_time - floor;
+                // event afterwards. See `Simulation::rewind_floor`.
+                let floor = sim.rewind_floor();
+                let room = sim.clock - floor;
                 let back_tip = if room > 1e-9 {
                     "Step back by Step Size / Distance (Left Arrow key)".to_string()
                 } else if floor > 0.0 {
@@ -1413,20 +1400,13 @@ impl AppControls {
                     .inner;
                 if step_back {
                     self.record_transport_press(TransportPress::StepBack, now);
-                    // Stepped back by however much of the step is left above the floor.
-                    let back = current_step.min(room).max(0.0);
-                    *current_time -= back;
-                    // The worldlines first, by the same `ObserverPair::rewind_to` that
-                    // `SpacetimeApp::step_backward` calls, then the fields, which are rewound
-                    // rather than dropped: `SignalField::step_back` integrates every ray back along
-                    // the null geodesic it came in on, revives the ones that died inside the
-                    // interval, un-sends the pulses emitted inside it, and re-establishes each
-                    // receiver's side of every wavefront at the rewound state. That order is why
-                    // the observers move first, and going through `SignalPair` is why this button
-                    // and the left arrow key cannot mean different things.
-                    ObserverPair { bob: bob.as_mut(), alice: alice.as_mut() }
-                        .rewind_to(metric, *current_time);
-                    signals.step_back(metric, back, alice.as_ref(), bob.as_ref());
+                    // The one description of a step back, shared with the left arrow key: the
+                    // clock is clamped to the floor read above, the worldlines are wound back onto
+                    // it, and the transmissions are then rewound rather than dropped - every ray
+                    // integrated back along the null geodesic it came in on, the pulses emitted
+                    // inside the interval un-sent, and each receiver's side of every wavefront
+                    // re-established at the rewound state. See `Simulation::step_back`.
+                    sim.step_back(current_step);
                 }
                 if transport_button(
                     ui,
@@ -1436,17 +1416,10 @@ impl AppControls {
                     flashing == Some(TransportPress::StepForward),
                 ) {
                     self.record_transport_press(TransportPress::StepForward, now);
-                    *current_time += current_step;
-                    ObserverPair { bob: bob.as_mut(), alice: alice.as_mut() }
-                        .step(metric, *current_time, current_step);
-                    // One description of a step forward, shared with the play loop and the arrow
-                    // keys: carry both transmissions, let each emitter emit, then let each receiver
-                    // listen.
-                    let (a, b) = self.endpoints(alice.as_ref(), bob.as_ref());
-                    // The panel's own step is a step like any other, so the wavefront count goes in
-                    // the same way it does on the played frame: see `SignalPair::set_rays_per_pulse`.
-                    signals.set_rays_per_pulse(self.rays_per_pulse);
-                    signals.advance(metric, current_step, a, b);
+                    // The one description of a step forward, shared with the play loop and the
+                    // arrow keys: the clock, then both worldlines, then both transmissions, with
+                    // the wavefront count riding in on the step. See `Simulation::step_forward`.
+                    sim.step_forward(current_step, self.transmit());
                 }
             });
         });
@@ -1458,6 +1431,10 @@ impl AppControls {
         // they get their own frame and their own heading rather than trailing off the same one.
         ui.group(|ui| {
             ui.label(egui::RichText::new("SIMULATION SETTINGS").strong().color(Theme::UI_HEADING));
+            // Nothing in this group changes the run; every control here is a setting of the
+            // panel's own, and the geometry is read only to say what each one is worth in
+            // kilometres and seconds.
+            let metric = &sim.metric;
 
             ui.add(
                 egui::Slider::new(&mut self.play_speed, 0.05..=20.0)
@@ -1646,23 +1623,23 @@ impl AppControls {
             ui.label(egui::RichText::new("BLACK HOLE PROPERTIES").strong().color(Theme::UI_HEADING));
 
             // Logarithmic Mass input
-            let mut log_mass = metric.m_solar.log10();
+            let mut log_mass = sim.metric.m_solar.log10();
             if ui.add(egui::Slider::new(&mut log_mass, 0.0..=11.0).text("Mass log₁₀(M☉)")).changed() {
                 let m_solar = 10.0_f64.powf(log_mass);
-                *metric = KerrSchild::with_solar_mass(metric.m, metric.a, m_solar);
+                sim.metric = KerrSchild::with_solar_mass(sim.metric.m, sim.metric.a, m_solar);
             }
-            ui.label(format!("Mass: {:.2e} M☉", metric.m_solar));
+            ui.label(format!("Mass: {:.2e} M☉", sim.metric.m_solar));
 
-            let mut spin_ratio = metric.a_star();
+            let mut spin_ratio = sim.metric.a_star();
             if ui.add(egui::Slider::new(&mut spin_ratio, 0.0..=0.999).text("Spin a/M")).changed() {
-                *metric = KerrSchild::with_solar_mass(metric.m, spin_ratio * metric.m, metric.m_solar);
+                sim.metric = KerrSchild::with_solar_mass(sim.metric.m, spin_ratio * sim.metric.m, sim.metric.m_solar);
             }
 
             ui.label(egui::RichText::new("Presets (Sets Mass & Spin):").small());
             // Two rows rather than one that wraps where it likes: the two widest labels have a
             // row of their own, so the panel stays as narrow as the rest of it.
             let mut preset_changed = false;
-            let highlighted = active_preset(metric);
+            let highlighted = active_preset(&sim.metric);
             for second_row in [false, true] {
                 ui.horizontal_wrapped(|ui| {
                     for (label, m, a_star, m_solar, note) in PRESETS {
@@ -1672,28 +1649,28 @@ impl AppControls {
                         let pick = chip(ui, highlighted == Some(label), label);
                         let pick = if note.is_empty() { pick } else { pick.on_hover_text(note) };
                         if pick.clicked() {
-                            *metric = KerrSchild::with_solar_mass(m, a_star * m, m_solar);
+                            sim.metric = KerrSchild::with_solar_mass(m, a_star * m, m_solar);
                             preset_changed = true;
                         }
                     }
                 });
             }
             if preset_changed {
-                self.drop_observers(metric, alice, bob, &mut signals, current_time);
+                self.drop_observers(sim);
             }
 
             ui.separator();
-            let rp = metric.outer_horizon();
-            let rm = metric.inner_horizon();
-            let re = metric.ergosphere_equatorial();
+            let rp = sim.metric.outer_horizon();
+            let rm = sim.metric.inner_horizon();
+            let re = sim.metric.ergosphere_equatorial();
             if self.use_physical_units {
-                ui.label(format!("• Outer Horizon r₊: {} ({:.3} M)", metric.format_km(metric.r_to_km(rp)), rp));
-                ui.label(format!("• Cauchy Horizon r₋: {} ({:.3} M)", metric.format_km(metric.r_to_km(rm)), rm));
-                ui.label(format!("• Ergosphere r_E:   {} ({:.3} M)", metric.format_km(metric.r_to_km(re)), re));
+                ui.label(format!("• Outer Horizon r₊: {} ({:.3} M)", sim.metric.format_km(sim.metric.r_to_km(rp)), rp));
+                ui.label(format!("• Cauchy Horizon r₋: {} ({:.3} M)", sim.metric.format_km(sim.metric.r_to_km(rm)), rm));
+                ui.label(format!("• Ergosphere r_E:   {} ({:.3} M)", sim.metric.format_km(sim.metric.r_to_km(re)), re));
             } else {
-                ui.label(format!("• Outer Horizon r₊: {:.3} M ({})", rp, metric.format_physical_distance(rp)));
-                ui.label(format!("• Cauchy Horizon r₋: {:.3} M ({})", rm, metric.format_physical_distance(rm)));
-                ui.label(format!("• Ergosphere r_E:   {:.3} M ({})", re, metric.format_physical_distance(re)));
+                ui.label(format!("• Outer Horizon r₊: {:.3} M ({})", rp, sim.metric.format_physical_distance(rp)));
+                ui.label(format!("• Cauchy Horizon r₋: {:.3} M ({})", rm, sim.metric.format_physical_distance(rm)));
+                ui.label(format!("• Ergosphere r_E:   {:.3} M ({})", re, sim.metric.format_physical_distance(re)));
             }
         });
 
@@ -1703,9 +1680,9 @@ impl AppControls {
         // for - the light cones, the rest-frame view and the stack on r₋ are all his - so his card
         // is the one reached for most often and it sits at the top of the pair. They are the same
         // code twice: see `ObserverCard`.
-        BOB_CARD.show(ui, metric, &mut self.bob, bob, signals.bob, *current_time, self.use_physical_units);
+        BOB_CARD.show(ui, &sim.metric, &mut self.bob, &mut sim.bob, &mut sim.bob_signal, sim.clock, self.use_physical_units);
         ui.add_space(4.0);
-        ALICE_CARD.show(ui, metric, &mut self.alice, alice, signals.alice, *current_time, self.use_physical_units);
+        ALICE_CARD.show(ui, &sim.metric, &mut self.alice, &mut sim.alice, &mut sim.alice_signal, sim.clock, self.use_physical_units);
 
         ui.add_space(6.0);
 
