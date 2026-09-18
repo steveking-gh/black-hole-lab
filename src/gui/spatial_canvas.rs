@@ -1,4 +1,5 @@
 use crate::gui::controls::{ReferenceFrame, SignalViews};
+use crate::gui::polyline::{SCREEN_SPACING, thin_to_pixels};
 use crate::gui::spacetime_canvas::TelemetryBoxes;
 use crate::gui::theme::Theme;
 use crate::physics::geodesic::GeodesicState;
@@ -1539,11 +1540,13 @@ pub(crate) fn draw_spatial_trail<F: Fn((f64, f64)) -> Pos2>(
     if obs.trail.len() < 2 {
         return;
     }
-    let points: Vec<Pos2> = obs
-        .trail
-        .iter()
-        .map(|point| to_screen(metric.cartesian_position(point.r, point.phi)))
-        .collect();
+    // Thinned to the screen: the trail holds one event per stepped frame, so on a long run most
+    // consecutive events embed to the same pixel and cost a triangle each. See `thin_to_pixels`.
+    let points = thin_to_pixels(
+        obs.trail.iter().map(|p| to_screen(metric.cartesian_position(p.r, p.phi))),
+        |at| *at,
+        SCREEN_SPACING,
+    );
     let faint = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 120);
     painter.add(egui::Shape::line(points, Stroke::new(width, faint)));
 }

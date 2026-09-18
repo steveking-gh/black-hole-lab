@@ -1,4 +1,5 @@
 use crate::gui::controls::{impossible_mode_note, ReferenceFrame, SignalViews};
+use crate::gui::polyline::{SCREEN_SPACING, thin_to_pixels};
 use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::geodesic::proper_time_between;
@@ -1712,11 +1713,15 @@ Tick Enable Observer on Alice's or Bob's card",
         let mut alice_box: Option<Pos2> = None;
         if let Some(al) = alice {
             if al.trail.len() >= 2 {
-                let points: Vec<Pos2> = al
-                    .trail
-                    .iter()
-                    .map(|point| Pos2::new(to_screen_x(point.r), to_screen_y(point.t)))
-                    .collect();
+                // Thinned to the screen, so that what this costs to draw follows the length of the
+                // curve on the canvas rather than the depth of the buffer behind it: a worldline
+                // recorded once a frame is mostly vertices a fraction of a pixel apart. See
+                // `thin_to_pixels`.
+                let points = thin_to_pixels(
+                    al.trail.iter().map(|p| Pos2::new(to_screen_x(p.r), to_screen_y(p.t))),
+                    |at| *at,
+                    SCREEN_SPACING,
+                );
                 painter.add(PathShape::line(points, Stroke::new(2.0, Theme::ALICE_COLOR)));
             }
 
@@ -1735,11 +1740,12 @@ Tick Enable Observer on Alice's or Bob's card",
 
         // Bob Worldline & Dragging
         if let Some(bob) = bob.filter(|b| b.trail.len() >= 2) {
-            let points: Vec<Pos2> = bob
-                .trail
-                .iter()
-                .map(|point| Pos2::new(to_screen_x(point.r), to_screen_y(point.t)))
-                .collect();
+            // Thinned to the screen, exactly as Alice's is just above.
+            let points = thin_to_pixels(
+                bob.trail.iter().map(|p| Pos2::new(to_screen_x(p.r), to_screen_y(p.t))),
+                |at| *at,
+                SCREEN_SPACING,
+            );
             painter.add(PathShape::line(points, Stroke::new(2.5, Theme::BOB_COLOR)));
         }
 

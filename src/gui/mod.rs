@@ -1,4 +1,5 @@
 pub mod theme;
+pub mod polyline;
 pub mod spacetime_canvas;
 pub mod spatial_canvas;
 pub mod cauchy_effects;

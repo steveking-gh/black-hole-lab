@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::ops::Range;
 
 use crate::gui::controls::{ReferenceFrame, SignalViews};
+use crate::gui::polyline::{SCREEN_SPACING, thin_to_pixels};
 use crate::gui::spacetime_canvas::{CHART_BANNER, COARSE_ZOOM_STEPS, TelemetryBoxes};
 use crate::gui::spatial_canvas::{
     CENTRED_RING_GAP, FrontStyle, Who, draw_reception_tick, draw_signal_field, draw_spatial_trail,
@@ -1318,15 +1319,21 @@ impl VolumeCanvas {
                 Who::Alice => 1.8,
                 Who::Bob => 2.2,
             };
-            let points: Vec<(f64, [f64; 3])> = obs
-                .trail
-                .iter()
-                .filter(|p| p.t >= t_min && p.t <= current_time)
-                .map(|p| (p.t, chart.world(metric, p.t, p.r, p.phi, t_scale)))
-                // A trail point that maps to an infinity is dropped rather than drawn: the rest of
-                // the worldline is still the worldline.
-                .filter(|(_, p)| finite3(*p))
-                .collect();
+            // Thinned to the screen once the world position is known, so the run count below
+            // follows the drawn length of the worldline and not the depth of the buffer. The
+            // thinning is in screen space but keeps the world point and the time, which the depth
+            // sort and the fade still need. See `thin_to_pixels`.
+            let points: Vec<(f64, [f64; 3])> = thin_to_pixels(
+                obs.trail
+                    .iter()
+                    .filter(|p| p.t >= t_min && p.t <= current_time)
+                    .map(|p| (p.t, chart.world(metric, p.t, p.r, p.phi, t_scale)))
+                    // A trail point that maps to an infinity is dropped rather than drawn: the
+                    // rest of the worldline is still the worldline.
+                    .filter(|(_, p)| finite3(*p)),
+                |(_, at)| project(*at).0,
+                SCREEN_SPACING,
+            );
             let mut start = 0;
             while start + 1 < points.len() {
                 let end = (start + WORLDLINE_RUN).min(points.len());
