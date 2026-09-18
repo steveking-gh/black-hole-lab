@@ -1042,12 +1042,6 @@ const TRANSPORT_CORNER: f32 = 8.0;
 /// enough to see and short enough that holding the arrow key still reads as a series of presses.
 const TRANSPORT_FLASH_SECONDS: f64 = 0.17;
 
-/// The size the transport icons are drawn at, inside `TRANSPORT_BUTTON`.
-///
-/// They are SVG, so this is the size they are rasterised for rather than a scale applied to a
-/// bitmap, and the shapes stay crisp at whatever the desktop's scaling makes of it.
-const TRANSPORT_ICON: egui::Vec2 = egui::vec2(20.0, 20.0);
-
 /// The largest radius an observer can be dropped from, in M: the top of the drop-radius slider in
 /// both of its unit flavours.
 ///
@@ -1069,9 +1063,18 @@ const _: () = assert!(
 /// One of them. Returns whether it was clicked, so the caller reads exactly as it did when these
 /// were `ui.button(..).clicked()`.
 ///
-/// `icon` is one of the SVGs under `assets/images`, passed as `egui::include_image!` so that the
-/// file is embedded in the binary and its path is checked at compile time. It is drawn tinted, so
-/// one white drawing serves whatever colour the button wants it in.
+/// `glyph` is the Unicode transport symbol the button carries: U+25B6 and U+23F8 for Play and
+/// Pause, U+23EE for Reset, and the two arrows for the steps. All five render.
+///
+/// Worth recording why that sentence is here. These were briefly SVG drawings loaded through
+/// `egui_extras`, on the strength of a claim that the glyphs were missing-glyph boxes - and the
+/// claim was wrong. It came from cmapping the two faces this repo bundles, Atkinson Hyperlegible
+/// at 342 codepoints and DejaVu Sans at 5 907, neither of which has U+23EE or U+23F8. But
+/// `install_fonts` only *inserts* those two at the front of the Proportional family:
+/// `FontDefinitions::default()` has already put Ubuntu-Light, NotoEmoji-Regular and
+/// emoji-icon-font there, and they stay behind as fallbacks. emoji-icon-font covers U+23EE and
+/// U+23F8, so egui was drawing them all along. The font stack to check is the family, not the
+/// bundle. The drawings bought nothing and cost resvg and some twenty crates, so they are gone.
 ///
 /// `engaged` fills the button in `Theme::TRANSPORT_ENGAGED`. For Play and Pause that is the state
 /// of the run and holds; for the others it is the tail of a press, held for
@@ -1080,18 +1083,16 @@ const _: () = assert!(
 /// of being pinned to one colour and going dead under the pointer.
 fn transport_button(
     ui: &mut egui::Ui,
-    icon: egui::ImageSource<'_>,
+    glyph: &str,
     caption: &str,
     tip: &str,
     engaged: bool,
 ) -> bool {
     ui.vertical(|ui| {
         ui.set_width(TRANSPORT_BUTTON.x);
-        let mut button = egui::Button::image(
-            egui::Image::new(icon).fit_to_exact_size(TRANSPORT_ICON).tint(Theme::TEXT_BRIGHT),
-        )
-        .corner_radius(TRANSPORT_CORNER)
-        .stroke(egui::Stroke::new(1.2, Theme::CHIP_OUTLINE));
+        let mut button = egui::Button::new(egui::RichText::new(glyph).size(22.0))
+            .corner_radius(TRANSPORT_CORNER)
+            .stroke(egui::Stroke::new(1.2, Theme::CHIP_OUTLINE));
         if engaged {
             button = button.fill(Theme::TRANSPORT_ENGAGED);
         }
@@ -1353,16 +1354,13 @@ impl AppControls {
                 ));
             }
             ui.horizontal(|ui| {
-                let (play_icon, play_caption) = if self.is_playing {
-                    (egui::include_image!("../../assets/images/pause.svg"), "Pause")
-                } else {
-                    (egui::include_image!("../../assets/images/play.svg"), "Play")
-                };
+                let (play_glyph, play_caption) =
+                    if self.is_playing { ("⏸", "Pause") } else { ("▶", "Play") };
                 // Sticky: the fill is which state the run is in, and it stays until that
                 // changes. So the button reads as pressed in while the simulation is playing.
                 if transport_button(
                     ui,
-                    play_icon,
+                    play_glyph,
                     play_caption,
                     "Toggle Play/Pause simulation (Spacebar)",
                     self.is_playing,
@@ -1371,7 +1369,7 @@ impl AppControls {
                 }
                 if transport_button(
                     ui,
-                    egui::include_image!("../../assets/images/reset.svg"),
+                    "⏮",
                     "Reset",
                     "Put the run back to its start: the clock to zero, both transmissions dropped, and every ticked observer dropped afresh from their card - Alice at ϕ = 0.25 and Bob at ϕ = 0, each from their own drop radius, each hovering there until their own Release Delay, on the worldline their own E and L pick out. Two things are not read off the card. Motion is inherited: an observer being replaced hands their own Motion to the one replacing them, so a Reset never answers a question about how somebody moves that the user has not asked, and a card that has just been ticked on starts as it does out of the box. And the drop radius is wherever that observer was standing the last time the clock read zero, so dragging a marker at the start of a run moves where they are dropped from.",
                     flashing == Some(TransportPress::Reset),
@@ -1406,7 +1404,7 @@ impl AppControls {
                     .add_enabled_ui(room > 1e-9, |ui| {
                         transport_button(
                             ui,
-                            egui::include_image!("../../assets/images/step-back.svg"),
+                            "←",
                             "Step Back",
                             &back_tip,
                             flashing == Some(TransportPress::StepBack),
@@ -1432,7 +1430,7 @@ impl AppControls {
                 }
                 if transport_button(
                     ui,
-                    egui::include_image!("../../assets/images/step-forward.svg"),
+                    "→",
                     "Step Fwd",
                     "Step forward by Step Size / Distance (Right Arrow key)",
                     flashing == Some(TransportPress::StepForward),
