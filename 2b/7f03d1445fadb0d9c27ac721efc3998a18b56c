@@ -1,0 +1,21 @@
+src/physics/wavefront.rs
+  s_99085f80de58c0::t_90342faf968919 129-130,2056-2061,2120,2185,2215-2219,2222,2488,2524,3899,5670,5900,6243,6478,6493
+src/app.rs
+  s_99085f80de58c0::t_90342faf968919 2850
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "2b7f03d1445fadb0d9c27ac721efc3998a18b56c",
+  "prompts": {},
+  "sessions": {
+    "s_99085f80de58c0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b270d59c-b282-4517-83fc-8b530cf1e304",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
