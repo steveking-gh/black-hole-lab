@@ -42,6 +42,7 @@ fn main() -> eframe::Result<()> {
         native_options,
         Box::new(|cc| {
             install_fonts(&cc.egui_ctx);
+            install_images(&cc.egui_ctx);
             Ok(Box::new(SpacetimeApp::default()))
         }),
     )
@@ -79,4 +80,16 @@ fn install_fonts(ctx: &egui::Context) {
         vec!["atkinson-bold".to_owned(), "dejavu".to_owned()],
     );
     ctx.set_fonts(fonts);
+}
+
+/// Register the image loaders the transport icons are drawn through.
+///
+/// The icons are SVG files under `assets/images`, embedded at compile time by
+/// `egui::include_image!` and rasterised by `egui_extras`' resvg loader at the size they are drawn
+/// at. They used to be Unicode transport glyphs, and every one of them was a missing-glyph box:
+/// neither Atkinson Hyperlegible nor DejaVu Sans carries U+23EE, U+23F8 or U+23EA, so the Reset and
+/// Pause buttons rendered as empty rectangles. A drawing is a drawing and does not depend on what
+/// a text face happens to cover.
+fn install_images(ctx: &egui::Context) {
+    egui_extras::install_image_loaders(ctx);
 }

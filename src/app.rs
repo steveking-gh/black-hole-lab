@@ -597,7 +597,7 @@ mod tests {
         app.alice.as_ref().expect("Alice's card is ticked in this test")
     }
 
-    /// Rebuild the run from the two cards, which is what ⏮ Reset and the app's own startup do. A test that wants a layout other than the default one sets the cards and
+    /// Rebuild the run from the two cards, which is what Reset and the app's own startup do. A test that wants a layout other than the default one sets the cards and
     /// calls this, rather than assembling observers by hand behind the panel's back.
     fn drop_observers(app: &mut SpacetimeApp) {
         let SpacetimeApp { metric, alice, bob, signal, bob_signal, controls, current_time, .. } =
@@ -2724,7 +2724,7 @@ mod tests {
         }
         assert!(bob_of(&app).r < 2.0 && !app.signal.pulses.is_empty(), "a run in progress");
 
-        // The action behind ⏮ Reset, and behind the preset row.
+        // The action behind Reset, and behind the preset row.
         drop_observers(&mut app);
         assert_eq!(app.current_time, 0.0, "the clock goes back with it");
         assert_same_layout("Reset vs startup", &layout(&app), &opening);

@@ -2428,7 +2428,7 @@ Tick Enable Observer on Alice's or Bob's card",
             painter.text(
                 Pos2::new(center.x + 18.0, center.y),
                 egui::Align2::LEFT_CENTER,
-                "💥 SINGULARITY IMPACT\nLight cone terminated at r = 0",
+                "SINGULARITY IMPACT\nLight cone terminated at r = 0",
                 egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
                 Theme::WARNING_RED,
             );

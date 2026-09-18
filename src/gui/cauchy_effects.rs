@@ -59,7 +59,7 @@ impl CauchyEffects {
                 ui.set_width(ui.available_width());
 
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("⏱ RELATIVISTIC TELEMETRY & PROPER CLOCKS").strong().color(Theme::HORIZON_OUTER));
+                    ui.label(egui::RichText::new("RELATIVISTIC TELEMETRY & PROPER CLOCKS").strong().color(Theme::HORIZON_OUTER));
 
                     // Radial separation readout aligned to the right
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

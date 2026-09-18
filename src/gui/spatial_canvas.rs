@@ -831,15 +831,15 @@ impl SpatialCanvas {
             // Collapsed: the view's name and the one number that changes under the mouse.
             match (self.keep_hole_centred, self.centred_on) {
                 (true, _) => format!(
-                    "Equatorial View (θ = π/2)   🔍 {:.0} px/M   centered on the black hole",
+                    "Equatorial View (θ = π/2)   {:.0} px/M   centered on the black hole",
                     self.zoom
                 ),
                 (false, Some(who)) => format!(
-                    "Equatorial View (θ = π/2)   🔍 {:.0} px/M   centered on {}",
+                    "Equatorial View (θ = π/2)   {:.0} px/M   centered on {}",
                     self.zoom,
                     who.name()
                 ),
-                (false, None) => format!("Equatorial View (θ = π/2)   🔍 {:.0} px/M", self.zoom),
+                (false, None) => format!("Equatorial View (θ = π/2)   {:.0} px/M", self.zoom),
             }
         } else if use_physical_units {
             format!(
@@ -861,7 +861,7 @@ impl SpatialCanvas {
                  Bob's fronts: same gain colours at half stroke, mint emission dots\n\
                  Receptions: triangle on the receiver's trail in the sender's colour (amber = Alice → Bob, mint = Bob → Alice)\n\
                  {}\
-                 🔍 Zoom: {:.0} px/M (scroll to zoom, drag the background to pan,\n\
+                 Zoom: {:.0} px/M (scroll to zoom, drag the background to pan,\n\
                  drag either observer's marker to put them anywhere in the plane)",
                 metric.format_physical_distance(1.0),
                 metric.m_solar,
@@ -898,7 +898,7 @@ impl SpatialCanvas {
                  Bob's fronts: same gain colours at half stroke, mint emission dots\n\
                  Receptions: triangle on the receiver's trail in the sender's colour (amber = Alice → Bob, mint = Bob → Alice)\n\
                  {}\
-                 🔍 Zoom: {:.0} px/M (scroll to zoom, drag the background to pan,\n\
+                 Zoom: {:.0} px/M (scroll to zoom, drag the background to pan,\n\
                  drag either observer's marker to put them anywhere in the plane)",
                 metric.format_physical_distance(1.0),
                 metric.format_physical_time(1.0),
