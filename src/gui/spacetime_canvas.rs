@@ -561,6 +561,31 @@ fn clamp_into(rect: Rect, bounds: Rect) -> Rect {
 /// the rounding reads as a deliberate shape rather than as an anti-aliased square corner.
 const BOX_CORNER_RADIUS: f32 = 8.0;
 
+/// The shadow every telemetry box casts, which is what lifts it off the chart underneath.
+///
+/// A box is drawn over the picture it is reporting on, and it is drawn nearly black on a nearly
+/// black canvas, so without something under its edge it reads as a hole in the chart rather than as
+/// a card lying on it. The shadow is the cheapest way to say which.
+///
+/// The geometry is one light, high and to the upper left, so every box on every canvas is lit the
+/// same way: `epaint`'s `margin()` works out to nothing above or to the left of the box, and ten
+/// points below and to the right, from `spread + blur/2 -/+ offset`. Equal on the two lit sides is
+/// what puts the light at 45 degrees, and `blur/2 == offset` is what keeps it off the other two -
+/// a shadow creeping out of the top left would read as a second light rather than as depth. See
+/// `test_the_box_shadow_falls_down_and_to_the_right_only`, which asserts exactly that.
+///
+/// It does not scale with the font, unlike the box and its type. A shadow is a statement about how
+/// far the card is off the page, and the card does not rise as the type grows.
+const BOX_SHADOW: egui::epaint::Shadow = egui::epaint::Shadow {
+    offset: [5, 5],
+    blur: 10,
+    spread: 0,
+    // Dark enough to read against the canvas and the region fills both, and no darker: the boxes
+    // sit over the drawn worldlines, and a shadow that hid one would be reporting on the chart by
+    // obscuring it.
+    color: Color32::from_black_alpha(130),
+};
+
 /// The two sizes a telemetry box prints at. They are now the same size: 10 pt is the floor for
 /// text anywhere in this app, and the title is told apart by colour and position rather than by
 /// being the only legible row.
@@ -611,6 +636,10 @@ fn paint_telemetry_box(
     let pad_y = 6.0 * font_scale;
     let line_spacing = 13.0 * font_scale;
 
+    // Under the box and before it, so it falls on the chart and not on the card. Boxes can
+    // overlap, and when they do the upper one's shadow lands on the lower one, which is what a
+    // shadow does.
+    painter.add(BOX_SHADOW.as_shape(badge_rect, BOX_CORNER_RADIUS * font_scale));
     painter.rect_filled(badge_rect, BOX_CORNER_RADIUS * font_scale, Color32::from_black_alpha(230));
     painter.rect_stroke(
         badge_rect,
@@ -2802,6 +2831,23 @@ fn segment_y_at_x(a: Pos2, b: Pos2, x: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_the_box_shadow_falls_down_and_to_the_right_only() {
+        // One light for every box on every canvas, high and to the upper left. `epaint` works the
+        // reach out as `spread + blur/2 -/+ offset` per side, so this is the shadow's own geometry
+        // rather than a guess at it, and it is asserted because the two halves are easy to set
+        // independently and wrong: a blur wider than twice the offset creeps out of the top left
+        // and reads as a second light, and unequal offsets put the light off the diagonal.
+        let reach = BOX_SHADOW.margin();
+        assert_eq!(reach.left, 0.0, "nothing to the left of the box");
+        assert_eq!(reach.top, 0.0, "nor above it");
+        assert_eq!(reach.right, 10.0, "and gone by ten points to the right");
+        assert_eq!(reach.bottom, 10.0, "and ten points below");
+        assert_eq!(reach.right, reach.bottom, "which puts the light at 45 degrees");
+        // Transparent, so what is under a box is dimmed rather than erased.
+        assert!(BOX_SHADOW.color.a() > 0 && BOX_SHADOW.color.a() < 255);
+    }
 
     /// One egui pass over a canvas-sized drag surface with a telemetry-sized box registered on
     /// top of it, in the same order the canvases use. Returns (canvas dragged, box dragged).
