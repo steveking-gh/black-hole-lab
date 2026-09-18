@@ -1,0 +1,94 @@
+src/perf/micro.rs
+  s_1fbbbb8a53c367::t_71db0ec93e8c48 589
+  s_1fbbbb8a53c367::t_7911c14d425aab 543,546-548,552,570
+  s_1fbbbb8a53c367::t_dfa9b5aa608960 112-117,120-128
+  s_1fbbbb8a53c367::t_d8f6b32f12c33a 63-67,69-75
+  s_1fbbbb8a53c367::t_3c70be9f3ee8dd 40
+  s_1fbbbb8a53c367::t_4e50f8fd55fb04 18-22
+  s_1fbbbb8a53c367::t_92f387c0a6a36d 444-470,474,477,481,483,487,491,509,511,515,522,541
+src/perf/quick.rs
+  s_1fbbbb8a53c367::t_1df58ecd5060cb 207
+  s_1fbbbb8a53c367::t_157de6d3af3ba2 64,71
+  s_1fbbbb8a53c367::t_54e79f35a23e4e 34
+  s_1fbbbb8a53c367::t_f7ed9d04f2ec8e 228-277
+  s_1fbbbb8a53c367::t_2450ae79c294fe 183-187,190
+  s_1fbbbb8a53c367::t_6cf1baa43e32a9 65-70
+  s_1fbbbb8a53c367::t_18aeb91fe6e1ef 170-182,188-189,191-194
+  s_1fbbbb8a53c367::t_9a2fefb2c36ffc 218
+  s_1fbbbb8a53c367::t_4501a868cf2a12 1-33,35-63,72-119,125,131-169,195-206,208-217,219-227
+  s_1fbbbb8a53c367::t_7f43d74d04e459 120-124,126-130
+.cargo/config.toml
+  s_1fbbbb8a53c367::t_f1af0860d767c2 1-12
+src/perf/mod.rs
+  s_1fbbbb8a53c367::t_c07ffe6ba733aa 62-74
+  s_1fbbbb8a53c367::t_7e3a85ff1aab2e 572-579,594
+  s_1fbbbb8a53c367::t_45f240c0d3967b 517-519
+  s_1fbbbb8a53c367::t_63cadb20dbc7b1 1218-1259
+  s_1fbbbb8a53c367::t_114ea4e1da2c2e 301,306-309,313-322
+  s_1fbbbb8a53c367::t_f44ca7fb45bee8 701
+  s_1fbbbb8a53c367::t_9d0404da5299a9 406-408,411,415,424-436,445-449,463-467
+  s_1fbbbb8a53c367::t_6925a981e4ac28 717-722
+  s_1fbbbb8a53c367::t_bbfb1ce0e3767c 825-875
+  s_1fbbbb8a53c367::t_765361b0bddc91 40-61,75-81,87-88,93,97-104,110-111,129-131
+  s_1fbbbb8a53c367::t_e832c3ab49d704 657
+  s_1fbbbb8a53c367::t_9185a620f482bc 1108
+  s_1fbbbb8a53c367::t_91acb968a5487c 266-272
+  s_1fbbbb8a53c367::t_92f4d96916d276 323,1030-1100,1104-1105,1107
+  s_1fbbbb8a53c367::t_760476ce609d5d 376,379
+  s_1fbbbb8a53c367::t_b459dff81db0fc 342,347
+  s_1fbbbb8a53c367::t_78852fc8df9308 1190-1217
+  s_1fbbbb8a53c367::t_254c2164448195 138-146
+  s_1fbbbb8a53c367::t_d7848cfbc7f337 611,615-621,624-626,628-629,632-647
+  s_1fbbbb8a53c367::t_811dcc456bd30d 1274-1276
+  s_1fbbbb8a53c367::t_f8dbc2be9fc779 170
+  s_1fbbbb8a53c367::t_87ce877cc05c02 926-935
+  s_1fbbbb8a53c367::t_5d2ae490c4cb54 886-904
+  s_1fbbbb8a53c367::t_c8bd8dc1cc0476 680
+  s_1fbbbb8a53c367::t_cc20f757607e10 608-610,612-614
+  s_1fbbbb8a53c367::t_10d3d4ea1dff3f 499-516,520-530,532,535-545
+  s_1fbbbb8a53c367::t_99acce8eb6fd5d 627
+  s_1fbbbb8a53c367::t_e57905fdcc8d40 402-404
+  s_1fbbbb8a53c367::t_ed37ce26f1833d 688-692,702-703,706,709-716,723-741
+  s_1fbbbb8a53c367::t_7cd6e74f209245 437-444
+  s_1fbbbb8a53c367::t_3077593403a251 1120-1126,1128
+  s_1fbbbb8a53c367::t_c5723d8d010257 324
+src/perf/harness.rs
+  s_1fbbbb8a53c367::t_69df561a1f02e4 39-40
+  s_1fbbbb8a53c367::t_82af4f48876437 222-255
+  s_1fbbbb8a53c367::t_5c8575198d1fce 308-326,346-349
+  s_1fbbbb8a53c367::t_5954623da5d42b 59-70,72
+  s_1fbbbb8a53c367::t_b27f3dd1276a08 327-341,343-344
+  s_1fbbbb8a53c367::t_5f42ef4e4715da 73-82
+  s_1fbbbb8a53c367::t_b4c05fe5293984 342,345
+  s_1fbbbb8a53c367::t_77d257f9201921 36-38
+  s_1fbbbb8a53c367::t_e3759edbc3167d 307
+src/perf/replay.rs
+  s_1fbbbb8a53c367::t_8e967950f6aa31 86
+  s_1fbbbb8a53c367::t_c9c061022bf834 463-476,481,485,497-505,510,512-525,531,533,551
+  s_1fbbbb8a53c367::t_292c5a964649f1 384
+  s_1fbbbb8a53c367::t_9976a7f5e4cae0 71-80
+  s_1fbbbb8a53c367::t_9b93c47874703d 373,375
+  s_1fbbbb8a53c367::t_f92e7d35b49fc0 406-407,412-413,418
+  s_1fbbbb8a53c367::t_5e8e648ad96cde 45
+  s_1fbbbb8a53c367::t_92572ca343c169 25-30
+  s_1fbbbb8a53c367::t_b39980d0010f38 276-281
+  s_1fbbbb8a53c367::t_841f29f0a7b8f2 353
+  s_1fbbbb8a53c367::t_0caa97e0bc6f09 433-439
+  s_1fbbbb8a53c367::t_39af7f03ab73dd 565-568,570-576
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "7f48f491d6f42a9f9915c0210e4799acb167a40c",
+  "prompts": {},
+  "sessions": {
+    "s_1fbbbb8a53c367": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ed2f15a7-41d1-4dd6-ba98-d9aaeb4cd695",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
