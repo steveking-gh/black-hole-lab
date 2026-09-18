@@ -341,7 +341,7 @@ fn ruler_distance_label(metric: &KerrSchild, r_in_m: f64) -> String {
 
 /// Where a telemetry box is kept between frames once the user has moved it.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Placement {
+pub(crate) enum Placement {
     /// Displaced from the anchor next to the observer by this much: the box follows the observer.
     Offset(Vec2),
     /// At this position relative to the canvas's top-left corner, whatever the observer does.
@@ -403,9 +403,8 @@ pub enum Canvas {
 
 impl Canvas {
     /// Every canvas there is, for iterating the set. The reading half of the identity - this and
-    /// `from_key` - is what the save module will come in through; nothing in the app turns a slug
-    /// back into a canvas yet, so until then the round-trip test below is their only caller.
-    #[allow(dead_code)]
+    /// `from_key` - is how `crate::save` comes back in: a file names a canvas by its slug, and a
+    /// load turns each slug it recognises back into one of these.
     pub const ALL: [Self; 4] = [Self::Spacetime, Self::RestFrame, Self::Spatial, Self::Volume];
 
     /// This canvas's slug. See the type's own comment before touching one of these strings.
@@ -419,7 +418,6 @@ impl Canvas {
     }
 
     /// The canvas a slug names, or None for one this version has never written.
-    #[allow(dead_code)]
     pub fn from_key(key: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|c| c.key() == key)
     }
@@ -448,9 +446,8 @@ pub enum BoxId {
 }
 
 impl BoxId {
-    /// Every box there is, for iterating the set. Unread in the app for now, exactly as
-    /// `Canvas::ALL` is.
-    #[allow(dead_code)]
+    /// Every box there is, for iterating the set, read by `crate::save` exactly as `Canvas::ALL`
+    /// is.
     pub const ALL: [Self; 8] = [
         Self::Observer(Who::Alice),
         Self::Observer(Who::Bob),
@@ -478,7 +475,6 @@ impl BoxId {
     }
 
     /// The box a slug names, or None for one this version has never written.
-    #[allow(dead_code)]
     pub fn from_key(key: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|b| b.key() == key)
     }
@@ -488,10 +484,12 @@ impl BoxId {
 /// the box's subject so that the same observer can have a different box position in each diagram.
 #[derive(Default)]
 pub struct TelemetryBoxes {
-    placements: HashMap<(Canvas, BoxId), Placement>,
+    /// Visible to the crate for `crate::save`, which writes these placements to a file under the
+    /// stable slugs of `Canvas::key` and `BoxId::key` and puts them back on a load.
+    pub(crate) placements: HashMap<(Canvas, BoxId), Placement>,
     /// Whether a drag pins the box to the canvas where it was dropped (the equatorial view), or
     /// keeps it following the observer at the dragged offset (the (t, r) diagram, the default).
-    pin_on_drag: bool,
+    pub(crate) pin_on_drag: bool,
 }
 
 impl TelemetryBoxes {

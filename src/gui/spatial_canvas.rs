@@ -78,7 +78,7 @@ pub struct SpatialCanvas {
     /// the global foliation, which is the case the selector cannot express. Where the two disagree
     /// this one wins, being the more particular request, and it falls back to the selector's
     /// choice while the observer it names is not in the simulation.
-    centred_on: Option<Who>,
+    pub(crate) centred_on: Option<Who>,
     /// A standing request to keep the black hole in the middle of the view: the origin of the
     /// embedding, the centre of the ring. Like `centred_on` it is about where the canvas is
     /// looking and survives a Reset, and the two are exclusive - the menu clears one when the
@@ -86,7 +86,7 @@ pub struct SpatialCanvas {
     /// is the case it exists for: a rest frame with the hole held still and the observer falling
     /// across the picture. While it holds, the pan is pinned at zero, so a drag or a wheel zoom
     /// about the cursor cannot carry the hole away from the middle; the zoom is about the hole.
-    keep_hole_centred: bool,
+    pub(crate) keep_hole_centred: bool,
     /// The marker drag in progress on this canvas, if any. Cleared when the pointer is released,
     /// when the observer being dragged leaves the simulation, and by `SpatialCanvas::end_drag` when
     /// the run is rebuilt under it.
@@ -2576,8 +2576,7 @@ mod tests {
         // turn each, which is what a front in the deep interior looks like anyway.
         let emitter =
             Observer::new_with_phi(&metric, "Alice", 0.0, 4.5, 0.0, 0.0, WorldlineParams::default());
-        let mut field = SignalField::default();
-        field.rays_per_pulse = 12;
+        let mut field = SignalField { rays_per_pulse: 12, ..Default::default() };
         field.emit_if_due(&metric, &emitter);
         assert_eq!(field.pulses.len(), 1, "one pulse, let go at r = 4.5");
         let n = field.pulses[0].rays.len();

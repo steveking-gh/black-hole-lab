@@ -1155,14 +1155,14 @@ pub struct Reception {
     /// receiver. This is exactly reproducible, unlike the segment that happens to straddle a fixed
     /// azimuth at a given instant, because it names the pair whose swept patch the worldline
     /// passed through rather than the pair that stood across an azimuth when somebody looked.
-    segment: usize,
+    pub(crate) segment: usize,
     /// Which turn of the receiver's azimuth the crossing happened at. A front that has wound
     /// passes over the receiver again at phi + 2 pi k, and each of those is a separate piece of
     /// front at its own radius, so the turn is part of naming the crossing.
-    turn: i64,
+    pub(crate) turn: i64,
     /// receiver.r - r_front on that segment at the end of the pass interval: which side of the
     /// front the crossing left the receiver on. Only the sign of it is ever read.
-    side_after: f64,
+    pub(crate) side_after: f64,
     /// Coordinate time of the *pass* that found the crossing, as against `t`, the crossing itself.
     /// The two differ by up to one pass interval.
     ///
@@ -1173,7 +1173,7 @@ pub struct Reception {
     /// exactly: the pass that noticed the arrival is inside the interval being undone (`t_pass`
     /// after the target) and the primed front still has the receiver on the near side of that
     /// (`segment`, `turn`), the side opposite to `side_after`.
-    t_pass: f64,
+    pub(crate) t_pass: f64,
 }
 
 /// The emission event of a pulse that was received, kept as a record in its own right.
@@ -1264,11 +1264,11 @@ pub struct RingHistory {
     /// Coordinate-time spacing the rows are currently stored at: `HISTORY_MIN_DT`, doubled once for
     /// each thinning `HISTORY_MAX_ROWS` has forced. The same rule, and the same reason, as
     /// `Pulse::track_dt`.
-    history_dt: f64,
+    pub(crate) history_dt: f64,
     /// Every this-th ray of the pulse is sampled. Kept so that a reader can say which rays a row's
     /// samples belong to; the drawing does not need it, since consecutive samples are consecutive
     /// kept rays whatever the stride is.
-    stride: usize,
+    pub(crate) stride: usize,
 }
 
 impl RingHistory {
@@ -1387,7 +1387,7 @@ pub struct Pulse {
     pub extent_track: Vec<(f64, f64, f64)>,
     /// Coordinate-time spacing the track is currently stored at: `TRACK_MIN_DT`, doubled once for
     /// each thinning `TRACK_MAX_POINTS` has forced. See `Pulse::extend_track`.
-    track_dt: f64,
+    pub(crate) track_dt: f64,
     /// The sampled front of this pulse swept up in coordinate time, for the volume view, or None
     /// on the pulses that do not carry one.
     ///
@@ -1395,11 +1395,15 @@ pub struct Pulse {
     /// keeping a surface rather than a curve; see `RingHistory`. It is seeded at emission with the
     /// emission event, extended at every `SignalField::advance` by `Pulse::extend_history`, and cut
     /// back by `SignalField::step_back` alongside the extent track.
-    history: Option<RingHistory>,
+    pub(crate) history: Option<RingHistory>,
     /// The front and the receiver as both stood at the previous detection pass, or None before
     /// this pulse has had one. It is the other half of every reception: a crossing is a statement
     /// about an interval, and this is the near end of it. See `Pulse::sweep`.
-    prev: Option<FrontMark>,
+    ///
+    /// Visible to the crate because `crate::save` writes it to a file and puts it back. Re-taking
+    /// it on load with `prime`, which is what a `step_back` does, is not the same thing to the last
+    /// bits: see `crate::save::v1::FrontMark`.
+    pub(crate) prev: Option<FrontMark>,
     /// Every crossing of the receiver's worldline by this pulse, in the order they met them.
     pub receptions: Vec<Reception>,
 }
@@ -1412,21 +1416,21 @@ pub struct Pulse {
 /// sweeps, so what has to be remembered is where the segment was, not which sheet of the front
 /// anybody had called it.
 #[derive(Debug, Clone, Copy)]
-struct RayMark {
+pub(crate) struct RayMark {
     /// Radius of the ray at that pass.
-    r: f64,
+    pub(crate) r: f64,
     /// The ray's azimuth *relative to the receiver*, unwrapped along the ray loop so that the
     /// polyline stays continuous however many turns frame dragging has put into it, and pinned to
     /// the previous pass's branch so that "turn k" names the same turn at both ends of an interval.
     /// The receiver sits at rel = 0, and equally at every rel = 2 pi k. See `Pulse::scan`.
-    rel: f64,
+    pub(crate) rel: f64,
     /// dr/dt of the ray at that pass.
-    dr_dt: f64,
+    pub(crate) dr_dt: f64,
     /// dphi/dt of the ray at that pass.
-    dphi_dt: f64,
+    pub(crate) dphi_dt: f64,
     /// Whether the ray was still running. A segment with a dead end at either pass bounds no
     /// resolved piece of front over the interval between them, and nothing sweeps it.
-    alive: bool,
+    pub(crate) alive: bool,
 }
 
 /// One pulse's front, and the receiver, as both stood at one detection pass.
@@ -1436,17 +1440,17 @@ struct RayMark {
 /// receiver.r - r_ray, and the shift a bracketing sample carries is the one that receiver measured,
 /// with their own 4-velocity, at their own event.
 #[derive(Debug, Clone)]
-struct FrontMark {
+pub(crate) struct FrontMark {
     /// One entry per ray of the pulse, in ray order.
-    rays: Vec<RayMark>,
+    pub(crate) rays: Vec<RayMark>,
     /// The receiver's coordinate time at that pass.
-    t: f64,
+    pub(crate) t: f64,
     /// The receiver's radius at that pass.
-    r: f64,
+    pub(crate) r: f64,
     /// The receiver's 4-velocity at that pass, which is what the shift of a sample is measured
     /// against. Kept so that the shift of a crossing can be evaluated from the stored marks once
     /// one is found, rather than for every ray on every pass when almost none of them cross.
-    u_receiver: [f64; 3],
+    pub(crate) u_receiver: [f64; 3],
 }
 
 /// The roots of c2 v^2 + c1 v + c0 = 0 that lie in [0, 1), in increasing order.
@@ -2103,7 +2107,7 @@ pub struct SignalField {
     /// `Simulation::check_invariants`, which states that every pulse held is below it.
     pub(crate) next_index: usize,
     /// The emitter's proper time at the last emission, or None before they have sent anything.
-    last_emit_tau: Option<f64>,
+    pub(crate) last_emit_tau: Option<f64>,
     /// The emitter's proper-time interval between pulses.
     pub interval_tau: f64,
     /// How many rays the *next* pulse will carry: the sampling of the emitter's light cone, set
@@ -2139,16 +2143,16 @@ pub struct SignalField {
     /// The newest delivery this transmission has made, remembered separately from the pulses so
     /// that the pulse cap cannot erase the causal boundary it marks. Maintained by
     /// `detect_receptions` and wound back by `step_back`; read through `last_delivered_pulse`.
-    last_delivered: Option<Delivery>,
+    pub(crate) last_delivered: Option<Delivery>,
     /// Every arrival this transmission has made, in the order they were recorded, for the same
     /// reason: an arrival is an event that happened, and the cap dropping the wavefront that
     /// carried it does not unhappen it. Each one is also kept on its own pulse for as long as that
     /// pulse lives, which is what `Delivery` is read off; this is the copy that outlives it.
-    heard: Vec<Reception>,
+    pub(crate) heard: Vec<Reception>,
     /// Rays retired by the integrator's substep budget rather than by the geometry, over the whole
     /// life of this field. See `RayStep::BudgetExhausted`: it is a safety net that should never
     /// fire, so the count is kept rather than discarded and the tests assert it is zero.
-    budget_exhausted: usize,
+    pub(crate) budget_exhausted: usize,
     /// Pulses the cap evicted while they could still have been heard, over the whole life of this
     /// field. Zero means every arrival this transmission was ever going to make has been made.
     ///
@@ -2178,7 +2182,7 @@ pub struct SignalField {
     /// It is never wound back. `step_back` undoes the transmission, but an eviction is not part of
     /// the transmission: the pulse is gone from the field and no rewind brings it back, so a run
     /// that has lost arrivals goes on having lost them and goes on saying so.
-    dropped_in_flight: usize,
+    pub(crate) dropped_in_flight: usize,
 }
 
 impl Default for SignalField {

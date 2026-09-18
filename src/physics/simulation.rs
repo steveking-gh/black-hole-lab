@@ -39,6 +39,12 @@ pub struct Transmit {
 }
 
 /// Everything the run is.
+///
+/// `Clone` because a whole run is a value: `crate::save` builds one off a file beside the one the
+/// app is running, and a test that asks whether a saved run continues identically needs the same
+/// state in two places at once. Nothing in the app clones one per frame - the trails and the rays
+/// make it an expensive copy - and nothing should.
+#[derive(Clone)]
 pub struct Simulation {
     pub metric: KerrSchild,
     /// The two observers, either of whom may be out of the simulation: the "Enable Observer" box

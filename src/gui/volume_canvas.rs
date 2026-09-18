@@ -945,15 +945,15 @@ pub struct VolumeCanvas {
     /// The observer the view is being kept centred on, set from the canvas's right-click menu, on
     /// the same terms as the equatorial view's: a view setting, and the more particular of the two
     /// ways of saying where to look.
-    centred_on: Option<Who>,
+    pub(crate) centred_on: Option<Who>,
     /// Draw a cone at every whole M the trail crosses, not only at the observer's present event.
     /// Off by default: a dozen translucent fans stacked down a worldline is the picture of how the
     /// cones tip over, and it is also, on a first look at the view, a mess.
-    show_ghost_cones: bool,
+    pub(crate) show_ghost_cones: bool,
     /// Draw the exact past light cone of the focus observer's current event: the null geodesics
     /// through it integrated backwards to the bottom of the window, as a surface. On by default,
     /// because it is the one thing this view can show that no other picture in the app can.
-    show_past_cone: bool,
+    pub(crate) show_past_cone: bool,
     /// That surface, held between frames. Integrating it is the only work in this view that a
     /// camera drag must not repeat, so it is cached against the event it belongs to; see
     /// `PastConeKey` and `ConeRes`.
@@ -962,7 +962,7 @@ pub struct VolumeCanvas {
     /// on every `HISTORY_PULSE_STRIDE`-th pulse, swept up in t and coloured by gain. On by default,
     /// because it is the one place in the app where the split between the frozen family and the
     /// crossing family is a shape rather than an inference: the sheet tears in two on r-.
-    show_pulse_surfaces: bool,
+    pub(crate) show_pulse_surfaces: bool,
     /// Where the user has dragged each observer's info box on this canvas.
     pub telemetry: TelemetryBoxes,
     /// The screen offset of the followed observer's floor point as the last frame projected it.
@@ -973,7 +973,7 @@ pub struct VolumeCanvas {
     /// a multiply; here it is the whole camera, so the frame that has just done the work leaves it
     /// behind. It is only ever read by `look_at`, and the menu that calls `look_at` is registered
     /// inside the frame that has just written it.
-    focus_offset: Vec2,
+    pub(crate) focus_offset: Vec2,
 }
 
 impl Default for VolumeCanvas {

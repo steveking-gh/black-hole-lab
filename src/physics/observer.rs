@@ -215,12 +215,12 @@ pub struct TrailPoint {
     /// The observer's own clock at the event.
     pub tau: f64,
     /// The integrated 4-velocity u^mu = (u^t, u^r, u^phi) at the event.
-    u: [f64; 3],
+    pub(crate) u: [f64; 3],
     /// Whether the geodesic had already frozen onto r- (`GeodesicState::stalled`) at the event.
     /// A frozen worldline goes on climbing in t at fixed (r, phi, tau), so this is the one bit
     /// that tells the vertical segment apart from the fall that led into it, and it is what stops
     /// a rewind inside that segment from trying to integrate a worldline that has stopped.
-    stalled: bool,
+    pub(crate) stalled: bool,
 }
 
 /// Trail entries kept for a moving worldline, and for a dragged one. Past these the oldest entry
@@ -317,7 +317,10 @@ pub struct Observer {
     /// release seed of its geodesic. It is kept out of the trail because the trail has a cap and
     /// can drop its own first entry on a long run, while a rewind back into the hover needs this
     /// event exactly.
-    start: TrailPoint,
+    ///
+    /// Visible to the crate so that `crate::save` can put it back: a run read off a file is a run
+    /// that was never created here, and this event is not derivable from the trail.
+    pub(crate) start: TrailPoint,
     /// Release coordinate time t_release (e.g. 0 for Alice, delta_t for Bob)
     pub release_t: f64,
     /// What this observer's release means, so that a re-release at another radius - letting go of a

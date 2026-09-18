@@ -23,20 +23,21 @@ const FRAME_ROW_HEIGHT: f32 = 26.0;
 /// fingerprinted, checked and put back by assignment; see that type for what a step of the
 /// simulation is and for the order it takes.
 ///
-/// Several of the fields below are visible to the crate rather than private, and all of them are so
-/// for one reason: the performance harness (`crate::perf`) scripts this object the way the panel
-/// does - set the cards, drop the observers, step - and reads the state back out to fingerprint it.
-/// Nothing else outside this file writes any of them.
+/// Several of the fields below are visible to the crate rather than private, and for two reasons.
+/// The performance harness (`crate::perf`) scripts this object the way the panel does - set the
+/// cards, drop the observers, step - and reads the state back out to fingerprint it; and
+/// `crate::save` reads all of it to write a file and writes all of it to open one, which is what
+/// `snapshot` and `load_from` below are. Nothing else outside this file writes any of them.
 pub struct SpacetimeApp {
     /// The run: everything that is physics rather than presentation.
     pub(crate) sim: Simulation,
-    spacetime_canvas: SpacetimeCanvas,
+    pub(crate) spacetime_canvas: SpacetimeCanvas,
     /// The same foliation drawn as a volume: the equatorial plane as a floor and coordinate time
     /// standing up out of it. It stands in for `spacetime_canvas` in the left column while the View
     /// selector names `GlobalVolume`, and keeps its own camera, window and telemetry boxes while it
     /// is not being drawn, so that switching back and forth does not throw the view away.
-    volume_canvas: VolumeCanvas,
-    spatial_canvas: SpatialCanvas,
+    pub(crate) volume_canvas: VolumeCanvas,
+    pub(crate) spatial_canvas: SpatialCanvas,
     pub(crate) controls: AppControls,
     last_update: Instant,
     /// The frame interval to use instead of the wall clock, or None - which is what the app is
@@ -119,6 +120,67 @@ impl SpacetimeApp {
     /// the worldlines are wound back before the light.
     fn step_backward(&mut self, step: f64) {
         self.sim.step_back(step);
+    }
+
+    /// The whole of this app as a save document: the run, the panel's settings and what each canvas
+    /// is looking at. See `crate::save` for what a save holds and what it deliberately does not.
+    #[allow(dead_code)] // the Save button is the next phase's; the save tests are the caller
+    pub(crate) fn snapshot(&self, note: &str) -> crate::save::v1::Save {
+        crate::save::document(
+            &self.sim,
+            &self.controls,
+            &self.spacetime_canvas,
+            &self.spatial_canvas,
+            &self.volume_canvas,
+            note,
+        )
+    }
+
+    /// Write this state to a file, gzipped, through a sibling temporary and a rename.
+    #[allow(dead_code)] // as `snapshot`
+    pub(crate) fn save_to(
+        &self,
+        path: &std::path::Path,
+        note: &str,
+    ) -> Result<(), crate::save::Error> {
+        let bytes = crate::save::to_bytes(&self.snapshot(note))?;
+        crate::save::write_atomically(path, &bytes)
+    }
+
+    /// Read a state out of a file and become it, or change nothing at all.
+    ///
+    /// Build, validate, swap. `crate::save::rebuild` constructs the run, runs
+    /// `Simulation::check_invariants` over it and checks it against the file's own state hash, and
+    /// every one of those can fail; nothing below is assigned until all of them have passed, so a
+    /// load that goes wrong leaves the window exactly as it was.
+    ///
+    /// Three things the file does not carry are settled here. The run comes up **paused**, whatever
+    /// it was doing when it was saved. `last_update` is taken now, so the first frame after a load
+    /// measures the time since the load rather than the time since whatever the window was last
+    /// asked to do - which, after a native file dialog has been open for ten seconds, would be a
+    /// tenth of a second of clamped playback taken on a run the user has not looked at yet. And the
+    /// equatorial view's marker drag is ended, because the observers it was holding have just been
+    /// replaced.
+    pub(crate) fn load_from(
+        &mut self,
+        path: &std::path::Path,
+    ) -> Result<(), crate::save::Error> {
+        let bytes = crate::save::read_file(path)?;
+        let document = crate::save::read_document(&bytes)?;
+        let loaded = crate::save::rebuild(&document)?;
+
+        self.sim = loaded.sim;
+        self.controls = loaded.controls;
+        self.controls.is_playing = false;
+        crate::save::convert::apply_view_v1(
+            &loaded.view,
+            &mut self.spacetime_canvas,
+            &mut self.spatial_canvas,
+            &mut self.volume_canvas,
+        );
+        self.spatial_canvas.end_drag();
+        self.last_update = Instant::now();
+        Ok(())
     }
 }
 

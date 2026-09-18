@@ -24,19 +24,51 @@ mod app;
 mod gui;
 mod perf;
 mod physics;
+mod save;
+mod stamp;
+
+use std::path::PathBuf;
 
 use app::SpacetimeApp;
 use eframe::NativeOptions;
 
 fn main() -> eframe::Result<()> {
-    // The performance harness lives inside this binary, because the crate has no library target
-    // and is not growing one for it. The arguments are looked at before anything else happens, so
-    // `--perf` runs headless and exits with the harness's own status code without a window ever
-    // being created: see `perf` for what the three tiers measure and for the A/B workflow.
+    // Everything headless is decided here, before a window is asked for. Two things are:
+    //
+    // `--perf` anywhere on the line runs the performance harness and exits with its status code -
+    // the harness lives inside this binary because the crate has no library target and is not
+    // growing one for it; see `perf` for the tiers and the A/B workflow.
+    //
+    // `--save-info <path>` prints what a save file holds and exits, which is how a directory of
+    // them is told apart without opening each one in the app.
+    //
+    // What is left is a window, optionally opening on a save: a first argument that is not a flag
+    // is a path to one. A save that will not load is reported on stderr and the app opens as it
+    // otherwise would, because a bad path is not a reason to refuse to run.
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|arg| arg == "--perf") {
         std::process::exit(perf::run(&args));
     }
+    if let Some(index) = args.iter().position(|arg| arg == "--save-info") {
+        std::process::exit(match args.get(index + 1) {
+            Some(path) => match save::describe(std::path::Path::new(path)) {
+                Ok(report) => {
+                    print!("{report}");
+                    0
+                }
+                Err(message) => {
+                    eprintln!("{path}: {message}");
+                    2
+                }
+            },
+            None => {
+                eprintln!("--save-info: needs a path to a save file");
+                2
+            }
+        });
+    }
+    let opening: Option<PathBuf> =
+        args.first().filter(|arg| !arg.starts_with("--")).map(PathBuf::from);
 
     // Native window options
     let native_options = NativeOptions {
@@ -50,9 +82,15 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Black Hole Lab",
         native_options,
-        Box::new(|cc| {
+        Box::new(move |cc| {
             install_fonts(&cc.egui_ctx);
-            Ok(Box::new(SpacetimeApp::default()))
+            let mut app = SpacetimeApp::default();
+            if let Some(path) = opening.as_ref()
+                && let Err(message) = app.load_from(path)
+            {
+                eprintln!("{}: {message}", path.display());
+            }
+            Ok(Box::new(app))
         }),
     )
 }
