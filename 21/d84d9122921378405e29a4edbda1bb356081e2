@@ -1,0 +1,23 @@
+src/gui/controls.rs
+  s_99085f80de58c0::t_2e416bda8b2f6f 1067,1069-1077
+  s_99085f80de58c0::t_a5e6fc910baa0e 1086,1093-1095,1357-1358,1363,1372,1407,1433
+  s_99085f80de58c0::t_e2d802b1f29d9e 1066,1068
+Cargo.lock
+  s_99085f80de58c0::t_d01459331d82f7 39,1542,2389,2406-2407,2418,2427-2428
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "21d84d9122921378405e29a4edbda1bb356081e2",
+  "prompts": {},
+  "sessions": {
+    "s_99085f80de58c0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b270d59c-b282-4517-83fc-8b530cf1e304",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
