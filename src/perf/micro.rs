@@ -15,6 +15,11 @@
 //! shared: building it costs a few seconds and measuring against a different field each time would
 //! make the benchmarks incomparable with each other as well as across builds.
 //!
+//! The ramp is not the only way in. `Fixtures::from_app` takes the state off a run that is already
+//! at the steady state however it got there, which is what lets `--quick` load the same state out of
+//! a save point in seventy-five milliseconds instead of playing 20 M to reach it. Same field, same
+//! benchmarks, same numbers; see `crate::perf::quick`.
+//!
 //! **The three rays.** `NullRay::step` costs what it costs because of where the ray is, so one
 //! number for it would be meaningless. Three are measured: a ray climbing out at large r, where the
 //! substep control lets the step run to the geometric cap; a ray a tenth of an M above the ring,
@@ -32,6 +37,7 @@
 
 use std::time::Instant;
 
+use crate::app::SpacetimeApp;
 use crate::gui::controls::{ReferenceFrame, SignalViews};
 use crate::gui::spacetime_canvas::SpacetimeCanvas;
 use crate::gui::spatial_canvas::{FrontStyle, SpatialCanvas};
@@ -54,11 +60,19 @@ use crate::physics::wavefront::{NullRay, RayState, SignalField, ray_dopri5, ray_
 /// field has been evicting its oldest pulse for the second half of the build and holds a full 64
 /// pulses of 144 rays at each end. Playing longer changes the cost per frame very little and the
 /// build time a great deal.
-const FIXTURE_UNTIL: f64 = 20.0;
+///
+/// It is also the state the quick tier's save point is written at - see `crate::perf::quick` - so
+/// that a quick micro row and a full micro row are the same benchmark against the same field and
+/// can be read against each other.
+pub(crate) const FIXTURE_UNTIL: f64 = 20.0;
 
-/// The same, for `--quick` and for the tests: long enough that the cap has bitten and the field is
-/// not a special case, short enough to build in well under a second.
-const FIXTURE_UNTIL_QUICK: f64 = 6.0;
+/// The same by a short ramp, for `--list` - which only wants the names - and for the unit tests.
+///
+/// A test must not depend on a file under `target/`, which is machine-local and may not have been
+/// built yet, and must not spend twenty seconds of simulated time getting to its fixture. Six M is
+/// long enough that the pulse cap has bitten and the field is not the special case an empty one is,
+/// and short enough to build in well under a second.
+pub(crate) const FIXTURE_UNTIL_SHORT: f64 = 6.0;
 
 /// The prebuilt state every benchmark in this tier is measured against, built once and shared.
 pub(crate) struct Fixtures {
@@ -95,12 +109,23 @@ pub(crate) struct Fixtures {
 }
 
 impl Fixtures {
-    /// Build the shared state. Deterministic: same metric, same scenario, same fixed step, so two
-    /// processes on two builds measure against the same field to the last bit.
-    pub fn build(quick: bool) -> Self {
+    /// Build the shared state by playing the ISCO pair from t = 0 to `until`.
+    ///
+    /// Deterministic: same metric, same scenario, same fixed step, so two processes on two builds
+    /// measure against the same field to the last bit. It is the slow way to a steady state - about
+    /// four seconds to reach 20 M - and `from_app` is the other one.
+    pub fn ramped(until: f64) -> Self {
         let mut app = replay::app_for_fixtures();
-        let until = if quick { FIXTURE_UNTIL_QUICK } else { FIXTURE_UNTIL };
         replay::play_sim(&mut app, until);
+        Self::from_app(&app)
+    }
+
+    /// The shared state read off a run that is already in it, whatever got it there: a ramp, or a
+    /// save point loaded off disk in seventy-five milliseconds.
+    ///
+    /// Everything below is cloned or copied out of the run, so the fixtures own their state and the
+    /// caller keeps the app - which the quick tier then goes on to replay windows of.
+    pub fn from_app(app: &SpacetimeApp) -> Self {
         let metric = app.sim.metric;
         let mut alice_field_unheard = app.sim.alice_signal.clone();
         alice_field_unheard.advance(&metric, FRAME_DT);
@@ -416,33 +441,54 @@ pub(crate) fn benches(fx: &Fixtures) -> Vec<Bench<'_>> {
     //
     // One headless egui pass per iteration, with exactly one canvas inside it. The context, the
     // canvas and the observers are built once per benchmark: a canvas carries its own camera and
-    // its own caches, and the steady state of a played run is a warm one. `paint/empty-pass` is the
-    // same pass with nothing in it.
-    add!(
+    // its own caches, and the steady state of a played run is a warm one.
+    //
+    // "Once per benchmark" is what `warm!` below is for, and it used to be a lie. Each of these
+    // built its own `egui::Context` *inside* the timed closure, so a fresh one was built on every
+    // call - which meant every sample timed the first pass on a cold context rather than the warm
+    // pass the comment above claims, and, worse, made the benchmark's cost depend on its iteration
+    // count. `paint/empty-pass` costs 2.4 ms on a cold context and 2 µs on a warm one, and the
+    // calibration in `harness::measure` - which probes with one iteration and multiplies up - would
+    // stop dead at one iteration on any machine where that first probe cleared the sample floor,
+    // reporting 243 µs as the per-iteration cost of a 2 µs operation. A baseline that caught that
+    // against a check that did not is a hundredfold row in the compare table. The context and the
+    // canvas are now built once, warmed with one untimed pass, and owned by the closure.
+    macro_rules! warm {
+        ($name:expr, $what:expr, $pass:expr $(,)?) => {{
+            let mut pass = $pass;
+            pass();
+            add!($name, $what, Box::new(move |n| {
+                let started = Instant::now();
+                for _ in 0..n {
+                    pass();
+                }
+                started.elapsed()
+            }));
+        }};
+    }
+
+    warm!(
         "paint/empty-pass",
         "a headless egui pass with an empty ui: the per-pass overhead the three paint benchmarks \
          below all carry, and the figure to subtract from them",
-        Box::new(|n| {
+        {
             let ctx = headless_context();
             let mut time = 0.0;
-            let started = Instant::now();
-            for _ in 0..n {
+            move || {
                 time += FRAME_DT;
                 paint_pass(&ctx, time, LEFT_CANVAS_WIDTH, |_ui| {});
             }
-            started.elapsed()
-        }),
+        },
     );
-    add!(
+    warm!(
         "paint/spacetime-canvas",
         "one headless pass painting the (t, r) foliation chart of the steady state, both \
          transmissions drawn",
-        Box::new(|n| {
+        {
             let ctx = headless_context();
             let mut canvas = SpacetimeCanvas::default();
             let mut time = 0.0;
-            let started = Instant::now();
-            for _ in 0..n {
+            move || {
                 time += FRAME_DT;
                 paint_pass(&ctx, time, LEFT_CANVAS_WIDTH, |ui| {
                     canvas.render(
@@ -460,22 +506,20 @@ pub(crate) fn benches(fx: &Fixtures) -> Vec<Bench<'_>> {
                     );
                 });
             }
-            started.elapsed()
-        }),
+        },
     );
-    add!(
+    warm!(
         "paint/spatial-canvas",
         "one headless pass painting the equatorial (x, y) view of the same state: every front as a \
          closed polyline of 144 points",
-        Box::new(|n| {
+        {
             let ctx = headless_context();
             let mut canvas = SpatialCanvas::default();
             let mut bob = Some(fx.bob.clone());
             let mut alice = Some(fx.alice.clone());
             let mut details = false;
             let mut time = 0.0;
-            let started = Instant::now();
-            for _ in 0..n {
+            move || {
                 time += FRAME_DT;
                 paint_pass(&ctx, time, RIGHT_CANVAS_WIDTH, |ui| {
                     canvas.render(
@@ -494,20 +538,18 @@ pub(crate) fn benches(fx: &Fixtures) -> Vec<Bench<'_>> {
                     );
                 });
             }
-            started.elapsed()
-        }),
+        },
     );
-    add!(
+    warm!(
         "paint/volume-canvas",
         "one headless pass painting the 2D+1 volume of the same state. The focus event does not \
-         move between iterations, so the past cone is built on the first of them and cached for \
-         the rest; a played frame rebuilds it, which the frame tier measures",
-        Box::new(|n| {
+         move between iterations, so the past cone is built on the warming pass and cached for \
+         every timed one; a played frame rebuilds it, which the frame tier measures",
+        {
             let ctx = headless_context();
             let mut canvas = VolumeCanvas::default();
             let mut time = 0.0;
-            let started = Instant::now();
-            for _ in 0..n {
+            move || {
                 time += FRAME_DT;
                 paint_pass(&ctx, time, LEFT_CANVAS_WIDTH, |ui| {
                     canvas.render(
@@ -525,8 +567,7 @@ pub(crate) fn benches(fx: &Fixtures) -> Vec<Bench<'_>> {
                     );
                 });
             }
-            started.elapsed()
-        }),
+        },
     );
 
     out
@@ -545,7 +586,7 @@ mod tests {
         // measures panics, and nothing else in the suite would notice. It is not a measurement -
         // one sample of one iteration on a debug-assertions build is not a number anybody should
         // read - so nothing is asserted about the times, only that every benchmark produced one.
-        let fx = Fixtures::build(true);
+        let fx = Fixtures::ramped(FIXTURE_UNTIL_SHORT);
         let budget = Budget { samples: 1, min_sample: Duration::ZERO, warmup: Duration::ZERO };
         let mut benches = benches(&fx);
         assert!(benches.len() >= 15, "the tier is a list of hot spots, not a token one");

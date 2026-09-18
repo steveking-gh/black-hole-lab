@@ -37,33 +37,78 @@
 //! None of the three measures start-up, font loading, window creation or anything about the
 //! machine's display. All three are single-threaded, which is what the app is.
 //!
+//! # `--quick`: the everyday regression check
+//!
+//! The full suite takes about nine minutes, and nearly all of it is spent *reaching* a steady state
+//! rather than measuring one. `--quick` skips the reaching. It loads the `isco-pair-64` steady state
+//! from a save point in seventy-five milliseconds - `crate::save` restores a run to the bit - and
+//! spends the ten seconds that are left measuring. See `crate::perf::quick`.
+//!
+//! ```text
+//! cargo perf-baseline    # --perf --quick --save check    : this build is the reference
+//! cargo perf-check       # --perf --quick --compare check : and is this one still as fast?
+//! ```
+//!
+//! Those two aliases are in `.cargo/config.toml` and are the whole workflow. The save point builds
+//! itself the first time it is wanted, which costs a few seconds once; `--perf --make-savepoints`
+//! builds it on demand.
+//!
+//! **What a quick run keeps from the full suite.** All seventeen micro-benchmarks, against the same
+//! shared field, at fifteen samples instead of thirty. Simulation cost per frame. Full CPU frame
+//! cost with the ui/tessellate split, for *both* painters - the flat Global chart and the 2D+1
+//! volume. The workload counters. The end-of-window fingerprint, which is exact given the save
+//! point. A quick comparison can fail the process, on a 10% gate rather than the full suite's 5%.
+//!
+//! **A regression has to happen twice.** On this machine an unchanged build put one row of the
+//! twenty - a different one each time - uniformly 13 to 19 percent slow about one run in four, with
+//! that benchmark's own sample spread still reading under one percent: the whole sixty-millisecond
+//! window ran slow, so there is no outlier for the spread to see and nothing for the noise band to
+//! widen itself by. It is consistent with the core stepping down a clock bin or the thread being
+//! moved between cores, which is what Windows' Balanced power plan does. What such a transient
+//! cannot do is land on the same row twice running, so a quick comparison that finds regressions
+//! measures exactly those rows again and keeps a regression only if the second reading is also
+//! outside the band. This is not a wider band - the threshold is untouched - and it costs nothing on
+//! a clean run: a fraction of a second if the rows are micro-benchmarks, and about six seconds if a
+//! replay window has to be played again, which it must be as a sequence or it is not the same
+//! window. A `--save` always writes the first measurement and never a mixture.
+//!
+//! **What only the full suite has.** Cost growth over a run: a quick window is a few M at a plateau
+//! and its per-10-M series is flat by construction, while a scenario replay is thirty to a hundred M
+//! from t = 0 and shows the climb. The cap of 128 wavefronts. The `default-infall` layout. The
+//! far-branch freeze, with its u^t of order 1e10. And best-of-several runs, which is a stronger
+//! noise figure than one window's chunk medians. An idea that could change the *shape* of a run
+//! rather than the price of a frame is measured there, not here.
+//!
 //! # The command line
 //!
 //! ```text
 //! --perf [micro|sim|frame]...   which tiers to run (default: all three)
 //! --filter <substr>             only benchmarks and scenarios whose name contains substr
-//! --quick                       fewer samples and much shorter replays: a smoke run, not a measurement
+//! --quick                       the ten-second check from a save point; see above
+//! --make-savepoints             build the save points --quick measures, then exit
 //! --once                        one pass of each replay instead of the best of several
 //! --list                        print the names and what each one measures, then exit
 //! --save <name>                 write the results to target/perf/<name>.json
 //! --compare <name>              compare against target/perf/<name>.json; exit 1 on a regression
-//! --threshold <percent>         regression threshold, default 5
+//! --threshold <percent>         regression threshold, default 5, or 10 for --quick
 //! --help                        this text
 //! ```
 //!
-//! A `--compare` involving a `--quick` run on either side prints its table and then exits 0
-//! whatever the table says. Eight samples of a millisecond and one pass of each replay leave an
-//! unchanged build moving by ten to fifteen percent between runs, so a quick comparison that could
-//! fail would be a coin toss dressed as a check, and a check that is a coin toss gets switched off.
-//! Use `--quick` to see that the harness runs and that the fingerprints still match; drop it to
-//! decide anything.
+//! A `--compare` fails the process on a regression when both sides are quick runs of the same save
+//! point, or when neither is quick. It never fails when one side is quick and the other is not:
+//! those two runs measured different lengths of different parts of a run with different sample
+//! counts, and the ratio between their medians is not a number about the code. The table is still
+//! printed, because a large move is worth seeing however it was arrived at.
+//!
+//! Two quick runs of *different* save points are warned about for the same reason and then judged
+//! anyway: the warning says the workloads differ, and what to do about it is rebuild the baseline.
 //!
 //! `--once` is for the question a refactor asks, which is not "how fast" but "is the physics still
 //! bit-identical". A fingerprint is the same on every pass, so replaying each scenario three times
 //! to steady the timings buys it nothing: `--perf sim --once --compare <name>` plays every scenario
 //! to its full length once, about forty seconds instead of two minutes, and the fingerprints it
-//! prints are exactly the ones a full run would. Its timings are a single pass with no spread to
-//! judge them by, so like `--quick` it prints its verdicts and never exits 1 on them.
+//! prints are exactly the ones a full run would. Its timings are a single pass, so it prints its
+//! verdicts and never exits 1 on them.
 //!
 //! `--save` and `--compare` combine, which is what an A/B session actually does: measure, compare
 //! with the baseline, and keep the result under a new name. `target/perf` is resolved against the
@@ -81,13 +126,24 @@
 //! cargo run --release --target-dir target/probe -- --perf --compare base
 //! ```
 //!
+//! That is the full suite, for an idea worth nine minutes. The quick pair above is the same shape at
+//! a twentieth of the cost, and is what a working afternoon actually runs.
+//!
 //! `--target-dir target/probe` is not optional in practice: the app may be running from
 //! `target/release`, which locks the executable, and a build into the same directory then fails.
 //!
 //! Advice, in the order it matters:
 //!
 //! * Close the app and anything else heavy. A browser rendering video in the background moves these
-//!   numbers by more than most optimisations do.
+//!   numbers by more than most optimisations do, and so does the editor's own `rust-analyzer`: a
+//!   `cargo check` it starts after an edit runs on four or five cores for half a minute, and a quick
+//!   run taken inside that window reads ten to twenty percent slow on whichever benchmarks it
+//!   overlapped. Wait for the editor to go quiet before believing a ten-second check.
+//! * On Windows, measure on the High performance power plan rather than Balanced. Balanced parks
+//!   cores and moves the thread between them, and a benchmark measured across one of those moves
+//!   comes out uniformly 13 to 17 percent slow with its own sample spread still reading under one
+//!   percent - which is to say the harness cannot tell from inside that it happened. It is the one
+//!   remaining thing that makes a quick check cry wolf.
 //! * Run on mains power. A laptop on battery throttles, and it throttles *more* the longer the
 //!   suite runs, which looks exactly like a regression in whatever runs last.
 //! * Read the drift line at the foot of the report. It re-runs the first micro-benchmark after
@@ -111,6 +167,7 @@
 
 pub(crate) mod harness;
 pub(crate) mod micro;
+pub(crate) mod quick;
 pub(crate) mod replay;
 
 use std::io::Write;
@@ -206,6 +263,13 @@ pub(crate) struct Report {
     pub cpu: String,
     pub os: String,
     pub quick: bool,
+    /// Which save point a `--quick` run measured, and therefore what workload its timings are of.
+    ///
+    /// None for a full run, and also for a quick run written before save points existed - which is
+    /// what `serde(default)` is here for, and what tells the compare step that the two sides cannot
+    /// be judged against each other.
+    #[serde(default)]
+    pub savepoint: Option<quick::SavepointId>,
     /// True if each replay was played once rather than best-of-several: the fingerprints are as
     /// good as any, the timings have no spread behind them. Absent from reports written before the
     /// flag existed, which were never single-pass.
@@ -234,13 +298,28 @@ struct Options {
     tiers: Vec<Tier>,
     filter: Option<String>,
     quick: bool,
+    make_savepoints: bool,
     once: bool,
     list: bool,
     save: Option<String>,
     compare: Option<String>,
-    /// The regression threshold as a fraction, so 5% is 0.05.
-    threshold: f64,
+    /// The regression threshold as a fraction, so 5% is 0.05, or None for the default - which is
+    /// not one number: see `default_threshold`. An explicit `--threshold` wins either way, which is
+    /// why this is an option rather than a number filled in while parsing.
+    threshold: Option<f64>,
     help: bool,
+}
+
+/// The regression threshold a run is judged on when nobody asked for one.
+///
+/// 5% for the full suite, which takes thirty samples of every benchmark and the best of three runs
+/// of every replay and can support a claim that small. 10% for the quick tier, which takes half the
+/// samples and one window: its spreads come out at two to four percent rather than under two, and a
+/// gate set at 5% would fire on the machine rather than on the code. The band is the larger of this
+/// and three times the two measured spreads in any case - see `noise_band` - so this is a floor and
+/// a noisy quick run is judged more leniently still.
+fn default_threshold(quick: bool) -> f64 {
+    if quick { 0.10 } else { 0.05 }
 }
 
 impl Options {
@@ -260,11 +339,12 @@ fn parse(args: &[String]) -> Result<Options, String> {
         tiers: Vec::new(),
         filter: None,
         quick: false,
+        make_savepoints: false,
         once: false,
         list: false,
         save: None,
         compare: None,
-        threshold: 0.05,
+        threshold: None,
         help: false,
     };
     let mut i = 0;
@@ -293,9 +373,10 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 let value = next(&mut i, "--threshold")?;
                 let percent: f64 =
                     value.parse().map_err(|_| format!("--threshold wants a number, got `{value}`"))?;
-                opts.threshold = percent / 100.0;
+                opts.threshold = Some(percent / 100.0);
             }
             "--quick" => opts.quick = true,
+            "--make-savepoints" => opts.make_savepoints = true,
             "--once" => opts.once = true,
             "--list" => opts.list = true,
             "--help" | "-h" => opts.help = true,
@@ -318,17 +399,20 @@ Black Hole Lab performance harness.
 
   cargo run --release --target-dir target/probe -- --perf [options]
 
-  --perf [micro|sim|frame]...   which tiers to run (default: all three)
+  --perf [micro|sim|frame]...   which tiers to run (default: all three). Under --quick, naming
+                                sim or frame selects which of the three windows are reported
+                                rather than which are played: they run in sequence on one app
   --filter <substr>             only benchmarks and scenarios whose name contains substr
-  --quick                       fewer samples and much shorter replays: a smoke run, not a measurement
-                                (a --compare with a quick run on either side never exits 1)
+  --quick                       the ten-second regression check, measured from a save point
+                                instead of played to from t = 0. See below
+  --make-savepoints             build the save points --quick measures, then exit
   --once                        one pass of each replay instead of the best of several: all a
                                 fingerprint check needs (--perf sim --once --compare <name>,
-                                about 40 s). Never exits 1 on its timings either
+                                about 40 s). Never exits 1 on its timings
   --list                        print the names and what each one measures, then exit
   --save <name>                 write the results to target/perf/<name>.json
   --compare <name>              compare against target/perf/<name>.json; exit 1 on a regression
-  --threshold <percent>         regression threshold, default 5
+  --threshold <percent>         regression threshold, default 5, or 10 for --quick
   --help                        this text
 
 Tiers:
@@ -337,7 +421,32 @@ Tiers:
   frame   the same run through the real ui in a headless egui context, plus tessellation.
           CPU frame cost: no GPU upload, no present, no vsync.
 
-The A/B workflow:
+The everyday check, about ten seconds:
+
+  cargo perf-baseline       # --perf --quick --save check    : this build is the reference
+  cargo perf-check          # --perf --quick --compare check : and is this one still as fast?
+
+  Both aliases are in .cargo/config.toml. The save point builds itself the first time it is
+  wanted, which costs a few seconds once.
+
+  --quick keeps: all 17 hot spots against the same shared field, at 15 samples instead of 30;
+  simulation cost per frame; full CPU frame cost with the ui/tessellate split for both
+  painters, the flat Global chart and the 2D+1 volume; the workload counters; and the
+  fingerprint of the state each window ended in. It can and does exit 1.
+
+  A regression has to happen twice. An unchanged build puts one row in twenty uniformly 13 to
+  19 percent slow about one run in four - the whole 60 ms window runs slow, so the row's own
+  spread stays under 1% and the noise band cannot see it - and a transient like that does not
+  land on the same row twice. So a quick compare that finds regressions measures those rows
+  again and keeps only the ones that reproduce. Nothing on a clean run; a fraction of a second
+  for micro rows; about 6 s if a replay window must be played again, which it must be as a
+  sequence. --save always writes the first measurement, never a mixture.
+
+  Only the full suite has: cost growth over a run, the cap of 128 wavefronts, the
+  default-infall layout, the far-branch freeze, and best-of-several runs. An idea that could
+  change the shape of a run rather than the price of a frame belongs there.
+
+The A/B workflow, for an idea worth nine minutes:
 
   git stash                 # or: git checkout <base>
   cargo run --release --target-dir target/probe -- --perf --save base
@@ -351,7 +460,11 @@ The A/B workflow:
   for, the run cannot answer your question: drop --quick, or make the change bigger.
 
   Baselines live in target/perf, which is gitignored on purpose: a baseline is a statement
-  about one machine and is worthless on any other.
+  about one machine and is worthless on any other. So are the save points, in
+  target/perf/savepoints.
+
+A comparison of a quick run with a full one is a warning and never a failure: they measured
+different lengths of different parts of a run.
 
 Every replay prints a 64-bit fingerprint of the state it ended in. --compare says whether it
 matches the baseline's, which is how a claim to have changed only the speed gets checked."
@@ -383,15 +496,54 @@ pub(crate) fn run(args: &[String]) -> i32 {
         eprintln!("======================================================================");
     }
 
+    if opts.make_savepoints {
+        return match quick::make_savepoints() {
+            Ok(()) => 0,
+            Err(message) => {
+                eprintln!("--make-savepoints: {message}");
+                2
+            }
+        };
+    }
+
+    // A quick run measures one restored state, and both of its tiers measure the same one: the micro
+    // fixtures are taken off this app and then the replay windows are played on it. Loading comes
+    // first for that reason, and because a save point that will not load is a reason to stop rather
+    // than to measure something else.
+    let mut restored = if opts.quick && !opts.list {
+        match quick::restore() {
+            Ok(point) => {
+                println!("Save point: {}", point.id.line());
+                // Before anything is timed, and before the fixtures are even taken off it: the
+                // first benchmark on the list must not be the one that pays for a cold core.
+                quick::spin_up(&point.app);
+                Some(point)
+            }
+            Err(message) => {
+                eprintln!("--quick: {message}");
+                return 2;
+            }
+        }
+    } else {
+        None
+    };
+
     // The micro tier's benchmarks are built from the shared fixtures, so even `--list` has to build
-    // them - at the quick size, which takes well under a second - rather than keep a second copy of
+    // them - by the short ramp, which takes well under a second - rather than keep a second copy of
     // the list that could drift out of step with the first.
     let needs_fixtures = opts.wants(Tier::Micro);
-    let fixtures = needs_fixtures.then(|| {
-        if !opts.list {
-            println!("Building the shared field ...");
+    let fixtures = needs_fixtures.then(|| match restored.as_ref() {
+        Some(point) => micro::Fixtures::from_app(&point.app),
+        None => {
+            if !opts.list {
+                println!("Building the shared field ...");
+            }
+            micro::Fixtures::ramped(if opts.list {
+                micro::FIXTURE_UNTIL_SHORT
+            } else {
+                micro::FIXTURE_UNTIL
+            })
         }
-        micro::Fixtures::build(opts.quick || opts.list)
     });
 
     if opts.list {
@@ -417,7 +569,14 @@ pub(crate) fn run(args: &[String]) -> i32 {
         return 0;
     }
 
-    let budget = if opts.quick { Budget::quick() } else { Budget::full() };
+    // The budget one benchmark gets. A quick run pays for the paint benchmarks by the sample rather
+    // than by the iteration - one pass is already milliseconds - so those three take fewer of them;
+    // everything else is a kernel that gets its fifteen.
+    let budget_for = |name: &str| match (opts.quick, name.starts_with("paint/")) {
+        (false, _) => Budget::full(),
+        (true, false) => Budget::quick(),
+        (true, true) => Budget::quick_paint(),
+    };
     let mut micro_results: Vec<MicroResult> = Vec::new();
     let mut drift_percent = None;
 
@@ -432,7 +591,7 @@ pub(crate) fn run(args: &[String]) -> i32 {
             if !opts.matches(&bench.name) {
                 continue;
             }
-            let stats = harness::measure(&mut bench.body, &budget);
+            let stats = harness::measure(&mut bench.body, &budget_for(&bench.name));
             println!(
                 "{:<28} {:>12} {:>12} {:>8.1}% {:>10}",
                 bench.name,
@@ -446,26 +605,47 @@ pub(crate) fn run(args: &[String]) -> i32 {
     }
 
     let mut replay_results: Vec<ReplayResult> = Vec::new();
-    for (tier, mode) in [(Tier::Sim, Mode::Sim), (Tier::Frame, Mode::Frame)] {
-        if !opts.wants(tier) {
-            continue;
-        }
-        let mut printed_header = false;
-        for scenario in replay::scenarios() {
-            if scenario.frame_only && mode == Mode::Sim {
+    let wants_windows = opts.wants(Tier::Sim) || opts.wants(Tier::Frame);
+    if let Some(point) = restored.as_mut().filter(|_| wants_windows) {
+        // The quick tier's windows are one fixed composition rather than a tier selection: the three
+        // run one after another on the restored app, so each one's starting state is the one before
+        // it finishing, and leaving one out would change what the others measure. Naming `sim` or
+        // `frame`, or filtering, therefore chooses what is *reported* here rather than what is
+        // played; naming neither - `--perf micro --quick` - skips the windows altogether.
+        println!("\n== quick =============================================================");
+        println!(
+            "three windows in sequence on the save point, {:.1} M of it in all",
+            quick::span_m()
+        );
+        for result in quick::windows(&mut point.app) {
+            if !opts.matches(&result.name) {
                 continue;
             }
-            let name = format!("{}/{}", mode.label(), scenario.name);
-            if !opts.matches(&name) {
-                continue;
-            }
-            if !printed_header {
-                println!("\n== {} ===========================================================", mode.label());
-                printed_header = true;
-            }
-            let result = replay::replay(&scenario, mode, opts.quick, opts.once);
             print_replay(&result);
             replay_results.push(result);
+        }
+    } else if restored.is_none() {
+        for (tier, mode) in [(Tier::Sim, Mode::Sim), (Tier::Frame, Mode::Frame)] {
+            if !opts.wants(tier) {
+                continue;
+            }
+            let mut printed_header = false;
+            for scenario in replay::scenarios() {
+                if scenario.frame_only && mode == Mode::Sim {
+                    continue;
+                }
+                let name = format!("{}/{}", mode.label(), scenario.name);
+                if !opts.matches(&name) {
+                    continue;
+                }
+                if !printed_header {
+                    println!("\n== {} ===========================================================", mode.label());
+                    printed_header = true;
+                }
+                let result = replay::replay(&scenario, mode, opts.once);
+                print_replay(&result);
+                replay_results.push(result);
+            }
         }
     }
 
@@ -474,7 +654,7 @@ pub(crate) fn run(args: &[String]) -> i32 {
     if let Some(first) = benches.first_mut()
         && let Some(before) = micro_results.iter().find(|r| r.name == first.name)
     {
-        let again = harness::measure(&mut first.body, &budget);
+        let again = harness::measure(&mut first.body, &budget_for(&first.name));
         drift_percent = Some(100.0 * (again.median_ns / before.stats.median_ns - 1.0));
     }
 
@@ -497,6 +677,7 @@ pub(crate) fn run(args: &[String]) -> i32 {
         cpu: std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_else(|_| "unknown".to_string()),
         os: std::env::consts::OS.to_string(),
         quick: opts.quick,
+        savepoint: restored.map(|point| point.id),
         once: opts.once,
         debug_assertions: cfg!(debug_assertions),
         drift_percent,
@@ -504,6 +685,11 @@ pub(crate) fn run(args: &[String]) -> i32 {
         replay: replay_results,
     };
 
+    // What a `--save` writes is the first measurement and only ever the first measurement. The retry
+    // below re-measures a handful of rows to decide whether a regression was real, and none of what
+    // it measures goes into this document or into any baseline: a saved report has to be one run of
+    // one build, taken in one pass, or two of them cannot be compared. Saving happens here, before
+    // the comparison, so there is no path on which the two could be mixed.
     if let Some(name) = opts.save.as_ref()
         && let Err(message) = save(&report, name)
     {
@@ -512,13 +698,47 @@ pub(crate) fn run(args: &[String]) -> i32 {
     }
 
     if let Some(name) = opts.compare.as_ref() {
-        return match load(name) {
-            Ok(base) => compare(&base, &report, opts.threshold),
+        let threshold = opts.threshold.unwrap_or_else(|| default_threshold(opts.quick));
+        let base = match load(name) {
+            Ok(base) => base,
             Err(message) => {
                 eprintln!("--compare: {message}");
-                2
+                return 2;
             }
         };
+        let mut comparison = compare(&base, &report, threshold);
+        let mut retried = Vec::new();
+        // The retry is the quick tier's alone. The full suite already takes thirty samples of every
+        // benchmark and the best of two or three passes of every replay, which is a stronger answer
+        // to the same question and one it has already paid for.
+        let regressed = comparison.regressed();
+        if opts.quick && comparison.why_not_failable.is_none() && !regressed.is_empty() {
+            println!(
+                "\nre-measuring {}",
+                if regressed.len() == 1 {
+                    "the regressed row to see whether it reproduces ...".to_string()
+                } else {
+                    format!("the {} regressed rows to see which reproduce ...", regressed.len())
+                }
+            );
+            match quick::remeasure(&regressed, &mut benches, &budget_for, &report.replay) {
+                Ok(again) => {
+                    for name in &again.fingerprint_drift {
+                        println!(
+                            "  !!! {name} ended on a different state this time. The save point and \
+                             the sequence are the same, so this is not noise: something in the step \
+                             is not deterministic and every comparison this harness has ever made \
+                             is in doubt. Investigate before reading anything below."
+                        );
+                    }
+                    retried = reconfirm(&mut comparison.rows, &again.second);
+                }
+                // A retry that cannot run is not a reason to invent a verdict either way, so the
+                // first measurement's verdicts stand and the run says why.
+                Err(message) => println!("  could not re-measure ({message}); keeping the first verdicts"),
+            }
+        }
+        return conclude(&comparison, &retried);
     }
     0
 }
@@ -602,6 +822,57 @@ fn verdict(ratio: f64, band: f64) -> Verdict {
     }
 }
 
+/// What a report is, as far as the pass-or-fail rule is concerned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RunKind {
+    quick: bool,
+    /// Whether the run recorded which save point it measured, which is what makes it a quick run of
+    /// the tier this build has rather than of the smoke-test `--quick` that came before it.
+    savepoint: bool,
+    once: bool,
+}
+
+impl RunKind {
+    fn of(report: &Report) -> Self {
+        Self { quick: report.quick, savepoint: report.savepoint.is_some(), once: report.once }
+    }
+}
+
+/// Why a comparison of these two runs may not fail the process, or None when it may.
+///
+/// Three runs can be compared and only two shapes of comparison can fail. Two full runs can: thirty
+/// samples of every benchmark and the best of three passes of every replay. Two quick runs of a save
+/// point can: they measured the same restored state, the same windows, the same number of frames, at
+/// the same sample counts, and the 10% gate is set against the spreads that arrangement produces.
+///
+/// Everything else is printed and shrugged at. A quick run against a full one measured different
+/// parts of a run at different lengths, and the ratio of their medians is not a number about the
+/// code. A quick run with no save point recorded is from a build whose `--quick` was a smoke test
+/// with five-M replays in it. And a single-pass run's replays have no spread behind them at all, so
+/// their band is the bare threshold and one descheduled pass would cross it.
+fn why_not_failable(base: RunKind, new: RunKind) -> Option<&'static str> {
+    if base.quick != new.quick {
+        return Some(
+            "one side of this comparison is a --quick run and the other is not. They measured \
+             different lengths of different parts of a run, so the ratios above are not a verdict \
+             on the code. Compare like with like.",
+        );
+    }
+    if base.quick && !(base.savepoint && new.savepoint) {
+        return Some(
+            "one side of this comparison is a --quick run that did not record a save point, so \
+             what it measured cannot be established. Re-measure the baseline.",
+        );
+    }
+    if base.once || new.once {
+        return Some(
+            "one side of this comparison is a --once run, whose replay timings are a single pass. \
+             The fingerprints above are what it is for.",
+        );
+    }
+    None
+}
+
 /// One row of the compare table: a name measured on both sides.
 struct CompareRow {
     name: String,
@@ -612,8 +883,25 @@ struct CompareRow {
     verdict: Verdict,
 }
 
-/// Print the comparison and return the process's exit code: 1 if anything regressed.
-fn compare(base: &Report, new: &Report, threshold: f64) -> i32 {
+/// A comparison, printed, with its verdicts still open to a retry.
+struct Comparison {
+    rows: Vec<CompareRow>,
+    /// None when this comparison is allowed to fail the process. See `why_not_failable`.
+    why_not_failable: Option<&'static str>,
+}
+
+impl Comparison {
+    fn regressed(&self) -> Vec<String> {
+        self.rows
+            .iter()
+            .filter(|r| r.verdict == Verdict::Regression)
+            .map(|r| r.name.clone())
+            .collect()
+    }
+}
+
+/// Print the comparison table and the fingerprints, and hand back the verdicts.
+fn compare(base: &Report, new: &Report, threshold: f64) -> Comparison {
     println!("\n== compare against the baseline =======================================");
     println!(
         "baseline: {} git {}{} on {}",
@@ -634,6 +922,16 @@ fn compare(base: &Report, new: &Report, threshold: f64) -> i32 {
     }
     if base.quick != new.quick {
         println!("WARNING: one of these is a --quick run and the other is not. Different sample counts.");
+    }
+    match (base.savepoint.as_ref(), new.savepoint.as_ref()) {
+        (Some(old), Some(now)) if old == now => println!("save point: {}", now.line()),
+        (Some(old), Some(now)) => println!(
+            "WARNING: different workload - timings are not like for like.\n  \
+             baseline measured {}\n  this run measured {}",
+            old.line(),
+            now.line()
+        ),
+        _ => {}
     }
     if base.debug_assertions || new.debug_assertions {
         println!("WARNING: one of these was built with debug assertions on.");
@@ -729,35 +1027,85 @@ fn compare(base: &Report, new: &Report, threshold: f64) -> i32 {
         }
     }
 
-    let regressions = rows.iter().filter(|r| r.verdict == Verdict::Regression).count();
+    Comparison { rows, why_not_failable: why_not_failable(RunKind::of(base), RunKind::of(new)) }
+}
+
+/// One regressed row measured a second time, and what that made of its verdict.
+struct Retried {
+    name: String,
+    first: f64,
+    second: f64,
+    unit: &'static str,
+    band: f64,
+    reproduced: bool,
+}
+
+/// Re-judge the regressed rows against a second measurement of the same thing.
+///
+/// A regression counts only if it reproduces. On this machine an unchanged build put one row of the
+/// twenty - a different one each time - uniformly 13 to 19 percent slow about one run in four, with
+/// that benchmark's own sample spread still reading under one percent: the whole sixty-millisecond
+/// window ran slow, so there is no outlier for the median absolute deviation to see and no way for
+/// `noise_band` to widen itself. What such a transient cannot do is land on the same row twice
+/// running, so the row is measured again and keeps its verdict only if the second measurement is
+/// *also* outside the band against the same baseline.
+///
+/// This is not a wider band. The threshold and the band are exactly what they were; what has
+/// changed is that a regression has to happen twice. The cost is nothing on a clean run, because
+/// nothing is re-measured when nothing regressed.
+///
+/// Improvements are never passed in and are never touched: they fail nothing, so confirming them
+/// would buy nothing. A row with no second measurement - one that could not be re-measured - keeps
+/// the verdict it had.
+fn reconfirm(rows: &mut [CompareRow], second: &[(String, f64)]) -> Vec<Retried> {
+    let mut out = Vec::new();
+    for row in rows.iter_mut().filter(|r| r.verdict == Verdict::Regression) {
+        let Some((_, again)) = second.iter().find(|(name, _)| name == &row.name) else {
+            continue;
+        };
+        let reproduced = verdict(again / row.base, row.band) == Verdict::Regression;
+        out.push(Retried {
+            name: row.name.clone(),
+            first: row.new,
+            second: *again,
+            unit: row.unit,
+            band: row.band,
+            reproduced,
+        });
+        if !reproduced {
+            row.verdict = Verdict::Same;
+        }
+    }
+    out
+}
+
+/// The retry table, the summary line and the process's exit code.
+fn conclude(comparison: &Comparison, retried: &[Retried]) -> i32 {
+    if !retried.is_empty() {
+        println!(
+            "\n{:<28} {:>12} {:>12} {:>9}  verdict",
+            "re-measured", "first", "again", "band"
+        );
+        for row in retried {
+            println!(
+                "{:<28} {:>12} {:>12} {:>8.1}%  {}",
+                row.name,
+                format_measure(row.first, row.unit),
+                format_measure(row.second, row.unit),
+                100.0 * row.band,
+                if row.reproduced { "reproduced - REGRESSION" } else { "did not reproduce - noise" }
+            );
+        }
+    }
+    let regressions = comparison.rows.iter().filter(|r| r.verdict == Verdict::Regression).count();
     println!(
         "\n{} regressed, {} improved, {} the same within noise.",
         regressions,
-        rows.iter().filter(|r| r.verdict == Verdict::Improvement).count(),
-        rows.iter().filter(|r| r.verdict == Verdict::Same).count()
+        comparison.rows.iter().filter(|r| r.verdict == Verdict::Improvement).count(),
+        comparison.rows.iter().filter(|r| r.verdict == Verdict::Same).count()
     );
-    // A quick run cannot fail the process, however its table reads. Eight samples of a millisecond
-    // and a single pass of each replay put the run-to-run variation of an unchanged build at ten to
-    // fifteen percent on the cheaper benchmarks, so a quick comparison that exited 1 would be a
-    // coin toss dressed as a check - and something with a coin toss in it ends up being ignored or
-    // switched off. The verdicts are still printed, because a *large* move is worth seeing even
-    // from a smoke run; what they are not is a pass or a fail.
-    if base.quick || new.quick {
-        println!(
-            "Not failing on any of that: one side of this comparison is a --quick run, whose \
-             samples are too few to tell a regression from the machine. Re-measure without \
-             --quick before believing a verdict."
-        );
-        return 0;
-    }
-    // The same for a single-pass run, for a narrower reason: its replays have no spread across
-    // runs, so their band is the bare threshold and one descheduled pass would cross it. What a
-    // `--once` run is for is the fingerprint table above, which is exact on any number of passes.
-    if base.once || new.once {
-        println!(
-            "Not failing on any of that: one side of this comparison is a --once run, whose \
-             replay timings are a single pass. The fingerprints above are what it is for."
-        );
+    if let Some(why) = comparison.why_not_failable {
+        println!("Not failing on any of that: {why}");
         return 0;
     }
     i32::from(regressions > 0)
@@ -769,13 +1117,18 @@ fn format_measure(value: f64, unit: &str) -> String {
 
 /// One replay scenario's block of the report.
 fn print_replay(result: &ReplayResult) {
+    // "one pass" rather than "best of 1 runs": a single window's spread is of its chunk medians and
+    // not of anything repeated, and the line should not imply a best-of that was not taken.
+    let passes = if result.runs == 1 {
+        format!("one pass in {:.1} s (chunk spread", result.wall_s)
+    } else {
+        format!("best of {} runs in {:.1} s (run spread", result.runs, result.wall_s)
+    };
     println!(
-        "\n{}  {} frames over {:.1} M, best of {} runs in {:.1} s (run spread {:.1}%)",
+        "\n{}  {} frames over {:.1} M, {passes} {:.1}%)",
         result.name,
         result.frames,
         result.sim_time,
-        result.runs,
-        result.wall_s,
         100.0 * result.run_spread
     );
     println!(
@@ -835,6 +1188,76 @@ mod tests {
     }
 
     #[test]
+    fn test_only_like_for_like_runs_can_fail_the_process() {
+        let full = RunKind { quick: false, savepoint: false, once: false };
+        let quick = RunKind { quick: true, savepoint: true, once: false };
+        // The two shapes that are a check: two full runs, and two quick runs of a save point.
+        assert_eq!(why_not_failable(full, full), None);
+        assert_eq!(why_not_failable(quick, quick), None);
+        // Their thresholds differ, because their spreads do.
+        assert_eq!(default_threshold(false), 0.05);
+        assert_eq!(default_threshold(true), 0.10);
+
+        // Mixing the two is a warning whichever way round it is: different lengths of different
+        // parts of a run.
+        assert!(why_not_failable(full, quick).is_some());
+        assert!(why_not_failable(quick, full).is_some());
+
+        // A quick baseline from before save points existed says nothing about what it measured, so
+        // there is nothing to be like for like with.
+        let smoke = RunKind { quick: true, savepoint: false, once: false };
+        assert!(why_not_failable(smoke, quick).is_some());
+        assert!(why_not_failable(quick, smoke).is_some());
+
+        // And a single pass never fails on its timings, on either side and in either tier.
+        assert!(why_not_failable(RunKind { once: true, ..full }, full).is_some());
+        assert!(why_not_failable(quick, RunKind { once: true, ..quick }).is_some());
+    }
+
+    #[test]
+    fn test_a_regression_has_to_happen_twice_to_count() {
+        // Three rows measured against a baseline of 100, with a band of 10%: one that regressed and
+        // meant it, one that regressed because the machine dipped for sixty milliseconds, and an
+        // improvement, which is never re-measured because it fails nothing.
+        let row = |name: &str, new: f64, verdict| CompareRow {
+            name: name.to_string(),
+            base: 100.0,
+            new,
+            unit: "ns",
+            band: 0.10,
+            verdict,
+        };
+        let mut rows = vec![
+            row("kernel/real", 130.0, Verdict::Regression),
+            row("kernel/transient", 116.0, Verdict::Regression),
+            row("kernel/faster", 80.0, Verdict::Improvement),
+        ];
+        // The second measurement of the transient comes back where it started; the real one does
+        // not. The improvement is offered a second reading it never asked for, to prove it is left
+        // alone rather than merely absent.
+        let second = vec![
+            ("kernel/real".to_string(), 128.0),
+            ("kernel/transient".to_string(), 101.0),
+            ("kernel/faster".to_string(), 100.0),
+        ];
+        let retried = reconfirm(&mut rows, &second);
+
+        assert_eq!(rows[0].verdict, Verdict::Regression, "130 then 128 is the code, not the machine");
+        assert_eq!(rows[1].verdict, Verdict::Same, "116 then 101 did not reproduce");
+        assert_eq!(rows[2].verdict, Verdict::Improvement, "an improvement is never re-judged");
+
+        assert_eq!(retried.len(), 2, "only the two regressions were re-measured");
+        assert!(retried[0].reproduced && retried[0].first == 130.0 && retried[0].second == 128.0);
+        assert!(!retried[1].reproduced);
+
+        // A row that could not be re-measured at all keeps the verdict it had: the retry decides
+        // regressions, and a retry that did not happen decides nothing.
+        let mut lonely = vec![row("kernel/real", 130.0, Verdict::Regression)];
+        assert!(reconfirm(&mut lonely, &[]).is_empty());
+        assert_eq!(lonely[0].verdict, Verdict::Regression);
+    }
+
+    #[test]
     fn test_the_command_line_says_what_it_means() {
         let parse_of = |line: &str| {
             parse(&line.split_whitespace().map(str::to_string).collect::<Vec<_>>())
@@ -848,7 +1271,9 @@ mod tests {
         assert_eq!(one.tiers, vec![Tier::Micro, Tier::Sim]);
         assert!(one.quick);
         assert!(one.matches("ray/step-frozen") && !one.matches("field/advance"));
-        assert!((one.threshold - 0.12).abs() < 1e-12);
+        assert_eq!(one.threshold, Some(0.12), "an explicit threshold wins over either default");
+        assert_eq!(all.threshold, None, "and an unstated one is not a number yet");
+        assert!(parse_of("--perf --make-savepoints").unwrap().make_savepoints);
 
         let both = parse_of("--perf --save base --compare base").unwrap();
         assert_eq!(both.save.as_deref(), Some("base"));

@@ -22,6 +22,12 @@
 //! is inside the ui figure and cannot be separated out from inside it - the sim tier's median for
 //! the same scenario is what to subtract.
 //!
+//! **Windows.** A scenario replay is a whole run: a freshly dropped app at t = 0, played to a stated
+//! length. The two loops that time it - `sim_window` and `frame_window` - take an app in whatever
+//! state it is already in, which is what `crate::perf::quick` uses to measure three windows in a row
+//! on one app restored from a save point. The measuring is the same code; what differs is where the
+//! run came from and how far it is played.
+//!
 //! **The fingerprint.** At the end of every replay a 64-bit FNV-1a hash is taken over the bit
 //! patterns of the whole simulated state: the clock, both worldlines, every ray of every pulse of
 //! both transmissions, and every arrival either side recorded. It is `Simulation::fingerprint`,
@@ -36,7 +42,7 @@ use eframe::App;
 
 use crate::app::SpacetimeApp;
 use crate::gui::controls::{ReferenceFrame, StepMode};
-use crate::perf::harness::{median_of, percentile_of, relative_spread};
+use crate::perf::harness::{chunked_spread, median_of, percentile_of, relative_spread};
 use crate::perf::{headless_context, raw_input};
 use crate::physics::observer::{ObserverMode, Release};
 use crate::physics::wavefront::SignalField;
@@ -62,15 +68,23 @@ const BUCKET_M: f64 = 10.0;
 const SIM_RUNS: usize = 3;
 const FRAME_RUNS: usize = 2;
 
+/// How many chunks a window's frames are cut into to arrive at its own noise figure.
+///
+/// Six: few enough that a chunk spans several emissions and its median is therefore of the same mix
+/// of work every time, many enough that the median absolute deviation over the chunks is a figure
+/// rather than a coin toss. `harness::chunked_spread` is why this is not the spread over raw frames.
+/// A scenario replayed several times overwrites this with the spread across the repeats, which is a
+/// stronger statement and the one the full suite has always reported; a single window - which is
+/// what the quick tier measures - keeps it.
+const WINDOW_CHUNKS: usize = 6;
+
 /// One scripted run of the app.
 pub(crate) struct Scenario {
     pub name: &'static str,
     /// What the scenario is for: which code paths it puts under the measurement.
     pub what: &'static str,
-    /// M of coordinate time to play, and the same for `--quick`, which is a smoke run and not a
-    /// measurement.
+    /// M of coordinate time to play.
     pub duration: f64,
-    pub quick_duration: f64,
     /// The cards, the geometry and the sliders this scenario sets, applied to a freshly defaulted
     /// app. Everything it does not touch is the app exactly as it opens.
     pub setup: fn(&mut SpacetimeApp),
@@ -106,7 +120,6 @@ pub(crate) fn scenarios() -> Vec<Scenario> {
                    4.5 M, both transmitting - played well past Bob's arrival on the ring, which \
                    is about 4 M of his proper time and some 15 M of the clock's",
             duration: 40.0,
-            quick_duration: 5.0,
             setup: |_app| {},
             view: ReferenceFrame::DistantObserver,
             frame_only: false,
@@ -118,7 +131,6 @@ pub(crate) fn scenarios() -> Vec<Scenario> {
                    layout this project's earlier hand measurements used, played to the plateau \
                    rather than to their 120 M",
             duration: 30.0,
-            quick_duration: 5.0,
             setup: |app| isco_pair(app, 64),
             view: ReferenceFrame::DistantObserver,
             frame_only: false,
@@ -128,7 +140,6 @@ pub(crate) fn scenarios() -> Vec<Scenario> {
             what: "the same pair at the top of the Wavefronts kept slider, which is twice the \
                    rays in flight and so the worst case the panel can ask for. Longer than its                    sibling because the window it has to fill is twice as long",
             duration: 50.0,
-            quick_duration: 5.0,
             setup: |app| isco_pair(app, 128),
             view: ReferenceFrame::DistantObserver,
             frame_only: false,
@@ -140,7 +151,6 @@ pub(crate) fn scenarios() -> Vec<Scenario> {
                    u^t of order 1e10, a stalled geodesic carried along the horizon's generator - \
                    are inside the measurement",
             duration: 100.0,
-            quick_duration: 5.0,
             setup: far_branch_freeze,
             view: ReferenceFrame::DistantObserver,
             frame_only: false,
@@ -151,7 +161,6 @@ pub(crate) fn scenarios() -> Vec<Scenario> {
                    the flat chart with a separate and much heavier painter: depth-sorted meshes, \
                    the pipes, and an exact past cone rebuilt whenever the focus event moves",
             duration: 30.0,
-            quick_duration: 5.0,
             setup: |app| isco_pair(app, 64),
             view: ReferenceFrame::GlobalVolume,
             frame_only: true,
@@ -264,7 +273,12 @@ pub(crate) struct ReplayResult {
     /// The median as a percentage of one 60 Hz frame, 16.67 ms.
     pub budget_percent: f64,
     pub runs: usize,
-    /// Relative spread of the total wall time across the repeated runs: this tier's noise figure.
+    /// This result's noise figure, which `--compare` widens its band by.
+    ///
+    /// For a scenario replayed several times it is the relative spread of the total wall time across
+    /// the repeats. For a single window - `--once`, and every window of the quick tier - there are
+    /// no repeats to spread, so it is the spread of the window's chunk medians instead: see
+    /// `harness::chunked_spread`.
     pub run_spread: f64,
     /// Frame mode only: where the frame went.
     pub split: Option<FrameSplit>,
@@ -336,7 +350,7 @@ fn counters(app: &SpacetimeApp) -> Counters {
 
 /// One pass of the frame timings into the numbers the report prints.
 fn summarise_run(
-    scenario: &Scenario,
+    scenario: &str,
     mode: &str,
     frame_ms: &[f64],
     ui_ms: &[f64],
@@ -356,9 +370,9 @@ fn summarise_run(
         FrameSplit { ui_ms: median_of(&ui), tessellate_ms: median_of(&tess) }
     });
     ReplayResult {
-        name: format!("{mode}/{}", scenario.name),
+        name: format!("{mode}/{scenario}"),
         mode: mode.to_string(),
-        scenario: scenario.name.to_string(),
+        scenario: scenario.to_string(),
         frames: frame_ms.len(),
         sim_time: frame_ms.len() as f64 * FRAME_DT,
         wall_s,
@@ -367,7 +381,7 @@ fn summarise_run(
         max_ms: sorted.last().copied().unwrap_or(f64::NAN),
         budget_percent: 100.0 * median / (1000.0 / 60.0),
         runs: 1,
-        run_spread: 0.0,
+        run_spread: chunked_spread(frame_ms, WINDOW_CHUNKS),
         split,
         buckets,
         counters: counters(app),
@@ -389,20 +403,19 @@ fn bucket_series(frame_ms: &[f64]) -> Vec<Bucket> {
         .collect()
 }
 
-/// Replay a scenario `REPLAY_RUNS` times (once in quick mode) and keep the fastest, reporting the
-/// spread across the runs beside it.
+/// Replay a scenario `SIM_RUNS` or `FRAME_RUNS` times and keep the fastest, reporting the spread
+/// across the runs beside it.
 ///
 /// `once` plays the full length a single time. The timings then have no spread behind them, but the
 /// fingerprint is the one any number of passes would end on, which is all a check that a refactor
 /// left the physics alone is asking for.
-pub(crate) fn replay(scenario: &Scenario, mode: Mode, quick: bool, once: bool) -> ReplayResult {
-    let runs = match (quick || once, mode) {
+pub(crate) fn replay(scenario: &Scenario, mode: Mode, once: bool) -> ReplayResult {
+    let runs = match (once, mode) {
         (true, _) => 1,
         (false, Mode::Sim) => SIM_RUNS,
         (false, Mode::Frame) => FRAME_RUNS,
     };
-    let duration = if quick { scenario.quick_duration } else { scenario.duration };
-    let frames = (duration / FRAME_DT).round() as usize;
+    let frames = (scenario.duration / FRAME_DT).round() as usize;
     let mut results: Vec<ReplayResult> = Vec::with_capacity(runs);
     for _ in 0..runs {
         results.push(match mode {
@@ -412,13 +425,18 @@ pub(crate) fn replay(scenario: &Scenario, mode: Mode, quick: bool, once: bool) -
     }
     let mut totals: Vec<f64> = results.iter().map(|r| r.wall_s).collect();
     totals.sort_by(f64::total_cmp);
-    let spread = relative_spread(&totals, median_of(&totals));
     let mut best = results
         .into_iter()
         .min_by(|a, b| a.wall_s.total_cmp(&b.wall_s))
         .expect("at least one run");
     best.runs = runs;
-    best.run_spread = spread;
+    // The spread across the repeats is the better noise figure of the two, because it is of whole
+    // runs rather than of stretches inside one, and it replaces the chunk spread `summarise_run`
+    // left behind. One pass has no such spread - `relative_spread` of a single total is zero, which
+    // would read as a machine with no noise on it at all - so a single pass keeps its chunk spread.
+    if runs > 1 {
+        best.run_spread = relative_spread(&totals, median_of(&totals));
+    }
     best
 }
 
@@ -442,15 +460,29 @@ impl Mode {
 fn run_sim(scenario: &Scenario, frames: usize) -> ReplayResult {
     let mut app = SpacetimeApp::default();
     (scenario.setup)(&mut app);
+    sim_window(&mut app, "sim", scenario.name, frames)
+}
+
+/// Time `frames` simulation-only frames of an app that is already set up, wherever it stands.
+///
+/// The scenarios enter here with a freshly dropped run at t = 0; the quick tier enters with a run
+/// loaded from a save point and already at its steady state. Nothing here knows the difference,
+/// which is the point: the two tiers measure the same loop.
+pub(crate) fn sim_window(
+    app: &mut SpacetimeApp,
+    mode: &str,
+    scenario: &str,
+    frames: usize,
+) -> ReplayResult {
     let mut frame_ms = Vec::with_capacity(frames);
     let started = Instant::now();
     for _ in 0..frames {
         let at = Instant::now();
-        sim_frame(&mut app);
+        sim_frame(app);
         frame_ms.push(at.elapsed().as_secs_f64() * 1e3);
     }
     let wall = started.elapsed().as_secs_f64();
-    summarise_run(scenario, "sim", &frame_ms, &[], &[], wall, &app)
+    summarise_run(scenario, mode, &frame_ms, &[], &[], wall, app)
 }
 
 /// Tier 3: the real `SpacetimeApp::ui` through a headless context, then tessellation.
@@ -462,22 +494,43 @@ fn run_sim(scenario: &Scenario, frames: usize) -> ReplayResult {
 fn run_frame(scenario: &Scenario, frames: usize) -> ReplayResult {
     let mut app = SpacetimeApp::default();
     (scenario.setup)(&mut app);
-    app.controls.frame_of_ref = scenario.view;
+    play_state(&mut app, scenario.view);
+    let ctx = headless_context();
+    let mut time = 0.0;
+    frame_window(&mut app, &ctx, "frame", scenario.name, frames, &mut time)
+}
+
+/// Put an app in the state a played window is in, looking at a stated view.
+pub(crate) fn play_state(app: &mut SpacetimeApp, view: ReferenceFrame) {
+    app.controls.frame_of_ref = view;
     app.controls.is_playing = true;
     app.controls.play_speed = 1.0;
     app.controls.step_mode = StepMode::Time;
     app.fixed_frame_dt = Some(FRAME_DT);
+}
 
-    let ctx = headless_context();
+/// Time `frames` whole ui passes of an app that is already playing, plus their tessellation.
+///
+/// `time` is egui's own clock and is carried in and out rather than started at zero, so that a
+/// second window on the same context - the quick tier switches the View selector and measures
+/// again - continues the animation clock instead of restarting it, which would put every fade and
+/// every combo box back to its first frame half way through a measurement.
+pub(crate) fn frame_window(
+    app: &mut SpacetimeApp,
+    ctx: &egui::Context,
+    mode: &str,
+    scenario: &str,
+    frames: usize,
+    time: &mut f64,
+) -> ReplayResult {
     let mut frame_ms = Vec::with_capacity(frames);
     let mut ui_ms = Vec::with_capacity(frames);
     let mut tess_ms = Vec::with_capacity(frames);
-    let mut time = 0.0;
     let started = Instant::now();
     for _ in 0..frames {
-        time += FRAME_DT;
+        *time += FRAME_DT;
         let at = Instant::now();
-        let mut output = ctx.run_ui(raw_input(time), |ui| {
+        let mut output = ctx.run_ui(raw_input(*time), |ui| {
             let mut frame = eframe::Frame::_new_kittest();
             app.ui(ui, &mut frame);
         });
@@ -495,7 +548,7 @@ fn run_frame(scenario: &Scenario, frames: usize) -> ReplayResult {
         tess_ms.push(tess_elapsed);
     }
     let wall = started.elapsed().as_secs_f64();
-    summarise_run(scenario, "frame", &frame_ms, &ui_ms, &tess_ms, wall, &app)
+    summarise_run(scenario, mode, &frame_ms, &ui_ms, &tess_ms, wall, app)
 }
 
 #[cfg(test)]
@@ -509,9 +562,18 @@ mod tests {
         // quick replays of the same scenario in the same process must agree to the bit, and if they
         // ever stop agreeing then something in the step depends on the wall clock or on an
         // iteration order that is not fixed, which would make every comparison meaningless.
+        //
+        // Five M of it rather than its full forty, played straight through `sim_window` on a fresh
+        // app: the loop under test is the one both replay tiers and the quick tier run, and a test
+        // has no business either taking half a minute or depending on a save point under `target/`.
         let scenario = scenarios().into_iter().find(|s| s.name == "default-infall").unwrap();
-        let first = replay(&scenario, Mode::Sim, true, false);
-        let second = replay(&scenario, Mode::Sim, true, false);
+        let play = || {
+            let mut app = SpacetimeApp::default();
+            (scenario.setup)(&mut app);
+            sim_window(&mut app, "sim", scenario.name, 300)
+        };
+        let first = play();
+        let second = play();
         assert_eq!(
             first.fingerprint, second.fingerprint,
             "two runs of {} disagree about the state they ended in",

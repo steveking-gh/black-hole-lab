@@ -33,10 +33,11 @@ use std::time::{Duration, Instant};
 
 /// How much time a benchmark is allowed to spend on itself.
 ///
-/// The two presets are a measurement and a smoke test, and they are not interchangeable: eight
-/// samples of a millisecond apiece resolve nothing finer than a 10% change, which is why `--quick`
-/// marks its own output and why `--compare` of two quick runs is a check that the harness still
-/// runs rather than a check that the code is still fast.
+/// The presets are a measurement and a cheaper measurement, and the difference between them is how
+/// small a change they can resolve rather than whether they can resolve one at all. `full` takes 30
+/// samples of 5 ms, which puts a quiet benchmark's spread at 0.5% to 2% and makes a 5% gate
+/// workable. `quick` takes 15 samples at the same floor, half the wall time, and is what the quick
+/// tier's 10% gate is set against.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Budget {
     /// How many samples to take once the iteration count is settled.
@@ -55,10 +56,30 @@ impl Budget {
         Self { samples: 30, min_sample: Duration::from_millis(5), warmup: Duration::from_millis(20) }
     }
 
-    /// The smoke test: eight samples of at least a millisecond. Enough to prove every benchmark
-    /// runs and produces a finite number, and not enough to compare anything against anything.
+    /// The everyday check: half the samples of a full run, at the same floor.
+    ///
+    /// The floor is deliberately not lowered with the sample count. `paint/empty-pass` builds a
+    /// fresh `egui::Context` per call and so costs about 2.4 ms on its first pass and 2 µs on every
+    /// pass after it - a benchmark whose cost depends on its iteration count, which the calibration
+    /// warns about. Its first probe therefore lands just under a 5 ms floor and the search goes on
+    /// to sixteen hundred iterations, and lands just *over* a 3 ms one perhaps one run in ten, where
+    /// the search stops at one iteration and the benchmark reports the first pass - 243 µs, a
+    /// hundredfold - as its per-iteration cost. The two numbers are both "correct" and a baseline
+    /// that caught one against a check that caught the other is a 99% row in the compare table.
+    /// Sharing the full suite's floor is what makes quick and full calibrate identically, so the
+    /// only difference between them is how many samples are kept.
     pub fn quick() -> Self {
-        Self { samples: 8, min_sample: Duration::from_millis(1), warmup: Duration::from_millis(2) }
+        Self { samples: 15, min_sample: Duration::from_millis(5), warmup: Duration::from_millis(10) }
+    }
+
+    /// The same for the three paint benchmarks, which are the expensive ones.
+    ///
+    /// A canvas paint is already several milliseconds, so it runs one iteration per sample whatever
+    /// the floor says and the sample count *is* the cost: fifteen of the volume canvas is a third of
+    /// the quick tier's whole time budget. Ten is what keeps all three inside about half a second
+    /// between them, and a paint's own spread is narrow enough that the five samples buy little.
+    pub fn quick_paint() -> Self {
+        Self { samples: 10, ..Self::quick() }
     }
 }
 
@@ -198,6 +219,40 @@ pub(crate) fn relative_spread(sorted: &[f64], median: f64) -> f64 {
     1.4826 * median_of(&deviations) / median
 }
 
+/// The noise figure of a *window* of consecutive frames: the spread of its chunk medians.
+///
+/// The raw per-frame times of a replay are not samples of one quantity. A frame that emits a
+/// wavefront costs more than one that does not, a frame that rebuilds the volume view's past cone
+/// costs more again, and those differences are the workload rather than the machine: the median
+/// absolute deviation over raw frames comes out at tens of percent on a window that is perfectly
+/// repeatable, and a gate built on it would never fire. What *is* repeatable is a stretch of the
+/// window - the emissions fall in the same places every run, because the run is the same run - so
+/// the window is cut into equal chunks, each chunk is reduced to its own median ms per frame, and
+/// the spread is taken over those. A quiet machine gives a percent or two; a machine that was
+/// descheduled for half of one chunk shows it there and the median over the chunks does not move.
+///
+/// The statistic being compared is still the median over the whole window. This is only the
+/// statement of how far to trust it.
+pub(crate) fn chunked_spread(per_frame_ms: &[f64], chunks: usize) -> f64 {
+    if per_frame_ms.is_empty() || chunks == 0 {
+        return 0.0;
+    }
+    // Rounded up, so the chunk count is never more than asked for: 240 frames in 6 chunks is six of
+    // 40, and 241 is five of 41 and one of 36 rather than seven chunks the last of which is one
+    // frame long.
+    let per_chunk = per_frame_ms.len().div_ceil(chunks);
+    let mut medians: Vec<f64> = per_frame_ms
+        .chunks(per_chunk)
+        .map(|chunk| {
+            let mut sorted = chunk.to_vec();
+            sorted.sort_by(f64::total_cmp);
+            median_of(&sorted)
+        })
+        .collect();
+    medians.sort_by(f64::total_cmp);
+    relative_spread(&medians, median_of(&medians))
+}
+
 /// A duration in nanoseconds written at a scale a human can read, three significant figures.
 pub(crate) fn human_ns(ns: f64) -> String {
     if !ns.is_finite() {
@@ -247,6 +302,49 @@ mod tests {
         assert_eq!(stats.median_ns, 11.0);
         assert_eq!(stats.iters, 7);
         assert_eq!(stats.samples, 3);
+    }
+
+    #[test]
+    fn test_the_chunk_spread_measures_the_machine_and_not_the_workload() {
+        // A window whose frames alternate 2 ms and 10 ms: a shape a real replay has, because an
+        // emission frame costs more than the frames between emissions. Nothing about it varies from
+        // run to run, so its noise figure has to be zero - and the raw median absolute deviation
+        // over the same frames is enormous, which is exactly why the chunk medians are what is used.
+        let alternating: Vec<f64> =
+            (0..240).map(|i| if i % 2 == 0 { 2.0 } else { 10.0 }).collect();
+        let mut sorted = alternating.clone();
+        sorted.sort_by(f64::total_cmp);
+        assert!(
+            relative_spread(&sorted, median_of(&sorted)) > 0.9,
+            "the raw spread of this window is over 90%, and all of it is workload"
+        );
+        assert_eq!(
+            chunked_spread(&alternating, 6),
+            0.0,
+            "every chunk has the same median, so the machine did not move"
+        );
+
+        // Now the tail of the window costs twice what the head of it does: a stretch where the
+        // machine was busy elsewhere. One bad chunk of six gives medians 1, 1, 1, 1, 1, 2, whose own
+        // median is 1 and whose absolute deviations are 0, 0, 0, 0, 0, 1 - a median deviation of
+        // zero. Two bad chunks give deviations 0, 0, 0, 0, 1, 1, whose median is still zero. That is
+        // the median absolute deviation doing exactly what it is here for: a run has to be disturbed
+        // over *half* its length before the figure that says how far to trust it moves at all.
+        let window_with_bad_tail = |from: usize| {
+            let mut frames: Vec<f64> = vec![1.0; 240];
+            frames[from..].fill(2.0);
+            chunked_spread(&frames, 6)
+        };
+        assert_eq!(window_with_bad_tail(200), 0.0, "one chunk of six");
+        assert_eq!(window_with_bad_tail(160), 0.0, "two chunks of six");
+        // Three of six: the medians are 1, 1, 1, 2, 2, 2, so the median is 1.5 and every chunk is
+        // half an ms away from it.
+        assert!(
+            (window_with_bad_tail(120) - 1.4826 * 0.5 / 1.5).abs() < 1e-12,
+            "half the window at twice the cost is a window the machine moved under"
+        );
+
+        assert_eq!(chunked_spread(&[], 6), 0.0, "no frames, no measured noise");
     }
 
     #[test]

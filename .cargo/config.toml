@@ -1,0 +1,12 @@
+# The two commands a working afternoon runs. See `crate::perf` for what the quick tier measures and
+# for the full suite behind it.
+#
+# `--target-dir target/probe` is not optional in practice: the app may be running from
+# `target/release`, which locks the executable, and a build into the same directory then fails.
+# `check` is the baseline's name and is a file in target/perf; `cargo perf-baseline` writes it and
+# `cargo perf-check` judges the working tree against it, exiting 1 on a regression.
+#
+# .gitignore ignores `/target` and nothing else, so this file is tracked.
+[alias]
+perf-check = "run --release --target-dir target/probe -- --perf --quick --compare check"
+perf-baseline = "run --release --target-dir target/probe -- --perf --quick --save check"
