@@ -172,10 +172,28 @@ pub const MAX_PULSES: usize = 64;
 /// transmission.
 pub const EMISSION_INTERVAL_TAU: f64 = 0.1;
 
-/// Radius past which a ray has left the drawn field and is retired. It sits beyond the widest view
-/// the app offers, and dr/dt of an escaping ray only grows with r, so nothing that passes it ever
-/// comes back into the picture.
-pub const R_ESCAPE: f64 = 16.0;
+/// Radius past which a ray has left the drawn field and is retired. dr/dt of an escaping ray only
+/// grows with r, so nothing that passes this ever comes back into the picture.
+///
+/// It has to sit beyond the largest radius the app can put an observer at, and at 16 M it did not:
+/// the panel's drop-radius slider reaches 30 M, so every ray a pair out there exchanged was retired
+/// before it could cross between them and the two were simply deaf. Measured with a hovering pair
+/// half a radian apart: 484 arrivals at r = 14, and *zero* at 18, 25 and 29. The light was not
+/// slow, or redshifted away, or lost in the cap; it was deleted at a drawing boundary that the
+/// observers had been allowed to stand outside of.
+///
+/// 32 M clears the slider's top with margin for the arc between two observers at it, which is what
+/// `test_a_pair_at_the_widest_drop_radius_can_still_hear_each_other` pins: raise that slider past
+/// this and the test says so rather than the app going quiet. The cost is nothing measurable - the
+/// field is bounded by `MAX_PULSES` either way, so longer-lived rays only mean more of the same 64
+/// pulses still have live rays: 9 216 live rays against 8 528, and 2.15 ms a step either way.
+///
+/// A pair further out than about 20 M is still deaf at the default cap, but for a different reason
+/// and one the field now reports: the emitter's cadence is its own proper time, so 64 pulses spans
+/// under 7 M of coordinate time while light needs over 12 M to cross half a radian of arc out
+/// there.
+/// That is `SignalField::dropped_in_flight`, and raising the cap to 256 recovers all 447 arrivals.
+pub const R_ESCAPE: f64 = 32.0;
 
 /// Largest |dr| allowed in one integration substep, in units of M.
 const MAX_DR_PER_SUBSTEP: f64 = 0.02;
@@ -5694,6 +5712,61 @@ mod tests {
             "the trimmed field reports a narrower range: {lo_capped:.4}..{hi_capped:.4} \
              against {lo_full:.4}..{hi_full:.4}"
         );
+    }
+
+    #[test]
+    fn test_a_pair_at_the_widest_drop_radius_can_still_hear_each_other() {
+        // `R_ESCAPE` is a drawing boundary, and a ray that reaches it is retired. So it has to sit
+        // outside every radius the app can put an observer at, or the app can place a pair where
+        // their own light is deleted before it arrives - which at 16 M it did: the drop-radius
+        // slider reaches 30 M, and a hovering pair half a radian apart heard 484 arrivals at
+        // r = 14 and exactly none at 18, 25 or 29.
+        //
+        // This measures the layout rather than the constants: a pair at the slider's own top, put
+        // there the way the app puts them, has to hear each other. The arithmetic half of the
+        // guard - that the slider cannot reach past `R_ESCAPE` at all - is a `const` assertion
+        // beside `WIDEST_DROP_R` itself, so that failure is a build error and never a test run.
+        use crate::gui::controls::WIDEST_DROP_R;
+
+        let metric = KerrSchild::new(1.0, 0.65);
+        let params = WorldlineParams::default();
+        // Held in place for the whole run: released far in the future, so both hover. Out here the
+        // static worldline exists comfortably and the transmission runs off it.
+        let mut tx = Observer::new_with_phi(&metric, "Alice", 0.0, WIDEST_DROP_R, 1e9, 0.0, params);
+        let mut rx = Observer::new_with_phi(&metric, "Bob", 0.0, WIDEST_DROP_R, 1e9, 0.5, params);
+        // A cap wide enough that the cap is not what is under test here. At this radius the
+        // emitter's proper-time cadence puts pulses out far faster than light crosses the 15 M of
+        // arc between the two, so the default 64 would evict every one of them before it arrived -
+        // a real limitation, reported by `dropped_in_flight` and measured in its own test.
+        let mut field = SignalField { max_pulses: 1_024, ..SignalField::default() };
+        field.rays_per_pulse = 36;
+        let dt = 0.05;
+        for i in 0..1_600 {
+            let t = ((i + 1) as f64) * dt;
+            tx.step(&metric, t, dt);
+            rx.step(&metric, t, dt);
+            field.advance(&metric, dt);
+            field.emit_if_due(&metric, &tx);
+            field.detect_receptions(&metric, &rx);
+        }
+        let heard = field.received_count();
+        let ratios: Vec<f64> = field.receptions().map(|r| r.ratio).collect();
+        println!(
+            "a hovering pair at r = {WIDEST_DROP_R}, half a radian apart: {heard} arrivals of \
+             {} pulses sent, shift {:.6} to {:.6}",
+            field.pulses.back().map(|p| p.index + 1).unwrap_or(0),
+            ratios.iter().copied().fold(f64::MAX, f64::min),
+            ratios.iter().copied().fold(f64::MIN, f64::max)
+        );
+        assert!(heard > 100, "the widest layout the app offers must not be deaf: {heard} arrivals");
+        // Two static observers at one radius keep the same clock, so what passes between them is
+        // neither blueshifted nor redshifted: the ratio is one, to the integrator's accuracy.
+        assert!(
+            ratios.iter().all(|r| (r - 1.0).abs() < 1e-3),
+            "a static pair at equal radius measures no shift: {:?}",
+            &ratios[..ratios.len().min(5)]
+        );
+        assert_eq!(field.dropped_in_flight(), 0, "nothing was evicted at this cap");
     }
 
     pub(super) fn run_return_transmission(

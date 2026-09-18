@@ -713,7 +713,7 @@ impl ObserverCard {
             if use_physical_units {
                 let mut r_km = metric.r_to_km(settings.drop_r);
                 let min_km = metric.r_to_km(0.05);
-                let max_km = metric.r_to_km(30.0);
+                let max_km = metric.r_to_km(WIDEST_DROP_R);
                 if ui
                     .add(
                         egui::Slider::new(&mut r_km, min_km..=max_km)
@@ -727,7 +727,7 @@ impl ObserverCard {
                 }
             } else {
                 ui.add(
-                    egui::Slider::new(&mut settings.drop_r, 0.05..=30.0)
+                    egui::Slider::new(&mut settings.drop_r, 0.05..=WIDEST_DROP_R)
                         .logarithmic(true)
                         .text("Drop radius r (M)"),
                 )
@@ -1009,6 +1009,24 @@ impl ObserverCard {
 /// `TRANSPORT_BUTTON` is sized so that four of them and the spacing between them fit across the
 /// panel, which is 300 points wide, and so that the longest caption - "Step Back" - fits under one.
 const TRANSPORT_BUTTON: egui::Vec2 = egui::vec2(60.0, 44.0);
+
+/// The largest radius an observer can be dropped from, in M: the top of the drop-radius slider in
+/// both of its unit flavours.
+///
+/// It is named because it is half of a pair. `wavefront::R_ESCAPE` retires a ray that climbs past
+/// it, so the escape boundary has to sit outside this or the app can place a pair whose own light
+/// is deleted before it crosses between them - which is exactly what it did while this was 30 and
+/// that was 16, leaving every layout past about 17 M deaf.
+/// `test_a_pair_at_the_widest_drop_radius_can_still_hear_each_other` measures that a pair out here
+/// really does hear each other; the assertion below is the cheaper half of the same guard, and it
+/// fails the build rather than a test run.
+pub const WIDEST_DROP_R: f64 = 30.0;
+
+const _: () = assert!(
+    WIDEST_DROP_R < crate::physics::wavefront::R_ESCAPE,
+    "the drop-radius slider reaches past R_ESCAPE, so the app can place observers whose own \
+     light is retired before it reaches them"
+);
 
 /// One of them. Returns whether it was clicked, so the caller reads exactly as it did when these
 /// were `ui.button(..).clicked()`.
