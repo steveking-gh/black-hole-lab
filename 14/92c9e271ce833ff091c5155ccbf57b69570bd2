@@ -1,0 +1,60 @@
+src/gui/controls.rs
+  s_1fbbbb8a53c367::t_b19ec149a56605 424-425
+  s_1fbbbb8a53c367::t_79ceddc1dba547 1249-1255
+  s_1fbbbb8a53c367::t_924b9db5274d35 368-387
+  s_1fbbbb8a53c367::t_1f4c99be8f98d6 1086-1091
+  s_1fbbbb8a53c367::t_b560b212060076 1054-1078,1082-1084,1092
+  s_1fbbbb8a53c367::t_b372f3e67acaef 1079-1081
+  s_1fbbbb8a53c367::t_77be9d14506c1d 1085
+  s_1fbbbb8a53c367::t_337d64b3b918f8 1493-1504,1506-1514
+  s_1fbbbb8a53c367::t_ebb2f8ee8313c5 1505
+src/save/tests.rs
+  s_1fbbbb8a53c367::t_638874df2de4e7 1,10-13,20
+  s_1fbbbb8a53c367::t_dddfc8bb9793c5 362-436
+src/save/mod.rs
+  s_1fbbbb8a53c367::t_52e2a261918823 187-192,194-209
+  s_1fbbbb8a53c367::t_5c61548b303aa7 193
+  s_1fbbbb8a53c367::t_23995a9301def6 250-251,440
+src/app.rs
+  s_1fbbbb8a53c367::t_289dc9cbedeede 184-199,202-275,311-355
+  s_1fbbbb8a53c367::t_ee58c7ca5ff463 568-579
+  s_1fbbbb8a53c367::t_5d8e0e8561c7e1 162-165,169
+  s_1fbbbb8a53c367::t_faea8f527e8f8d 441-449,451-469,471
+  s_1fbbbb8a53c367::t_5a43921adddb43 359
+  s_1fbbbb8a53c367::t_1fee1e7ae1880c 276-310
+  s_1fbbbb8a53c367::t_66e7fe2b873904 450
+  s_1fbbbb8a53c367::t_009af6a675040e 3-4
+  s_1fbbbb8a53c367::t_c4ab0c7e11644d 470
+src/main.rs
+  s_1fbbbb8a53c367::t_f490a92727e572 88-97
+THIRD-PARTY-NOTICES.md
+  s_1fbbbb8a53c367::t_9253f9e15585e2 28,39-40
+Cargo.toml
+  s_1fbbbb8a53c367::t_e8454347bf5f4b 15-18
+Cargo.lock
+  s_598aa93e8867c5::t_3e1ab77e3f6f38 464,750-751,829,2050,2524-2529,2715-2741
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "1492c9e271ce833ff091c5155ccbf57b69570bd2",
+  "prompts": {},
+  "sessions": {
+    "s_1fbbbb8a53c367": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ed2f15a7-41d1-4dd6-ba98-d9aaeb4cd695",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    },
+    "s_598aa93e8867c5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-af817c1465738a47e",
+        "model": "unknown"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
