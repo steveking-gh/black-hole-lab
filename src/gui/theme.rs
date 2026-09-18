@@ -151,6 +151,15 @@ impl Theme {
     /// this makes it say so from across the panel.
     pub const CHIP_OUTLINE_ACTIVE: Color32 = Color32::from_rgb(0, 230, 255);
 
+    /// Fill of a transport button that is engaged: Play or Pause while it is the state the run is
+    /// in, and any of the others for the moment after it is pressed.
+    ///
+    /// The same hue as `CHIP_OUTLINE`, carried down to something a white icon still reads clearly
+    /// against. A fill at the outline's own value would be a blue button with a blue edge and no
+    /// edge to see; this keeps the outline the brighter of the two, so an engaged button is a
+    /// filled shape with a rim rather than a blue blob.
+    pub const TRANSPORT_ENGAGED: Color32 = Color32::from_rgb(26, 50, 86);
+
     // Blueshift / Warning Gradient
     pub const WARNING_RED: Color32 = Color32::from_rgb(255, 50, 80);
     pub const BLUESHIFT_BLUE: Color32 = Color32::from_rgb(60, 140, 255);

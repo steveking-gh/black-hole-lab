@@ -273,6 +273,14 @@ pub struct AppControls {
     /// the promise "playback runs at 1 s/s of the focus observer's watch" is from being kept at
     /// the event being drawn, which near the Cauchy horizon is very far indeed.
     pub achieved_watch_rate: Option<f64>,
+    /// Which stateless transport button was last pressed, and the time it was pressed at on
+    /// egui's own clock, so that the press can be shown for `TRANSPORT_FLASH_SECONDS` and then
+    /// forgotten. None when nothing has been pressed or the last flash has expired.
+    ///
+    /// Visible to the crate only because the panel is built with struct-update syntax in places
+    /// that have no business setting this; it is written through `record_transport_press` and read
+    /// through `transport_flashing`, and nothing outside this file should touch it.
+    pub(crate) transport_flash: Option<(TransportPress, f64)>,
     /// How many rays a newly emitted pulse carries: the sampling of the emitter's light cone, at
     /// alpha = 2 pi i / n, and so the resolution of every wavefront sent from now on.
     ///
@@ -367,6 +375,7 @@ impl Default for AppControls {
             play_speed: 1.0,
             step_distance_km: 1000.0,
             achieved_watch_rate: None,
+            transport_flash: None,
             rays_per_pulse: RAYS_PER_PULSE,
             max_pulses: MAX_PULSES,
             draw_front_arcs: true,
@@ -1010,6 +1019,29 @@ impl ObserverCard {
 /// panel, which is 300 points wide, and so that the longest caption - "Step Back" - fits under one.
 const TRANSPORT_BUTTON: egui::Vec2 = egui::vec2(60.0, 44.0);
 
+/// A transport button with no state of its own: one that does its work and is done. See
+/// `AppControls::transport_flash`, which remembers which was pressed and when.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportPress {
+    Reset,
+    StepBack,
+    StepForward,
+}
+
+/// Corner radius of a transport button, matching the panel's chips so that the two rows of
+/// controls read as the same family of things to press.
+const TRANSPORT_CORNER: f32 = 8.0;
+
+/// How long a press shows on a button that has no state to show.
+///
+/// Play and Pause are sticky: the fill says which one the run is in and stays until it changes.
+/// Reset, Step Back and Step Fwd do their work and are done, so there is nothing for a fill to
+/// mean afterwards - but a press with no acknowledgement at all leaves the user wondering whether
+/// the click landed, particularly for Step Back at a step size small enough that nothing visibly
+/// moves. So the same fill is shown for a moment and then let go. A sixth of a second is long
+/// enough to see and short enough that holding the arrow key still reads as a series of presses.
+const TRANSPORT_FLASH_SECONDS: f64 = 0.17;
+
 /// The size the transport icons are drawn at, inside `TRANSPORT_BUTTON`.
 ///
 /// They are SVG, so this is the size they are rasterised for rather than a scale applied to a
@@ -1040,25 +1072,30 @@ const _: () = assert!(
 /// `icon` is one of the SVGs under `assets/images`, passed as `egui::include_image!` so that the
 /// file is embedded in the binary and its path is checked at compile time. It is drawn tinted, so
 /// one white drawing serves whatever colour the button wants it in.
+///
+/// `engaged` fills the button in `Theme::TRANSPORT_ENGAGED`. For Play and Pause that is the state
+/// of the run and holds; for the others it is the tail of a press, held for
+/// `TRANSPORT_FLASH_SECONDS` by `AppControls::transport_flash`. The fill is only set when it is
+/// wanted, so that a button which is not engaged keeps egui's own hover and press shading instead
+/// of being pinned to one colour and going dead under the pointer.
 fn transport_button(
     ui: &mut egui::Ui,
     icon: egui::ImageSource<'_>,
     caption: &str,
     tip: &str,
+    engaged: bool,
 ) -> bool {
     ui.vertical(|ui| {
         ui.set_width(TRANSPORT_BUTTON.x);
-        let clicked = ui
-            .add_sized(
-                TRANSPORT_BUTTON,
-                egui::Button::image(
-                    egui::Image::new(icon)
-                        .fit_to_exact_size(TRANSPORT_ICON)
-                        .tint(Theme::TEXT_BRIGHT),
-                ),
-            )
-            .on_hover_text(tip)
-            .clicked();
+        let mut button = egui::Button::image(
+            egui::Image::new(icon).fit_to_exact_size(TRANSPORT_ICON).tint(Theme::TEXT_BRIGHT),
+        )
+        .corner_radius(TRANSPORT_CORNER)
+        .stroke(egui::Stroke::new(1.2, Theme::CHIP_OUTLINE));
+        if engaged {
+            button = button.fill(Theme::TRANSPORT_ENGAGED);
+        }
+        let clicked = ui.add_sized(TRANSPORT_BUTTON, button).on_hover_text(tip).clicked();
         ui.vertical_centered(|ui| {
             ui.label(egui::RichText::new(caption).size(11.0).color(Theme::TEXT_MUTED));
         });
@@ -1254,6 +1291,27 @@ impl AppControls {
         }
     }
 
+    /// Which stateless transport button should be drawn as pressed at `now`, on egui's own clock.
+    ///
+    /// The record is dropped as it expires rather than being left to accumulate, so a `None` here
+    /// is also the end of the repaint the flash was asking for. `now` is a parameter rather than
+    /// read from a context so that the timing is a function of two numbers and can be checked as
+    /// one: see `test_a_press_shows_for_its_moment_and_is_then_forgotten`.
+    fn transport_flashing(&mut self, now: f64) -> Option<TransportPress> {
+        match self.transport_flash {
+            Some((which, at)) if now - at < TRANSPORT_FLASH_SECONDS => Some(which),
+            _ => {
+                self.transport_flash = None;
+                None
+            }
+        }
+    }
+
+    /// Record a press on a stateless transport button, so that it shows for its moment.
+    fn record_transport_press(&mut self, which: TransportPress, now: f64) {
+        self.transport_flash = Some((which, now));
+    }
+
     /// The two transmissions as `SignalPair` wants them: who is where, and who is sending.
     fn endpoints<'a>(
         &self,
@@ -1283,17 +1341,31 @@ impl AppControls {
         // the choice redraws. See `SpacetimeApp::update`.
         ui.group(|ui| {
             ui.label(egui::RichText::new("SIMULATION CONTROL").strong().color(Theme::UI_HEADING));
+            // A press on a stateless button is shown for a moment and then let go. The clock is
+            // egui's own, so it runs whether or not the simulation is playing, and the repaint is
+            // asked for explicitly: a paused app redraws only on input, and without this the fill
+            // would sit there until the user moved the mouse. See `TRANSPORT_FLASH_SECONDS`.
+            let now = ui.input(|i| i.time);
+            let flashing = self.transport_flashing(now);
+            if let Some((_, at)) = self.transport_flash {
+                ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(
+                    (TRANSPORT_FLASH_SECONDS - (now - at)).max(0.0),
+                ));
+            }
             ui.horizontal(|ui| {
                 let (play_icon, play_caption) = if self.is_playing {
                     (egui::include_image!("../../assets/images/pause.svg"), "Pause")
                 } else {
                     (egui::include_image!("../../assets/images/play.svg"), "Play")
                 };
+                // Sticky: the fill is which state the run is in, and it stays until that
+                // changes. So the button reads as pressed in while the simulation is playing.
                 if transport_button(
                     ui,
                     play_icon,
                     play_caption,
                     "Toggle Play/Pause simulation (Spacebar)",
+                    self.is_playing,
                 ) {
                     self.is_playing = !self.is_playing;
                 }
@@ -1302,7 +1374,9 @@ impl AppControls {
                     egui::include_image!("../../assets/images/reset.svg"),
                     "Reset",
                     "Put the run back to its start: the clock to zero, both transmissions dropped, and every ticked observer dropped afresh from their card - Alice at ϕ = 0.25 and Bob at ϕ = 0, each from their own drop radius, each hovering there until their own Release Delay, on the worldline their own E and L pick out. Two things are not read off the card. Motion is inherited: an observer being replaced hands their own Motion to the one replacing them, so a Reset never answers a question about how somebody moves that the user has not asked, and a card that has just been ticked on starts as it does out of the box. And the drop radius is wherever that observer was standing the last time the clock read zero, so dragging a marker at the start of a run moves where they are dropped from.",
+                    flashing == Some(TransportPress::Reset),
                 ) {
+                    self.record_transport_press(TransportPress::Reset, now);
                     self.drop_observers(metric, alice, bob, &mut signals, current_time);
                 }
                 // The same `step_for` the arrow keys and the play loop ask, so the three paths
@@ -1335,10 +1409,12 @@ impl AppControls {
                             egui::include_image!("../../assets/images/step-back.svg"),
                             "Step Back",
                             &back_tip,
+                            flashing == Some(TransportPress::StepBack),
                         )
                     })
                     .inner;
                 if step_back {
+                    self.record_transport_press(TransportPress::StepBack, now);
                     // Stepped back by however much of the step is left above the floor.
                     let back = current_step.min(room).max(0.0);
                     *current_time -= back;
@@ -1359,7 +1435,9 @@ impl AppControls {
                     egui::include_image!("../../assets/images/step-forward.svg"),
                     "Step Fwd",
                     "Step forward by Step Size / Distance (Right Arrow key)",
+                    flashing == Some(TransportPress::StepForward),
                 ) {
+                    self.record_transport_press(TransportPress::StepForward, now);
                     *current_time += current_step;
                     ObserverPair { bob: bob.as_mut(), alice: alice.as_mut() }
                         .step(metric, *current_time, current_step);
@@ -1637,5 +1715,43 @@ impl AppControls {
         if ui.button("Relativistic Theory & Horizons").clicked() {
             self.show_theory_modal = !self.show_theory_modal;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_a_press_shows_for_its_moment_and_is_then_forgotten() {
+        // Play and Pause have a state to show, so their fill holds until the state changes. Reset,
+        // Step Back and Step Fwd do their work and are done, so the press is shown for
+        // `TRANSPORT_FLASH_SECONDS` and then let go: long enough to see that the click landed,
+        // short enough that holding an arrow key still reads as a series of presses rather than
+        // one continuous glow.
+        let mut controls = AppControls::default();
+        assert_eq!(controls.transport_flashing(0.0), None, "nothing pressed, nothing lit");
+
+        controls.record_transport_press(TransportPress::StepBack, 10.0);
+        assert_eq!(controls.transport_flashing(10.0), Some(TransportPress::StepBack));
+        // Still lit well into its moment, and dark once the moment has passed. The exact boundary
+        // is not worth asserting and the first draft of this test was wrong to try: in f64
+        // 10.0 + 0.17 - 10.0 is 0.16999999999999993, so what happens at the nominal boundary is a
+        // statement about rounding rather than about the flash.
+        assert_eq!(
+            controls.transport_flashing(10.0 + 0.9 * TRANSPORT_FLASH_SECONDS),
+            Some(TransportPress::StepBack)
+        );
+        assert_eq!(controls.transport_flashing(10.0 + 1.1 * TRANSPORT_FLASH_SECONDS), None);
+        // And forgotten rather than merely hidden, so a later frame has nothing left to ask about
+        // and the repaint the flash was asking for stops being asked for.
+        assert!(controls.transport_flash.is_none(), "the expired record is dropped");
+
+        // A second press restarts the moment, and only the newest button is lit: two at once would
+        // say that two things had happened when one did.
+        controls.record_transport_press(TransportPress::Reset, 20.0);
+        controls.record_transport_press(TransportPress::StepForward, 20.05);
+        assert_eq!(controls.transport_flashing(20.1), Some(TransportPress::StepForward));
+        assert_eq!(controls.transport_flashing(20.05 + 1.1 * TRANSPORT_FLASH_SECONDS), None);
     }
 }
