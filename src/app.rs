@@ -2847,7 +2847,7 @@ mod tests {
         for (who, field) in [("Alice", &app.signal), ("Bob", &app.bob_signal)] {
             assert!(field.pulses.len() > 1, "{who} sent a second pulse by t = {}", app.current_time);
             assert_eq!(
-                field.pulses.last().unwrap().rays.len(),
+                field.pulses.back().unwrap().rays.len(),
                 256,
                 "{who}'s newest pulse carries the count the slider now shows"
             );

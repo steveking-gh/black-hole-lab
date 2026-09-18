@@ -126,6 +126,8 @@
 //! a dead ray records r = NaN rather than the radius it was left standing at, so nothing draws a
 //! piece of front that is not there.
 
+use std::collections::VecDeque;
+
 use crate::physics::geodesic::{GeodesicState, R_STOP, geodesic_accel};
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::Observer;
@@ -2051,7 +2053,12 @@ fn signalling_four_velocity(metric: &KerrSchild, observer: &Observer) -> [f64; 3
 #[derive(Debug, Clone)]
 pub struct SignalField {
     /// Live pulses, oldest first.
-    pub pulses: Vec<Pulse>,
+    ///
+    /// A deque because every eviction is from the front: the cap drops the oldest, and dropping the
+    /// front of a vector moves every pulse behind it. Nothing here wants random access - the whole
+    /// field is walked with `iter` on every pass, and the ends are reached by name - so a deque is
+    /// simply the container this collection is. See `SignalField::trim_to_cap`.
+    pub pulses: VecDeque<Pulse>,
     /// The field's own coordinate clock, advanced by `advance` and wound back by `step_back`. It
     /// carries the time of the field as a whole, so that a step backwards does not have to
     /// interrogate every pulse for it, and it is what an empty field falls back on.
@@ -2110,7 +2117,7 @@ pub struct SignalField {
 impl Default for SignalField {
     fn default() -> Self {
         Self {
-            pulses: Vec::new(),
+            pulses: VecDeque::new(),
             t: 0.0,
             next_index: 0,
             last_emit_tau: None,
@@ -2175,7 +2182,7 @@ impl SignalField {
             })
             .collect();
 
-        self.pulses.push(Pulse {
+        self.pulses.push_back(Pulse {
             index: self.next_index,
             emitted_t: emitter.t,
             emitted_tau: emitter.tau,
@@ -2205,9 +2212,14 @@ impl SignalField {
     /// down under it - are the same eviction, so they go through one place. The floor of one pulse
     /// is not reachable from the panel, whose slider stops there, and is here so that a cap of zero
     /// from anywhere else cannot leave a transmitting emitter with nothing in flight at all.
+    ///
+    /// O(1) per eviction, `pulses` being a deque. A `Pulse` is 224 bytes, so shifting the rest of a
+    /// full field down one moved 14 KB at the default cap of 64 and 28 KB at the panel's top of
+    /// 128 - once per emission rather than once per step, so a tenth of a megabyte a second at
+    /// worst, but there was never anything to buy it with.
     fn trim_to_cap(&mut self) {
         while self.pulses.len() > self.max_pulses.max(1) {
-            self.pulses.remove(0);
+            self.pulses.pop_front();
         }
     }
 
@@ -2473,7 +2485,7 @@ impl SignalField {
     /// and so that a rewind, which un-sends the newest pulses but leaves `next_index` alone, takes
     /// the count back down with it.
     pub fn pulses_after(&self, index: usize) -> usize {
-        self.pulses.last().map_or(0, |p| p.index.saturating_sub(index))
+        self.pulses.back().map_or(0, |p| p.index.saturating_sub(index))
     }
 
     /// Drop every pulse and put the clock back to zero. This is the reset, not the rewind: it is
@@ -2509,7 +2521,7 @@ impl SignalField {
 }
 
 /// The delivery of the newest pulse among these that has been received, or None if none has.
-fn newest_delivery(pulses: &[Pulse]) -> Option<Delivery> {
+fn newest_delivery(pulses: &VecDeque<Pulse>) -> Option<Delivery> {
     pulses
         .iter()
         .filter(|p| !p.receptions.is_empty())
@@ -3884,7 +3896,7 @@ mod tests {
             let alice = Observer::new_with_phi(&metric, "Alice", 0.0, r0, 0.0, 0.0, params);
             let mut field = SignalField::default();
             field.emit_if_due(&metric, &alice);
-            let pulse = field.pulses.first().expect("a released Alice emits at once");
+            let pulse = field.pulses.front().expect("a released Alice emits at once");
             assert_eq!(pulse.rays.len(), RAYS_PER_PULSE);
 
             let mut frozen = 0usize;
@@ -5655,7 +5667,7 @@ mod tests {
             field.detect_receptions(&metric, &alice);
 
             if probe.is_none()
-                && let Some(pulse) = field.pulses.first()
+                && let Some(pulse) = field.pulses.front()
             {
                 let ray = *pulse
                     .rays
@@ -5885,7 +5897,7 @@ mod tests {
             "the delivering pulse should have been evicted by now"
         );
         assert!(
-            field.pulses.first().map(|p| p.index).unwrap_or(0) > last.pulse_index,
+            field.pulses.front().map(|p| p.index).unwrap_or(0) > last.pulse_index,
             "every pulse still in hand is newer than it"
         );
     }
@@ -6228,7 +6240,7 @@ mod tests {
         for (what, emitter) in emitters.iter() {
             let mut field = SignalField::default();
             field.emit_if_due(&metric, emitter);
-            let pulse = field.pulses.first().unwrap_or_else(|| panic!("{what} must emit"));
+            let pulse = field.pulses.front().unwrap_or_else(|| panic!("{what} must emit"));
             assert!(pulse.rays.len() >= 64, "{what}: {} rays", pulse.rays.len());
 
             // The emitter-relative ratio, for contrast: this is the quantity the receptions and the
@@ -6463,7 +6475,7 @@ mod tests {
         let mut field = SignalField::default();
         field.emit_if_due(&metric, &emitter);
         {
-            let pulse = field.pulses.first().expect("the first call emits");
+            let pulse = field.pulses.front().expect("the first call emits");
             let history = pulse.history().expect("pulse zero is tagged");
             for sample in history.rows[0].samples.iter() {
                 assert!(
@@ -6478,7 +6490,7 @@ mod tests {
         for _ in 0..12 {
             field.advance(&metric, dt);
         }
-        let pulse = field.pulses.first().expect("the pulse is still in flight");
+        let pulse = field.pulses.front().expect("the pulse is still in flight");
         let history = pulse.history().expect("and it is still tagged");
         let stride = history.ray_stride();
         let row = history.rows.last().expect("a row was appended");
