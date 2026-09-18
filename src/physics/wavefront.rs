@@ -2310,23 +2310,17 @@ impl SignalField {
                     exhausted += 1;
                 }
             }
-            let keep = pulse
-                .extent_track
-                .iter()
-                .take_while(|(t, _, _)| *t <= target_t + 1e-9)
-                .count()
-                .max(1);
+            // A track is appended in order and thinned in place, so it is sorted in t and the
+            // points to keep are a prefix: `partition_point` finds where that prefix ends. The
+            // floor of one is the seed, the emission event, which is never cut away.
+            let keep =
+                pulse.extent_track.partition_point(|(t, _, _)| *t <= target_t + 1e-9).max(1);
             pulse.extent_track.truncate(keep);
-            // The history is cut on the same rule and with the same tolerance: a row recorded after
-            // the target was recorded off rays that have just been integrated back out of it, and
-            // the emission row is never cut away.
+            // The history is cut on the same rule, by the same search, and with the same tolerance:
+            // a row recorded after the target was recorded off rays that have just been integrated
+            // back out of it, and the emission row is never cut away.
             if let Some(history) = pulse.history.as_mut() {
-                let keep = history
-                    .rows
-                    .iter()
-                    .take_while(|row| row.t <= target_t + 1e-9)
-                    .count()
-                    .max(1);
+                let keep = history.rows.partition_point(|row| row.t <= target_t + 1e-9).max(1);
                 history.rows.truncate(keep);
             }
             pulse.receptions.retain(|rec| rec.t <= target_t);
@@ -2336,7 +2330,9 @@ impl SignalField {
         }
         self.budget_exhausted += exhausted;
         self.heard.retain(|rec| rec.t <= target_t);
-        self.last_emit_tau = self.pulses.iter().map(|p| p.emitted_tau).reduce(f64::max);
+        // Pulses are emitted in order of the emitter's own clock and the retain above keeps a
+        // prefix, so the newest pulse carries the latest emission and there is nothing to scan for.
+        self.last_emit_tau = self.pulses.back().map(|p| p.emitted_tau);
         // A delivery is retracted only if the arrival that made it happened after the target time;
         // one that had already happened by then still stands, even where the cap has since thrown
         // its pulse away. Whichever of the standing record and the pulses in hand names the newer
@@ -2433,6 +2429,11 @@ impl SignalField {
     /// The reception with the latest coordinate time. Arrivals do not come in emission order: the
     /// frozen family of an early pulse can reach the receiver long after the crossing family of a
     /// late one, so they have to be compared by their own event time.
+    ///
+    /// Which is why this is a scan and not `back()`, tempting as that looks. `heard` is sorted only
+    /// to the granularity of a detection pass: `detect_receptions` walks the pulses and appends each
+    /// one's new crossings in turn, so within a single pass the arrivals of different pulses
+    /// interleave in t. The last entry is therefore not reliably the latest one.
     pub fn last_reception(&self) -> Option<&Reception> {
         self.receptions().max_by(|a, b| a.t.total_cmp(&b.t))
     }
@@ -2522,10 +2523,15 @@ impl SignalField {
 
 /// The delivery of the newest pulse among these that has been received, or None if none has.
 fn newest_delivery(pulses: &VecDeque<Pulse>) -> Option<Delivery> {
+    // Pulses are held in emission order, so the newest one that has been heard is the last one
+    // that has been heard, and walking back from the end finds it without visiting the rest. Not a
+    // binary search, and it could not be one: having been received is not monotone along the
+    // field - an old pulse can have arrived while a newer one is still in flight, which is the
+    // whole point of `Delivery` - so there is no partition to search for.
     pulses
         .iter()
-        .filter(|p| !p.receptions.is_empty())
-        .max_by_key(|p| p.index)
+        .rev()
+        .find(|p| !p.receptions.is_empty())
         .map(|p| Delivery {
             pulse_index: p.index,
             emitted_t: p.emitted_t,
@@ -5042,14 +5048,16 @@ mod tests {
     /// The receiver's radius at coordinate time `t`, interpolated between the samples of a
     /// worldline recorded by `run_startup_layout`.
     fn radius_at(track: &[(f64, f64)], t: f64) -> f64 {
-        match track.iter().position(|&(sample, _)| sample >= t) {
-            None => track.last().unwrap().1,
-            Some(0) => track[0].1,
-            Some(k) => {
-                let ((t0, r0), (t1, r1)) = (track[k - 1], track[k]);
-                let w = if t1 > t0 { (t - t0) / (t1 - t0) } else { 0.0 };
-                r0 + w * (r1 - r0)
-            }
+        // The track is recorded in order, so the bracketing pair is a `partition_point` away.
+        let k = track.partition_point(|&(sample, _)| sample < t);
+        if k == track.len() {
+            track.last().expect("the walk recorded samples").1
+        } else if k == 0 {
+            track[0].1
+        } else {
+            let ((t0, r0), (t1, r1)) = (track[k - 1], track[k]);
+            let w = if t1 > t0 { (t - t0) / (t1 - t0) } else { 0.0 };
+            r0 + w * (r1 - r0)
         }
     }
 

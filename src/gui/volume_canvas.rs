@@ -1646,11 +1646,14 @@ impl VolumeCanvas {
                     let Some(history) = pulse.history() else {
                         continue;
                     };
-                    // Rows are stored oldest first, so the window is a suffix: everything older
-                    // than the bottom of the volume is below the floor's floor and is not drawn.
-                    let Some(first) = history.rows.iter().position(|row| row.t >= t_min) else {
+                    // Rows are stored oldest first, so they are sorted in t and the window is a
+                    // suffix: everything older than the bottom of the volume is below the floor's
+                    // floor and is not drawn. Where that suffix starts is a `partition_point`, and
+                    // a start at the end of the rows means the whole history is below the window.
+                    let first = history.rows.partition_point(|row| row.t < t_min);
+                    if first == history.rows.len() {
                         continue;
-                    };
+                    }
                     let rows = &history.rows[first..];
                     let n = rows[0].samples.len();
                     if rows.len() < 2 || n < 2 {
