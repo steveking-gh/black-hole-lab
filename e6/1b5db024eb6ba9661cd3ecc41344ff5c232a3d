@@ -1,0 +1,23 @@
+src/perf/mod.rs
+  s_1fbbbb8a53c367::t_26a0ec04400f75 46,61-67,208-212,236,262,298,324-326,465,499,752-756,917-918
+  s_1fbbbb8a53c367::t_cae96c8292b8f5 757-758
+  s_1fbbbb8a53c367::t_24c6224504e3af 759-761
+src/perf/replay.rs
+  s_1fbbbb8a53c367::t_26a0ec04400f75 394-399,513-514
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e61b5db024eb6ba9661cd3ecc41344ff5c232a3d",
+  "prompts": {},
+  "sessions": {
+    "s_1fbbbb8a53c367": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ed2f15a7-41d1-4dd6-ba98-d9aaeb4cd695",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
