@@ -749,7 +749,7 @@ const PAST_CONE_DT_MOVING: f64 = 0.1;
 /// the full one. Nothing in the drawing reads it - the surface is built from `rays.len()` and from
 /// each ray's own samples, so a coarse cone draws by exactly the same code as a fine one.
 #[derive(Clone, Copy, PartialEq, Debug)]
-struct ConeRes {
+pub(crate) struct ConeRes {
     /// M of coordinate time between consecutive samples of a generator.
     dt: f64,
     /// How many null generators the cone is sampled on.
@@ -761,7 +761,7 @@ struct ConeRes {
 impl ConeRes {
     const MOVING: Self =
         Self { dt: PAST_CONE_DT_MOVING, rays: PAST_CONE_RAYS_MOVING, full: false };
-    const FULL: Self = Self { dt: PAST_CONE_DT, rays: PAST_CONE_RAYS, full: true };
+    pub(crate) const FULL: Self = Self { dt: PAST_CONE_DT, rays: PAST_CONE_RAYS, full: true };
 }
 
 /// How many sample rows of the past cone's surface go into one mesh.
@@ -849,7 +849,7 @@ struct PastConeKey {
 }
 
 /// The exact past light cone of one event: the null geodesics through it, run backwards.
-struct PastCone {
+pub(crate) struct PastCone {
     key: PastConeKey,
     /// Per generator, the (t, r, phi) samples of that geodesic: the event itself first, then
     /// earlier and earlier. Kept in coordinates rather than projected, so that a camera move
@@ -882,7 +882,12 @@ struct PastCone {
 /// clock without moving and its (t, r, phi) would claim the ray sat at the ring for the rest of the
 /// window. A generator whose past hugs a horizon needs no special case at all: its dr/dt decays to
 /// zero and the steps get cheap.
-fn build_past_cone(metric: &KerrSchild, obs: &Observer, t_min: f64, res: ConeRes) -> PastCone {
+pub(crate) fn build_past_cone(
+    metric: &KerrSchild,
+    obs: &Observer,
+    t_min: f64,
+    res: ConeRes,
+) -> PastCone {
     let tetrad = Observer::raindrop_tetrad(metric, obs.r);
     let u = tetrad.e0;
     let mut rays = Vec::with_capacity(res.rays);

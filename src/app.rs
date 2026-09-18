@@ -17,13 +17,20 @@ use std::time::Instant;
 /// added above the picture rather than pushing the foot of it out of the window.
 const FRAME_ROW_HEIGHT: f32 = 26.0;
 
+/// Everything the run is: the geometry, the two worldlines, the two transmissions, the clock, the
+/// panel's settings and the three canvases.
+///
+/// Several of the fields below are visible to the crate rather than private, and all of them are so
+/// for one reason: the performance harness (`crate::perf`) scripts this object the way the panel
+/// does - set the cards, drop the observers, step - and reads the state back out to fingerprint it.
+/// Nothing else outside this file writes any of them.
 pub struct SpacetimeApp {
-    metric: KerrSchild,
+    pub(crate) metric: KerrSchild,
     /// The two observers, either of whom may be out of the simulation: the "Enable Observer" box
     /// on a card unticked means there is no worldline at all rather than a hidden one, and the two
     /// are optional in the same way because the cards are the same card twice.
-    bob: Option<Observer>,
-    alice: Option<Observer>,
+    pub(crate) bob: Option<Observer>,
+    pub(crate) alice: Option<Observer>,
     spacetime_canvas: SpacetimeCanvas,
     /// The same foliation drawn as a volume: the equatorial plane as a floor and coordinate time
     /// standing up out of it. It stands in for `spacetime_canvas` in the left column while the View
@@ -33,13 +40,24 @@ pub struct SpacetimeApp {
     spatial_canvas: SpatialCanvas,
     /// Alice's signal pulses, which Bob receives. They live here rather than in a canvas because
     /// they are advanced on the simulation clock and read by both diagrams and the HUD.
-    signal: SignalField,
+    pub(crate) signal: SignalField,
     /// Bob's own transmission, which Alice receives. It is the same object driven the other way
     /// round, and the two are advanced, rewound and cleared together through `SignalPair`.
-    bob_signal: SignalField,
-    controls: AppControls,
-    current_time: f64,
+    pub(crate) bob_signal: SignalField,
+    pub(crate) controls: AppControls,
+    pub(crate) current_time: f64,
     last_update: Instant,
+    /// The frame interval to use instead of the wall clock, or None - which is what the app is
+    /// built with and what a window always runs on.
+    ///
+    /// A played frame's simulation step is `dt * play_speed`, so on a real window the step depends
+    /// on how long the last frame took to draw: a slower machine takes bigger steps, and fewer of
+    /// them per M of simulated time. That is right for a window, where what matters is that the run
+    /// plays at a steady rate in seconds, and it is fatal to a measurement, which has to put the
+    /// same run through the same frames or it is timing a moving target - and would flatter a slow
+    /// build by giving it fewer frames to do. `crate::perf`'s frame tier sets this to 1/60, the
+    /// same step its simulation tier hands `step_forward`, so the two tiers replay the same run.
+    pub(crate) fixed_frame_dt: Option<f64>,
 }
 
 impl Default for SpacetimeApp {
@@ -83,6 +101,7 @@ impl Default for SpacetimeApp {
             controls,
             current_time,
             last_update: Instant::now(),
+            fixed_frame_dt: None,
         }
     }
 }
@@ -138,7 +157,7 @@ impl SpacetimeApp {
     }
 
     /// One step forward by hand, in the same order as a played frame.
-    fn step_forward(&mut self, step: f64) {
+    pub(crate) fn step_forward(&mut self, step: f64) {
         self.current_time += step;
         // Both worldlines move as one object, so that this path, the play loop and the panel's
         // buttons cannot mean different things by a step. See `ObserverPair`.
@@ -189,9 +208,13 @@ impl eframe::App for SpacetimeApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
-        // Calculate frame delta time
+        // Calculate frame delta time. A headless frame may have been given one to use instead of
+        // the wall clock, which is what lets a measurement replay the same run every time: see
+        // `fixed_frame_dt`. The clock is still read and stored either way, so that the first real
+        // frame after one of those is an ordinary frame.
         let now = Instant::now();
-        let dt = (now - self.last_update).as_secs_f64().clamp(1.0 / 240.0, 0.1);
+        let measured = (now - self.last_update).as_secs_f64().clamp(1.0 / 240.0, 0.1);
+        let dt = self.fixed_frame_dt.unwrap_or(measured);
         self.last_update = now;
 
         // Nothing to report about a watch that is not being kept: the readout is written below

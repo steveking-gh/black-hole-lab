@@ -22,12 +22,22 @@
 
 mod app;
 mod gui;
+mod perf;
 mod physics;
 
 use app::SpacetimeApp;
 use eframe::NativeOptions;
 
 fn main() -> eframe::Result<()> {
+    // The performance harness lives inside this binary, because the crate has no library target
+    // and is not growing one for it. The arguments are looked at before anything else happens, so
+    // `--perf` runs headless and exits with the harness's own status code without a window ever
+    // being created: see `perf` for what the three tiers measure and for the A/B workflow.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|arg| arg == "--perf") {
+        std::process::exit(perf::run(&args));
+    }
+
     // Native window options
     let native_options = NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -51,7 +61,12 @@ fn main() -> eframe::Result<()> {
 /// and friends rendered as boxes. Atkinson Hyperlegible (SIL OFL) is the primary text face;
 /// DejaVu Sans (Bitstream Vera licence) sits behind it as the symbol fallback for both families.
 /// Licences are in assets/fonts.
-fn install_fonts(ctx: &egui::Context) {
+///
+/// Visible to the crate because the performance harness installs the same faces into its headless
+/// context: laying out r₋, τ and Ω against a fallback stack is not the same work as laying them out
+/// against one face, and a frame measured with egui's bundled font would be measuring a different
+/// frame from the one the window paints.
+pub(crate) fn install_fonts(ctx: &egui::Context) {
     use egui::{FontData, FontDefinitions, FontFamily};
     use std::sync::Arc;
 

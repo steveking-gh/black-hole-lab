@@ -288,7 +288,7 @@ const HISTORY_MIN_DT: f64 = 0.1;
 const HISTORY_MAX_ROWS: usize = 256;
 
 /// State vector of a ray in coordinate time: y = (r, phi, v^r, v^phi).
-type RayState = [f64; 4];
+pub(crate) type RayState = [f64; 4];
 
 /// The bilinear form -g_{mu nu} a^mu b^nu at radius r.
 fn minus_inner(metric: &KerrSchild, r: f64, a: &[f64; 3], b: &[f64; 3]) -> f64 {
@@ -942,7 +942,7 @@ impl NullRay {
 /// the statement of an invariant rather than a guard. Clamping r instead, which is what this used
 /// to do, fed a different equation into a substep that could still be accepted, and left the ray's
 /// death standing on a state partly integrated with it.
-fn ray_rhs(metric: &KerrSchild, y: &RayState) -> RayState {
+pub(crate) fn ray_rhs(metric: &KerrSchild, y: &RayState) -> RayState {
     debug_assert!(y[0] >= R_STOP, "ray_rhs evaluated below the ring at r = {}", y[0]);
     let v = [1.0, y[2], y[3]];
     let acc = geodesic_accel(metric, y[0], &v);
@@ -969,7 +969,7 @@ fn ray_rhs(metric: &KerrSchild, y: &RayState) -> RayState {
 /// tableau's first-same-as-last property). One accepted substep therefore costs six evaluations
 /// of `ray_rhs`, against four for the classical RK4 this replaces and eleven for the same error
 /// control by step doubling.
-fn ray_dopri5(
+pub(crate) fn ray_dopri5(
     metric: &KerrSchild,
     y: &RayState,
     k1: &RayState,
@@ -1033,7 +1033,7 @@ fn ray_dopri5(
 
 /// Why a Dormand-Prince substep could not be taken.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StageFail {
+pub(crate) enum StageFail {
     /// A stage would have been evaluated below R_STOP: the ray is arriving at the ring.
     BelowRing,
     /// A stage went non-finite: the state has stopped meaning anything, which is not a place.
