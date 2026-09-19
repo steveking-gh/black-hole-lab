@@ -140,6 +140,72 @@ fn velocity_step_cap(k1: &StateVec, u: &[f64; 3]) -> f64 {
     }
 }
 
+/// How close to the asked-for proper time a shortened substep has to land before it is taken.
+///
+/// It is a bound on tau, not on t, because tau is what the caller named. Over a substep dtau/dt is
+/// 1/u^t, which runs from about 1 in the weak field down to 1e-10 at `U_T_STALL`, so this is
+/// anything from 1e-13 M of coordinate time to nothing measurable at all - and the smaller it gets,
+/// the less the emission event moves in t for a given error in tau. Three orders below the 1e-9 the
+/// app calls "the same event" everywhere else, and well above the ulp of a tau of order tens of M.
+const TAU_LANDING: f64 = 1e-13;
+
+/// The substep of `h` or less, from the state `y` with slope `k1`, whose RK4 result lands on
+/// `tau_stop`.
+///
+/// tau(h) is smooth and strictly increasing along a future-directed worldline, and the caller has
+/// already established the bracket: tau(0) = y[3] < tau_stop <= tau(h). So this is a secant on
+/// tau(h) - tau_stop kept inside that bracket by bisection, which converges in a handful of
+/// iterations and cannot leave the substep however badly conditioned the curve is. Every trial
+/// re-runs the RK4 from the *same* `y` and the same `k1`, so what comes back is a point of the same
+/// solution the unshortened substep would have traced, and not an interpolation between two of them.
+///
+/// The bracket collapsing to the last representable interval in h is the other way out, and it is
+/// the honest one: the target then lies between two adjacent doubles and the upper end is the
+/// substep that reaches it.
+fn shorten_to_tau(
+    metric: &KerrSchild,
+    y: &StateVec,
+    k1: &StateVec,
+    h: f64,
+    tau_stop: f64,
+) -> StateVec {
+    let mut lo = 0.0f64;
+    let mut f_lo = y[3] - tau_stop;
+    if f_lo >= 0.0 {
+        // The caller guards against this, and a state already at the target has nothing to shorten.
+        return *y;
+    }
+    let mut hi = h;
+    let mut best = rk4(metric, y, k1, h, rhs_coord_time);
+    let mut f_hi = best[3] - tau_stop;
+    for _ in 0..80 {
+        if f_hi <= TAU_LANDING || hi - lo <= f64::EPSILON * (1.0 + hi) {
+            break;
+        }
+        // The secant point, and the midpoint wherever the secant would leave the bracket (a flat
+        // or a NaN-poisoned end, neither of which the geometry produces, but neither of which may
+        // be allowed to throw the search out of the interval it is bracketed in).
+        let span = f_hi - f_lo;
+        let mut guess = if span > 0.0 { lo + (hi - lo) * (-f_lo / span) } else { 0.5 * (lo + hi) };
+        if !(guess > lo && guess < hi) {
+            guess = 0.5 * (lo + hi);
+        }
+        let stepped = rk4(metric, y, k1, guess, rhs_coord_time);
+        let f = stepped[3] - tau_stop;
+        if f >= 0.0 {
+            hi = guess;
+            f_hi = f;
+            best = stepped;
+        } else {
+            lo = guess;
+            f_lo = f;
+        }
+    }
+    // The shortest substep tried that does not stop *short* of the target, so the emission event is
+    // never placed before the emitter's watch reads it.
+    best
+}
+
 /// One classical RK4 step of `rhs` with step size h, reusing the slope `k1` at `y`.
 fn rk4(
     metric: &KerrSchild,
@@ -364,9 +430,51 @@ impl GeodesicState {
     /// what hold the conserved quantities to 1e-8 through the strong field, where a cap on
     /// coordinate time alone is far too coarse. A whole infall from r = 6 to the ring costs
     /// under a millisecond, so the accuracy is free at UI rates.
+    ///
+    /// This is `step_coord_time_until_tau` with no proper-time stop, and it is written that way
+    /// rather than beside it: the emission events the simulation splits its steps at have to lie on
+    /// the very curve the worldline is drawn along, and two integrators - however carefully copied
+    /// from one another - are two curves the moment either is touched.
     pub fn step_coord_time(&mut self, metric: &KerrSchild, dt: f64) {
+        self.step_coord_time_until_tau(metric, dt, f64::INFINITY);
+    }
+
+    /// `step_coord_time`, stopped early at the event where the worldline's own clock reads
+    /// `tau_stop`, and returning the coordinate time it actually advanced.
+    ///
+    /// This is how `Simulation::step_forward` finds the events its sub-steps are cut at: an emitter
+    /// transmits every `EMISSION_INTERVAL_TAU` of *their* proper time, which is an event on their
+    /// worldline and not a point on anybody's step grid, so the step has to be able to ask where
+    /// that event is and stop on it.
+    ///
+    /// The substep sequence is the one above, unchanged, until a substep would carry tau past
+    /// `tau_stop`. That substep is then taken again from the same pre-substep state and the same
+    /// slope k1, with h shortened until tau lands within `TAU_LANDING` of the target - a secant on
+    /// tau(h), which is smooth and strictly increasing (dtau/dt = 1/u^t > 0 for every
+    /// future-directed worldline in this chart), bracketed by bisection so that no arithmetic
+    /// accident can walk it outside the substep it started in. Re-integrating from the same state
+    /// rather than interpolating between two committed ones is what keeps the stopping event *on*
+    /// the curve: it is the RK4 solution at h, which is exactly what the drawn worldline is made of.
+    ///
+    /// With `tau_stop` infinite - which is what `step_coord_time` passes - the comparison below is
+    /// false at every substep and not one bit of the original path changes. That matters beyond
+    /// tidiness: a loaded run has to play on bit-identically, and the perf fingerprints are taken on
+    /// the worldlines.
+    ///
+    /// The return is read off `self.t` rather than accumulated from the substeps, so it is the
+    /// interval the state really moved through even where `commit` refused a substep half way.
+    pub fn step_coord_time_until_tau(
+        &mut self,
+        metric: &KerrSchild,
+        dt: f64,
+        tau_stop: f64,
+    ) -> f64 {
         if self.stalled || self.r <= R_STOP || dt <= 0.0 {
-            return;
+            return 0.0;
+        }
+        let t_entry = self.t;
+        if self.tau >= tau_stop {
+            return 0.0;
         }
         let mut remaining = dt;
         // A hard ceiling on substeps per call, so that a state the caps cannot get through - the
@@ -392,8 +500,15 @@ impl GeodesicState {
                     .max(1e-7),
             );
 
-            let y = rk4(metric, &y, &k1, h, rhs_coord_time);
-            if !self.commit(&y) {
+            let stepped = rk4(metric, &y, &k1, h, rhs_coord_time);
+            // The one place the proper-time stop enters. `>=` rather than `>` so that a substep
+            // landing exactly on the target is taken as the landing rather than shortened to it.
+            if stepped[3] >= tau_stop {
+                let landing = shorten_to_tau(metric, &y, &k1, h, tau_stop);
+                self.commit(&landing);
+                break;
+            }
+            if !self.commit(&stepped) {
                 break;
             }
             remaining -= h;
@@ -403,6 +518,7 @@ impl GeodesicState {
             }
         }
         self.normalize_phi();
+        self.t - t_entry
     }
 
     /// Exact geodesic 4-velocity components (dt/dtau, dr/dtau, dphi/dtau) in ingoing

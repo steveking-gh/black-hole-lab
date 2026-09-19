@@ -172,6 +172,22 @@ pub const MAX_PULSES: usize = 64;
 /// transmission.
 pub const EMISSION_INTERVAL_TAU: f64 = 0.1;
 
+/// How far either side of a due proper time an emitter's watch still counts as reading it.
+///
+/// `Simulation::step_forward` splits its step at the event where the emitter's watch reads the due
+/// value, so the emitter arrives at `emit_if_due` standing on that event - but the sub-step
+/// re-integrates the substeps the search took and lands a few ulps of a tau of order tens of M away
+/// from it rather than on the bit. Without a tolerance the pulse would be declined at one such
+/// landing and sent a whole interval late, and the comb would be a sum of roundings rather than
+/// tau_0 + k `interval_tau`.
+///
+/// It is the 1e-9 the app calls "the same event" everywhere else (see
+/// `Simulation::check_invariants`). That leaves four orders of headroom over the landings measured,
+/// which run to a few times 1e-13 at worst and sit at 1e-15 normally, while being a millionth of the
+/// 0.1 M interval it is deciding the edges of, so no pulse can be brought forward or held back by
+/// anything a user could see.
+const DUE_TOLERANCE: f64 = 1e-9;
+
 /// Radius past which a ray has left the drawn field and is retired. dr/dt of an escaping ray only
 /// grows with r, so nothing that passes this ever comes back into the picture.
 ///
@@ -2154,6 +2170,24 @@ fn is_static_hover(metric: &KerrSchild, observer: &Observer) -> bool {
     !observer.is_active && metric.metric_components(observer.r)[0][0] < 0.0
 }
 
+/// Has this observer a worldline to transmit from at all?
+///
+/// The three refusals `SignalField::emit_if_due` opens with, said once so that
+/// `SignalField::next_due_tau` - which `Simulation::step_forward` asks where to cut its next
+/// sub-step - refuses in exactly the same cases rather than in nearly the same ones. An emitter the
+/// step split for and then declined to hear from would leave the loop cutting steps at events that
+/// never produce a pulse.
+///
+/// An observer waiting at or inside the static limit has no hovering worldline (`is_static_hover`),
+/// one at the ring has no future, and one stalled on r- has a proper time that has stopped: none of
+/// the three has a clock left to pace a transmission by.
+fn can_transmit(metric: &KerrSchild, emitter: &Observer) -> bool {
+    if (!emitter.is_active && !is_static_hover(metric, emitter)) || emitter.r <= R_STOP {
+        return false;
+    }
+    !matches!(emitter.geodesic, Some(geo) if geo.stalled)
+}
+
 /// The 4-velocity to quote an observer's signals in, at emission and at reception alike: the
 /// 4-velocity of the worldline the observer is on, and nothing else.
 ///
@@ -2290,10 +2324,29 @@ impl Default for SignalField {
 }
 
 impl SignalField {
-    /// Emit a pulse if the emitter's own clock says one is due: at the first call, and every
-    /// `interval_tau` of their proper time after that. A stalled or retired worldline sends
-    /// nothing, since a worldline that is no longer advancing has no proper time to space pulses
-    /// by.
+    /// The emitter's own clock reading at which this transmission's next pulse falls due, or None
+    /// where there is no next pulse to place.
+    ///
+    /// This is what `Simulation::step_forward` cuts its sub-steps on: it asks the field when the
+    /// next pulse is due and the emitter when their watch will read it, and stops the step there.
+    /// The refusals are `can_transmit`'s, so the step never splits for an emitter that `emit_if_due`
+    /// would then decline to hear from.
+    ///
+    /// None for a transmission that has not sent anything yet, which is a different thing from a
+    /// transmission whose next pulse is far off: the first pulse is due *now*, at the event the
+    /// emitter already stands on, and `emit_if_due` sends it without anybody having to work out
+    /// when. See `SignalPair::emit_due_now`.
+    pub(crate) fn next_due_tau(&self, metric: &KerrSchild, emitter: &Observer) -> Option<f64> {
+        if !can_transmit(metric, emitter) {
+            return None;
+        }
+        Some(self.last_emit_tau? + self.interval_tau)
+    }
+
+    /// Emit a pulse if the emitter's own clock says one is due - at the first call, and every
+    /// `interval_tau` of their proper time after that - and say whether one went out. A stalled or
+    /// retired worldline sends nothing, since a worldline that is no longer advancing has no proper
+    /// time to space pulses by.
     ///
     /// An observer still waiting for release transmits too, and must. While they wait they are the
     /// static observer of `is_static_hover`, hovering at fixed (r, phi) with a perfectly good clock
@@ -2304,19 +2357,30 @@ impl SignalField {
     /// emission frame is `signalling_four_velocity`: the static frame while they hover, their own
     /// once they fall. The only observer with nothing to transmit from is one waiting at or inside
     /// the static limit, where the hovering worldline does not exist; that one waits in silence.
-    pub fn emit_if_due(&mut self, metric: &KerrSchild, emitter: &Observer) {
-        if (!emitter.is_active && !is_static_hover(metric, emitter)) || emitter.r <= R_STOP {
-            return;
+    ///
+    /// **The comb is anchored to the due value, not to the clock the caller happened to arrive on.**
+    /// `Simulation::step_forward` splits its step at the emission event and hands the emitter over
+    /// standing on it, but the sub-step re-integrates the substeps the search took and lands within
+    /// a few ulps of the due tau rather than on the bit: hence the `DUE_TOLERANCE` on the test
+    /// below, and hence `last_emit_tau` being set to the *due* value whenever the arrival is inside
+    /// it. The cadence is then tau_0 + k `interval_tau` exactly, for as long as the transmission
+    /// runs, instead of a sum of roundings. A caller that arrives genuinely late - a test stepping
+    /// the field by hand below `Simulation`, or an emitter who was silenced and has come back - is
+    /// emitted at once and the comb re-anchored to where they really are, which is the only honest
+    /// answer when the due event has already gone by.
+    ///
+    /// `Pulse::emitted_tau` is the emitter's actual reading at the emission event either way. It is
+    /// a record of what happened, not of what was asked for, and `step_back` rebuilds the cadence
+    /// off it.
+    pub fn emit_if_due(&mut self, metric: &KerrSchild, emitter: &Observer) -> bool {
+        if !can_transmit(metric, emitter) {
+            return false;
         }
-        if let Some(geo) = emitter.geodesic
-            && geo.stalled
+        let due = self.last_emit_tau.map(|last| last + self.interval_tau);
+        if let Some(due) = due
+            && emitter.tau < due - DUE_TOLERANCE
         {
-            return;
-        }
-        if let Some(last) = self.last_emit_tau
-            && emitter.tau < last + self.interval_tau
-        {
-            return;
+            return false;
         }
 
         // Light is isotropic in the frame of the worldline the emitter is actually on: their own
@@ -2360,8 +2424,30 @@ impl SignalField {
             receptions: Vec::new(),
         });
         self.next_index += 1;
-        self.last_emit_tau = Some(emitter.tau);
+        self.last_emit_tau = Some(match due {
+            Some(due) if emitter.tau <= due + DUE_TOLERANCE => due,
+            _ => emitter.tau,
+        });
         self.trim_to_cap(metric);
+        true
+    }
+
+    /// Take the side mark of the pulse just emitted, against the receiver where they now stand, and
+    /// record nothing.
+    ///
+    /// It is `SignalField::prime` for one pulse and with no record to reconcile.
+    /// `SignalPair::advance` gets this for free - a pulse emitted inside a step is marked by the
+    /// `detect_receptions` pass at the end of the same call, at the emission instant, because a
+    /// fresh pulse has no previous mark to sweep from - but a pulse emitted on the way *into* a step
+    /// is emitted before that pass exists. Marking it here, at the same pre-step state it was
+    /// emitted at, is what lets the sub-step that follows sweep it over the receiver; without the
+    /// mark the first sub-step would be spent establishing one and a crossing inside it would never
+    /// be seen.
+    pub(crate) fn mark_newest(&mut self, metric: &KerrSchild, receiver: &Observer) {
+        let u_receiver = signalling_four_velocity(metric, receiver);
+        if let Some(pulse) = self.pulses.back_mut() {
+            pulse.scan(metric, receiver, &u_receiver, false);
+        }
     }
 
     /// Pulses the cap evicted while they could still have been heard. See `dropped_in_flight`:
@@ -2748,12 +2834,81 @@ impl<'a> Endpoint<'a> {
 }
 
 impl SignalPair<'_> {
+    /// Send whatever is already due at the event the step is about to start from, and mark each
+    /// pulse sent against the receiver standing there.
+    ///
+    /// Two things are due at the start of a step rather than at the end of one. The **first pulse**
+    /// of a transmission: a field with no `last_emit_tau` has nothing to count an interval from, so
+    /// its first pulse goes out at the event transmission begins - the start of the run, or the
+    /// instant "Transmit Signal" is ticked mid-run - and not a step later, where the size of that
+    /// step would decide where the whole comb sits. And a pulse whose due proper time the emitter's
+    /// watch already reads to within `DUE_TOLERANCE`, which `Simulation::step_forward` sends here
+    /// rather than splitting off a sub-step of nothing to send it at the end of.
+    ///
+    /// The marking is the part that is easy to leave out. Inside `advance` a fresh pulse is marked
+    /// by the `detect_receptions` pass at the end of the same call, at the emission instant; a pulse
+    /// emitted before the clock moves has no such pass behind it, so `SignalField::mark_newest`
+    /// takes the mark here, at the same state the pulse was emitted at. The sub-step that follows
+    /// then sweeps it from that mark like any other pulse, and a crossing inside that sub-step is
+    /// seen. Nothing is recorded twice: this pass records nothing at all.
+    pub fn emit_due_now(&mut self, metric: &KerrSchild, alice: Endpoint<'_>, bob: Endpoint<'_>) {
+        if let Some(al) = alice.sender()
+            && self.alice.emit_if_due(metric, al)
+            && let Some(b) = bob.observer
+        {
+            self.alice.mark_newest(metric, b);
+        }
+        if let Some(b) = bob.sender()
+            && self.bob.emit_if_due(metric, b)
+            && let Some(al) = alice.observer
+        {
+            self.bob.mark_newest(metric, al);
+        }
+    }
+
+    /// How much of `remaining` the simulation may carry in one piece before one of the two emitters'
+    /// watches reads the value its next pulse is due at.
+    ///
+    /// The whole of `remaining` where neither reads it inside that window, and otherwise the earlier
+    /// of the two events - which is what makes the sub-step end *on* an emission rather than
+    /// somewhere near one. Each field says when its next pulse falls due (`next_due_tau`) and each
+    /// emitter says how long until their own clock reads it (`Observer::time_until_tau`), so the
+    /// answer is a statement about the two worldlines and never about the caller's step size.
+    ///
+    /// A field that has sent nothing yet is not consulted: its first pulse is due at the event the
+    /// step starts from, and `emit_due_now` has already sent it.
+    pub fn time_to_next_emission(
+        &self,
+        metric: &KerrSchild,
+        clock: f64,
+        remaining: f64,
+        alice: Endpoint<'_>,
+        bob: Endpoint<'_>,
+    ) -> f64 {
+        let mut span = remaining;
+        for (field, endpoint) in [(&*self.alice, alice), (&*self.bob, bob)] {
+            if let Some(emitter) = endpoint.sender()
+                && let Some(due) = field.next_due_tau(metric, emitter)
+                && let Some(until) = emitter.time_until_tau(metric, clock, due, remaining)
+            {
+                span = span.min(until);
+            }
+        }
+        span
+    }
+
     /// Carry both transmissions forward by dt of the simulation clock.
     ///
     /// The order matters and is the same for each field. Advancing first and emitting second keeps
     /// a fresh pulse at its emitter's current event instead of one step behind it, and detecting
     /// last means a pulse emitted this frame already has a recorded side for its receiver before
     /// the next frame can move it.
+    ///
+    /// What this does *not* own any more is where inside a step a pulse is emitted. A pulse is due
+    /// at an event on its emitter's worldline, and `Simulation::step_forward` cuts its sub-steps at
+    /// those events before calling this, so by the time the emission below is reached the emitter
+    /// is already standing on one. `emit_due_now` handles the two emissions that fall at the start
+    /// of a step rather than the end of one; see it for why.
     ///
     /// An endpoint that is not sending - the observer out of the simulation, or there with
     /// "Transmit Signal" unticked - has its field silenced first and then carried on empty, so it

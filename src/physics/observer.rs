@@ -248,6 +248,17 @@ pub struct TrailPoint {
 const TRAIL_MAX_POINTS: usize = 10_000;
 const TRAIL_MAX_DRAG_POINTS: usize = 500;
 
+/// How far short of a target proper time `Observer::time_until_tau` still counts as having reached
+/// it.
+///
+/// The stopping integrator lands inside 1e-13 of what it was asked for (`TAU_LANDING` in
+/// `geodesic`), and the only other way to be within a hair of the target is to have run the whole
+/// window out on it - in which case saying "reached, at the end of the window" and saying "not
+/// reached" name sub-steps that differ by less than this, and the emission lands on the same event
+/// either way. An order of magnitude above the integrator's own landing, so that the two answers
+/// cannot disagree about a substep the integrator has already accepted.
+const TAU_REACHED: f64 = 1e-12;
+
 /// Which of the two observers a worldline is: the run's identity for Alice and Bob, carried as a
 /// value rather than as the text of their name.
 ///
@@ -969,6 +980,22 @@ impl Observer {
         if self.geodesic_stands_on_current_event() {
             return;
         }
+        self.geodesic = Some(self.seeded_geodesic(metric));
+    }
+
+    /// The geodesic state a free-fall step is about to be integrated from: the one the observer
+    /// carries where it already stands on their event, and a fresh seed at that event where it does
+    /// not. See `seed_geodesic_at_current_event`, which is this written into the observer.
+    ///
+    /// It is stated separately so that `time_until_tau` can integrate the same state the next step
+    /// will, without a `&mut self` it has no business having and without cloning the observer to get
+    /// one: `GeodesicState` is `Copy` and the trail, which is thousands of points, is not.
+    fn seeded_geodesic(&self, metric: &KerrSchild) -> GeodesicState {
+        if let Some(geo) = self.geodesic
+            && self.geodesic_stands_on_current_event()
+        {
+            return geo;
+        }
         let (energy, l_ang) = self
             .geodesic
             .map(|geo| (geo.energy, geo.l_ang))
@@ -976,7 +1003,102 @@ impl Observer {
         let mut geo = GeodesicState::new_infall(metric, self.t, self.r, energy, l_ang);
         geo.phi = self.phi;
         geo.tau = self.tau;
-        self.geodesic = Some(geo);
+        geo
+    }
+
+    /// How much coordinate time from the clock's present reading until this observer's own watch
+    /// reads `tau_target`, or None if it does not read it inside `max_dt` - or ever.
+    ///
+    /// This is the question `Simulation::step_forward` cuts its sub-steps on. An emitter transmits
+    /// every `EMISSION_INTERVAL_TAU` of *their* proper time, so where a pulse goes out is an event
+    /// on their worldline; the step has to be told where that event is before it can stop on it, and
+    /// nothing else in the app asks a worldline a question about its own clock.
+    ///
+    /// It has to answer for the motion `step` will actually take over that interval, and so it is
+    /// written as the same case split, in the same order:
+    ///
+    /// * Below `release_t` the observer hovers, and `hover` is closed form: tau runs linearly in t
+    ///   at 1/u^t of `hover_four_velocity`. The dispatch is on the *clock*, exactly as `step`'s is,
+    ///   rather than on `is_active` - a sub-step that ends at or after the release is a released
+    ///   step whatever the observer was doing when it began.
+    /// * The release inside the window is the one discontinuity, and it is `step`'s, not this
+    ///   function's: a sub-step that lands at or past `release_t` skips the hover altogether and
+    ///   integrates the geodesic from `release_t`, so the hover's contribution to tau is the one
+    ///   accumulated before the sub-step began. Both pieces are searched, the hover first.
+    /// * A released free-faller is the geodesic itself, stopped on the target by
+    ///   `GeodesicState::step_coord_time_until_tau` - the same integrator, and therefore the same
+    ///   curve, that `advance` is about to draw.
+    /// * Static and ZAMO hold r, so u is a constant of the worldline and tau is again linear in t.
+    /// * A dragged observer's clock does not advance at all, and neither does one stalled on r- or
+    ///   stopped at the ring: those have no next reading to wait for, and None says so.
+    ///
+    /// The mode is `effective_mode` throughout, because an inadmissible Static or ZAMO selection
+    /// free-falls, and its clock ticks at the rate of the worldline it is really on.
+    pub fn time_until_tau(
+        &self,
+        metric: &KerrSchild,
+        clock: f64,
+        tau_target: f64,
+        max_dt: f64,
+    ) -> Option<f64> {
+        if max_dt <= 0.0 || !max_dt.is_finite() || !tau_target.is_finite() {
+            return None;
+        }
+        if tau_target <= self.tau {
+            return Some(0.0);
+        }
+        // How much of the window is spent waiting. `step` sends every sub-step whose end lands
+        // below `release_t` to `hover`, so this is the length of the hovering piece and also the
+        // sub-step length at which the released piece starts.
+        let hover_span = (self.release_t - clock).max(0.0);
+        if hover_span > 0.0 {
+            let u = self.hover_four_velocity(metric);
+            // A hover with no worldline under it - at or inside the static limit - does not move
+            // the clock, and `hover` guards on the same component.
+            if u[0] > 0.0 {
+                let dt = (tau_target - self.tau) * u[0];
+                if dt < hover_span {
+                    return (dt <= max_dt).then_some(dt);
+                }
+            }
+        }
+        match self.effective_mode(metric) {
+            // A dragged observer is carried in t and in nothing else: `advance` leaves tau alone,
+            // so there is no reading to wait for.
+            ObserverMode::ManualDrag => None,
+            ObserverMode::Static | ObserverMode::Zamo => {
+                // Fixed r, so u is a constant and dtau = dt/u^t exactly, as `advance` adds it. The
+                // floor at `hover_span` is the release discontinuity: where the wait ticks slower
+                // than the worldline it is waiting for, the target is first read at the release.
+                let u = self.four_velocity_at(metric, self.r);
+                let dt = ((tau_target - self.tau) * u[0].max(1e-9)).max(hover_span);
+                (dt <= max_dt).then_some(dt)
+            }
+            ObserverMode::FreeFall => {
+                let mut geo = self.seeded_geodesic(metric);
+                if geo.stalled || geo.r <= R_STOP {
+                    // Frozen on r- or stopped at the ring. `advance` moves neither one's proper
+                    // time, so neither has a next reading.
+                    return None;
+                }
+                // How far the geodesic runs ahead of the sub-step. A releasing step integrates from
+                // `release_t` rather than from the clock - see `step`, and `hover`, which parks the
+                // geodesic at the release event with the clock and the azimuth the wait
+                // accumulated - so the geodesic covers `clock - release_t` more than the sub-step
+                // does. That is negative while the observer is still waiting, where it is the
+                // hovering piece the geodesic does *not* cover, and zero once released.
+                let offset = if self.is_active {
+                    0.0
+                } else {
+                    geo.t = self.release_t;
+                    geo.tau = self.tau;
+                    geo.phi = self.phi;
+                    clock - self.release_t
+                };
+                let advanced = geo.step_coord_time_until_tau(metric, max_dt + offset, tau_target);
+                (geo.tau >= tau_target - TAU_REACHED).then_some((advanced - offset).max(0.0))
+            }
+        }
     }
 
     /// One released step, along the worldline the observer is actually on - `effective_mode`, not

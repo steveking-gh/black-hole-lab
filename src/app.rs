@@ -781,7 +781,7 @@ mod tests {
     use crate::gui::controls::{WATCH_DT_CAP, active_preset};
     use crate::physics::geodesic::GeodesicState;
     use crate::physics::observer::{Observer, ObserverMode, Release, WorldlineParams};
-    use crate::physics::wavefront::{Pulse, SignalField};
+    use crate::physics::wavefront::{EMISSION_INTERVAL_TAU, Pulse, SignalField};
     use eframe::App;
 
     /// Bob, in a test that has him in the simulation. Either observer's card can be unticked now,
@@ -2597,10 +2597,13 @@ mod tests {
         // r = 4.5M, well before his own release at t = 8, and everything after it is sent to
         // nobody. Re-measured for this layout - the app used to open with him at r = 3.8M released
         // at t = 0, where the boundary was pulse #25, sent at t = 3.84 from r = 1.23, with 3
-        // pulses after it.
+        // pulses after it - and re-measured again once emission stopped being quantised to the
+        // step: he hovers at r = 4.5, where dtau = dt/1.3416, so his pulse #14 falls due at
+        // tau = 1.4 exactly and goes out at t = 1.4 x 1.3416 = 1.878 instead of at the 1.84 the
+        // 0.02 step grid used to round it to.
         assert!(
-            (last.emitted_t - 1.84).abs() < 0.02,
-            "the boundary pulse is the one of t = 1.84: {}",
+            (last.emitted_t - 1.878).abs() < 0.02,
+            "the boundary pulse is the one of t = 1.878: {}",
             last.emitted_t
         );
         assert!(
@@ -2609,8 +2612,8 @@ mod tests {
             last.emitted_r
         );
         assert!(
-            (last.received_t - 5.20).abs() < 0.02,
-            "and reaching her at t = 5.20, most of an M before her worldline ends: {}",
+            (last.received_t - 5.357).abs() < 0.02,
+            "and reaching her at t = 5.357, most of an M before her worldline ends: {}",
             last.received_t
         );
         assert!(never >= 40, "Bob goes on transmitting after the last delivery: {never}");
@@ -2621,6 +2624,165 @@ mod tests {
         for pulse in app.sim.bob_signal.pulses.iter().filter(|p| p.index > last.pulse_index) {
             assert!(pulse.receptions.is_empty(), "pulse {} cannot have arrived", pulse.index);
         }
+    }
+
+    /// One run of the same layout to the same clock at one step size, reported as what the two
+    /// transmissions did: every pulse's emission proper time in order, and how many arrivals each
+    /// receiver recorded.
+    ///
+    /// Every setting the run reads is written here rather than inherited, including the ones that
+    /// happen to match the app's own defaults: what this measures is whether the answer depends on
+    /// the step size, and a default quietly moving underneath it would make that question
+    /// unanswerable.
+    fn comb_run(step: f64, until: f64) -> ([Vec<f64>; 2], [usize; 2]) {
+        let mut app = SpacetimeApp::default();
+        app.controls.is_playing = false;
+        app.controls.step_mode = StepMode::Time;
+        app.controls.step_size = step;
+        // Sagittarius A*'s spin, which is the hole the app opens on and the one Alice's ISCO
+        // radius below belongs to.
+        app.sim.metric = KerrSchild::with_solar_mass(1.0, 0.90, 4.15e6);
+        app.controls.rays_per_pulse = 64;
+        // Well above the sixty-odd pulses this run sends, so that the cap cannot evict an emission
+        // the comb is being read off. The assertion below holds it to that.
+        app.controls.max_pulses = 128;
+        for card in [&mut app.controls.alice, &mut app.controls.bob] {
+            card.enabled = true;
+            card.transmit = true;
+            card.delta_t_delay = 0.0;
+            card.l_ang = 0.0;
+            card.drop_phi = 0.0;
+            card.mode = ObserverMode::FreeFall;
+            card.release = Release::FromInfinity;
+            card.drop_r = 4.5;
+        }
+        // Alice on the prograde ISCO of that hole, a quarter of a radian round from Bob, and Bob
+        // the raindrop falling past her: the layout the app opens on, stated in full.
+        app.controls.alice.release = Release::CircularPrograde;
+        app.controls.alice.drop_r = KerrSchild::new(1.0, 0.90).isco(true);
+        app.controls.alice.drop_phi = 0.25;
+        drop_observers(&mut app);
+        set_free_fall(&mut app);
+        app.sim.set_max_pulses(app.controls.max_pulses);
+
+        let steps = (until / step).round() as usize;
+        for _ in 0..steps {
+            app.step_forward(step);
+        }
+        assert!(
+            (app.sim.clock - until).abs() < 1e-9,
+            "the three runs have to end on the same clock: {} at a step of {step}",
+            app.sim.clock
+        );
+        let read = |field: &SignalField| {
+            assert_eq!(
+                field.pulses.len(),
+                field.next_index,
+                "the cap must not have evicted a pulse the comb is read off"
+            );
+            field.pulses.iter().map(|pulse| pulse.emitted_tau).collect::<Vec<_>>()
+        };
+        (
+            [read(&app.sim.alice_signal), read(&app.sim.bob_signal)],
+            [app.sim.alice_signal.received_count(), app.sim.bob_signal.received_count()],
+        )
+    }
+
+    #[test]
+    fn test_the_transmission_comb_is_the_emitters_own_clock_and_not_the_step_size() {
+        // An observer transmits every EMISSION_INTERVAL_TAU of *their own* proper time, so the
+        // events pulses leave from belong to their worldline and to nothing else. They used to
+        // belong to the user's step grid instead: a pulse went out at the first step boundary at or
+        // past the due reading, the cadence then counted from that boundary rather than from the
+        // due value so the comb drifted, and a step longer than the interval sent one pulse where
+        // several were due. Over this same 6 M a played frame put 22 of Alice's pulses on the wire
+        // at a mean spacing of 0.105 of her proper time, a 0.1 M step 20 at 0.111, and a 0.5 M step
+        // 12 at 0.185 - three different transmissions from one worldline.
+        //
+        // The three sizes are a played frame, the panel's default hand step, and the top of the
+        // Step Size slider. The largest is five times the emission interval, so every one of its
+        // steps has several pulses due inside it, which is the case the loop exists for.
+        const UNTIL: f64 = 6.0;
+        let steps = [1.0 / 60.0, 0.1, 0.5];
+        let runs: Vec<_> = steps.iter().map(|&step| comb_run(step, UNTIL)).collect();
+
+        let (reference, reference_heard) = &runs[0];
+        for (who, comb) in [("Alice", &reference[0]), ("Bob", &reference[1])] {
+            assert!(
+                comb.len() > 20,
+                "{who} must have transmitted for the whole run: {} pulses",
+                comb.len()
+            );
+        }
+        // Alice's transmission has been heard by the end of the run and Bob's has not: he is
+        // falling away from her orbit the whole time, and over 6 M no front of his has swept back
+        // over her. So the arrival counts below are checked against a run that did record
+        // arrivals, and are not an equality between two zeroes.
+        assert!(
+            reference_heard[0] > 0,
+            "Bob must have heard Alice, or the arrival counts below hold vacuously: \
+             {reference_heard:?}"
+        );
+        // The comb itself: tau_0 + k x interval, exactly, for each emitter. tau_0 is zero here -
+        // both observers are let go at t = 0 with their clocks at zero and the first pulse leaves
+        // at the event transmission begins - but it is read off the run rather than assumed, since
+        // what is being asserted is the *spacing*.
+        let mut worst_comb = 0.0f64;
+        for (step, (combs, _)) in steps.iter().zip(runs.iter()) {
+            for (who, comb) in [("Alice", &combs[0]), ("Bob", &combs[1])] {
+                let tau_0 = comb[0];
+                for (k, tau) in comb.iter().enumerate() {
+                    let due = tau_0 + (k as f64) * EMISSION_INTERVAL_TAU;
+                    worst_comb = worst_comb.max((tau - due).abs());
+                    assert!(
+                        (tau - due).abs() < 1e-9,
+                        "{who}'s pulse {k} left at tau = {tau} where the comb puts it at {due}, \
+                         stepping at {step}"
+                    );
+                }
+            }
+        }
+
+        // And the same transmission at all three step sizes: the same pulses, from the same events,
+        // heard the same number of times.
+        let mut worst_across = 0.0f64;
+        for (step, (combs, heard)) in steps.iter().zip(runs.iter()).skip(1) {
+            for (who, comb, against) in [
+                ("Alice", &combs[0], &reference[0]),
+                ("Bob", &combs[1], &reference[1]),
+            ] {
+                assert_eq!(
+                    comb.len(),
+                    against.len(),
+                    "{who} sent {} pulses at a step of {step} and {} at a played frame:\n{comb:?}\
+                     \nvs\n{against:?}",
+                    comb.len(),
+                    against.len()
+                );
+                for (k, (tau, reference_tau)) in comb.iter().zip(against.iter()).enumerate() {
+                    worst_across = worst_across.max((tau - reference_tau).abs());
+                    assert!(
+                        (tau - reference_tau).abs() < 1e-9,
+                        "{who}'s pulse {k} left at tau = {tau} at a step of {step} and at \
+                         {reference_tau} at a played frame"
+                    );
+                }
+            }
+            assert_eq!(
+                heard, reference_heard,
+                "the arrivals must not depend on the step size either: {heard:?} at a step of \
+                 {step} against {reference_heard:?} at a played frame"
+            );
+        }
+        println!(
+            "6 M of the opening layout at steps of 1/60, 0.1 and 0.5 M: {} + {} pulses, \
+             {} + {} arrivals, worst departure from tau_0 + k x {EMISSION_INTERVAL_TAU} \
+             {worst_comb:.3e}, worst spread across the three step sizes {worst_across:.3e}",
+            reference[0].len(),
+            reference[1].len(),
+            reference_heard[0],
+            reference_heard[1]
+        );
     }
 
     /// Every arrival a transmission has recorded, ordered by its own crossing time: the pulse it
@@ -2709,16 +2871,17 @@ mod tests {
             bob_then.len()
         );
 
-        // Two thirds of an M back, one arrow press at a time. The count is chosen so that the
+        // Half an M back, one arrow press at a time. The count is chosen so that the
         // rewind reaches past several arrivals in each field *and* leaves one of Alice's crossings
         // strictly inside the first step forward, which is the step that used to lose it: a field
         // whose sides have been dropped and not re-primed spends that step working out which side
-        // of each sheet the receiver is on, and sees no crossing at all. In the layout the app
-        // opens on, Bob hears her at t = 1.774, 2.001, 2.243, 2.499, 2.770, 3.057, 3.358 and 3.673
-        // - every one of them at r = 4.5M, since he is hovering there - and 33 steps back from
-        // t = 4 lands on t = 3.34, which puts the arrival at t = 3.358 inside the first step
-        // forward and leaves two arrivals in each field to be retracted and re-recorded.
-        let back = 33;
+        // of each sheet the receiver is on, and sees no crossing at all. In this layout Bob hears
+        // her twelve times on his way in, the last three at t = 3.200, 3.464 and 3.743, and 27 steps
+        // back from t = 4 lands on t = 3.46, which puts the arrival at t = 3.464 inside the first
+        // step forward and leaves two arrivals in each field to be retracted and re-recorded. (The
+        // count was 33 while emission was quantised to the step: pinning each pulse to the event its
+        // emitter's own watch falls due at moved every arrival with it.)
+        let back = 27;
         for _ in 0..back {
             app.step_backward(step);
         }

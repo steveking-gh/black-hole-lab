@@ -38,6 +38,26 @@ pub struct Transmit {
     pub bob: bool,
 }
 
+/// Shortest sub-step `Simulation::step_forward` will cut, in M of coordinate time.
+///
+/// It is a termination floor and not a resolution: it is there so that two emission events a
+/// rounding apart cannot be split into a sub-step of 1e-17 M that advances nothing and leaves the
+/// loop asking the same question for ever. At 1e-12 M it is four orders below the smallest interval
+/// any ray or worldline integrator in the app resolves - `GeodesicState::step_coord_time` floors its
+/// own substeps at 1e-7 M - so a sub-step that hits it moves nothing anybody can measure and the
+/// next one carries on from where it stood.
+const MIN_SUB_STEP: f64 = 1e-12;
+
+/// Hard ceiling on sub-steps per call, for the same reason `GeodesicState::step_coord_time` has one:
+/// a state the arithmetic cannot get through costs one bounded call rather than hanging the frame.
+///
+/// It is not a bound on the work a long step is allowed to do. A step is split at every pulse due
+/// inside it, so a Distance-mode step of hundreds of M legitimately takes thousands of sub-steps and
+/// is meant to; at the fastest cadence the panel allows that is still far short of this. If it ever
+/// binds, the call returns having covered less than the whole `dt` and the clock stops where it got
+/// to, exactly as a worldline that exhausts its own substep budget stops where it got to.
+const MAX_SUB_STEPS: usize = 100_000;
+
 /// Everything the run is.
 ///
 /// `Clone` because a whole run is a value: `crate::save` builds one off a file beside the one the
@@ -76,15 +96,28 @@ impl Simulation {
         }
     }
 
-    /// One step forward: the clock, then both worldlines, then both transmissions.
+    /// One step forward, cut at the events where the emitters' own watches say a pulse is due.
     ///
-    /// This is the only description of a step forward there is. The order is the whole of it. The
-    /// clock moves first because both of the calls below are told where it now stands rather than
-    /// how far it moved - `ObserverPair::step` lands the worldlines *on* the clock, which is what
-    /// keeps a released free-faller from running a release's worth of time ahead of it for the rest
-    /// of the run. The worldlines move before the light because a pulse emitted on this step is
-    /// emitted at its emitter's new event: `SignalPair::advance` then owns the rest of the order -
-    /// carry the light, then emit, then listen.
+    /// The step the caller asked for is covered by a run of *sub-steps*, each one the whole step
+    /// below, and each one ending either at the end of `dt` or exactly on the event where an
+    /// emitter's proper time reads the value its next pulse is due at. `SignalPair` says when that
+    /// is and `Observer::time_until_tau` says how far away it is; nothing here decides anything but
+    /// the lengths.
+    ///
+    /// **Why.** An observer transmits every `EMISSION_INTERVAL_TAU` of *their own* proper time, so
+    /// where a pulse leaves is an event on their worldline and on nothing else. Emitting at the end
+    /// of whatever step the caller happened to take made it an event on the user's step grid
+    /// instead: the pulse went out at the first step boundary at or past the due reading, the
+    /// cadence then counted from that boundary rather than from the due value so the comb drifted,
+    /// and a step longer than the interval - which is most of them, the Step Size slider reaching
+    /// 0.5 M and a played frame 0.33 M against an interval of 0.1 M - sent one pulse where several
+    /// were due. Measured over the same 6 M of the default layout, a frame step put 22 pulses on the
+    /// wire and a 0.5 M step 12. The physics cannot depend on how finely the user asked to watch it.
+    ///
+    /// Nothing is done about very long steps, deliberately: the loop splits at every pulse due
+    /// inside one, which is exactly what makes a long step exact, and a Distance-mode step of
+    /// hundreds of M is simply slow. The floor and the guard below are there so that a degenerate
+    /// length cannot spin, and not to bound the work.
     ///
     /// The ray count is pushed into both fields here, on the way into the step, rather than at the
     /// click that moved the slider: that way a played frame, an arrow key, a panel button and a
@@ -92,19 +125,79 @@ impl Simulation {
     /// transmissions cannot end up sampled differently. It reaches the emission and nothing else -
     /// pulses already in flight keep their own count.
     pub fn step_forward(&mut self, dt: f64, tx: Transmit) {
+        SignalPair { alice: &mut self.alice_signal, bob: &mut self.bob_signal }
+            .set_rays_per_pulse(tx.rays_per_pulse);
+        let mut remaining = dt.max(0.0);
+        let mut guard = 0;
+        // A step of nothing is still a step - `AppControls::set_spin` takes one to settle a run at
+        // t = 0 - so the body runs once whatever `dt` is and the loop is what repeats. Each pass
+        // sends whatever is already due, then carries the run as far as the next thing that falls
+        // due, so an emission is always the *end* of a sub-step or the start of one and never
+        // something that happened in the middle of a piece of integration.
+        loop {
+            guard += 1;
+            self.emit_due_now(tx);
+            let sub = self.sub_step_length(remaining, tx);
+            self.sub_step(sub, tx);
+            remaining -= sub;
+            if remaining <= 0.0 || guard >= MAX_SUB_STEPS {
+                break;
+            }
+        }
+        self.debug_check();
+    }
+
+    /// Send the pulses that are due at the event the next sub-step starts from. See
+    /// `SignalPair::emit_due_now`: the first pulse of a transmission is one of them, and so is a
+    /// pulse the sub-step before landed within `DUE_TOLERANCE` of.
+    fn emit_due_now(&mut self, tx: Transmit) {
+        let alice = Endpoint { observer: self.alice.as_ref(), transmitting: tx.alice };
+        let bob = Endpoint { observer: self.bob.as_ref(), transmitting: tx.bob };
+        SignalPair { alice: &mut self.alice_signal, bob: &mut self.bob_signal }
+            .emit_due_now(&self.metric, alice, bob);
+    }
+
+    /// How long the next sub-step may be: up to the end of what is left of the step, and no further
+    /// than the nearer of the two emitters' next due emission events.
+    ///
+    /// The floor is what makes the loop terminate. Every iteration either emits - which moves that
+    /// emitter's due value on by a whole interval - or advances the clock by something strictly
+    /// positive, and a due value already inside `DUE_TOLERANCE` of the emitter's present reading has
+    /// been sent by `emit_due_now` before this is asked, so what is left is at least a tolerance of
+    /// proper time away. The floor catches the case where that is still a hair of coordinate time,
+    /// deep in the strong field where dt/dtau runs large; a sub-step of 1e-12 M is below anything
+    /// the physics resolves and the next one carries on from it.
+    fn sub_step_length(&mut self, remaining: f64, tx: Transmit) -> f64 {
+        if remaining <= 0.0 {
+            return 0.0;
+        }
+        let alice = Endpoint { observer: self.alice.as_ref(), transmitting: tx.alice };
+        let bob = Endpoint { observer: self.bob.as_ref(), transmitting: tx.bob };
+        let span = SignalPair { alice: &mut self.alice_signal, bob: &mut self.bob_signal }
+            .time_to_next_emission(&self.metric, self.clock, remaining, alice, bob);
+        span.max(MIN_SUB_STEP).min(remaining)
+    }
+
+    /// One sub-step: the clock, then both worldlines, then both transmissions.
+    ///
+    /// This is the only description of a step forward there is; `step_forward` chooses the lengths
+    /// and this says what a step of one *is*. The order is the whole of it. The clock moves first
+    /// because both of the calls below are told where it now stands rather than how far it moved -
+    /// `ObserverPair::step` lands the worldlines *on* the clock, which is what keeps a released
+    /// free-faller from running a release's worth of time ahead of it for the rest of the run. The
+    /// worldlines move before the light because a pulse emitted on this step is emitted at its
+    /// emitter's new event: `SignalPair::advance` then owns the rest of the order - carry the light,
+    /// then emit, then listen.
+    fn sub_step(&mut self, dt: f64, tx: Transmit) {
         self.clock += dt;
         ObserverPair { bob: self.bob.as_mut(), alice: self.alice.as_mut() }
             .step(&self.metric, self.clock, dt);
-        let mut signals =
-            SignalPair { alice: &mut self.alice_signal, bob: &mut self.bob_signal };
-        signals.set_rays_per_pulse(tx.rays_per_pulse);
-        signals.advance(
+        SignalPair { alice: &mut self.alice_signal, bob: &mut self.bob_signal }.advance(
             &self.metric,
             dt,
             Endpoint { observer: self.alice.as_ref(), transmitting: tx.alice },
             Endpoint { observer: self.bob.as_ref(), transmitting: tx.bob },
         );
-        self.debug_check();
     }
 
     /// The earliest coordinate time the clock can still be wound back to.
