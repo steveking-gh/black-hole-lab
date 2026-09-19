@@ -1149,13 +1149,14 @@ fn fading_line(
 
 /// The head of a track as a screen polyline, cut off `max_px` back along the drawn curve.
 ///
-/// `head_first` walks the track backwards from its newest point, which is where the front stands
-/// now. The cut is made on arc length on the screen rather than on coordinate time or on a count of
-/// track points, because on this chart those are nothing like proportional to each other: an edge
-/// frozen on r- packs tens of M of track into one pixel column while the outer edge of a pulse far
-/// from the hole crosses the canvas over the same interval, and only a cut on the screen gives
-/// every comet the same drawn length. The far point is interpolated onto the `max_px` mark, so the
-/// tail ends where `Theme::COMET_TAIL_PX` says and not at whatever track point lies beyond it.
+/// `head_first` starts at where the front stands now and walks the track backwards from its newest
+/// point. The cut is made on arc length on the screen rather than on coordinate time or on a count
+/// of track points, because on this chart those are nothing like proportional to each other: an
+/// edge frozen on r- packs tens of M of track into one pixel column while the outer edge of a
+/// pulse far from the hole crosses the canvas over the same interval, and only a cut on the screen
+/// gives every comet the same drawn length. The far point is interpolated onto the `max_px` mark,
+/// so the tail ends where `Theme::COMET_TAIL_PX` says and not at whatever track point lies beyond
+/// it.
 ///
 /// Points that do not clear `SCREEN_SPACING` of the last one kept are dropped on the way, for the
 /// reason `thin_to_pixels` gives, and here for a second one: a track recorded every 0.02 M of
@@ -1883,13 +1884,24 @@ Tick Enable Observer on Alice's or Bob's card",
         // is still there, and the column of ticks is the pile of outgoing interior light that a
         // later infaller cuts through.
         //
-        // The head is the newest point of the track, and `Pulse::extend_track` records on a
-        // cadence of its own - `TRACK_MIN_DT`, 0.02 M, doubled once per thinning - so while a run
-        // plays the head can sit up to that far below the now line. At the 14 M window this chart
-        // opens on, over the 574 points of canvas height the perf harness's layout gives it, that
-        // is 0.8 of a point. Nothing is extrapolated to close the gap: every point of a track is a
-        // time the rays were actually stepped to, and the alternative would be to draw a front at
-        // a radius nothing has computed it to be at.
+        // The head is the pulse's extent at the field's own clock, `Pulse::radial_extent` read off
+        // the live rays, and the recorded track supplies only the tail behind it. Nothing is
+        // extrapolated or interpolated by that: the rays stand at exactly `SignalField::t`, which
+        // is the time this chart draws its now line at, so the head is a radius the front has been
+        // computed to be at and not a guess past the end of what is known. The track cannot serve
+        // as the head, because `Pulse::extend_track` records on a cadence of its own -
+        // `TRACK_MIN_DT`, 0.02 M, doubled once per thinning - so its newest point lags the clock by
+        // up to that whole spacing. Any step shorter than the cadence, and any zoom that makes
+        // 0.02 M more than a point of screen, shows that lag directly: the head stands still for
+        // several steps while the now line moves on, and then jumps forward when the next point is
+        // recorded. Which edge of the extent a head belongs to is the same question for the tail,
+        // so one pass over the rays serves both edges of a pulse.
+        //
+        // The head is prepended only while the field's clock is at or after the newest track point.
+        // It always is in the app - `SignalField::step_back` truncates the track to t <= its target
+        // and leaves the clock on that target - but a clock behind the track would put the head
+        // below the point the tail starts from and draw a line that doubles back on itself, so that
+        // case falls back to the track alone rather than drawing something untrue.
         let draw_comets = |field: &SignalField, colour: Color32| {
             let head_colour = Color32::from_rgba_unmultiplied(
                 colour.r(),
@@ -1901,22 +1913,32 @@ Tick Enable Observer on Alice's or Bob's card",
             // canvas cannot put anything on it, and the whole pulse costs one rectangle test.
             let reach = rect.expand(Theme::COMET_TAIL_PX);
             for pulse in field.pulses.iter() {
-                if !pulse.rays.iter().any(NullRay::alive) {
-                    continue;
-                }
-                let Some(newest) = pulse.extent_track.last() else {
+                // This is the "has a live front" test as well as the reading: `radial_extent` is
+                // None exactly when no ray of the pulse is alive, since it returns None on an empty
+                // min/max, so a spent pulse is skipped here and nothing else has to ask.
+                let Some((lo_now, hi_now)) = pulse.radial_extent(metric) else {
                     continue;
                 };
+                let Some(&newest) = pulse.extent_track.last() else {
+                    continue;
+                };
+                let head_at = if field.t >= newest.0 { (field.t, lo_now, hi_now) } else { newest };
                 for hi_edge in [false, true] {
                     let at = |&(t, lo, hi): &(f64, f64, f64)| {
                         Pos2::new(to_screen_x(if hi_edge { hi } else { lo }), to_screen_y(t))
                     };
-                    let head = at(newest);
+                    let head = at(&head_at);
                     if !reach.contains(head) {
                         continue;
                     }
+                    // The head leads the recorded track walked backwards. When the newest point of
+                    // the track is the head - the usual case while a run plays in steps at or over
+                    // the recording cadence - `comet_tail` drops it as a point no further than
+                    // `SCREEN_SPACING` from the one already kept, so the duplicate costs a vertex
+                    // that is never emitted rather than a zero-length first segment.
+                    let track = pulse.extent_track.iter().rev().map(at);
                     let tail =
-                        comet_tail(pulse.extent_track.iter().rev().map(at), Theme::COMET_TAIL_PX);
+                        comet_tail(std::iter::once(head).chain(track), Theme::COMET_TAIL_PX);
                     if tail.len() < 2 {
                         continue;
                     }
@@ -4234,7 +4256,11 @@ mod canvas_tests {
         }
 
         // Where the heads have to be: the two edges of every pulse that still has a live ray, at
-        // the newest point of its track, which at this step is the field's own clock.
+        // the newest point of its track, which at this step is the field's own clock. The 0.1 M
+        // step is five times the recording cadence, so the track and the clock agree here and this
+        // test cannot tell which of the two a head is read from;
+        // `test_a_comet_head_stands_at_the_live_front_between_two_recorded_track_points` is the one
+        // that separates them.
         let live: Vec<(f64, f64, f64)> = field
             .pulses
             .iter()
@@ -4292,6 +4318,90 @@ mod canvas_tests {
         );
         assert!(full_length > 0, "some of these tracks are longer than one tail");
         assert!(worst_end_alpha <= 5, "a full tail must reach the background: {worst_end_alpha}");
+    }
+
+    #[test]
+    fn test_a_comet_head_stands_at_the_live_front_between_two_recorded_track_points() {
+        // The head is where the front stands now, not the last place it was written down.
+        // `Pulse::extend_track` records at most once per `track_dt` - `TRACK_MIN_DT`, 0.02 M, until
+        // the first thinning doubles it - so a caller stepping in shorter intervals than that
+        // leaves the newest track point behind the field's clock for several steps together. The
+        // app does that routinely: the Step Size slider reaches down to 0.0005 M, a fortieth of the
+        // cadence, and even a played frame at the default one M per real second is a sixtieth of an
+        // M on a 60 Hz window, already under it. A head read off the track is then pinned to that
+        // stale point while the now line moves on, and jumps forward when the next point lands:
+        // the lag the user sees.
+        // Three steps of 0.004 M carry the field 0.012 M past the last recorded point, which is
+        // under the 0.02 M cadence, so the clock here stands between two track points by
+        // construction.
+        let (metric, mut bob, mut field, coarse_now) = falling_transmission();
+        let dt = 0.004;
+        for i in 0..3 {
+            let t = coarse_now + ((i + 1) as f64) * dt;
+            bob.step(&metric, t, dt);
+            field.advance(&metric, dt);
+            field.emit_if_due(&metric, &bob);
+        }
+        let now = field.t;
+
+        // What is drawn, and what the track alone would have drawn: the live extent at the field's
+        // clock against the newest recorded point, for every pulse that still has a front.
+        let shapes = distant_view_pass(&metric, &bob, &field, now);
+        let rect = canvas_rect(&shapes);
+        let canvas = SpacetimeCanvas::default();
+        let (t_min, t_max) = (now - canvas.time_window * 0.7, now + canvas.time_window * 0.3);
+        let to_x = |r: f64| rect.left() + (r / canvas.max_r) as f32 * rect.width();
+        let to_y = |t: f64| rect.bottom() - ((t - t_min) / (t_max - t_min)) as f32 * rect.height();
+        let now_y = to_y(now);
+
+        let mut heads: Vec<Pos2> = Vec::new();
+        let mut worst_lag_m: f64 = 0.0;
+        let mut worst_gap_px: f32 = 0.0;
+        for pulse in field.pulses.iter() {
+            let Some((lo, hi)) = pulse.radial_extent(&metric) else { continue };
+            let &(t_rec, lo_rec, hi_rec) = pulse.extent_track.last().expect("a track has its seed");
+            worst_lag_m = worst_lag_m.max(now - t_rec);
+            for (live_r, recorded_r) in [(lo, lo_rec), (hi, hi_rec)] {
+                let live = Pos2::new(to_x(live_r), now_y);
+                let recorded = Pos2::new(to_x(recorded_r), to_y(t_rec));
+                worst_gap_px = worst_gap_px.max(live.distance(recorded));
+                heads.push(live);
+            }
+        }
+        assert!(heads.len() >= 20, "only {} edges of Bob's still have a front", heads.len());
+        assert!(
+            worst_lag_m > dt,
+            "a clock between two track points is the whole point of this test, and the newest \
+             point is only {worst_lag_m} M behind"
+        );
+
+        let comets = faded_strokes(&shapes);
+        println!(
+            "{} comets at a clock {worst_lag_m:.4} M past the last recorded point: the stale head \
+             sits up to {worst_gap_px:.2} points from the live one at the 14 M window the app \
+             opens on, and further in proportion as the user zooms in",
+            comets.len()
+        );
+        assert!(comets.len() >= 10, "only {} comets drawn", comets.len());
+        for comet in &comets {
+            let head = comet.points[0];
+            assert!(
+                (head.y - now_y).abs() < 1e-3,
+                "a head at y = {} against the now line at {now_y}, {} points of lag",
+                head.y,
+                now_y - head.y
+            );
+            assert!(
+                heads.iter().any(|h| (*h - head).length() < 1e-3),
+                "a comet at {head:?}, where no edge of the live front stands"
+            );
+        }
+        for head in heads.iter().filter(|h| rect.contains(**h)) {
+            assert!(
+                comets.iter().any(|c| (c.points[0] - *head).length() < 1e-3),
+                "no comet at {head:?}, where an edge of the live front does stand"
+            );
+        }
     }
 
     #[test]

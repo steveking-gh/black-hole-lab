@@ -103,10 +103,11 @@
 //! What a (t, r) diagram can show of any of this is not a ray but a range. A pulse is a closed
 //! curve in (r, phi); projected onto the radial axis it is the interval its front spans, and that
 //! interval swept up in coordinate time is `Pulse::extent_track`, from which the spacetime canvas
-//! draws the head of each of the two edges. Its lower edge is bounded exactly by the ingoing edge
-//! of the emitter's own light cone, and its upper edge freezes onto r- for every pulse emitted
-//! inside r+, which is why the heads of the interior pulses stand in a column on the Cauchy
-//! horizon there. While the pulse is being swallowed the lower edge is on the ring itself and not
+//! draws the tail of each of the two edges, the head of each being `Pulse::radial_extent` read at
+//! the field's own clock. Its lower edge is bounded exactly by the ingoing edge of the emitter's
+//! own light cone, and its upper edge freezes onto r- for every pulse emitted inside r+, which is
+//! why the heads of the interior pulses stand in a column on the Cauchy horizon there. While the
+//! pulse is being swallowed the lower edge is on the ring itself and not
 //! on any one ray, for the reason `Pulse::radial_extent` gives: the rays are a sampling of the
 //! front, and the front is a continuum that stands on the ring for the whole of the interval its
 //! rays arrive over. A worldline between the two edges is only in *range* of the pulse; whether
@@ -1800,7 +1801,11 @@ impl Pulse {
     /// dies, the drawn inner edge steps outward to the innermost survivor, sooner and more abruptly
     /// than the continuum would. Nothing here hides that step; it is the point at which the drawing
     /// runs out of rays, and `test_the_swallowed_front_sits_on_the_ring` measures where it falls.
-    fn radial_extent(&self, metric: &KerrSchild) -> Option<(f64, f64)> {
+    ///
+    /// Visible to the crate because the extent at the field's *current* clock is what the (t, r)
+    /// chart puts the head of each comet at: the recorded track is a display cadence and lags the
+    /// clock by up to `track_dt`, while this reads the rays where they actually stand.
+    pub(crate) fn radial_extent(&self, metric: &KerrSchild) -> Option<(f64, f64)> {
         let mut lo = f64::INFINITY;
         let mut hi = f64::NEG_INFINITY;
         let (mut swallowed, mut escaped) = (false, false);
