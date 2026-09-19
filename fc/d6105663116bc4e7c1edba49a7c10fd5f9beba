@@ -1,0 +1,23 @@
+src/app.rs
+  s_617ff16b62779d::t_90e36b7669d1d0 2645,2698,2713-2714,2720,2747,2861-2946
+  s_617ff16b62779d::t_b7a651a090bb4d 2947-2948
+src/physics/observer.rs
+  s_617ff16b62779d::t_90e36b7669d1d0 545-550,944-963,965-974,1052-1055,1079-1081,1083-1085,1095-1096,1120-1123,1128-1129,1132-1139,1259-1268,2272-2393
+  s_617ff16b62779d::t_80f1df251e04ea 2394
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "fcd6105663116bc4e7c1edba49a7c10fd5f9beba",
+  "prompts": {},
+  "sessions": {
+    "s_617ff16b62779d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d664d551-dd91-446c-b763-e2346c3eed02",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
