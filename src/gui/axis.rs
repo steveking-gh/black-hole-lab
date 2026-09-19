@@ -26,8 +26,8 @@
 //! to the observer's own event. They are the same surfaces t = const they always were; what changes
 //! is that a playing run now moves the picture under a grid that stands still, and that each label
 //! is a short offset - "now", "+0.02M", "-80 s" - instead of a long absolute time. The absolute
-//! reading is not lost: the chart prints it once, at the head of the time axis, where a fast-moving
-//! number is a clock rather than a blur.
+//! reading is not lost: the chart prints it once, under the now line, which does not move, so that
+//! a fast-moving number is a clock rather than a blur.
 
 use std::ops::RangeInclusive;
 

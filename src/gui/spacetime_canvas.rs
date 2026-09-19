@@ -1492,13 +1492,49 @@ Tick Enable Observer on Alice's or Bob's card",
         // still instead of dragging the grid across the canvas at (play rate)/(time window), and so
         // that each label is a short offset - "now", "+0.02M", "-80 s" - rather than an absolute
         // reading deep enough to tell one fine line from the next. The absolute clock is printed
-        // once, at the head of this axis. See `axis::TimeGrid`.
+        // once, under the now line. See `axis::TimeGrid`.
         let t_grid = axis::TimeGrid::for_window(
             current_time,
             t_min,
             t_max,
             if use_physical_units { axis::TimeUnits::Physical(metric) } else { axis::TimeUnits::M },
         );
+        // The one absolute reading on this axis: the chart's clock, printed under the now line at
+        // the left, where the offsets above and below are counted from. Every other label on the
+        // axis is short because this one carries the long number, and it is legible however fast
+        // the run plays because the now line does not move.
+        //
+        // The user can pan the now line off the canvas, and the clock should not go with it: the
+        // reading is then pinned to the edge the present lies beyond, with an arrow saying which
+        // way, and the grid labels that would sit under it give way.
+        let t_now = if use_physical_units {
+            format!("t = {}", metric.format_physical_time(current_time))
+        } else {
+            format!("t = {current_time:+.2}M")
+        };
+        let label_font = egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale);
+        let label_height = Theme::MIN_FONT_PT * font_scale * 1.4;
+        let now_y = to_screen_y(current_time);
+        let now_pinned_to = if now_y < rect.top() {
+            Some((rect.top() + 4.0, egui::Align2::LEFT_TOP, format!("▲ now: {t_now}")))
+        } else if now_y > rect.bottom() {
+            Some((rect.bottom() - 4.0, egui::Align2::LEFT_BOTTOM, format!("▼ now: {t_now}")))
+        } else {
+            None
+        };
+        // The axis text is collected here and painted later, once the light is down: the grid
+        // lines belong under the wavefronts, but a transmission at its steady state fills the past
+        // half of this chart edge to edge, and labels painted with the lines were washed out by it
+        // - the clock reading under the now line first of all. See where `time_labels` is drained.
+        let mut time_labels: Vec<(Pos2, egui::Align2, String, Color32)> = Vec::new();
+        // The band of canvas a pinned reading occupies, which a grid label must keep out of.
+        let pinned_band = now_pinned_to.as_ref().map(|(y, align, _)| {
+            if *align == egui::Align2::LEFT_TOP {
+                (*y - 2.0)..=(*y + 2.0 * label_height)
+            } else {
+                (*y - 2.0 * label_height)..=(*y + 2.0)
+            }
+        });
         for k in t_grid.ticks() {
             let y = to_screen_y(t_grid.time_of(k));
             if y >= rect.top() && y <= rect.bottom() {
@@ -1513,18 +1549,31 @@ Tick Enable Observer on Alice's or Bob's card",
                         Stroke::new(Theme::GRID_LINE_WIDTH, Theme::GRID_LINE)
                     },
                 );
-                painter.text(
+                if pinned_band.as_ref().is_some_and(|band| band.contains(&y)) {
+                    continue;
+                }
+                time_labels.push((
                     Pos2::new(rect.left() + 4.0, y - 2.0),
                     egui::Align2::LEFT_BOTTOM,
                     t_grid.label(k),
-                    egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
                     if now_line {
                         Theme::TEXT_BRIGHT
                     } else {
                         Color32::from_rgba_premultiplied(140, 165, 195, 180)
                     },
-                );
+                ));
+                if now_line {
+                    time_labels.push((
+                        Pos2::new(rect.left() + 4.0, y + 2.0),
+                        egui::Align2::LEFT_TOP,
+                        t_now.clone(),
+                        Theme::TEXT_BRIGHT,
+                    ));
+                }
             }
+        }
+        if let Some((y, align, text)) = now_pinned_to {
+            time_labels.push((Pos2::new(rect.left() + 4.0, y), align, text, Theme::TEXT_BRIGHT));
         }
 
         // 2. Vertical Radial Grid & Tick Labels
@@ -1584,7 +1633,6 @@ Tick Enable Observer on Alice's or Bob's card",
 
         // Prominent Axis Titles with Physical Conversion
         let r_phys_unit = metric.format_physical_distance(1.0);
-        let t_phys_unit = metric.format_physical_time(1.0);
 
         // Horizontal Axis Title (Bottom Right)
         let r_axis_title = if use_physical_units {
@@ -1600,32 +1648,6 @@ Tick Enable Observer on Alice's or Bob's card",
             Theme::TEXT_BRIGHT,
         );
 
-        // Vertical Axis Title (Top Left)
-        //
-        // The absolute reading of the chart's clock is printed here and nowhere else on the axis.
-        // The grid lines carry offsets from it, which is what keeps them short and still; the one
-        // number that has to race while the run plays is this one, and it races in a fixed place,
-        // where a moving digit reads as a clock rather than as a blur. It stays on the canvas when
-        // the user has panned the now line off it.
-        let t_now = if use_physical_units {
-            metric.format_physical_time(current_time)
-        } else {
-            format!("{current_time:.2}M")
-        };
-        let t_axis_title = if use_physical_units {
-            format!("▲ Coordinate Time t  [Physical Time | 1M = {t_phys_unit}]   now: t = {t_now}")
-        } else {
-            format!(
-                "▲ Coordinate Time t  [Units of M/c = GM/c³ : 1M = {t_phys_unit}]   now: t = {t_now}"
-            )
-        };
-        painter.text(
-            Pos2::new(rect.left() + 8.0, rect.top() + 24.0),
-            egui::Align2::LEFT_TOP,
-            t_axis_title,
-            egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
-            Color32::from_rgb(135, 185, 255),
-        );
         // What this picture is, said once where the eye lands first. A chart places every event
         // where the coordinates put it and claims nothing about distance or simultaneity for any
         // observer; the two rest-frame views make the opposite claim, and the reader has to know
@@ -1884,6 +1906,17 @@ Tick Enable Observer on Alice's or Bob's card",
             self.time_offset += dt;
             let dr = (delta.x as f64 / rect.width() as f64) * max_r;
             self.r_offset = (self.r_offset - dr).max(0.0);
+        }
+
+        // The time axis's text, held back from where its lines were ruled so that it lands on top
+        // of the light rather than under it. Each label gets a dark plate a little larger than its
+        // own text first: the fills behind it run from the canvas's near-black to a wavefront's
+        // full orange, and no single text colour reads against both.
+        for (pos, align, text, colour) in time_labels {
+            let galley = painter.layout_no_wrap(text, label_font.clone(), colour);
+            let text_rect = align.anchor_size(pos, galley.size());
+            painter.rect_filled(text_rect.expand2(Vec2::new(3.0, 1.0)), 2.0, Theme::LABEL_PLATE);
+            painter.galley(text_rect.min, galley, colour);
         }
 
         // Everything left on this canvas is Bob's: his worldline, his light cone, his marker and

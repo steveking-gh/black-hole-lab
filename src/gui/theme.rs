@@ -12,6 +12,10 @@ impl Theme {
     pub const BG_VOID: Color32 = Color32::from_rgb(10, 12, 18);
     pub const CANVAS_BG: Color32 = Color32::from_rgb(14, 16, 24);
     pub const PANEL_BG: Color32 = Color32::from_rgb(20, 24, 34);
+    /// The plate behind an axis label that has to read over whatever the chart has painted there:
+    /// the canvas colour, most of the way to opaque, so that the label sits on the chart's own
+    /// dark rather than on a wavefront's orange, and what is under the plate still shows faintly.
+    pub const LABEL_PLATE: Color32 = Color32::from_rgba_premultiplied(12, 14, 21, 225);
 
     // Region Fills (Translucent). Region I has none: the exterior is the canvas background. Every
     // view paints these as disjoint strips or bands, never one over another, so that each region

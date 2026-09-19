@@ -1012,8 +1012,8 @@ mod tests {
 
         let flat = painted_text(&mut app);
         assert!(
-            flat.contains("Coordinate Time t"),
-            "the (t, r) diagram's own time axis should be drawn in the 1D+1 chart"
+            flat.contains("Radial Distance r"),
+            "the (t, r) diagram's own radial axis should be drawn in the 1D+1 chart"
         );
         assert!(!flat.contains("2D+1 Volume"), "and the volume view should not be");
         assert!(flat.contains("Spatial x"), "the equatorial view is drawn either way");
@@ -1025,7 +1025,7 @@ mod tests {
             "choosing the 2D+1 chart should put the volume view in the left column"
         );
         assert!(
-            !volume.contains("Coordinate Time t"),
+            !volume.contains("Radial Distance r"),
             "and take the (t, r) diagram out of it: the two share the column"
         );
         assert!(volume.contains("Spatial x"), "the equatorial view is untouched by the swap");
