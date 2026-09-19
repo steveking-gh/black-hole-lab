@@ -95,8 +95,9 @@ impl SpacetimeApp {
     /// hovering Bob, or a Static or ZAMO Bob holding his radius, has no time in which he covers
     /// Δr, and there is no honest number to divide by - is `AppControls::distance_step`; the
     /// conversion of a watch tick, and the cap on it, is `AppControls::watch_step`. The panel's
-    /// Step Back and Step Fwd buttons and the play loop ask the same `step_for`, so a keypress, a
-    /// click and a played frame cannot mean different intervals.
+    /// Step Back and Step Fwd buttons ask the same `step_for`, and the play loop's `played_step`
+    /// reads the mode through the same `AppControls::step_of`, so a keypress, a click and a played
+    /// frame cannot mean different things by a step.
     fn arrow_step(&self) -> f64 {
         self.controls.step_for(
             &self.sim.metric,
@@ -382,38 +383,31 @@ impl eframe::App for SpacetimeApp {
 
         // Advance simulation if playing
         if self.controls.is_playing {
-            // Time mode: frame-rate independent playback at `play_speed` units of M per real second.
-            // Distance mode: per-frame step chosen so Bob moves a fixed Δr (normalised to 60 fps).
-            // Watch mode: `play_speed` units of M per real second of the *focus observer's* proper
-            // time, so the rest-frame view runs at 1 s/s of the watch it is drawn for.
+            // Frame-rate independent playback at `play_speed` units of M per real second, in all
+            // three modes. Time mode: M of coordinate time. Distance mode: M of r covered by
+            // whoever paces the step. Watch mode: M of the *focus observer's* proper time, so the
+            // rest-frame view runs at 1 s/s of the watch it is drawn for.
             // Nothing throttles the step near r₋ but Watch mode's own cap: to study the crossing,
             // pause and step by hand.
-            let base = dt * self.controls.play_speed;
-            let mut sim_dt = self.controls.step_for(
+            let sim_dt = self.controls.played_step(
                 &self.sim.metric,
                 self.sim.bob.as_ref(),
                 self.sim.alice.as_ref(),
-                base,
+                dt,
             );
-            match self.controls.step_mode {
-                // A distance step is a fixed Δr however long the frame took, so it is the one
-                // mode whose step does not already carry the frame's own dt: it is normalised to
-                // 60 fps here instead, which is what keeps a slow frame from crawling.
-                StepMode::Distance => sim_dt *= (dt / 0.01667).clamp(0.2, 3.0),
-                // What that step was worth on the watch it was asked for in. The same
-                // `watch_step` `step_for` just used, so the figure reported is the step taken.
-                StepMode::Watch => {
-                    let watch = self.controls.watch_step(
-                        &self.sim.metric,
-                        self.sim.bob.as_ref(),
-                        self.sim.alice.as_ref(),
-                        base,
-                    );
-                    let asked = watch.u_t * base;
-                    self.controls.achieved_watch_rate =
-                        Some(if asked > 0.0 { watch.dt / asked } else { 1.0 });
-                }
-                StepMode::Time => {}
+            // What that step was worth on the watch it was asked for in. The same `watch_step`
+            // `played_step` just used, so the figure reported is the step taken.
+            if self.controls.step_mode == StepMode::Watch {
+                let base = dt * self.controls.play_speed;
+                let watch = self.controls.watch_step(
+                    &self.sim.metric,
+                    self.sim.bob.as_ref(),
+                    self.sim.alice.as_ref(),
+                    base,
+                );
+                let asked = watch.u_t * base;
+                self.controls.achieved_watch_rate =
+                    Some(if asked > 0.0 { watch.dt / asked } else { 1.0 });
             }
 
             // The played step is the step every other path takes, down to the order the clock, the
@@ -1996,6 +1990,49 @@ mod tests {
         assert!(bob.velocity_c(&app.sim.metric) < 0.0, "he is falling, and the step follows him");
         app.sim.bob = Some(bob);
         assert!(app.arrow_step() < 0.1);
+    }
+
+    #[test]
+    fn test_a_played_distance_frame_covers_play_speed_of_r_per_real_second() {
+        // Distance mode used to ignore the Play Speed slider: every played frame took the Step
+        // Dist slider's Δr, scaled by the frame time against a nominal 60 fps and clamped to
+        // [0.2, 3]. A played frame now covers `frame_dt × play_speed` M of r for whoever paces
+        // the step, so the slider is a rate per real second here as in the other two modes.
+        let mut app = SpacetimeApp::default();
+        app.controls.is_playing = false;
+        app.controls.step_mode = StepMode::Distance;
+        app.controls.play_speed = 2.0;
+        // The press's own amount, set to show that a played frame does not read it.
+        app.controls.step_distance_km = 1000.0;
+        set_free_fall(&mut app);
+        app.step_forward(0.05);
+
+        let played = |app: &SpacetimeApp, frame_dt: f64| {
+            app.controls.played_step(
+                &app.sim.metric,
+                app.sim.bob.as_ref(),
+                app.sim.alice.as_ref(),
+                frame_dt,
+            )
+        };
+        let speed = bob_of(&app).velocity_c(&app.sim.metric).abs();
+        assert!(speed > 0.01, "Bob is falling, clear of the turning-point floor: {speed}");
+        let frame = played(&app, 1.0 / 60.0);
+        assert!(
+            (frame - (2.0 / 60.0) / speed).abs() < 1e-12,
+            "Δt = Δr / |dr/dt| with Δr = frame_dt × play_speed: {frame}"
+        );
+        // A frame ten times as long is worth ten times the step, which the old clamp at 3 refused.
+        assert!((played(&app, 10.0 / 60.0) / frame - 10.0).abs() < 1e-9);
+        app.controls.play_speed = 4.0;
+        assert!((played(&app, 1.0 / 60.0) / frame - 2.0).abs() < 1e-9, "and the slider is a rate");
+        app.controls.step_distance_km = 10.0;
+        assert_eq!(played(&app, 1.0 / 60.0), 2.0 * frame, "that the Step Dist slider has no say in");
+
+        // Nobody moving in r: the frame is worth the same M of coordinate time, as in Time mode.
+        app.sim.alice = None;
+        app.sim.bob = None;
+        assert_eq!(played(&app, 1.0 / 60.0), 4.0 / 60.0);
     }
 
     #[test]
