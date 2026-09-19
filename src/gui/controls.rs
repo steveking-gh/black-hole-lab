@@ -220,8 +220,9 @@ impl ObserverSettings {
 
     /// An observer in free fall on the prograde innermost stable circular orbit of the hole the
     /// app opens on (`OPENING_SPIN`): the thrust-free orbit, released the moment the run starts.
-    /// The radius is the ISCO's for that spin; a different hole chosen from the presets re-drops
-    /// the observer from this radius, which the card then reports as stable or not for it.
+    /// The radius is the ISCO's for that spin; a different hole - chosen from the presets, or from
+    /// the Spin slider at t = 0 - re-drops the observer from this radius, which the card then
+    /// reports as stable or not for that hole.
     fn isco_orbiter(delta_t_delay: f64) -> Self {
         Self {
             mode: ObserverMode::FreeFall,
@@ -429,7 +430,8 @@ impl Default for AppControls {
 
 /// The black hole presets, as (label, M, a/M, M_solar). One of them is highlighted when the metric
 /// is that preset's, which is read off the metric rather than remembered: nothing can then drift out
-/// of step with the geometry, and moving the mass or spin slider drops the highlight by itself.
+/// of step with the geometry, and moving the Mass or Spin slider - which the panel allows only
+/// while the clock reads zero - drops the highlight by itself.
 /// The mass and spin quick-picks, as (label, M, a/M, solar masses, a note shown on hover or "" for
 /// none). The note is there for a preset that cannot be what it says it is - see Gargantua.
 const PRESETS: [(&str, f64, f64, f64, &str); 7] = [
@@ -452,6 +454,17 @@ const GARGANTUA_NOTE: &str = "Kip Thorne's hole from Interstellar, at the mass h
 Its spin is the part this app cannot carry. Thorne needs a/M = 1 - 1.3e-14 for the hour-per-seven-years on Miller's planet, and at that spin r+ - r- = 2 M sqrt(1 - (a/M)^2) is 3.2e-7 M: the two horizons are closer together than a double-precision integrator can keep them apart over a fall, and the Spin slider stops at 0.999 for that reason. What is set here is that 0.999 - a rapidly rotating hole of the right mass, and the right hole to fall into, but not the one on the screen in the film.
 
 Mallary, Khanna & Burko (Phys. Rev. D 98, 104024) study an infaller at a/M = 0.995 with E = 1, L = 4M for the same reason, and say that closeness to extremality is difficult to simulate.";
+
+/// What the Mass slider says while the clock is running and the Mass slider is greyed out.
+///
+/// Mass is honest about itself here: the mass slider breaks no physics, and the tip says so rather
+/// than inventing a danger. One hole per run is the rule, and the rule is the whole reason.
+const MASS_LOCKED_TIP: &str = "The Mass slider moves only while the clock reads zero, because a run is a run of one hole. Mass by itself would break nothing: every chart measures radii and intervals in M, and the Mass slider only sets what one M is worth in kilometres and seconds, a figure no integrator ever reads. The Spin slider alongside is the one that changes the geometry, and Black Hole Lab settles the whole hole - mass and spin together - before a run starts rather than halfway through, so that a finished run is a run of a single black hole rather than of two. Press Reset, which puts the clock back to zero, and then set the mass; or click a preset, which sets mass and spin together and starts the run again by itself.";
+
+/// What the Spin slider says while the clock is running and the Spin slider is greyed out.
+///
+/// The one the physics actually demands: see `Simulation::may_change_geometry`.
+const SPIN_LOCKED_TIP: &str = "The Spin slider moves only while the clock reads zero, because a run is a run of one hole. Spin is the geometry: every wavefront standing in the field is an exact null geodesic of the a/M the run started in, and each observer carries a four-velocity, an energy E and an angular momentum L that only that same a/M normalises. A new spin under a run already under way would leave Black Hole Lab integrating all of that light on in a metric the light is no longer null in, and would leave both worldlines obeying the old hole's equations in a new hole's field. Press Reset, which puts the clock back to zero, and then set the spin - a spin set there starts the run again in the new geometry, which costs nothing at t = 0; or click a preset, which sets mass and spin together and starts the run again the same way.";
 
 /// The step-distance quick-picks in Distance step mode, as (label, km).
 const STEP_DISTANCE_PRESETS: [(&str, f64); 4] =
@@ -606,9 +619,10 @@ pub fn impossible_mode_note(obs: &Observer, metric: &KerrSchild) -> Option<&'sta
 /// The preset the metric currently *is*, by label, or None if it is not one of them.
 ///
 /// The highlight in the preset row is read off the geometry through this rather than remembered,
-/// so nothing can drift out of step with the hole and dragging the mass or spin slider drops the
-/// highlight by itself. It is also how a test can ask what the app's default hole is without
-/// duplicating the table.
+/// so nothing can drift out of step with the hole and dragging the Mass or Spin slider - which the
+/// panel allows only while the clock reads zero, a preset being the only way to change the hole
+/// after that - drops the highlight by itself. It is also how a test can ask what the app's
+/// default hole is without duplicating the table.
 pub fn active_preset(metric: &KerrSchild) -> Option<&'static str> {
     PRESETS
         .iter()
@@ -1202,6 +1216,32 @@ impl AppControls {
         self.view_reset_requested = true;
     }
 
+    /// Put the hole on a new spin and start the run again in it, which is what the Spin slider does
+    /// at t = 0 and the only thing the Spin slider does at all: past t = 0 the panel greys the
+    /// slider out (`Simulation::may_change_geometry`), because a/M is the geometry the light in
+    /// flight and both worldlines are solutions of.
+    ///
+    /// The restart is the point, and a preset click has always done the same thing for the same
+    /// reason. At t = 0 nothing is lost by it and something is still cleared: a run standing at zero
+    /// can already hold a pulse emitted at t = 0 - the app emits on the way into the first step, and
+    /// a run stepped back to zero keeps what it has - whose rays were launched in the hole being
+    /// replaced, and `drop_observers` clears both fields and drops both observers afresh so that the
+    /// ray count, the energies and the angular momenta all belong to the hole now on screen.
+    ///
+    /// Mass has no twin of this method, and the asymmetry is real rather than an oversight: the
+    /// mass slider rebuilds the metric with the same m and a and a new `m_solar`, which is the
+    /// figure that turns M into kilometres and seconds on the labels and which no integrator ever
+    /// reads, so a restart there would discard a t = 0 layout the user may have dragged into place
+    /// and change no number the physics uses.
+    ///
+    /// It is `pub(crate)` for the reason `drop_observers` is: these are egui widgets and a test
+    /// cannot drag one.
+    pub(crate) fn set_spin(&mut self, sim: &mut Simulation, a_star: f64) {
+        sim.metric =
+            KerrSchild::with_solar_mass(sim.metric.m, a_star * sim.metric.m, sim.metric.m_solar);
+        self.drop_observers(sim);
+    }
+
     /// Take the position of any observer with a hand on them as the position they are dropped
     /// from, if the run is standing at its start. Both coordinates: the equatorial view drags them
     /// about the plane, so a drag says a radius and an azimuth.
@@ -1712,17 +1752,48 @@ impl AppControls {
         ui.group(|ui| {
             ui.label(egui::RichText::new("BLACK HOLE PROPERTIES").strong().color(Theme::UI_HEADING));
 
+            // Both sliders are held while the clock is running, and the two are held for different
+            // reasons. Spin is the geometry: light in flight and both worldlines are solutions of
+            // the metric they started in, and a new a/M under them is the very thing
+            // `Simulation::restart` clears the light for. Mass breaks nothing - the same m and a
+            // rebuilt with a new m_solar, and m_solar is a display unit that no integrator reads -
+            // and is held alongside spin because a run is a run of one hole, which is a rule a user
+            // can hold in their head where "one of these two sliders is safe" is not. Step Back a
+            // few dozen lines up is greyed out the same way. See `Simulation::may_change_geometry`.
+            let may_change_geometry = sim.may_change_geometry();
+
             // Logarithmic Mass input
             let mut log_mass = sim.metric.m_solar.log10();
-            if ui.add(egui::Slider::new(&mut log_mass, 0.0..=11.0).text("Mass log₁₀(M☉)")).changed() {
+            if ui
+                .add_enabled(
+                    may_change_geometry,
+                    egui::Slider::new(&mut log_mass, 0.0..=11.0).text("Mass log₁₀(M☉)"),
+                )
+                .on_disabled_hover_text(MASS_LOCKED_TIP)
+                .changed()
+            {
                 let m_solar = 10.0_f64.powf(log_mass);
                 sim.metric = KerrSchild::with_solar_mass(sim.metric.m, sim.metric.a, m_solar);
             }
             ui.label(format!("Mass: {:.2e} M☉", sim.metric.m_solar));
 
             let mut spin_ratio = sim.metric.a_star();
-            if ui.add(egui::Slider::new(&mut spin_ratio, 0.0..=0.999).text("Spin a/M")).changed() {
-                sim.metric = KerrSchild::with_solar_mass(sim.metric.m, spin_ratio * sim.metric.m, sim.metric.m_solar);
+            if ui
+                .add_enabled(
+                    may_change_geometry,
+                    egui::Slider::new(&mut spin_ratio, 0.0..=0.999).text("Spin a/M"),
+                )
+                .on_disabled_hover_text(SPIN_LOCKED_TIP)
+                .changed()
+            {
+                // Reached only at t = 0, where the run can be started again for nothing - and it is
+                // started again, because even a clock reading zero can hold a pulse emitted at
+                // t = 0 whose rays are null geodesics of the spin being replaced. The mass slider
+                // above needs no such restart and gets none: m_solar reaches no integrator, so
+                // dropping both observers over a mass change would throw away a t = 0 layout the
+                // user may have dragged into place and buy nothing with it. See
+                // `AppControls::set_spin`.
+                self.set_spin(sim, spin_ratio);
             }
 
             ui.label(egui::RichText::new("Presets (Sets Mass & Spin):").small());
@@ -1818,5 +1889,52 @@ mod tests {
         controls.record_transport_press(TransportPress::StepForward, 20.05);
         assert_eq!(controls.transport_flashing(20.1), Some(TransportPress::StepForward));
         assert_eq!(controls.transport_flashing(20.05 + 1.1 * TRANSPORT_FLASH_SECONDS), None);
+    }
+
+    #[test]
+    fn test_the_hole_changes_only_at_the_start_and_a_new_spin_starts_the_run_again() {
+        // The rule the Mass and Spin sliders are greyed out by, and the action the Spin slider
+        // takes where the rule allows a change at all. The sliders themselves cannot be dragged
+        // from a test, which is why both halves live behind methods: `may_change_geometry` on the
+        // run and `set_spin` here.
+        let mut controls = AppControls::default();
+        let mut sim = Simulation::new(KerrSchild::with_solar_mass(1.0, OPENING_SPIN, 4.15e6));
+        // Alice is dropped from 8M rather than from her card's default prograde ISCO, because the
+        // spin this test hands the hole has to leave her card meaning the same kind of worldline:
+        // a circular orbit exists at 8M at every spin, while the a = 0.90 ISCO at 2.32M lies inside
+        // the photon orbit of a slower hole and the release would fall back to the raindrop there.
+        controls.alice.drop_r = 8.0;
+        controls.drop_observers(&mut sim);
+        assert!(sim.may_change_geometry(), "a run standing at t = 0 is a run with no geometry to protect");
+
+        // One step and the hole is settled: there is light in flight that is null in this metric
+        // and nowhere else, and two worldlines normalised against this mass and this spin.
+        sim.step_forward(1.0, controls.transmit());
+        assert!(sim.clock > 0.0 && !sim.may_change_geometry(), "a run in progress holds its hole");
+
+        // Back to the start, and the run is open again - but not empty. Alice emits on the way into
+        // the first step, so a clock reading zero can still carry a pulse whose rays were launched
+        // in the hole about to be replaced, which is the case a restart at t = 0 is for.
+        controls.drop_observers(&mut sim);
+        sim.step_forward(0.0, controls.transmit());
+        assert!(sim.may_change_geometry() && !sim.alice_signal.pulses.is_empty());
+
+        let l_before = controls.alice.worldline_params(&sim.metric).l_ang;
+        controls.set_spin(&mut sim, 0.0);
+
+        assert_eq!(sim.metric.a_star(), 0.0, "the slider's spin is the hole's spin");
+        assert_eq!(sim.metric.m_solar, 4.15e6, "and a spin change moves nothing else about the hole");
+        assert_eq!(sim.clock, 0.0);
+        assert!(
+            sim.alice_signal.pulses.is_empty() && sim.bob_signal.pulses.is_empty(),
+            "the light of the previous hole is dropped rather than integrated on in this one"
+        );
+        // Both observers are back, and back as this hole's circular orbiter rather than the
+        // previous hole's: the same 8M in Schwarzschild asks for a different L.
+        let alice = sim.alice.as_ref().expect("her card is ticked");
+        let l_after = controls.alice.worldline_params(&sim.metric).l_ang;
+        assert!((l_before - l_after).abs() > 0.1, "{l_before} and {l_after} are the two holes' orbits");
+        assert_eq!(alice.geodesic.as_ref().expect("she is on a geodesic").l_ang, l_after);
+        assert!(sim.bob.is_some() && alice.t == 0.0);
     }
 }

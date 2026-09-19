@@ -195,6 +195,25 @@ impl Simulation {
         self.debug_check();
     }
 
+    /// Whether the hole itself may still be changed, which is true only while the run stands at
+    /// its start.
+    ///
+    /// A run is a run of one geometry. Every ray in flight is a null geodesic of this metric, and
+    /// each observer carries a four-velocity, an energy E and an angular momentum L that only this
+    /// mass and this spin normalise, so a new hole under a run in progress leaves all of that light
+    /// and both of those worldlines solving the old hole's equations in a new hole's field. That is
+    /// the same reason `restart` above clears the light rather than keeping it. The panel greys the
+    /// Mass and Spin sliders out wherever this reads false, and at t = 0 a spin change goes through
+    /// `AppControls::set_spin`, which starts the run again in the new hole.
+    ///
+    /// The clock is compared with zero exactly, as `AppControls::remember_drop_positions` compares
+    /// it: `restart` assigns 0.0, and `step_back` subtracts from the clock the room the clock has
+    /// above its floor, so a run wound back to its start reads exactly zero rather than nearly
+    /// zero.
+    pub fn may_change_geometry(&self) -> bool {
+        self.clock == 0.0
+    }
+
     /// `check_invariants` as an assertion, in the builds that carry them.
     ///
     /// The check itself sits inside the `debug_assert!`'s condition, so a release build never runs
