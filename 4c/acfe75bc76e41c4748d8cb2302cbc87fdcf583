@@ -1,0 +1,29 @@
+build.rs
+  s_617ff16b62779d::t_3c49514ff9f2ef 1-84
+src/version/compose.rs
+  s_617ff16b62779d::t_3c49514ff9f2ef 1-38
+src/version/mod.rs
+  s_617ff16b62779d::t_3c49514ff9f2ef 1-37
+src/save/mod.rs
+  s_617ff16b62779d::t_3c49514ff9f2ef 223
+src/app.rs
+  s_617ff16b62779d::t_3c49514ff9f2ef 500-503
+src/main.rs
+  s_617ff16b62779d::t_3c49514ff9f2ef 29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "4cacfe75bc76e41c4748d8cb2302cbc87fdcf583",
+  "prompts": {},
+  "sessions": {
+    "s_617ff16b62779d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d664d551-dd91-446c-b763-e2346c3eed02",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
