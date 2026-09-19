@@ -1,3 +1,4 @@
+use crate::gui::axis;
 use crate::gui::controls::{ReferenceFrame, SignalViews};
 use crate::gui::polyline::{SCREEN_SPACING, thin_to_pixels};
 use crate::gui::spacetime_canvas::{BoxId, Canvas, TelemetryBoxes};
@@ -440,10 +441,7 @@ impl SpatialCanvas {
         if use_physical_units {
             let px_per_km = zoom / (metric.r_grav_km() as f32);
             let max_span_km = ((rect.width().max(rect.height()) * 0.7) / px_per_km.max(1e-6)) as f64;
-            let target_step = (max_span_km / 5.0).max(1e-4);
-            let power = 10.0_f64.powf(target_step.log10().floor());
-            let mantissa = target_step / power;
-            let km_step = if mantissa < 1.5 { 1.0 * power } else if mantissa < 3.5 { 2.0 * power } else if mantissa < 7.5 { 5.0 * power } else { 10.0 * power };
+            let km_step = axis::round_step((max_span_km / 5.0).max(1e-4));
 
             let mut km = km_step;
             while km <= max_span_km {
@@ -477,10 +475,7 @@ impl SpatialCanvas {
             }
         } else {
             let visible_m = (rect.width().max(rect.height()) as f64 / zoom as f64) * 0.7;
-            let target_step = (visible_m / 8.0).max(1e-6);
-            let power = 10.0_f64.powf(target_step.log10().floor());
-            let mantissa = target_step / power;
-            let r_step = if mantissa < 1.5 { 1.0 * power } else if mantissa < 3.5 { 2.0 * power } else if mantissa < 7.5 { 5.0 * power } else { 10.0 * power };
+            let r_step = axis::round_step((visible_m / 8.0).max(1e-6));
 
             let max_ticks = 15;
             let mut s = r_step;

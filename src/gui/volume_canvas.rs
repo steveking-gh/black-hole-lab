@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::ops::Range;
 
+use crate::gui::axis;
 use crate::gui::controls::{ReferenceFrame, SignalViews};
 use crate::gui::polyline::{SCREEN_SPACING, thin_to_pixels};
 use crate::gui::spacetime_canvas::{CHART_BANNER, COARSE_ZOOM_STEPS, BoxId, Canvas, TelemetryBoxes};
@@ -657,23 +658,12 @@ fn finite3(p: [f64; 3]) -> bool {
 }
 
 /// The spacing of the global chart's time rungs for a window `span` M tall: the (t, r) diagram's
-/// own rule, about seven rungs a window on a 0.5, 1, 2, 5, 10, 25 ladder, so that the two pictures
-/// of the foliation are ruled the same way.
+/// own rule, about seven rungs a window on a round step, so that the two pictures of the foliation
+/// are ruled the same way. This view's window is fixed at 14 M and the rungs therefore stand 2 M
+/// apart, but the rule is the shared one rather than a second copy of it, so that the day the
+/// window is opened to the wheel the rungs follow it as the diagram's do.
 fn time_grid_step(span: f64) -> f64 {
-    let raw = span / 7.0;
-    if raw > 20.0 {
-        25.0
-    } else if raw > 10.0 {
-        10.0
-    } else if raw > 4.0 {
-        5.0
-    } else if raw > 1.5 {
-        2.0
-    } else if raw > 0.7 {
-        1.0
-    } else {
-        0.5
-    }
+    axis::round_step(span / 7.0)
 }
 
 /// The zoom ceiling, in pixels per M.
@@ -1288,12 +1278,13 @@ impl VolumeCanvas {
                             },
                         );
                     }
+                    // The same labels the (t, r) diagram's axis carries, from the same step, so a
+                    // rung on a pipe here and a grid line there read alike and carry the digits
+                    // their shared step needs.
                     let text = if use_physical_units {
-                        format!("t = {}", metric.format_physical_time(t_val))
-                    } else if t_step >= 1.0 {
-                        format!("t = {:+}M", t_val as i64)
+                        format!("t = {}", axis::time_label_physical(metric, t_val, t_step))
                     } else {
-                        format!("t = {t_val:+.1}M")
+                        format!("t = {}", axis::time_label_m(t_val, t_step))
                     };
                     buf.label(
                         project([metric.cartesian_radius(r), 0.0, z]).0,

@@ -1,3 +1,4 @@
+pub mod axis;
 pub mod theme;
 pub mod polyline;
 pub mod spacetime_canvas;

@@ -1,3 +1,4 @@
+use crate::gui::axis;
 use crate::gui::controls::{impossible_mode_note, ReferenceFrame, SignalViews};
 use crate::gui::polyline::{SCREEN_SPACING, thin_to_pixels};
 use crate::gui::theme::Theme;
@@ -1530,24 +1531,15 @@ Tick Enable Observer on Alice's or Bob's card",
         // as it is in the volume, and the three fills above mark what is not the exterior.
 
         // 1. Horizontal Time Grid & Vertical Time Axis Labels
-        let raw_t_step = (t_max - t_min) / 7.0;
-        let t_step = if raw_t_step > 20.0 {
-            25.0
-        } else if raw_t_step > 10.0 {
-            10.0
-        } else if raw_t_step > 4.0 {
-            5.0
-        } else if raw_t_step > 1.5 {
-            2.0
-        } else if raw_t_step > 0.7 {
-            1.0
-        } else {
-            0.5
-        };
-
-        let first_t = (t_min / t_step).floor() as i32;
-        let last_t = (t_max / t_step).ceil() as i32;
-        for i in first_t..=last_t {
+        //
+        // The step follows the zoom, because this axis is zoomed across five decades - the wheel
+        // clamps `time_window` to 0.005 ..= 500 M - and a grid with a floor under its step has no
+        // lines at all on the tight side of that floor. `time_axis_ticks` puts about seven of them
+        // across whatever window it is given, and the labels below carry however many decimals that
+        // step needs: both halves of the grid are told the same number, so neither can drift from
+        // the other. See `axis`.
+        let (t_step, t_ticks) = axis::time_axis_ticks(t_min, t_max);
+        for i in t_ticks {
             let t_val = (i as f64) * t_step;
             let y = to_screen_y(t_val);
             if y >= rect.top() && y <= rect.bottom() {
@@ -1557,9 +1549,9 @@ Tick Enable Observer on Alice's or Bob's card",
                 );
                 // Time tick label on the left margin
                 let t_label = if use_physical_units {
-                    format!("t = {}", metric.format_physical_time(t_val))
+                    format!("t = {}", axis::time_label_physical(metric, t_val, t_step))
                 } else {
-                    format!("t = {:+}M", t_val as i32)
+                    format!("t = {}", axis::time_label_m(t_val, t_step))
                 };
                 painter.text(
                     Pos2::new(rect.left() + 4.0, y - 2.0),
@@ -1575,10 +1567,7 @@ Tick Enable Observer on Alice's or Bob's card",
         if use_physical_units {
             let min_km = self.r_offset * metric.r_grav_km();
             let max_km = (self.r_offset + self.max_r) * metric.r_grav_km();
-            let target_step = (self.max_r * metric.r_grav_km() / 7.0).max(1e-6);
-            let power = 10.0_f64.powf(target_step.log10().floor());
-            let mantissa = target_step / power;
-            let km_step = if mantissa < 1.5 { 1.0 * power } else if mantissa < 3.5 { 2.0 * power } else if mantissa < 7.5 { 5.0 * power } else { 10.0 * power };
+            let km_step = axis::round_step((self.max_r * metric.r_grav_km() / 7.0).max(1e-6));
             let first_km = (min_km / km_step).floor() * km_step;
             let mut km = first_km;
             while km <= max_km {
@@ -1604,10 +1593,7 @@ Tick Enable Observer on Alice's or Bob's card",
         } else {
             let min_r = self.r_offset;
             let max_r = self.r_offset + self.max_r;
-            let target_step = (self.max_r / 7.0).max(1e-6);
-            let power = 10.0_f64.powf(target_step.log10().floor());
-            let mantissa = target_step / power;
-            let r_step = if mantissa < 1.5 { 1.0 * power } else if mantissa < 3.5 { 2.0 * power } else if mantissa < 7.5 { 5.0 * power } else { 10.0 * power };
+            let r_step = axis::round_step((self.max_r / 7.0).max(1e-6));
             let first_r = (min_r / r_step).floor() * r_step;
             let mut r_val = first_r;
             while r_val <= max_r {
