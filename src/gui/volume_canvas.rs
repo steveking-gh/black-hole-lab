@@ -946,8 +946,9 @@ pub struct VolumeCanvas {
     /// cones tip over, and it is also, on a first look at the view, a mess.
     pub(crate) show_ghost_cones: bool,
     /// Draw the exact past light cone of the focus observer's current event: the null geodesics
-    /// through it integrated backwards to the bottom of the window, as a surface. On by default,
-    /// because it is the one thing this view can show that no other picture in the app can.
+    /// through it integrated backwards to the bottom of the window, as a surface. Off by default,
+    /// though it is the one thing this view can show that no other picture in the app can: it is
+    /// switched on from the canvas's right-click menu.
     pub(crate) show_past_cone: bool,
     /// That surface, held between frames. Integrating it is the only work in this view that a
     /// camera drag must not repeat, so it is cached against the event it belongs to; see
@@ -979,7 +980,7 @@ impl Default for VolumeCanvas {
             time_offset: 0.0,
             centred_on: None,
             show_ghost_cones: false,
-            show_past_cone: true,
+            show_past_cone: false,
             past_cone: None,
             show_pulse_surfaces: true,
             telemetry: TelemetryBoxes::pinning(),
@@ -2918,6 +2919,7 @@ mod tests {
         let mut bob = bob_at(&metric, 4.0);
         let mut canvas = VolumeCanvas {
             camera: Camera::preset(Preset::ThreeQuarter, 48.0, Vec2::ZERO, 1.0),
+            show_past_cone: true,
             ..Default::default()
         };
 
@@ -2975,6 +2977,7 @@ mod tests {
         let mut bob = bob_at(&metric, 3.0);
         let mut canvas = VolumeCanvas {
             camera: Camera::preset(Preset::ThreeQuarter, 48.0, Vec2::ZERO, 1.0),
+            show_past_cone: true,
             ..Default::default()
         };
         volume_frame_on(&mut canvas, &metric, Some(&bob), false);
