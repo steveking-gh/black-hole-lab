@@ -1,0 +1,37 @@
+src/gui/axis.rs
+  s_1fbbbb8a53c367::t_e7b4d54c146e4b 577
+  s_1fbbbb8a53c367::t_640cca9a51516c 28-30
+  s_1fbbbb8a53c367::t_cfbb0d1f09ee89 139-141,150-197,201-204,207-241,244-272,274-294,298-347,350-371,377-384,392-393,398-414
+  s_1fbbbb8a53c367::t_c1c3778c7b836d 23-27,142-149,198-200,205-206,242-243,295-297,462-464,521-524
+  s_1fbbbb8a53c367::t_ba652c9e52cb92 273
+  s_1fbbbb8a53c367::t_575cc052518170 385-391,394-397
+  s_1fbbbb8a53c367::t_4671769646215d 493-497
+  s_1fbbbb8a53c367::t_f07e1e49c9db05 458-461,465-466,470-492,498-520,525-530,533,535-537,545-551,554-576,578-587
+  s_1fbbbb8a53c367::t_9cfc1d62a5f1f2 372-376
+  s_1fbbbb8a53c367::t_ca3f14ef46609f 19-22,31-32
+  s_1fbbbb8a53c367::t_9d7ff01436fa87 348-349
+src/gui/spacetime_canvas.rs
+  s_1fbbbb8a53c367::t_e0c79ba7d63de5 1
+  s_1fbbbb8a53c367::t_d011b48c719d7b 1490-1503,1505-1507,1510-1514,1519,1521-1525
+  s_1fbbbb8a53c367::t_2c3b242aac8c24 1604-1614,1616,1618-1620
+  s_1fbbbb8a53c367::t_02d493753b6516 122-125,127-137
+src/gui/volume_canvas.rs
+  s_1fbbbb8a53c367::t_315578e23795a1 660-669
+  s_1fbbbb8a53c367::t_4513be4bd33282 1253-1260
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d6d3720e81c27f0cd2c9d303c322e9cc45dbe823",
+  "prompts": {},
+  "sessions": {
+    "s_1fbbbb8a53c367": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ed2f15a7-41d1-4dd6-ba98-d9aaeb4cd695",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
