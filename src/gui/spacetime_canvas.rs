@@ -1,4 +1,4 @@
-use crate::gui::axis;
+use crate::gui::axis::{self, SECONDS_PER_YEAR};
 use crate::gui::controls::{impossible_mode_note, ReferenceFrame, SignalViews};
 use crate::gui::polyline::{SCREEN_SPACING, thin_to_pixels};
 use crate::gui::theme::Theme;
@@ -68,9 +68,6 @@ pub const CHART_BANNER: &str = "This is a chart, not a frame of reference.";
 pub const REST_FRAME_TIP: &str =
 "The focus observer's first-order local inertial frame, built from their orthonormal tetrad: c ≡ 1, so light cones stand at 45° and every worldline through the event stands steeper. The dual tetrad places the surfaces r = const - the horizons, the static limit, the ring singularity - exactly at the observer's own event, and linearised for offsets away from that event.";
 
-/// Seconds in a Julian year, the unit the top of the distant clock grid's ladder is counted in.
-const SECONDS_PER_YEAR: f64 = 86400.0 * 365.25;
-
 /// Smallest on-screen gap, in points at `font_scale` = 1, that `distant_clock_grid_step` will
 /// leave between two neighbouring lines of the distant clock grid. Below this the lines stop being
 /// readable as separate slices and start being a smear, so the ladder is climbed instead. Under
@@ -122,66 +119,22 @@ The zoom only ever tightens the view. Any turn of the wheel switches this settin
 /// and the lines are squeezed anyway.
 const CLOCK_LABEL_MIN_PX: f32 = 16.0;
 
-/// The rungs of the ladder below a year, as (seconds in the unit, the multiples of it that are
-/// used, the unit's name). Within each unit the 1-2-5 pattern is carried on up through the decades
-/// until the next unit takes over, so the ladder has no holes in it: no two neighbouring rungs are
-/// more than a factor of 2.5 apart, and the step actually chosen is therefore never more than that
-/// much coarser than the smallest readable one. (1, 2, 5 once per unit would leave gaps of 200
-/// between 5 µs and 1 ms and of 73 between 5 days and a year, and in those gaps a grid asked for a
-/// line every 36 µs would get one every 1 ms - two hundred times too coarse, which on a canvas a
-/// few hundred points tall is one line and no grid at all.)
-///
-/// Microseconds and milliseconds are in the middle of it because for a 10 solar-mass hole one M
-/// of coordinate time is 49 microseconds, and outside the hole u^t is of order 1, so the grid an
-/// exterior observer wants is measured in tens of microseconds.
-///
-/// It runs on down to femtoseconds for the approach to r-. An observer asymptoting to the far
-/// branch of the Cauchy horizon is a finite and *shrinking* proper time from it - the r- line
-/// crosses their own time axis at exactly Delta r / u^r (see `LocalFrame::surface_r_const`) - and
-/// at the point where `geodesic::U_T_STALL` stops the worldline that is about two femtoseconds for
-/// a ten solar-mass hole. A ladder that stopped at the microsecond could not put a single line
-/// between them and the horizon there, which is the one place in the app where the number is the
-/// whole story.
-const CLOCK_UNITS: [(f64, &[f64], &str); 9] = [
-    (1e-15, &[1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0], "fs"),
-    (1e-12, &[1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0], "ps"),
-    (1e-9, &[1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0], "ns"),
-    (1e-6, &[1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0], "µs"),
-    (1e-3, &[1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0], "ms"),
-    (1.0, &[1.0, 2.0, 5.0, 10.0, 20.0, 30.0], "s"),
-    (60.0, &[1.0, 2.0, 5.0, 10.0, 20.0, 30.0], "min"),
-    (3600.0, &[1.0, 2.0, 5.0, 10.0, 12.0], "hr"),
-    (86400.0, &[1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0], "day"),
-];
-
-/// How many decades of years the ladder carries on for above one year. 1e30 years at a hundred
-/// points per M is past any u^t a f64 worldline integrator can reach.
-const CLOCK_YEAR_DECADES: i32 = 30;
-
-/// The whole ladder, in ascending order, as (seconds, the step named in its own unit). Years run on
-/// in the same 1-2-5 pattern decade after decade, which is where the powers of ten come from:
-/// 1 yr, 2 yr, 5 yr, 10 yr, ..., 1e6 yr, 2e6 yr, and so on.
+/// The ladder this grid climbs, in ascending order, as (seconds, the step named in its own unit):
+/// `axis::clock_ladder` with each rung written out as the text a legend can print - "50 µs",
+/// "30 min", "1e6 yr". The rungs themselves live beside the axis rules, because the foliation
+/// chart's time grid is ruled by the same table and two copies of it would drift apart.
 fn distant_clock_ladder() -> Vec<(f64, String)> {
-    let name = |multiple: f64, unit: &str| {
-        if multiple < 1e4 {
-            format!("{multiple:.0} {unit}")
-        } else {
-            format!("{multiple:.0e} {unit}")
-        }
-    };
-    let mut rungs = Vec::new();
-    for (unit_seconds, multiples, unit) in CLOCK_UNITS {
-        for &multiple in multiples {
-            rungs.push((multiple * unit_seconds, name(multiple, unit)));
-        }
-    }
-    for decade in 0..=CLOCK_YEAR_DECADES {
-        for mantissa in [1.0, 2.0, 5.0] {
-            let years = mantissa * 10.0_f64.powi(decade);
-            rungs.push((years * SECONDS_PER_YEAR, name(years, "yr")));
-        }
-    }
-    rungs
+    axis::clock_ladder()
+        .into_iter()
+        .map(|rung| {
+            let name = if rung.multiple < 1e4 {
+                format!("{:.0} {}", rung.multiple, rung.unit)
+            } else {
+                format!("{:.0e} {}", rung.multiple, rung.unit)
+            };
+            (rung.seconds, name)
+        })
+        .collect()
 }
 
 /// One rung of the distant clock grid: how much of the chart's Killing time t separates two
@@ -1534,31 +1487,42 @@ Tick Enable Observer on Alice's or Bob's card",
         //
         // The step follows the zoom, because this axis is zoomed across five decades - the wheel
         // clamps `time_window` to 0.005 ..= 500 M - and a grid with a floor under its step has no
-        // lines at all on the tight side of that floor. `time_axis_ticks` puts about seven of them
-        // across whatever window it is given, and the labels below carry however many decimals that
-        // step needs: both halves of the grid are told the same number, so neither can drift from
-        // the other. See `axis`.
-        let (t_step, t_ticks) = axis::time_axis_ticks(t_min, t_max);
-        for i in t_ticks {
-            let t_val = (i as f64) * t_step;
-            let y = to_screen_y(t_val);
+        // lines at all on the tight side of that floor. The lines are anchored to the present rather
+        // than to the origin of t, so that a playing run moves the picture under a grid that stands
+        // still instead of dragging the grid across the canvas at (play rate)/(time window), and so
+        // that each label is a short offset - "now", "+0.02M", "-80 s" - rather than an absolute
+        // reading deep enough to tell one fine line from the next. The absolute clock is printed
+        // once, at the head of this axis. See `axis::TimeGrid`.
+        let t_grid = axis::TimeGrid::for_window(
+            current_time,
+            t_min,
+            t_max,
+            if use_physical_units { axis::TimeUnits::Physical(metric) } else { axis::TimeUnits::M },
+        );
+        for k in t_grid.ticks() {
+            let y = to_screen_y(t_grid.time_of(k));
             if y >= rect.top() && y <= rect.bottom() {
+                // The present gets the heavier stroke and the brighter label, so that "now" names a
+                // line the eye can already pick out of its neighbours.
+                let now_line = k == 0;
                 painter.line_segment(
                     [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
-                    Stroke::new(Theme::GRID_LINE_WIDTH, Theme::GRID_LINE),
+                    if now_line {
+                        Stroke::new(1.2, Theme::TEXT_MUTED)
+                    } else {
+                        Stroke::new(Theme::GRID_LINE_WIDTH, Theme::GRID_LINE)
+                    },
                 );
-                // Time tick label on the left margin
-                let t_label = if use_physical_units {
-                    format!("t = {}", axis::time_label_physical(metric, t_val, t_step))
-                } else {
-                    format!("t = {}", axis::time_label_m(t_val, t_step))
-                };
                 painter.text(
                     Pos2::new(rect.left() + 4.0, y - 2.0),
                     egui::Align2::LEFT_BOTTOM,
-                    t_label,
+                    t_grid.label(k),
                     egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
-                    Color32::from_rgba_premultiplied(140, 165, 195, 180),
+                    if now_line {
+                        Theme::TEXT_BRIGHT
+                    } else {
+                        Color32::from_rgba_premultiplied(140, 165, 195, 180)
+                    },
                 );
             }
         }
@@ -1637,10 +1601,23 @@ Tick Enable Observer on Alice's or Bob's card",
         );
 
         // Vertical Axis Title (Top Left)
-        let t_axis_title = if use_physical_units {
-            format!("▲ Coordinate Time t  [Physical Time | 1M = {}]", t_phys_unit)
+        //
+        // The absolute reading of the chart's clock is printed here and nowhere else on the axis.
+        // The grid lines carry offsets from it, which is what keeps them short and still; the one
+        // number that has to race while the run plays is this one, and it races in a fixed place,
+        // where a moving digit reads as a clock rather than as a blur. It stays on the canvas when
+        // the user has panned the now line off it.
+        let t_now = if use_physical_units {
+            metric.format_physical_time(current_time)
         } else {
-            format!("▲ Coordinate Time t  [Units of M/c = GM/c³ : 1M = {}]", t_phys_unit)
+            format!("{current_time:.2}M")
+        };
+        let t_axis_title = if use_physical_units {
+            format!("▲ Coordinate Time t  [Physical Time | 1M = {t_phys_unit}]   now: t = {t_now}")
+        } else {
+            format!(
+                "▲ Coordinate Time t  [Units of M/c = GM/c³ : 1M = {t_phys_unit}]   now: t = {t_now}"
+            )
         };
         painter.text(
             Pos2::new(rect.left() + 8.0, rect.top() + 24.0),

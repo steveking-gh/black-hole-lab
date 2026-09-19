@@ -657,11 +657,16 @@ fn finite3(p: [f64; 3]) -> bool {
     p[0].is_finite() && p[1].is_finite() && p[2].is_finite()
 }
 
-/// The spacing of the global chart's time rungs for a window `span` M tall: the (t, r) diagram's
-/// own rule, about seven rungs a window on a round step, so that the two pictures of the foliation
-/// are ruled the same way. This view's window is fixed at 14 M and the rungs therefore stand 2 M
-/// apart, but the rule is the shared one rather than a second copy of it, so that the day the
-/// window is opened to the wheel the rungs follow it as the diagram's do.
+/// The spacing of the global chart's time rungs for a window `span` M tall: about seven rungs a
+/// window on a round step of M, `axis::round_step`'s answer rather than a second copy of the rule.
+/// This view's window is fixed at 14 M and the rungs therefore stand 2 M apart, but the rule
+/// follows the window, so the day that window is opened to the wheel the rungs follow it too.
+///
+/// A round step of M rather than the clock ladder the (t, r) diagram's own axis now picks its step
+/// from, because these rungs are labelled with absolute readings of the chart's clock and that
+/// diagram's are labelled with offsets from now: a ladder rung is round on the reading a *pair* of
+/// rungs differ by, which is what an offset counts, and a rung here has to be round on the reading
+/// printed against it.
 fn time_grid_step(span: f64) -> f64 {
     axis::round_step(span / 7.0)
 }
@@ -1245,11 +1250,14 @@ impl VolumeCanvas {
             }
 
             // The distant observer's clock, as rungs on one pipe, labelled with the coordinate
-            // time itself - the reading on the chart's clock, not an offset from now - at the step
-            // the (t, r) diagram spaces its own time axis by, so that as the clock runs the rungs
-            // slide down into the past exactly as that diagram's grid lines do. Rungs at offsets
-            // from now would stand still on the screen with the same labels for ever, which is a
-            // clock that appears to have stopped. On r-, because that is the pipe a frozen
+            // time itself - the reading on the chart's clock, not an offset from now - so that as
+            // the clock runs the rungs slide down the pipe into the past. Rungs at offsets from now
+            // would stand still with the same labels for ever, which in this picture is a clock
+            // that appears to have stopped: the (t, r) diagram anchors its grid to now and reads
+            // the running clock off the head of its time axis instead, and this view has no such
+            // axis to put one on - the pipe and its rungs are the clock. Nothing races here either
+            // way, because this window is fixed at 14 M and a rung crosses the floor every 2 M of
+            // play. On r-, because that is the pipe a frozen
             // worldline winds up, one turn of helix per 2 pi / Omega_- of t, and the rungs are
             // what that pitch is read against; nothing runs away at r+ in this chart, a faller
             // crosses it at a finite t. The same ladder on all four pipes would be three ladders
