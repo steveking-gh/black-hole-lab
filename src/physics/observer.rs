@@ -1411,8 +1411,8 @@ impl Observer {
 /// It exists for the same reason `SignalPair` does. Every path that moves the simulation - the
 /// play loop, the arrow keys, the panel's transport buttons - has to move both worldlines the same
 /// way, and a step backwards in particular has to hand both of them the same target time as the
-/// clock they are being drawn against. Stating that once here is what keeps the panel's Step Back
-/// button and `SpacetimeApp::step_backward` from drifting apart.
+/// clock they are being drawn against. Stating that once here is what keeps every caller of
+/// `Simulation::step_back`, the one path a step backwards has, moving both of them alike.
 pub struct ObserverPair<'a> {
     pub bob: Option<&'a mut Observer>,
     pub alice: Option<&'a mut Observer>,

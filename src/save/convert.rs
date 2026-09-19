@@ -348,6 +348,11 @@ fn ray_from_v1(ray: &v1::Ray) -> NullRay {
             v1::RayEnd::Escape => RayEnd::Escape,
             v1::RayEnd::Unintegrable => RayEnd::Unintegrable,
         }),
+        // The carried Dormand-Prince slope is derived from the four state fields above and the
+        // metric, so a file has no business storing it and v1 does not: the first step after a
+        // load evaluates `ray_rhs` at the restored state, which is the very number the saving run
+        // was carrying. `test_a_loaded_run_plays_on_bit_identically` is where that is checked.
+        slope: None,
     }
 }
 

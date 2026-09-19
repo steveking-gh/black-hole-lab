@@ -385,6 +385,32 @@ pub struct NullRay {
     /// it happened to be, so a radial test would have to guess. `Pulse::radial_extent` has to know
     /// which end of the front a death happened at, so the integrator records it.
     pub death_end: Option<RayEnd>,
+    /// `ray_rhs` at the state the four fields above stand on, when that value is already in hand:
+    /// the Dormand-Prince tableau's first-same-as-last slope, carried from the substep that
+    /// committed the state to the first stage of the substep that leaves it. None means only that
+    /// nobody has computed it yet, never that the state is special, and `NullRay::integrate`
+    /// evaluates it for itself when it finds None.
+    ///
+    /// It is derived state and it is not saved: `crate::save::v1` has no field for it and
+    /// `ray_from_v1` leaves it None, because the first step after a load recomputes exactly the
+    /// number that was dropped.
+    ///
+    /// Reusing it is bit-identical rather than nearly so, which is the whole point, and it rests on
+    /// two facts about `ray_rhs`. It reads the metric and (r, v^r, v^phi) and nothing else - not t,
+    /// not phi, not the step size, not the direction of integration - so the cached slope is as
+    /// good for a `step_back` as for the `step` that filled it, and a bare write to the ray's `t`
+    /// or `phi` cannot stale it. And the metric it was evaluated in cannot move under it: a run
+    /// with light in flight will not let its geometry be touched at all
+    /// (`Simulation::may_change_geometry` greys the Mass and Spin sliders out above t = 0), while
+    /// the three things that do change m or a - a spin set at t = 0, a preset, a run loaded off
+    /// disk - each replace every ray in both fields wholesale, so no ray ever carries a slope
+    /// across a change of hole. The `debug_assertions` check at the top of `NullRay::integrate`
+    /// re-derives the slope and compares it bit for bit on every use, so the whole test suite is
+    /// standing behind that argument rather than the argument standing alone.
+    ///
+    /// Crate-visible rather than private only because `crate::save::convert::ray_from_v1` builds a
+    /// ray by struct literal from another module; nothing outside this file writes it.
+    pub(crate) slope: Option<RayState>,
 }
 
 /// Which boundary of the drawn field a dead ray reached.
@@ -443,6 +469,9 @@ impl NullRay {
             v_emit: v,
             death_t: None,
             death_end: None,
+            // A ray that has never been integrated has no slope in hand; its first substep pays
+            // the one `ray_rhs` every ray used to pay on every call.
+            slope: None,
         }
     }
 
@@ -810,6 +839,17 @@ impl NullRay {
     ///   evaluations per accepted substep instead of six, and at fourth order instead of fifth,
     ///   which is why the embedded pair is used here: the whole field is integrated every frame.
     ///
+    /// The first stage of the first substep is not evaluated here if the ray already knows it.
+    /// Every accepted substep ends by handing back `ray_rhs` at the state it produced, which is the
+    /// next substep's first stage, and the last of them hands back `ray_rhs` at the state this call
+    /// commits - the state the *next* call will start from. `NullRay::slope` carries it across, so
+    /// a played frame of a ray that takes a single substep, which is almost every ray of a field at
+    /// 1/60 M, costs six evaluations rather than seven. The saving is the same one evaluation
+    /// whatever the substep count, so it is worth about a seventh of a cheap ray-frame and almost
+    /// nothing of a stiff one. The slope's own doc comment sets out why reusing it is bit-identical
+    /// rather than merely close, and the `debug_assert!` below re-derives and compares it on every
+    /// call that uses one.
+    ///
     /// That locality is the point. The subdivision this replaces read one substep count off the
     /// state at the start of the interval - which for a step backwards is the far end of the path
     /// being retraced - and applied it to the whole of it. A hand step of 0.1 M was then integrated
@@ -842,7 +882,24 @@ impl NullRay {
         let sign = if forward { 1.0 } else { -1.0 };
         let end_t = self.t + dt;
         let mut y: RayState = [self.r, self.phi, self.dr_dt, self.dphi_dt];
-        let mut k = ray_rhs(metric, &y);
+        // k is the slope at y at every point of this function, which is the invariant the whole
+        // scheme runs on: `substep_cap` sizes the next substep from the pair, `ray_dopri5` takes k
+        // as its first stage, and every state committed below is committed with the k that belongs
+        // to it. It holds on entry either way - from the ray's own carried slope or from a fresh
+        // evaluation - it is restored at the foot of the loop by the substep's first-same-as-last
+        // slope, and it is therefore still true when `remaining` was zero and the loop never ran.
+        let mut k = match self.slope {
+            Some(carried) => {
+                debug_assert!(
+                    same_bits(&carried, &ray_rhs(metric, &y)),
+                    "the carried slope is not `ray_rhs` at the ray's own state: carried {carried:?} \
+                     against {:?} at y = {y:?}",
+                    ray_rhs(metric, &y)
+                );
+                carried
+            }
+            None => ray_rhs(metric, &y),
+        };
         let mut remaining = dt.abs();
         // The first proposal is the whole interval; the caps cut it down on the first substep, and
         // the controller carries a working size from one substep to the next after that.
@@ -902,33 +959,60 @@ impl NullRay {
             k = slope;
             remaining -= h;
         }
-        self.commit(&y, end_t);
+        self.commit(&y, end_t, Some(k));
         RayStep::Integrated
     }
 
     /// Retire the ray at an integrated state, recording both when it died and which boundary of
     /// the field it died at. The two are set here and cleared in `revive`, and nowhere else, so
     /// `death_end` is Some exactly when `death_t` is.
+    ///
+    /// The slope is dropped rather than kept. Every caller does have it - a death is reported from
+    /// inside `integrate`, where k is the slope at the y being committed, and a dead ray's state is
+    /// exactly where `revive` puts it back on its feet - so keeping it would be correct and would
+    /// save one `ray_rhs` on the step that revives the ray. It is dropped because a death is rare
+    /// and a revival rarer still, and because dropping it is what leaves `revive` with nothing to
+    /// think about: a ray can only carry a slope that its own integration put there.
     fn die(&mut self, y: &RayState, t: f64, end: RayEnd) {
-        self.commit(y, t);
+        self.commit(y, t, None);
         self.death_t = Some(t);
         self.death_end = Some(end);
     }
 
     /// Put a dead ray back on its feet, which is what a `step_back` reaching past its death does.
+    ///
+    /// Nothing is said here about the carried slope: `die` cleared it, no dead ray is ever
+    /// integrated, and the `integrate` that follows this finds None and evaluates its own.
     fn revive(&mut self) {
         self.death_t = None;
         self.death_end = None;
     }
 
-    /// Move the ray onto an integrated state at a given coordinate time.
-    fn commit(&mut self, y: &RayState, t: f64) {
+    /// Move the ray onto an integrated state at a given coordinate time, together with `ray_rhs` at
+    /// that same state when the caller has it in hand.
+    ///
+    /// The slope is an argument rather than something computed here precisely so that it cannot be
+    /// anything but the one belonging to the state going in beside it: this is the only place the
+    /// four state fields are written, so it is the only place the pair can be got wrong.
+    fn commit(&mut self, y: &RayState, t: f64, slope: Option<RayState>) {
         self.t = t;
         self.r = y[0];
         self.phi = y[1];
         self.dr_dt = y[2];
         self.dphi_dt = y[3];
+        self.slope = slope;
     }
+}
+
+/// Whether two slopes are the same value rather than merely equal as floats, element by element.
+///
+/// The carried-slope check in `NullRay::integrate` is a claim about identity - that the cached
+/// number *is* what `ray_rhs` would return, so that reusing it cannot move a fingerprint - and `==`
+/// does not state that: it calls two zeros of opposite sign equal and two NaNs unequal, and the
+/// second of those would let a state the integrator is about to retire pass the check by being
+/// unreproducible. Comparing the bits says what is meant.
+fn same_bits(a: &RayState, b: &RayState) -> bool {
+    a.iter().zip(b.iter()).all(|(x, y)| x.to_bits() == y.to_bits())
 }
 
 /// dy/dt for y = (r, phi, v^r, v^phi) with v^t = 1.
@@ -968,7 +1052,9 @@ pub(crate) fn ray_rhs(metric: &KerrSchild, y: &RayState) -> RayState {
 /// the last stage of this step's error estimate and the first stage of the next step (the
 /// tableau's first-same-as-last property). One accepted substep therefore costs six evaluations
 /// of `ray_rhs`, against four for the classical RK4 this replaces and eleven for the same error
-/// control by step doubling.
+/// control by step doubling. The caller hands that slope straight back as the next `k1`, within a
+/// call and between calls both: `NullRay::integrate` carries it in `NullRay::slope`, so a ray that
+/// has been integrated once never evaluates a first stage again for as long as it lives.
 pub(crate) fn ray_dopri5(
     metric: &KerrSchild,
     y: &RayState,
@@ -2710,9 +2796,8 @@ impl SignalPair<'_> {
     ///
     /// The observers passed in must already be at the rewound state: a step backwards moves the
     /// worldlines first and the fields second, because the fields need the receivers where they now
-    /// stand and the worldlines need nothing from the fields at all. Both call sites - the arrow
-    /// key through `SpacetimeApp::step_backward` and the panel's Step Back button - go through this
-    /// one call in that order.
+    /// stand and the worldlines need nothing from the fields at all. `Simulation::step_back`, the
+    /// one path a step backwards has, goes through this one call in that order.
     ///
     /// Priming is what makes a rewind reversible in the receptions as well as in the light.
     /// `SignalField::step_back` drops the per-sheet sides, and a field with no sides spends its
@@ -2805,6 +2890,7 @@ mod tests {
             v_emit: v,
             death_t: None,
             death_end: None,
+            slope: None,
         }
     }
 
@@ -4170,6 +4256,103 @@ mod tests {
             "and back to the radius it started at: r = {} vs {r0}",
             ray.r
         );
+    }
+
+    #[test]
+    fn test_carrying_the_slope_between_calls_changes_no_bit_of_the_path() {
+        // `NullRay::slope` hands the last accepted substep's first-same-as-last slope to the first
+        // stage of the next call, where `ray_rhs` used to be evaluated afresh. The claim is that
+        // those are the same number and not merely close ones, so this runs each ray twice - once
+        // carrying the slope, once with the slope knocked out before every call, which is the code
+        // as it stood - and demands the two agree bit for bit at every step rather than to a
+        // tolerance. The `debug_assert!` inside `integrate` makes the same statement from the other
+        // side on every ray of every test in the project; this is the outcome that statement is
+        // there to protect, and it walks the three paths the carried slope has to survive: a run of
+        // played frames, a reversal in the middle of one, and a death at the ring with the revival
+        // that stepping back past it makes.
+        //
+        // Knocking the slope out is also the answer to a ray whose state is written from outside:
+        // a cleared cache is exactly what such a ray has, and the run below is what it then does.
+        let metric = KerrSchild::new(1.0, 0.65);
+        // A played frame, which is the interval almost every ray of a field is stepped by and the
+        // one a single substep usually covers, so the carried slope is the whole of the first
+        // stage rather than a seventh of it.
+        let dt = 1.0 / 60.0;
+        let agree = |carried: &NullRay, cleared: &NullRay, what: &str, n: usize| {
+            for (name, a, b) in [
+                ("t", carried.t, cleared.t),
+                ("r", carried.r, cleared.r),
+                ("phi", carried.phi, cleared.phi),
+                ("dr/dt", carried.dr_dt, cleared.dr_dt),
+                ("dphi/dt", carried.dphi_dt, cleared.dphi_dt),
+            ] {
+                assert_eq!(
+                    a.to_bits(),
+                    b.to_bits(),
+                    "{what}, step {n}: {name} is {a} carrying the slope and {b} evaluating it",
+                );
+            }
+            assert_eq!(
+                carried.death_t.map(f64::to_bits),
+                cleared.death_t.map(f64::to_bits),
+                "{what}, step {n}: the two runs died at different times",
+            );
+            assert_eq!(
+                carried.death_end, cleared.death_end,
+                "{what}, step {n}: the two runs died at different boundaries",
+            );
+        };
+
+        // Outward and radial from 12 M, the cheap case a single substep covers; a half turn of
+        // azimuth from 3 M, where the controller is working; and straight down from 0.5 M, which
+        // reaches the ring and dies inside the forward leg.
+        for (what, r0, alpha) in [
+            ("the ray climbing out of 12 M", 12.0, 0.0),
+            ("the ray turning at 3 M", 3.0, std::f64::consts::FRAC_PI_2),
+            ("the ray falling onto the ring from 0.5 M", 0.5, std::f64::consts::PI),
+        ] {
+            let u = raindrop(&metric, r0);
+            let tetrad = Tetrad::from_four_velocity(&metric, r0, &u);
+            let start = NullRay::from_local_direction(&metric, 0.0, r0, 0.0, &tetrad, alpha, &u);
+            let (mut carried, mut cleared) = (start, start);
+            // Out, then back past the start - which takes the falling ray back through its own
+            // death - then out again, so that the slope is carried across both reversals as well
+            // as along.
+            let mut died_on_the_way_out = false;
+            for (leg, steps, back) in
+                [("out", 120, false), ("back", 240, true), ("out again", 120, false)]
+            {
+                for n in 0..steps {
+                    if back {
+                        carried.step_back(&metric, dt);
+                        cleared.slope = None;
+                        cleared.step_back(&metric, dt);
+                    } else {
+                        carried.step(&metric, dt);
+                        cleared.slope = None;
+                        cleared.step(&metric, dt);
+                    }
+                    agree(&carried, &cleared, &format!("{what}, leg {leg}"), n);
+                }
+                if leg == "out" {
+                    died_on_the_way_out = !carried.alive();
+                }
+                if leg == "back" && died_on_the_way_out {
+                    assert!(
+                        carried.alive(),
+                        "{what} died on the way out, so the leg that steps back past its death \
+                         must have revived it",
+                    );
+                }
+            }
+            if r0 == 0.5 {
+                assert!(
+                    died_on_the_way_out,
+                    "the ray aimed at the ring must reach it inside the forward leg, so that this \
+                     test covers a death and the revival after it",
+                );
+            }
+        }
     }
 
     /// The transmission of `run_transmission` on a plain fixed step, run to a given coordinate
@@ -6009,6 +6192,7 @@ mod tests {
             v_emit: [1.0, -1.0, 0.0],
             death_t: None,
             death_end: None,
+            slope: None,
         };
         for _ in 0..600 {
             pnd.step(&metric, 0.005);

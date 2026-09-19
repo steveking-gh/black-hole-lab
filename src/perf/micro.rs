@@ -290,8 +290,12 @@ pub(crate) fn benches(fx: &Fixtures) -> Vec<Bench<'_>> {
     // ---- one ray, one frame -------------------------------------------------------------------
     //
     // The ray is copied inside the timed span so that every iteration integrates the same interval
-    // from the same state. A `NullRay` is nine f64 and a pair of Options; the copy is a rounding
-    // error against the substeps of even the cheapest of the three.
+    // from the same state. A `NullRay` is nine f64, a pair of Options and the carried Dormand-
+    // Prince slope; the copy is a rounding error against the substeps of even the cheapest of the
+    // three. Each of the three prototypes was integrated to where it stands by `representative_rays`
+    // rather than constructed there, so each one arrives carrying that slope, and these three
+    // benchmarks time the six-evaluation frame a played field actually pays rather than the
+    // seven-evaluation one a ray only ever pays once.
     for (name, what, proto) in [
         (
             "ray/step-escaping",
