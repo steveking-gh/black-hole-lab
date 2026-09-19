@@ -398,7 +398,8 @@ impl SpatialCanvas {
         // hold a borrow of the canvas for as long as they live: the marker menu below takes
         // `&mut self` while they are still in scope.
         let zoom = self.zoom;
-        let to_offset = |(x, y): (f64, f64)| Vec2::new(x as f32 * zoom, -(y as f32) * zoom);
+        let zoom_px = f64::from(zoom);
+        let to_offset = |(x, y): (f64, f64)| (x * zoom_px, -y * zoom_px);
         // Following an observer who is not in the simulation is following nobody, so the view
         // stays on the hole rather than jumping to a remembered position. A standing request to
         // keep one of them centred is answered first, and the View selector's own
@@ -406,8 +407,21 @@ impl SpatialCanvas {
         // gone.
         let followed = self.followed(bob, alice, frame_of_ref);
         let frame_tracking_offset =
-            followed.map_or(Vec2::ZERO, |obs| to_offset(obs.cartesian_position(metric)));
-        let center = rect.center() + self.pan_offset - frame_tracking_offset;
+            followed.map_or((0.0, 0.0), |obs| to_offset(obs.cartesian_position(metric)));
+        // The centre of the geometry is carried in f64, because the zone fills and the boundary
+        // lines below are built about it and this view zooms to half a million pixels per M. Out
+        // there the centre of the hole stands a hundred million pixels off the canvas, where the
+        // f32 of a `Pos2` has eight whole pixels between one value and the next, and the drawn
+        // radii of r- and r+ differ by a millionth of themselves. Formed in f32, centre + R(cos,
+        // sin) loses that difference to the cancellation of two huge numbers; formed in f64 and
+        // narrowed only once the point is back on the canvas, it costs 1e-8 px. See `ZoneArc`.
+        let centre = (
+            f64::from(rect.center().x) + f64::from(self.pan_offset.x) - frame_tracking_offset.0,
+            f64::from(rect.center().y) + f64::from(self.pan_offset.y) - frame_tracking_offset.1,
+        );
+        // Everything else on this canvas is drawn within a screen's width of the middle, where f32
+        // says all there is to say, and this is that same point narrowed once for all of them.
+        let center = Pos2::new(centre.0 as f32, centre.1 as f32);
 
         // Background
         painter.rect_filled(rect, 4.0, Theme::CANVAS_BG);
@@ -423,7 +437,7 @@ impl SpatialCanvas {
         let rho_e = metric.cartesian_radius(re);
         let rho_ring = metric.a.abs();
 
-        let r_to_px = |r: f64| -> f32 { (r as f32) * zoom };
+        let r_to_px = |r: f64| -> f64 { r * zoom_px };
         let to_screen =
             |(x, y): (f64, f64)| center + Vec2::new(x as f32 * zoom, -(y as f32) * zoom);
         // Direction vectors (velocities, tangents) need the same y flip as positions.
@@ -545,50 +559,66 @@ impl SpatialCanvas {
         // Each zone is its own band between two boundaries rather than a disc laid over the discs
         // outside it, so that a region's pixel colour is its fill over the canvas background - the
         // colour the (t, r) diagram paints the same region in - and not its fill stacked on every
-        // region it sits inside. See `annulus_mesh`.
-        // Ergosphere: between r+ and the static limit 2M.
-        painter.add(egui::Shape::mesh(annulus_mesh(
-            center,
-            r_to_px(rho_p),
-            r_to_px(rho_e),
-            Theme::ERGOSPHERE_FILL,
-        )));
-
-        // Region II: between r- and r+.
-        painter.add(egui::Shape::mesh(annulus_mesh(
-            center,
-            r_to_px(rho_m),
-            r_to_px(rho_p),
-            Theme::REGION_II_FILL,
-        )));
-
-        // Region III: between the ring and r-.
-        painter.add(egui::Shape::mesh(annulus_mesh(
-            center,
-            r_to_px(rho_ring),
-            r_to_px(rho_m),
-            Theme::REGION_III_FILL,
-        )));
-
-        // The disc rho < a is the hole of the ring: it is not part of this sheet of the equatorial
-        // plane at r > 0 at all, so it gets its own fill rather than a region colour.
+        // region it sits inside.
+        //
+        // The bands and the lines drawn at their edges are cut from one and the same tessellation
+        // of the circles: same centre, same angles, same arithmetic, so a fill and the boundary at
+        // its edge cannot part company however deep the zoom goes. They used to be cut by two
+        // different rules - a fixed 72-gon for a fill, whatever egui chose for a stroke - and a
+        // 72-gon's chords fall 9.5e-4 R inside the circle, which is 19 px at a drawn radius of
+        // 20 000 px: enough to carry the fill of region II over the r- line and into region III.
+        // See `ZoneArc`.
         let ring_px = r_to_px(rho_ring);
-        painter.circle_filled(center, ring_px.max(2.0), Theme::SINGULARITY_FILL);
+        // The boundaries of the picture from the middle outward: the inner edge of the disc inside
+        // the ring, then the ring r = 0 at rho = |a|, the Cauchy horizon r-, the outer horizon r+
+        // and the static limit. The disc rho < a is the hole of the ring - it is not part of this
+        // sheet of the equatorial plane at r > 0 at all, so it gets its own fill rather than a
+        // region colour - and a hole with no spin has no ring, so that fill is floored at two
+        // pixels of drawn radius and marks the middle of the picture either way.
+        let bounds = [0.0, ring_px.max(2.0), r_to_px(rho_m), r_to_px(rho_p), r_to_px(rho_e)];
+        let arc = ZoneArc::over(rect, centre, bounds[4]);
+        let edges: [Vec<Pos2>; 5] = bounds.map(|radius| arc.ring(arc.held(radius)));
 
-        // 2. Concentric Boundary Rings
+        // Each band in turn, from the ring outward. A band whose two radii are held to the same
+        // value has no part of the canvas in it - the whole view lies inside it, or outside it -
+        // and is not drawn at all.
+        let fills = [
+            Theme::SINGULARITY_FILL,
+            Theme::REGION_III_FILL,
+            Theme::REGION_II_FILL,
+            Theme::ERGOSPHERE_FILL,
+        ];
+        for (band, fill) in fills.into_iter().enumerate() {
+            if arc.held(bounds[band]) < arc.held(bounds[band + 1]) {
+                painter.add(egui::Shape::mesh(arc.band(&edges[band], &edges[band + 1], fill)));
+            }
+        }
+
+        // 2. Concentric Boundary Rings, each stroked through the very points the fills either side
+        // of it are built from. A boundary the canvas cannot reach is not drawn: out there its
+        // radius is held to the rim of the view, which is not where the surface is.
         // Ergosphere boundary
-        painter.circle_stroke(center, r_to_px(rho_e), Stroke::new(1.5, Theme::ERGOSPHERE_LINE));
+        if arc.shows(bounds[4]) {
+            painter.add(arc.outline(&edges[4], Stroke::new(1.5, Theme::ERGOSPHERE_LINE)));
+        }
 
         // Outer Horizon r+
-        painter.circle_stroke(center, r_to_px(rho_p), Stroke::new(2.5, Theme::HORIZON_OUTER));
+        if arc.shows(bounds[3]) {
+            painter.add(arc.outline(&edges[3], Stroke::new(2.5, Theme::HORIZON_OUTER)));
+        }
 
         // Inner Cauchy Horizon r-
-        painter.circle_stroke(center, r_to_px(rho_m), Stroke::new(2.0, Theme::HORIZON_CAUCHY));
+        if arc.shows(bounds[2]) {
+            painter.add(arc.outline(&edges[2], Stroke::new(2.0, Theme::HORIZON_CAUCHY)));
+        }
 
         // Ring singularity r = 0: the circle of Cartesian radius exactly a, and inside it the
         // arrow that says which way the hole turns.
+        let ring_px = ring_px as f32;
         draw_ring_spin_arrow(&painter, center, ring_px, metric.a);
-        painter.circle_stroke(center, ring_px.max(2.0), Stroke::new(2.0, Theme::SINGULARITY_LINE));
+        if arc.shows(bounds[1]) {
+            painter.add(arc.outline(&edges[1], Stroke::new(2.0, Theme::SINGULARITY_LINE)));
+        }
         if ring_px >= 6.0 {
             painter.text(
                 center + Vec2::new(0.0, ring_px + 4.0),
@@ -945,32 +975,223 @@ impl SpatialCanvas {
     }
 }
 
-/// How many segments a zone's band is cut into: seventy-two, as the volume cuts its rings.
+/// The fewest segments a whole turn of a zone boundary is cut into, however small the circle.
+///
+/// Seventy-two, as it has always been here and as the volume cuts its rings. The sagitta rule
+/// below asks for fewer than this at any radius under 262 px, and a circle of ten pixels should
+/// still read as a circle rather than as the fourteen-sided figure the tolerance alone would
+/// allow: at that size the error is not what the eye is objecting to.
 const ZONE_SEGMENTS: usize = 72;
 
-/// The filled band between two concentric circles, as one mesh.
+/// How far inside the true circle the chord of one drawn segment may fall, in screen pixels.
 ///
-/// The zones are painted as disjoint bands rather than as nested discs so that a region's pixel
-/// colour is its own fill over the canvas background - the colour the (t, r) diagram paints the
-/// same region in, where the regions are side-by-side strips - rather than its fill stacked on the
-/// fill of every region outside it. Region II is then the same deep purple, and region III the
-/// same dark sea green, in every view. An inner radius of zero is a disc.
-pub(crate) fn annulus_mesh(center: Pos2, r_in: f32, r_out: f32, fill: Color32) -> egui::Mesh {
-    let mut mesh = egui::Mesh::default();
-    for i in 0..ZONE_SEGMENTS {
-        let th = std::f32::consts::TAU * (i as f32) / (ZONE_SEGMENTS as f32);
-        let (s, c) = th.sin_cos();
-        mesh.colored_vertex(center + Vec2::new(c * r_in, s * r_in), fill);
-        mesh.colored_vertex(center + Vec2::new(c * r_out, s * r_out), fill);
+/// A regular n-gon on a circle of on-screen radius R misses it by the sagitta R(1 - cos(pi/n)),
+/// which is R pi^2 / (2 n^2) to the accuracy that matters, so a *fixed* n is a fixed fraction of R
+/// and grows without bound as the view zooms in. Seventy-two segments cut the chords 9.5e-4 R
+/// inside the circle: a quarter of a pixel at R = 260 px, 19 px at R = 20 000 px, and this view
+/// reaches drawn radii of 1e6 px and beyond. Holding the error in pixels instead inverts that to
+/// n = pi sqrt(R / (2 eps)), and a quarter of a pixel is below anything an anti-aliased stroke can
+/// show.
+const ZONE_SAGITTA_PX: f64 = 0.25;
+
+/// The fewest segments any stretch of a boundary is cut into, however short the stretch.
+///
+/// At a drawn radius of a million pixels the canvas sees less than a milliradian of the circle and
+/// the tolerance is met by a single chord, which is true and looks like nothing: four segments
+/// cost nothing and leave the ends of the arc and the margins around it comfortable.
+const ZONE_ARC_MIN: usize = 4;
+
+/// Most segments one stretch of a boundary is cut into.
+///
+/// This is a guarantee rather than a working limit. The count the tolerance asks for is bounded
+/// twice over - by the radius, through the square root, and by the stretch of the circle the
+/// canvas can see, which shrinks as 1/R once the centre is off the view - so what it actually
+/// asks for peaks at a few hundred. On a 900 px canvas
+/// `test_a_zone_boundary_is_cut_to_a_quarter_pixel_from_ten_pixels_to_a_billion` measures 72 for
+/// the whole turn of a small circle, 40 for the widest arc there is at 316 px, 27 at 1000 px, 7 at
+/// 10 000 px, and the floor of four from 30 000 px to a billion. A 4K canvas with the centre just
+/// off one corner is the worst case there is, at about 300. The cap is here so that no zoom, no
+/// pan and no window size can turn a frame into unbounded work.
+const ZONE_SEGMENTS_MAX: usize = 2048;
+
+/// How far outside the canvas the zone geometry is carried, in screen pixels.
+const ZONE_MARGIN_PX: f64 = 4.0;
+
+/// What one frame of this view can see of the family of circles about the hole: which angles of
+/// them reach the canvas, which radii reach it, and how finely they have to be cut.
+///
+/// Every zone boundary of the equatorial view is a circle about one centre - a surface of constant
+/// r is drawn at the Cartesian radius sqrt(r^2 + a^2), and the ring r = 0 at rho = |a| - so one of
+/// these answers for the whole picture. Answering it once is what lets a band and the boundary at
+/// its edge be built from a single list of points, which is the only way the two can be made
+/// incapable of disagreeing.
+///
+/// The second thing it does is keep the work bounded. At a drawn radius of a million pixels the
+/// canvas sees a fraction of a milliradian of the circle, and tessellating the whole turn to a
+/// quarter of a pixel would ask for four thousand segments to draw four of them. Only the stretch
+/// that can reach the canvas is cut.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ZoneArc {
+    /// The centre of the family, in screen pixels and in f64. See the comment on `centre` in
+    /// `render`: at these zooms it is millions of pixels off the canvas.
+    centre: (f64, f64),
+    /// The first and the last angle of the stretch that can reach the canvas, measured in screen
+    /// coordinates - x right, y down - and never folded into a range, so that a stretch straddling
+    /// the seam at +-pi is one interval and not two and `to` is always the greater of the pair.
+    from: f64,
+    to: f64,
+    /// Whether the whole turn shows, which is what makes an outline a loop rather than a line and
+    /// a band's last segment join back to its first.
+    closed: bool,
+    /// The distance from the centre to the nearest and to the farthest point of the canvas. A
+    /// circle smaller than `near`, or larger than `far`, misses the canvas altogether; one between
+    /// them crosses it, and is a boundary there is something to draw of.
+    near: f64,
+    far: f64,
+    /// How many segments the stretch from `from` to `to` is cut into.
+    steps: usize,
+}
+
+impl ZoneArc {
+    /// The stretch of the circles about `centre` that `rect` can show, cut fine enough for the
+    /// circle of on-screen radius `outermost` - the largest of the family that will be drawn.
+    fn over(rect: egui::Rect, centre: (f64, f64), outermost: f64) -> Self {
+        use std::f64::consts::{PI, TAU};
+        // Everything is measured against the canvas grown by a few pixels, so that a fill runs
+        // under the rim of the view rather than up to it and no rounding of an angle or a radius
+        // can leave a hairline of background along an edge or at a corner. The margin is
+        // comfortably more than the quarter pixel a chord may cut in by plus half of the widest
+        // stroke. The spill costs nothing: `Ui::allocate_painter` hands back a painter clipped to
+        // the rect it allocated, so what goes past the rim is never rasterised.
+        let probe = rect.expand(ZONE_MARGIN_PX as f32);
+        let (left, right) = (f64::from(probe.left()), f64::from(probe.right()));
+        let (top, bottom) = (f64::from(probe.top()), f64::from(probe.bottom()));
+        let leg = |x: f64, y: f64| (x - centre.0, y - centre.1);
+        let corners = [(left, top), (right, top), (right, bottom), (left, bottom)];
+        let far = corners.iter().fold(0.0_f64, |widest, &(x, y)| {
+            let (dx, dy) = leg(x, y);
+            widest.max(dx.hypot(dy))
+        });
+        // The nearest point of the canvas is the centre's own position held to it, which is the
+        // centre itself - and a distance of zero - whenever the centre is on the canvas.
+        let (nx, ny) = leg(centre.0.clamp(left, right), centre.1.clamp(top, bottom));
+        let near = nx.hypot(ny);
+        let (from, to, closed) = if near == 0.0 {
+            (0.0, TAU, true)
+        } else {
+            // A convex figure seen from outside subtends less than half a turn, so the smallest
+            // stretch of angles holding the canvas is the one its four corners span. Each corner
+            // is measured against the direction of the canvas's own middle, which lies inside
+            // that stretch and so is less than half a turn from every one of them: folding those
+            // differences into [-pi, pi) cannot be the fold that carries a corner to the wrong end
+            // of the stretch, because the seam sits behind the viewer and this arithmetic never
+            // reaches it.
+            let (bx, by) = leg(f64::from(probe.center().x), f64::from(probe.center().y));
+            let base = by.atan2(bx);
+            let (mut first, mut last) = (0.0_f64, 0.0_f64);
+            for (x, y) in corners {
+                let (dx, dy) = leg(x, y);
+                let turned = (dy.atan2(dx) - base + PI).rem_euclid(TAU) - PI;
+                first = first.min(turned);
+                last = last.max(turned);
+            }
+            (base + first, base + last, false)
+        };
+        // Segments enough that no chord falls further than `ZONE_SAGITTA_PX` inside the circle it
+        // stands for: n = pi sqrt(R / (2 eps)) over a whole turn, and that share of it over a
+        // shorter stretch. The radius it is cut for is the largest that will be drawn, held to
+        // what the canvas can show, so that a circle far outside the view does not buy segments
+        // nobody could see. Every smaller circle of the family then comes out finer than the
+        // tolerance asks rather than coarser, which is why one cut serves the whole picture.
+        let share = (to - from) / TAU;
+        let reference = outermost.clamp(near, far);
+        let by_error = (PI * (reference / (2.0 * ZONE_SAGITTA_PX)).sqrt() * share).ceil();
+        let by_floor = ((ZONE_SEGMENTS as f64) * share).ceil();
+        let steps = (by_error.max(by_floor) as usize).clamp(ZONE_ARC_MIN, ZONE_SEGMENTS_MAX);
+        Self { centre, from, to, closed, near, far, steps }
     }
-    let n = ZONE_SEGMENTS as u32;
-    for i in 0..n {
-        let j = (i + 1) % n;
-        let (a_in, a_out, b_in, b_out) = (2 * i, 2 * i + 1, 2 * j, 2 * j + 1);
-        mesh.add_triangle(a_in, a_out, b_out);
-        mesh.add_triangle(a_in, b_out, b_in);
+
+    /// The points of the circle of on-screen radius `radius`, over the visible stretch and in
+    /// order. A closed stretch leaves out the repeat of its first point, as a loop does.
+    ///
+    /// Each point is formed in f64 about a centre carried in f64, and only the result is narrowed
+    /// to the f32 of a `Pos2`. That result is always on or near the canvas - `held` keeps the
+    /// radius between the nearest and the farthest point of the view, and the stretch of angles
+    /// covers no more than the view subtends - so the narrowing costs about 1e-4 px, while the
+    /// same arithmetic carried out in f32 about a centre 1e8 px away would cost eight.
+    fn ring(&self, radius: f64) -> Vec<Pos2> {
+        let count = if self.closed { self.steps } else { self.steps + 1 };
+        let step = (self.to - self.from) / (self.steps as f64);
+        (0..count)
+            .map(|i| {
+                let (sin, cos) = (self.from + step * (i as f64)).sin_cos();
+                Pos2::new(
+                    (self.centre.0 + radius * cos) as f32,
+                    (self.centre.1 + radius * sin) as f32,
+                )
+            })
+            .collect()
     }
-    mesh
+
+    /// Whether the circle of this radius crosses the canvas, which is whether there is a boundary
+    /// on the screen to stroke.
+    fn shows(&self, radius: f64) -> bool {
+        radius >= self.near && radius <= self.far
+    }
+
+    /// This radius held to the stretch of radii the canvas can show.
+    ///
+    /// A fill is a region of the plane and not a circle, so a band whose far edge is ten million
+    /// pixels out is still the band that has to cover this canvas. Holding both of its radii to
+    /// [near, far] leaves the covered part of the view exactly as it was - every point outside
+    /// that range is off the canvas - while keeping every vertex where f32 can carry it. Two radii
+    /// held to the same value mean the band has no part of the view in it.
+    fn held(&self, radius: f64) -> f64 {
+        radius.clamp(self.near, self.far)
+    }
+
+    /// The filled band between two circles of this family, as one mesh.
+    ///
+    /// The zones are painted as disjoint bands rather than as nested discs so that a region's
+    /// pixel colour is its own fill over the canvas background - the colour the (t, r) diagram
+    /// paints the same region in, where the regions are side-by-side strips - rather than its fill
+    /// stacked on the fill of every region outside it. Region II is then the same deep purple, and
+    /// region III the same dark sea green, in every view.
+    ///
+    /// The two edges are given as points rather than as radii because the whole point of them is
+    /// that they are shared: the outer edge of one band is the inner edge of the next and is the
+    /// list of points its boundary is stroked through, all three the same `Vec`.
+    fn band(&self, inner: &[Pos2], outer: &[Pos2], fill: Color32) -> egui::Mesh {
+        let mut mesh = egui::Mesh::default();
+        for (&inside, &outside) in inner.iter().zip(outer) {
+            mesh.colored_vertex(inside, fill);
+            mesh.colored_vertex(outside, fill);
+        }
+        let count = inner.len().min(outer.len()) as u32;
+        let steps = if self.closed { count } else { count.saturating_sub(1) };
+        for i in 0..steps {
+            let j = (i + 1) % count;
+            let (a_in, a_out, b_in, b_out) = (2 * i, 2 * i + 1, 2 * j, 2 * j + 1);
+            mesh.add_triangle(a_in, a_out, b_out);
+            mesh.add_triangle(a_in, b_out, b_in);
+        }
+        mesh
+    }
+
+    /// One boundary, stroked through the points a band's edge is built from: a loop when the whole
+    /// turn shows and an open line when the canvas sees only an arc of it.
+    ///
+    /// This is what `circle_stroke` could not do. egui cuts a circle by a rule of its own, at most
+    /// 128 segments of a whole turn however large the radius, which at R = 20 000 px stands 6 px
+    /// clear of where a 72-gon fill ended - so the fill of a region crossed the line at its edge
+    /// and ran into its neighbour. Through one list of points there is no rule to disagree with.
+    fn outline(&self, points: &[Pos2], stroke: Stroke) -> egui::Shape {
+        if self.closed {
+            egui::Shape::closed_line(points.to_vec(), stroke)
+        } else {
+            egui::Shape::line(points.to_vec(), stroke)
+        }
+    }
 }
 
 /// Which observer a canvas is anchored to, given a standing request to keep one centred and the
@@ -1632,6 +1853,303 @@ mod tests {
         assert!(spin_arrow_arc(0.0, ring_px).is_empty(), "and a hole with no spin has no arrow");
     }
 
+    /// The canvas the zone geometry is measured against: off the origin and not square, so that
+    /// nothing in the arithmetic can come out right by a symmetry the real view does not have.
+    fn zone_canvas() -> egui::Rect {
+        egui::Rect::from_min_size(Pos2::new(13.0, 41.0), Vec2::new(903.0, 617.0))
+    }
+
+    /// One boundary of on-screen radius `radius` as the view would cut it, with the centre of the
+    /// hole placed straight below the middle of the canvas so that the circle runs through it.
+    /// That is the geometry of every deep zoom: the centre far off the view, one boundary crossing
+    /// it. At small radii the centre lands on the canvas and the same call gives the whole turn.
+    fn zone_ring(radius: f64) -> (ZoneArc, Vec<Pos2>) {
+        let rect = zone_canvas();
+        let centre = (f64::from(rect.center().x), f64::from(rect.center().y) + radius);
+        let arc = ZoneArc::over(rect, centre, radius);
+        let points = arc.ring(radius);
+        (arc, points)
+    }
+
+    /// How far the chords of a drawn boundary fall inside the circle they stand for, and how far
+    /// its vertices stray off that circle, both measured in f64 from the points themselves.
+    fn zone_error(arc: &ZoneArc, radius: f64, points: &[Pos2]) -> (f64, f64) {
+        let radial = |x: f64, y: f64| (x - arc.centre.0).hypot(y - arc.centre.1);
+        let mut sagitta = 0.0_f64;
+        let mut off_circle = 0.0_f64;
+        let mut loop_back = points.to_vec();
+        if arc.closed {
+            loop_back.push(points[0]);
+        }
+        for pair in loop_back.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            let mid = (
+                0.5 * (f64::from(a.x) + f64::from(b.x)),
+                0.5 * (f64::from(a.y) + f64::from(b.y)),
+            );
+            sagitta = sagitta.max(radius - radial(mid.0, mid.1));
+            off_circle =
+                off_circle.max((radial(f64::from(a.x), f64::from(a.y)) - radius).abs());
+        }
+        (sagitta, off_circle)
+    }
+
+    #[test]
+    fn test_a_zone_boundary_is_cut_to_a_quarter_pixel_from_ten_pixels_to_a_billion() {
+        // The defect this rule replaces: a boundary cut into a fixed number of segments is a fixed
+        // *fraction* of its radius away from the circle, so however good it looks at the default
+        // zoom it is wrong by whole pixels once the view is deep. Fixing the error in pixels
+        // instead has to hold at every radius the view can reach - the zoom runs to 500 000 px per
+        // M, and the ergosphere is 2.2 M out - and the count it asks for has to stay bounded while
+        // it does, which it can only do by spending its segments on the stretch of the circle the
+        // canvas can actually see.
+        let mut worst_sagitta = 0.0_f64;
+        let mut most_points = 0usize;
+        for step in 0..=16 {
+            // Ten pixels to a billion, a factor of sqrt(10) at a time.
+            let radius = 10.0 * 10.0_f64.powf(f64::from(step) / 2.0);
+            let (arc, points) = zone_ring(radius);
+            let (sagitta, off_circle) = zone_error(&arc, radius, &points);
+            assert!(
+                sagitta <= ZONE_SAGITTA_PX + 1e-3,
+                "a chord of the {radius} px boundary falls {sagitta} px inside it"
+            );
+            assert!(
+                off_circle < 1e-3,
+                "a vertex of the {radius} px boundary sits {off_circle} px off it"
+            );
+            assert!(
+                points.len() <= ZONE_SEGMENTS_MAX + 1,
+                "the {radius} px boundary took {} points",
+                points.len()
+            );
+            worst_sagitta = worst_sagitta.max(sagitta);
+            most_points = most_points.max(points.len());
+            println!(
+                "R = {radius:>12.0} px: {:>3} points over {:.6} of a turn, chords {sagitta:.4} px \
+                 inside the circle, vertices {off_circle:.2e} px off it",
+                points.len(),
+                (arc.to - arc.from) / std::f64::consts::TAU
+            );
+        }
+        // The whole turn of a small circle is the most segments any of this asks for, and it is
+        // the floor rather than the tolerance that asks for them.
+        assert_eq!(most_points, ZONE_SEGMENTS, "the widest cut is a whole turn at the floor");
+        println!("worst chord: {worst_sagitta:.4} px inside; most points: {most_points}");
+    }
+
+    #[test]
+    fn test_a_boundary_a_hundred_million_pixels_across_is_drawn_across_the_whole_canvas() {
+        // The deep zoom, where the centre of the hole is 1e8 px off the canvas and the boundary
+        // through the view is a stretch of circle a hundredth of a milliradian long. Two things
+        // have to hold: every vertex is on that circle to far better than a pixel, which is what
+        // the f64 centre buys - the same points formed in f32 would be out by eight pixels, since
+        // that is the spacing of the f32 grid at 1e8 - and the drawn stretch covers every point of
+        // the circle that is on the canvas, with no gap left at the edges of the view.
+        let radius = 1e8;
+        let rect = zone_canvas();
+        let (arc, points) = zone_ring(radius);
+        let (sagitta, off_circle) = zone_error(&arc, radius, &points);
+        assert!(!arc.closed, "the canvas sees an arc of this circle and not a turn of it");
+        assert!(off_circle < 1e-3, "a vertex sits {off_circle} px off the circle");
+        assert!(sagitta <= ZONE_SAGITTA_PX + 1e-3, "a chord falls {sagitta} px inside it");
+        assert!(
+            !rect.contains(points[0]) && !rect.contains(*points.last().expect("an arc has ends")),
+            "both ends of the arc are drawn past the edge of the canvas"
+        );
+
+        // Every angle of the circle that lands on the canvas is inside the drawn stretch, tested
+        // over three times that stretch so that a miss at either end would show.
+        let (middle, wide) = (0.5 * (arc.from + arc.to), 3.0 * (arc.to - arc.from));
+        let samples = 4000;
+        let mut on_canvas = 0;
+        for i in 0..=samples {
+            let theta = middle - 0.5 * wide + wide * f64::from(i) / f64::from(samples);
+            let (sin, cos) = theta.sin_cos();
+            let at = Pos2::new(
+                (arc.centre.0 + radius * cos) as f32,
+                (arc.centre.1 + radius * sin) as f32,
+            );
+            if rect.contains(at) {
+                on_canvas += 1;
+                assert!(
+                    theta > arc.from && theta < arc.to,
+                    "the circle is on the canvas at {theta} rad, outside the drawn stretch \
+                     [{}, {}]",
+                    arc.from,
+                    arc.to
+                );
+            }
+        }
+        assert!(on_canvas > 100, "only {on_canvas} of {samples} samples landed on the canvas");
+        println!(
+            "R = 1e8 px: {} points over {:.3e} rad, {on_canvas}/{samples} samples on the canvas, \
+             vertices {off_circle:.2e} px off the circle",
+            points.len(),
+            arc.to - arc.from
+        );
+    }
+
+    #[test]
+    fn test_a_boundary_the_canvas_cannot_reach_is_not_drawn_and_one_around_it_is_a_whole_turn() {
+        let rect = zone_canvas();
+        let middle = (f64::from(rect.center().x), f64::from(rect.center().y));
+
+        // The centre on the canvas: the whole turn of every circle can show, so an outline is a
+        // loop and the cut is the floor of seventy-two.
+        let arc = ZoneArc::over(rect, middle, 100.0);
+        assert!(arc.closed, "the canvas is around the centre, so the whole turn shows");
+        assert_eq!(arc.ring(100.0).len(), ZONE_SEGMENTS, "and is cut at the floor");
+        assert!(arc.shows(100.0), "a circle within the corners crosses the canvas");
+        assert!(!arc.shows(1e6), "and one far outside them does not");
+        assert!(
+            arc.held(1e6) < 600.0,
+            "a circle outside the view is held to the rim of it, at {} px",
+            arc.held(1e6)
+        );
+        assert!(arc.held(0.0) == 0.0, "and the innermost edge is the centre itself");
+
+        // The centre a million pixels away: only the circles that pass through the canvas are
+        // drawn, and the ones short of it and beyond it are not.
+        let away = (middle.0, middle.1 + 1e6);
+        let arc = ZoneArc::over(rect, away, 1e6);
+        assert!(!arc.closed, "the centre is off the canvas, so only an arc of it shows");
+        assert!(arc.shows(1e6), "the circle through the canvas is drawn");
+        assert!(!arc.shows(1e6 - 5000.0), "one five thousand pixels short of it is not");
+        assert!(!arc.shows(1e6 + 5000.0), "nor is one five thousand pixels beyond it");
+        // Both radii of a band outside the view are held to the same value, which is how the
+        // caller knows there is no band to draw.
+        assert_eq!(
+            arc.held(1e6 - 5000.0),
+            arc.held(1e6 - 4000.0),
+            "a band wholly outside the canvas has nothing of it in it"
+        );
+    }
+
+    /// One filled zone as it reached the painter: the colour of its mesh and every vertex of it.
+    type ZoneFill = (Color32, Vec<Pos2>);
+
+    /// One boundary as it reached the painter: its colour, whether it is a loop rather than an
+    /// open arc, and the points it is stroked through.
+    type ZoneLine = (Color32, bool, Vec<Pos2>);
+
+    /// The zone geometry of one frame of the equatorial view at this zoom and pan.
+    fn zone_frame(zoom: f32, pan: Vec2) -> (Vec<ZoneFill>, Vec<ZoneLine>) {
+        use crate::physics::wavefront::SignalField;
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let metric = KerrSchild::new(1.0, 0.90);
+        let mut canvas = SpatialCanvas { zoom, pan_offset: pan, ..Default::default() };
+        let signal = SignalField::default();
+        let mut details = false;
+        let (mut alice, mut bob): (Option<Observer>, Option<Observer>) = (None, None);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::Vec2::new(800.0, 700.0))),
+            ..Default::default()
+        };
+        let output = ctx.clone().run_ui(input, |ui| {
+            canvas.render(
+                ui,
+                &metric,
+                &mut bob,
+                &mut alice,
+                0.0,
+                SignalViews { alice: &signal, bob: &signal },
+                600.0,
+                false,
+                ReferenceFrame::DistantObserver,
+                1.0,
+                FrontStyle { arcs: true, hide_wound: true },
+                &mut details,
+            );
+        });
+        let (mut fills, mut lines) = (Vec::new(), Vec::new());
+        fn walk(shape: &egui::Shape, fills: &mut Vec<ZoneFill>, lines: &mut Vec<ZoneLine>) {
+            match shape {
+                egui::Shape::Mesh(mesh) => {
+                    if let Some(first) = mesh.vertices.first() {
+                        fills.push((
+                            first.color,
+                            mesh.vertices.iter().map(|v| v.pos).collect(),
+                        ));
+                    }
+                }
+                egui::Shape::Path(path) => {
+                    if let egui::epaint::ColorMode::Solid(colour) = path.stroke.color {
+                        lines.push((colour, path.closed, path.points.clone()));
+                    }
+                }
+                egui::Shape::Vec(inner) => {
+                    for shape in inner {
+                        walk(shape, fills, lines);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for clipped in output.shapes.iter() {
+            walk(&clipped.shape, &mut fills, &mut lines);
+        }
+        output.drop_without_applying_deltas();
+        (fills, lines)
+    }
+
+    #[test]
+    fn test_every_boundary_is_stroked_through_the_points_of_the_fills_it_divides() {
+        // The guarantee the whole fix rests on, measured off a painted frame rather than off the
+        // helper's arithmetic: a boundary line and the edges of the two fills that meet at it are
+        // one list of points, to the bit. Two tessellations of the same circle can be made to
+        // agree to a tolerance; one list cannot disagree at all, at any zoom.
+        //
+        // Two frames. At the default zoom the whole hole is on the canvas and all four boundaries
+        // are loops. At 200 000 px per M, with the pan putting r- through the middle of the view,
+        // the centre of the geometry is 210 000 px off the canvas, the ring and the two outer
+        // boundaries are nowhere near it, and the one boundary that shows is an open arc - which
+        // is the state the user's screenshot was taken in.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let deep_zoom = 200_000.0_f32;
+        let r_minus_px =
+            metric.cartesian_radius(metric.inner_horizon()) * f64::from(deep_zoom);
+        let deep_pan = Vec2::new(0.0, r_minus_px as f32);
+        for (zoom, pan, want_closed) in
+            [(48.0_f32, Vec2::ZERO, true), (deep_zoom, deep_pan, false)]
+        {
+            let (fills, lines) = zone_frame(zoom, pan);
+            let mut checked = 0;
+            for (line_colour, either_side) in [
+                (Theme::SINGULARITY_LINE, [Theme::SINGULARITY_FILL, Theme::REGION_III_FILL]),
+                (Theme::HORIZON_CAUCHY, [Theme::REGION_III_FILL, Theme::REGION_II_FILL]),
+                (Theme::HORIZON_OUTER, [Theme::REGION_II_FILL, Theme::ERGOSPHERE_FILL]),
+                (Theme::ERGOSPHERE_LINE, [Theme::ERGOSPHERE_FILL, Theme::ERGOSPHERE_FILL]),
+            ] {
+                let Some((_, closed, points)) =
+                    lines.iter().find(|(colour, _, _)| *colour == line_colour)
+                else {
+                    continue; // This boundary is off the canvas at this zoom, so it is not drawn.
+                };
+                assert_eq!(*closed, want_closed, "at zoom {zoom} the boundary is a loop or an arc");
+                for fill_colour in either_side {
+                    let Some((_, vertices)) = fills.iter().find(|(c, _)| *c == fill_colour) else {
+                        continue; // The region on that side has no part of the canvas in it.
+                    };
+                    for at in points {
+                        assert!(
+                            vertices.contains(at),
+                            "at zoom {zoom} a point of the boundary is not a vertex of the fill \
+                             beside it: {at:?}"
+                        );
+                    }
+                    checked += 1;
+                }
+                println!(
+                    "zoom {zoom}: the boundary {line_colour:?} runs through {} shared points",
+                    points.len()
+                );
+            }
+            assert!(checked > 0, "at zoom {zoom} no boundary met a fill at all");
+        }
+    }
+
     /// One real frame of the equatorial view, returning every filled circle it painted - colour,
     /// radius and centre - and the id of the `Ui` it was drawn in, which is what the marker menus
     /// are keyed off.
@@ -1676,6 +2194,15 @@ mod tests {
         fn walk(shape: &egui::Shape, out: &mut Vec<(Color32, f32, Pos2)>) {
             match shape {
                 egui::Shape::Circle(c) => out.push((c.fill, c.radius, c.center)),
+                // The zone fills are meshes cut to what the canvas can show rather than circles,
+                // so each is entered here as a circle of no radius at its first vertex. That
+                // vertex is the inner edge of the innermost band, which is the centre of the
+                // geometry itself while the centre is on the canvas: see `hole_of`.
+                egui::Shape::Mesh(mesh) => {
+                    if let Some(first) = mesh.vertices.first() {
+                        out.push((first.color, 0.0, first.pos));
+                    }
+                }
                 egui::Shape::Vec(inner) => {
                     for shape in inner {
                         walk(shape, out);
@@ -1691,9 +2218,11 @@ mod tests {
         (circles, ui_id)
     }
 
-    /// Where the hole was painted this frame: the ring's fill is drawn once, at the centre of the
-    /// geometry. With no pan and nobody being tracked it is also the middle of the canvas, which is
-    /// how a test knows where the middle is without knowing the layout.
+    /// Where the hole was painted this frame: the fill of the disc inside the ring is laid down
+    /// once, and its inner edge is the centre of the geometry itself whenever that centre is on
+    /// the canvas - which it is in every frame these tests run, none of them panning the hole off
+    /// the view. With no pan and nobody being tracked it is also the middle of the canvas, which
+    /// is how a test knows where the middle is without knowing the layout.
     fn hole_of(circles: &[(Color32, f32, Pos2)]) -> Pos2 {
         circles
             .iter()

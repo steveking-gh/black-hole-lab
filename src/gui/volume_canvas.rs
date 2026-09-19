@@ -1748,7 +1748,7 @@ impl VolumeCanvas {
         //
         // The region fills are the sections of the same four tubes at the floor's own height, built
         // from the same `pipe_point`. Each region is the band between two sections rather than a
-        // disc laid over the discs outside it, for the reason `spatial_canvas::annulus_mesh` gives:
+        // disc laid over the discs outside it, for the reason `spatial_canvas::ZoneArc::band` gives:
         // a region's pixel colour is then its own fill over the canvas background, the colour the
         // (t, r) diagram paints the same region in. The band is cut at the same partition the
         // tubes' rings are stroked through, so its edges pass through those very points.
