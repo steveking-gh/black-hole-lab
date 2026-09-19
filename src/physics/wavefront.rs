@@ -1530,8 +1530,9 @@ pub(crate) struct RayMark {
     pub(crate) dr_dt: f64,
     /// dphi/dt of the ray at that pass.
     pub(crate) dphi_dt: f64,
-    /// Whether the ray was still running. A segment with a dead end at either pass bounds no
-    /// resolved piece of front over the interval between them, and nothing sweeps it.
+    /// Whether the ray was still running. A segment with a ray already dead at the earlier pass
+    /// swept nothing over the interval, and one that lost a ray inside the interval swept a patch
+    /// only up to that death. See `Patch`.
     pub(crate) alive: bool,
 }
 
@@ -1553,6 +1554,119 @@ pub(crate) struct FrontMark {
     /// against. Kept so that the shift of a crossing can be evaluated from the stored marks once
     /// one is found, rather than for every ray on every pass when almost none of them cross.
     pub(crate) u_receiver: [f64; 3],
+}
+
+/// The piece of surface one segment of a front swept between two detection passes: its four
+/// corners, and the receiver at its far end.
+///
+/// Almost always that is the whole interval, and the corners are the two marks as they stand. The
+/// exception is a segment that lost a ray inside the interval. A dead ray is left standing at its
+/// death event, which is not where the front was when the interval ended, so the two marks do not
+/// bound a patch between them; but up to the death the segment was as resolved a piece of front as
+/// any other, and a receiver who passed through it in that time was reached by it. Skipping such a
+/// segment outright, which is what `Pulse::sweep` used to do, dropped exactly those arrivals, and
+/// dropped them according to how long the pass was: with Bob trailing Alice down the default
+/// infall, her eighth pulse sweeps over him at t = 5.674 M and r = 0.66 M, and the ingoing ray on
+/// one side of him reaches the ring 0.17 M later. A pass shorter than that saw the arrival and a
+/// pass spanning both events did not, so Bob heard eight pulses at a Step Size of 0.3 M and seven
+/// at 0.4 M. A reception is an event on a worldline and cannot depend on how finely the run was
+/// stepped.
+///
+/// So the patch of such a segment is cut at the first death. Nothing new is measured to do it. Each
+/// ray's path over the interval runs straight from its previous mark to the last event it has an
+/// exact sample at - its death event, where it was left standing, or this pass if it is still
+/// running - and the patch ends where the first of the two paths does, with the other ray and the
+/// receiver carried linearly to that time, which is how the bilinear model of `Pulse::sweep`
+/// carries everything already. After the first death the segment joins a live ray to a swallowed
+/// one and is no longer a piece of front at all, and nothing is swept through it.
+///
+/// One correction is owed. `RayMark::rel` is measured from the receiver's azimuth *at the pass*,
+/// so a dead ray's `rel` at this pass is its death azimuth against a receiver who has moved on
+/// since. The receiver's azimuth enters the model linearly, so the advance to take back out is the
+/// uncovered fraction of their advance over the whole interval, and that advance is the trapezoid
+/// of dphi/dt = u^phi / u^t over the two 4-velocities the marks already hold.
+struct Patch {
+    /// The two rays of the segment, in ray order.
+    pair: [usize; 2],
+    /// Ray i and ray j at the previous pass, then ray i and ray j at the far end of the patch: the
+    /// order `Pulse::arrival` carries its samples in.
+    ends: [RayMark; 4],
+    /// Coordinate time of the far end: this pass, or the first death inside the interval.
+    t1: f64,
+    /// The receiver's radius at the far end.
+    r1: f64,
+    /// How much of the interval each ray's own path covers: 1 for a ray still running at this
+    /// pass, and the fraction of the interval it lived through for one that died inside it.
+    covered: [f64; 2],
+    /// How far along each ray's own path the far end of the patch lies: 1 for the ray whose path
+    /// ends there, less for a partner that outlived it.
+    reach: [f64; 2],
+}
+
+impl Patch {
+    /// The patch of a segment whose rays were both running at both passes: the marks as they
+    /// stand, and nothing else, so every number `Pulse::sweep` and `Pulse::arrival` read off it is
+    /// the number they read before there was a truncated one.
+    fn whole(prev: &FrontMark, now: &FrontMark, pair: [usize; 2]) -> Self {
+        let [i, j] = pair;
+        Self {
+            pair,
+            ends: [prev.rays[i], prev.rays[j], now.rays[i], now.rays[j]],
+            t1: now.t,
+            r1: now.r,
+            covered: [1.0, 1.0],
+            reach: [1.0, 1.0],
+        }
+    }
+
+    /// The patch of a segment that lost a ray between `prev` and `now`, cut at the first death, or
+    /// None where it swept nothing: a ray of it was already dead at the previous pass, or died at
+    /// the very start of the interval.
+    fn truncated(
+        rays: &[NullRay],
+        prev: &FrontMark,
+        now: &FrontMark,
+        pair: [usize; 2],
+    ) -> Option<Self> {
+        let [i, j] = pair;
+        if !prev.rays[i].alive || !prev.rays[j].alive {
+            return None;
+        }
+        let dt = now.t - prev.t;
+        let covered = pair.map(|k| {
+            if now.rays[k].alive {
+                return 1.0;
+            }
+            rays[k].death_t.map_or(0.0, |died| ((died - prev.t) / dt).clamp(0.0, 1.0))
+        });
+        let cut = covered[0].min(covered[1]);
+        if cut <= 0.0 {
+            return None;
+        }
+        let omega = |u: &[f64; 3]| if u[0] > 0.0 { u[2] / u[0] } else { 0.0 };
+        let receiver_advance = 0.5 * (omega(&prev.u_receiver) + omega(&now.u_receiver)) * dt;
+        let reach = covered.map(|own| cut / own);
+        let far = |side: usize| {
+            let (start, end) = (prev.rays[pair[side]], now.rays[pair[side]]);
+            let along = |a: f64, b: f64| a + reach[side] * (b - a);
+            let rel_end = end.rel + (1.0 - covered[side]) * receiver_advance;
+            RayMark {
+                r: along(start.r, end.r),
+                rel: along(start.rel, rel_end),
+                dr_dt: along(start.dr_dt, end.dr_dt),
+                dphi_dt: along(start.dphi_dt, end.dphi_dt),
+                alive: true,
+            }
+        };
+        Some(Self {
+            pair,
+            ends: [prev.rays[i], prev.rays[j], far(0), far(1)],
+            t1: prev.t + cut * dt,
+            r1: prev.r + cut * (now.r - prev.r),
+            covered,
+            reach,
+        })
+    }
 }
 
 /// The roots of c2 v^2 + c1 v + c0 = 0 that lie in [0, 1), in increasing order.
@@ -1965,24 +2079,32 @@ impl Pulse {
         let mut found: Vec<Reception> = Vec::new();
         for i in 0..n {
             let j = (i + 1) % n;
-            // A segment bounds a resolved piece of front over the whole interval only if both of
-            // its rays were running at both ends of it. A ray that died inside the interval is left
-            // standing at its death event, which is not where the front was when the interval
-            // ended, so nothing is swept through it: clamping the patch to the death time would
-            // recover those, and they are the one class of crossing this test still cannot see.
-            let ends = [prev.rays[i], prev.rays[j], now.rays[i], now.rays[j]];
-            if ends.iter().any(|mark| !mark.alive) {
-                continue;
-            }
+            // A segment bounds a resolved piece of front for as long as both of its rays are
+            // running, which is the whole interval for almost every segment, and then the marks
+            // are the corners as they stand. One that lost a ray inside the interval swept a patch
+            // up to that death and no further: see `Patch::truncated`. It is built only for those,
+            // which are a segment in a thousand, so that every other segment reaches the test below
+            // having done nothing but read its four marks.
+            let marks = [prev.rays[i], prev.rays[j], now.rays[i], now.rays[j]];
+            let truncated = if marks.iter().all(|mark| mark.alive) {
+                None
+            } else {
+                match Patch::truncated(&self.rays, prev, now, [i, j]) {
+                    Some(patch) => Some(patch),
+                    None => continue,
+                }
+            };
+            let (ends, r1) = truncated.as_ref().map_or((marks, now.r), |cut| (cut.ends, cut.r1));
             let (a00, a10, a01, a11) = (ends[0].rel, ends[1].rel, ends[2].rel, ends[3].rel);
             let (s00, s10) = (prev.r - ends[0].r, prev.r - ends[1].r);
-            let (s01, s11) = (now.r - ends[2].r, now.r - ends[3].r);
+            let (s01, s11) = (r1 - ends[2].r, r1 - ends[3].r);
             // A bilinear function on the square takes its extremes at the corners, so four
             // same-signed corners put the receiver wholly on one side of this patch and there is
             // nothing to solve. Almost every segment of almost every pulse leaves here.
             if s00.min(s10).min(s01).min(s11) > 0.0 || s00.max(s10).max(s01).max(s11) < 0.0 {
                 continue;
             }
+            let patch = truncated.unwrap_or_else(|| Patch::whole(prev, now, [i, j]));
             let (s0, s1, s2, s3) = (s00, s10 - s00, s01 - s00, s00 - s10 - s01 + s11);
             let (b1, b2, b3) = (a10 - a00, a01 - a00, a00 - a10 - a01 + a11);
             let lo = a00.min(a10).min(a01).min(a11);
@@ -2003,8 +2125,7 @@ impl Pulse {
                     if !(0.0..1.0).contains(&u) {
                         continue;
                     }
-                    let pair = [i, j];
-                    if let Some(hit) = self.arrival(metric, prev, now, receiver, pair, turn, u, v) {
+                    if let Some(hit) = self.arrival(metric, prev, now, receiver, &patch, turn, u, v) {
                         found.push(hit);
                     }
                 }
@@ -2027,12 +2148,12 @@ impl Pulse {
         prev: &FrontMark,
         now: &FrontMark,
         receiver: &Observer,
-        pair: [usize; 2],
+        patch: &Patch,
         turn: i64,
         u: f64,
         v: f64,
     ) -> Option<Reception> {
-        let [i, j] = pair;
+        let [i, j] = patch.pair;
         // Anything that varies smoothly across the front and along the interval is carried to the
         // crossing over both parameters at once: four exact samples, one interpolation, and no
         // preference for either pass or either ray.
@@ -2051,11 +2172,37 @@ impl Pulse {
             let v_ray = [1.0, ray.dr_dt, ray.dphi_dt];
             measured_shift(metric, ray.r, &v_ray, self.rays[k].f_emit, &mark.u_receiver)
         };
-        let ratio = carry([shift(prev, i), shift(prev, j), shift(now, i), shift(now, j)]);
+        // The shift at the far end of the patch. On a whole patch that is the sample at this pass,
+        // as it stands. On a truncated one each ray's last exact sample is where its own path ended
+        // - its death event, or this pass for the partner that outlived it - measured by the
+        // receiver as they stood at that time, and the far end of the patch lies `reach` of the way
+        // along that path from the previous pass.
+        let far_shift = |side: usize| {
+            let k = patch.pair[side];
+            let ray = now.rays[k];
+            let v_ray = [1.0, ray.dr_dt, ray.dphi_dt];
+            let covered = patch.covered[side];
+            let u_receiver = if covered == 1.0 {
+                now.u_receiver
+            } else {
+                std::array::from_fn(|c| {
+                    prev.u_receiver[c] + covered * (now.u_receiver[c] - prev.u_receiver[c])
+                })
+            };
+            let end = measured_shift(metric, ray.r, &v_ray, self.rays[k].f_emit, &u_receiver);
+            let reach = patch.reach[side];
+            if reach == 1.0 {
+                end
+            } else {
+                let start = shift(prev, k);
+                start + reach * (end - start)
+            }
+        };
+        let ratio = carry([shift(prev, i), shift(prev, j), far_shift(0), far_shift(1)]);
         if !ratio.is_finite() || ratio <= 0.0 {
             return None;
         }
-        let t = prev.t + v * (now.t - prev.t);
+        let t = prev.t + v * (patch.t1 - prev.t);
         // The one calculation a crossing pays for and a pass does not: the receiver's own event at
         // the crossing, re-integrated along their worldline rather than interpolated between the
         // two passes. It also settles a question interpolation cannot: phi comes off the integrator
@@ -2064,10 +2211,12 @@ impl Pulse {
         let at = receiver.event_at(metric, t);
         // Which side of this segment the receiver ends the interval on. Only the sign is ever read,
         // by `Pulse::retract_unseen`, and where that segment stands at the far end of the interval
-        // is where to read it; if the segment no longer reaches this turn at all, the patch's own
-        // radial offset at the crossing's u says the same thing.
+        // is where to read it; if the segment no longer reaches this turn at all - or no longer
+        // exists, one of its rays having died inside the interval - the patch's own radial offset
+        // at its far end and the crossing's u says the same thing.
+        let far = [patch.ends[2], patch.ends[3]];
         let side_after = side_at(now, i, turn)
-            .unwrap_or((1.0 - u) * (now.r - now.rays[i].r) + u * (now.r - now.rays[j].r));
+            .unwrap_or((1.0 - u) * (patch.r1 - far[0].r) + u * (patch.r1 - far[1].r));
         Some(Reception {
             pulse_index: self.index,
             t,
@@ -2075,18 +2224,8 @@ impl Pulse {
             r: at.r,
             phi: at.phi,
             ratio,
-            dr_dt: carry([
-                prev.rays[i].dr_dt,
-                prev.rays[j].dr_dt,
-                now.rays[i].dr_dt,
-                now.rays[j].dr_dt,
-            ]),
-            dphi_dt: carry([
-                prev.rays[i].dphi_dt,
-                prev.rays[j].dphi_dt,
-                now.rays[i].dphi_dt,
-                now.rays[j].dphi_dt,
-            ]),
+            dr_dt: carry(patch.ends.map(|mark| mark.dr_dt)),
+            dphi_dt: carry(patch.ends.map(|mark| mark.dphi_dt)),
             // A classification, so the nearer ray decides it rather than an average of the two.
             frozen_family: self.rays[if u < 0.5 { i } else { j }].frozen(metric),
             segment: i,

@@ -2626,15 +2626,94 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_an_arrival_is_heard_even_when_a_ray_of_its_segment_dies_in_the_same_pass() {
+        // Bob trails Alice down the opening layout, and her eighth pulse sweeps over him at
+        // t = 5.674 M and r = 0.66 M, just above r-. The ingoing ray on one side of him there
+        // reaches the ring at t = 5.847 M, and `Pulse::sweep` used to skip any segment that had lost
+        // a ray since the previous detection pass. So the arrival was recorded by a pass that ended
+        // between the two events and lost by one that spanned both: Bob heard pulses 0 to 7 at a
+        // Step Size of 0.3 M and only 0 to 6 at 0.4 M. The patch of such a segment is now cut at the
+        // death instead. See `Patch` in `crate::physics::wavefront`.
+        //
+        // 144 rays a pulse, which is the count the app opens on and the one whose segment 101 this
+        // happens to; at 64 the rays stand elsewhere and the crossing never met the blind spot.
+        let heard = |step: f64| {
+            let app = comb_app(step, 6.0, 144);
+            app.sim
+                .alice_signal
+                .receptions()
+                .map(|arrival| (arrival.pulse_index, arrival.t, arrival.r))
+                .collect::<Vec<_>>()
+        };
+        let reference = heard(0.1);
+        assert_eq!(
+            reference.iter().map(|arrival| arrival.0).collect::<Vec<_>>(),
+            (0..8).collect::<Vec<_>>(),
+            "at a fine step Bob hears Alice's first eight pulses, once each and in order"
+        );
+        let last = reference[7];
+        assert!(
+            (last.1 - 5.674).abs() < 2e-3 && (last.2 - 0.662).abs() < 2e-3,
+            "and the eighth where this test says the blind spot was: t = {}, r = {}",
+            last.1,
+            last.2
+        );
+        for step in [0.3, 0.4, 0.5] {
+            let got = heard(step);
+            println!(
+                "step {step}: Bob heard pulses {:?}, the last at t = {:.6}",
+                got.iter().map(|arrival| arrival.0).collect::<Vec<_>>(),
+                got.last().map_or(f64::NAN, |arrival| arrival.1)
+            );
+            assert_eq!(
+                got.len(),
+                reference.len(),
+                "a step of {step} M hears the arrivals a step of 0.1 M hears: {got:?}"
+            );
+            for (coarse, fine) in got.iter().zip(&reference) {
+                assert_eq!(coarse.0, fine.0, "the same pulses in the same order at {step} M");
+                // The stamp is as good as the bilinear model of one pass, which is what moves it
+                // with the step; a missed or an invented arrival is whole tenths of an M away.
+                assert!(
+                    (coarse.1 - fine.1).abs() < 5e-3 && (coarse.2 - fine.2).abs() < 5e-3,
+                    "pulse {} at a step of {step} M: t = {} against {}, r = {} against {}",
+                    coarse.0,
+                    coarse.1,
+                    fine.1,
+                    coarse.2,
+                    fine.2
+                );
+            }
+        }
+    }
+
     /// One run of the same layout to the same clock at one step size, reported as what the two
     /// transmissions did: every pulse's emission proper time in order, and how many arrivals each
     /// receiver recorded.
+    fn comb_run(step: f64, until: f64) -> ([Vec<f64>; 2], [usize; 2]) {
+        let app = comb_app(step, until, 64);
+        let read = |field: &SignalField| {
+            assert_eq!(
+                field.pulses.len(),
+                field.next_index,
+                "the cap must not have evicted a pulse the comb is read off"
+            );
+            field.pulses.iter().map(|pulse| pulse.emitted_tau).collect::<Vec<_>>()
+        };
+        (
+            [read(&app.sim.alice_signal), read(&app.sim.bob_signal)],
+            [app.sim.alice_signal.received_count(), app.sim.bob_signal.received_count()],
+        )
+    }
+
+    /// The run `comb_run` reports on, as the app it ended in, at a stated ray count.
     ///
     /// Every setting the run reads is written here rather than inherited, including the ones that
     /// happen to match the app's own defaults: what this measures is whether the answer depends on
     /// the step size, and a default quietly moving underneath it would make that question
     /// unanswerable.
-    fn comb_run(step: f64, until: f64) -> ([Vec<f64>; 2], [usize; 2]) {
+    fn comb_app(step: f64, until: f64, rays_per_pulse: usize) -> SpacetimeApp {
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
         app.controls.step_mode = StepMode::Time;
@@ -2642,7 +2721,7 @@ mod tests {
         // Sagittarius A*'s spin, which is the hole the app opens on and the one Alice's ISCO
         // radius below belongs to.
         app.sim.metric = KerrSchild::with_solar_mass(1.0, 0.90, 4.15e6);
-        app.controls.rays_per_pulse = 64;
+        app.controls.rays_per_pulse = rays_per_pulse;
         // Well above the sixty-odd pulses this run sends, so that the cap cannot evict an emission
         // the comb is being read off. The assertion below holds it to that.
         app.controls.max_pulses = 128;
@@ -2674,18 +2753,7 @@ mod tests {
             "the three runs have to end on the same clock: {} at a step of {step}",
             app.sim.clock
         );
-        let read = |field: &SignalField| {
-            assert_eq!(
-                field.pulses.len(),
-                field.next_index,
-                "the cap must not have evicted a pulse the comb is read off"
-            );
-            field.pulses.iter().map(|pulse| pulse.emitted_tau).collect::<Vec<_>>()
-        };
-        (
-            [read(&app.sim.alice_signal), read(&app.sim.bob_signal)],
-            [app.sim.alice_signal.received_count(), app.sim.bob_signal.received_count()],
-        )
+        app
     }
 
     #[test]
