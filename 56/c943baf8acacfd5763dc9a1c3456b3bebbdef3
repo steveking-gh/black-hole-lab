@@ -1,0 +1,30 @@
+src/app.rs
+  s_37bd8375228b9b::t_ab98f318d15da6 98-100
+  s_37bd8375228b9b::t_df1103a51b3a9e 386-389,392,396,398-410
+  s_37bd8375228b9b::t_bd53d8891b0803 1996-2037
+  s_37bd8375228b9b::t_c4b2fddc357755 1995
+src/gui/controls.rs
+  s_37bd8375228b9b::t_427e60e282a7de 1389-1391,1393-1396,1401-1402,1405-1407,1411-1444
+  s_37bd8375228b9b::t_409ec723b1c30a 469-475
+  s_37bd8375228b9b::t_3d2bb9bb99a541 1314-1317
+  s_37bd8375228b9b::t_5d3d767cb0f895 1326-1327,1335-1336,1344-1345
+  s_37bd8375228b9b::t_004e3078304383 1616-1617,1619
+  s_37bd8375228b9b::t_c30248338d93e2 1631-1660
+  s_37bd8375228b9b::t_b752377c26fab2 1445
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "56c943baf8acacfd5763dc9a1c3456b3bebbdef3",
+  "prompts": {},
+  "sessions": {
+    "s_37bd8375228b9b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ba594f45-ef7d-4b9b-9d4b-821aca695d0a",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
