@@ -1,0 +1,38 @@
+src/save/convert.rs
+  s_1fbbbb8a53c367::t_0766bc1f02b7f1 355
+  s_1fbbbb8a53c367::t_15486f2167a9d7 351-354
+src/perf/micro.rs
+  s_1fbbbb8a53c367::t_e1d0e4a5f2370c 293-298
+src/physics/observer.rs
+  s_1fbbbb8a53c367::t_e1868c1fbef5c8 1414-1415
+src/physics/wavefront.rs
+  s_1fbbbb8a53c367::t_e41de25edd515d 4277-4280
+  s_1fbbbb8a53c367::t_fe48b7680280b0 842-852
+  s_1fbbbb8a53c367::t_72cce8fd7a5065 2799-2800
+  s_1fbbbb8a53c367::t_fcdbce942eda12 962
+  s_1fbbbb8a53c367::t_0164a3c043b617 388-412
+  s_1fbbbb8a53c367::t_d9846b57e05eae 969-975,977,983-985,991-997,1007-1015
+  s_1fbbbb8a53c367::t_7126a22f9655b9 472-473
+  s_1fbbbb8a53c367::t_d109e70fe4b9aa 885-890,902
+  s_1fbbbb8a53c367::t_0766bc1f02b7f1 413,474,891-901,1003,2893,4328,4332,6195
+  s_1fbbbb8a53c367::t_09e43cbe4892f0 1055-1057
+  s_1fbbbb8a53c367::t_a5510af5db6ca4 4261-4276,4281-4317,4324-4327,4329-4331,4333-4336,4347-4348,4354-4357
+  s_1fbbbb8a53c367::t_7c2bd4f5ecb756 4318-4323,4337-4346,4349-4353
+  s_1fbbbb8a53c367::t_4bf5b8656bf33a 1016-1017
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "8f73475f237882fac1a795c596f1016f778e72af",
+  "prompts": {},
+  "sessions": {
+    "s_1fbbbb8a53c367": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ed2f15a7-41d1-4dd6-ba98-d9aaeb4cd695",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
