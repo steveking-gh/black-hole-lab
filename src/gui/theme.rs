@@ -337,6 +337,47 @@ impl Theme {
     /// nothing on these fronts is measured in opacity.
     pub const FRONT_FROZEN_ALPHA: u8 = 230;
 
+    /// The furthest behind a drawn piece of front its trailing fade may reach, in screen pixels.
+    ///
+    /// The fade is the one thing in the equatorial picture that says which way the light is going.
+    /// A still frame of a front is a closed curve and a curve has two sides, so a ring drawn on its
+    /// own is as much a front collapsing onto the hole as one running away from it; a strip laid
+    /// behind each piece, in that piece's own colour and falling to nothing, names the side the
+    /// light came from and leaves the direction of travel readable without playing the run.
+    ///
+    /// Thirty pixels is a screen length at every zoom, and deliberately not a length in M: scaled
+    /// with the zoom it would be six pixels of fade at one zoom and half the canvas at another,
+    /// which says nothing about the light. The secondary field's thinner stroke does not shorten it
+    /// either - the trail is a direction cue, and the direction is the same fact in both
+    /// transmissions.
+    ///
+    /// It is a ceiling rather than the length itself. What a fade must not do is reach the front
+    /// behind it: a transmission sends one pulse every 0.1 M of the emitter's proper time, so at
+    /// the default 48 px/M the fronts of a field stand about 5 px apart, and a 30 px fade on every
+    /// one of them lay six deep and filled the whole field with one flat salmon wash - exactly the
+    /// uninteresting fill a picture of a wavefront should not have. `FRONT_TRAIL_GAP_FRACTION`
+    /// bounds each fade by the gap to the following front instead, and this ceiling is what is left
+    /// to bound the case the user had in mind: a zoom deep enough, or a field sparse enough, that
+    /// the gap is wide and the fade would otherwise run away with the picture.
+    pub const FRONT_TRAIL_PX: f32 = 30.0;
+
+    /// How much of the gap to the following front one front's trailing fade may occupy.
+    ///
+    /// Two fronts of one transmission are one emission interval apart, and the fade of the leading
+    /// one reaches back across that gap towards the trailing one. Held to a fraction of the gap the
+    /// fades of a field cannot stack at any zoom or any spacing: where the fronts crowd, each line
+    /// keeps a soft trailing edge a few pixels deep, sharp on the leading side and fading behind,
+    /// and where the fronts are far apart - a deep zoom, a low pulse count - the full
+    /// `FRONT_TRAIL_PX` appears. A sixth of the gap is left clear at 0.85, which is what keeps the
+    /// neighbouring fade visibly separate rather than abutting it into one continuous band.
+    ///
+    /// The gap the drawing uses is an estimate, not a measurement: the ray's own screen speed times
+    /// the coordinate time between the two emissions. It ignores the emitter's motion between those
+    /// two events and the change in the chart speed of light across the gap, and it is right to: it
+    /// bounds a decoration. Nothing in the picture is measured in the length of a trail, and the
+    /// gain colouring, the arrival marks and the reception test all read exactly as they did.
+    pub const FRONT_TRAIL_GAP_FRACTION: f32 = 0.85;
+
     /// The colour of a wavefront gain nu(infaller here) / nu(infaller at the emission event), at
     /// opacity `alpha`: red at 1, where every front is born, running red, orange, yellow, green,
     /// blue, violet up to a hundred thousandfold gain and out to a colourless grey at a tenfold

@@ -9,7 +9,7 @@ use crate::physics::observer::{Observer, ObserverMode};
 /// Which of the two observers, re-exported here because the equatorial view is where most of the
 /// per-observer drawing is and every user of it in the gui reaches it through this module.
 pub use crate::physics::observer::Who;
-use crate::physics::wavefront::SignalField;
+use crate::physics::wavefront::{NullRay, SignalField};
 use egui::{Color32, Pos2, Stroke, Vec2};
 
 /// How the wavefronts of a transmission are drawn on this canvas: the two view settings of the
@@ -1338,6 +1338,58 @@ fn draw_ring_spin_arrow(painter: &egui::Painter, center: Pos2, ring_px: f32, spi
 /// keep an arc visible once it has collapsed onto r-, and nothing outside r+ has. Inside r+ every
 /// ray of the family is on its way to r- and reaches a pixel of it within a few M, which is where
 /// the weight is needed and the only place it is now applied.
+///
+/// Behind every drawn piece of front lies its trail: a strip in that piece's own colour at the
+/// line and transparent at its far edge, laid on the side the light has come *from*. A front on a
+/// still frame is a closed curve, and a closed curve says nothing about which way it is moving; the
+/// fade says it, so an expanding ring reads as expanding without the run being played. All the
+/// trails of one field go into one mesh - `Trails` gathers it - which takes its place on the
+/// painter before the first line of the first pulse goes down, so the fades lie under every front
+/// of the field and a line stays exactly as crisp as it was.
+///
+/// How deep the strip is at a ray is `Theme::FRONT_TRAIL_GAP_FRACTION` of the gap back to the front
+/// behind it, held under `Theme::FRONT_TRAIL_PX`. The bound is what makes the cue readable at all:
+/// a transmission sends every 0.1 M of the emitter's proper time, so at the default 48 px/M its
+/// fronts stand about 5 px apart, and a fixed 30 px fade on every one of them lay six deep and
+/// turned the whole field into one flat wash with only the leading front legible. Bounded by the
+/// gap, no two fades of a field can overlap at any zoom or any spacing: crowded, each line keeps a
+/// soft trailing edge a few pixels deep - sharp ahead, fading behind, which is the whole of the
+/// cue - and on a deep zoom, or with the pulse count turned down, the full 30 px opens out.
+///
+/// The gap is estimated rather than measured: the ray's own screen speed times the coordinate time
+/// between the two emissions, which ignores the emitter's motion between those events and the
+/// change in the chart speed of light across the gap. That is the right standard for it, because
+/// the number bounds a decoration - nothing in the picture is measured in the length of a fade, and
+/// a fade drawn a pixel too short or too long says nothing false about the light. It is per ray
+/// rather than per front because the rays of one pulse move at wildly different screen speeds, so
+/// the fade narrows by itself exactly where that pulse and the one behind it have converged.
+///
+/// What "behind" means at a point of a front is decided by the *ray's* coordinate velocity there,
+/// (dr/dt, dphi/dt) off the integrated `NullRay`, and not by the normal of the drawn polyline. The
+/// two agree for a ring expanding evenly and part company exactly where the front is interesting -
+/// sheared, folded, or being torn between the frozen family and the crossing one - and only one of
+/// them is a quantity the simulation holds: the velocity is integrated, the normal of an
+/// interpolated polyline is an artefact of where the sampling happened to put its points. So the
+/// direction drawn is the direction the light at that point is travelling, which is also the honest
+/// answer where a front is folded over itself and two pieces of it are going opposite ways through
+/// the same pixel. `screen_velocity` pushes that velocity through the Jacobian
+/// `KerrSchild::cartesian_velocity` and then through `to_screen` itself by a finite difference in
+/// its f64 input, which is what makes the cue correct on the 2D+1 volume's tilted floor as well as
+/// on the flat equatorial view: both projections are affine, so the difference is the exact screen
+/// direction rather than an approximation to it, and a projection that was not affine would still
+/// get the tangent it has at that point. Along a segment the two end rays' screen directions are
+/// interpolated in the same loop coordinate s that carries the position and the gain, so a band's
+/// strip uses the sub-range of s that band covers.
+///
+/// Nothing is drawn where there is no direction to draw: a ray whose screen velocity vanishes - on
+/// the volume's floor seen edge-on, or where the interpolation runs between two ends travelling
+/// opposite ways - gets its tail vertex on top of its front vertex, so the strip closes to nothing
+/// there instead of jumping to a made-up heading. A segment that draws no line has no trail either,
+/// which covers the dead endpoints, the wound segments `hide_wound` cuts, and the whole points-only
+/// mode. Neither does the frozen family's heavy pass: its light glides *along* r- at Omega_-, so a
+/// trail there would lie on the front itself and along the magenta r- circle: a smear over the one
+/// place in the picture that is already hardest to read, answering a question - which way is this
+/// going? - that a family standing still in radius does not raise.
 /// Largest azimuthal span of one drawn piece of a wavefront segment, in radians.
 ///
 /// A segment of the front is the piece of null surface between two neighbouring rays, and what it
@@ -1550,6 +1602,238 @@ fn banded_segment(arc: Vec<Pos2>, gain_from: f64, gain_to: f64) -> Vec<(Vec<Pos2
         .collect()
 }
 
+/// How far along the light's direction the screen probe of `screen_velocity` steps, in M, and how
+/// much it grows by when the step it took was too short to read a direction off.
+///
+/// Both projections a front is drawn through are affine in the Cartesian chart point - the
+/// equatorial view scales and flips it, `Camera::project` takes two dot products of it - so the
+/// difference quotient is the exact screen direction at any step size at all, and the size is
+/// chosen for arithmetic rather than for accuracy. It has to be large enough that the difference of
+/// two f32 screen positions is not mostly rounding, and the zoom it is multiplied by spans five
+/// orders of magnitude: 1e-2 M is 0.5 px at the default 48 px/M and 2000 px at the 200 000 px/M a
+/// deep zoom onto r- reaches. So the probe starts small and grows by a hundred until the step it
+/// produces is at least `TRAIL_PROBE_MIN_PX`, which two growths carry down to a zoom of 1e-4 px/M -
+/// far below anything the canvas offers.
+const TRAIL_PROBE_EPS: f64 = 1e-2;
+const TRAIL_PROBE_GROWTH: f64 = 100.0;
+const TRAIL_PROBE_TRIES: usize = 3;
+
+/// The shortest screen step `screen_velocity` will take a direction from. A whole pixel of
+/// separation leaves the difference of two f32 positions well clear of their last few bits, even
+/// with the picture panned a hundred thousand pixels off the canvas.
+const TRAIL_PROBE_MIN_PX: f32 = 1.0;
+
+/// Below this length an interpolated heading is treated as no heading at all: the two ends of the
+/// segment are travelling opposite ways and there is no "behind" between them. Nothing physical is
+/// near it - every heading being interpolated is a unit vector or exactly zero.
+const TRAIL_MIN_HEADING: f32 = 1e-3;
+
+/// The shallowest fade worth laying. A band whose trail is under a pixel deep at both of its ends
+/// puts nothing on the screen a viewer could read a direction off, so that band is left out
+/// entirely. It is most of a crowded field near the hole, where the gap to the following front is a
+/// fraction of a pixel, and it is where the vertices are saved.
+const TRAIL_MIN_PX: f32 = 1.0;
+
+/// Most vertices one trail mesh may carry before the next band starts a new one.
+///
+/// `epaint::Mesh` indexes in u32 and nothing here could approach that, but `Mesh::split_to_u16`
+/// still cuts every mesh up for the backends that take 16-bit indices, and it panics outright on a
+/// single triangle whose vertices span more than 65 535 of them. Holding a mesh below that leaves
+/// the split trivially satisfiable however the bands fall. The default field reaches about 37 000
+/// vertices - 64 pulses of 144 segments, four vertices each - so the cap is hit only by the deep
+/// interior, where one wound segment is cut into hundreds of pieces, and by the 256-pulse setting.
+const MAX_TRAIL_MESH_VERTICES: usize = 65_532;
+
+/// The screen velocity of the light at one ray - which way it is going and how fast, in pixels per
+/// M of coordinate time - or `Vec2::ZERO` where the projection leaves it no direction at all.
+///
+/// The ray carries dr/dt and dphi/dt at its own event. `KerrSchild::cartesian_velocity` is the
+/// exact Jacobian of `cartesian_position`, so it turns that pair into the chart-plane velocity
+/// d(x, y)/dt - which is not the polar (dr/dt, r dphi/dt) rotated by the polar angle, because the
+/// embedding x + iy = (r + ia)e^{i phi} carries the spin's offset. The screen velocity is then read
+/// off `to_screen` itself rather than assumed: one step of `TRAIL_PROBE_EPS` along the chart
+/// velocity, projected, minus the ray's own projected position, divided by that step and multiplied
+/// by the chart speed. That is exact for an affine projection and first-order for any other, and it
+/// is the reason the same code draws the cue correctly on the volume's tilted floor.
+///
+/// The speed is what bounds the fade. The front behind this one was let go an emission interval
+/// ago, so the light at this ray has covered its own screen speed times that interval since, and
+/// that is the gap the fade is allowed to occupy - see `Theme::FRONT_TRAIL_GAP_FRACTION`. The
+/// direction and the speed come out of the one probe because they are the one vector.
+///
+/// A ray that is not moving on screen has no direction to give. That is not only the ray at rest:
+/// the volume's floor seen edge-on projects every chart velocity onto nothing, and a frozen ray on
+/// r- has dr/dt -> 0 but goes on co-rotating at Omega_-, so it moves tangentially and does have a
+/// heading. Zero is returned for the first case and never invented for it.
+///
+/// `eps` carries the step that last worked from ray to ray. The zoom cannot change within a frame,
+/// so once one ray has found a step long enough to read a direction off, every other ray of the
+/// field starts from that step instead of walking up to it again. It matters because a projection
+/// is not always cheap: `Camera::project` strikes the camera's basis with two sin_cos calls every
+/// time it is asked, so the difference between one probe per ray and three is measurable on the
+/// 2D+1 volume's floor.
+fn screen_velocity<F: Fn((f64, f64)) -> Pos2>(
+    metric: &KerrSchild,
+    ray: &NullRay,
+    at: Pos2,
+    to_screen: &F,
+    eps: &mut f64,
+) -> Vec2 {
+    let (x, y) = metric.cartesian_position(ray.r, ray.phi);
+    let (vx, vy) = metric.cartesian_velocity(ray.r, ray.phi, ray.dr_dt, ray.dphi_dt);
+    let speed = vx.hypot(vy);
+    if !speed.is_finite() || speed <= 0.0 {
+        return Vec2::ZERO;
+    }
+    let (ux, uy) = (vx / speed, vy / speed);
+    for _ in 0..TRAIL_PROBE_TRIES {
+        let step = to_screen((x + *eps * ux, y + *eps * uy)) - at;
+        if step.is_finite() && step.length() >= TRAIL_PROBE_MIN_PX {
+            // The step is what one `eps` of chart length along the light's direction is worth on
+            // screen, and the light covers `speed` of that chart length per M of coordinate time.
+            let velocity = step * ((speed / *eps) as f32);
+            return if velocity.is_finite() { velocity } else { Vec2::ZERO };
+        }
+        *eps *= TRAIL_PROBE_GROWTH;
+    }
+    // Nothing at any step: the step is put back where it started so that a ray whose own velocity
+    // is what vanished cannot leave the whole field probing at a step a hundred thousand M long.
+    *eps = TRAIL_PROBE_EPS;
+    Vec2::ZERO
+}
+
+/// The fade behind one ray: which way the light there is going on screen, and how far back the fade
+/// may reach at that ray.
+///
+/// The length is `Theme::FRONT_TRAIL_GAP_FRACTION` of the estimated gap to the front behind this
+/// one, held under `Theme::FRONT_TRAIL_PX`. It is per ray rather than per front because the gap is:
+/// the rays of one pulse run at wildly different screen speeds - one settling onto r- has almost
+/// none, its neighbour crossing has all of it - so the fade narrows exactly where the fronts crowd
+/// and opens out where they do not.
+#[derive(Clone, Copy)]
+struct Trail {
+    /// Unit screen direction of travel, or zero where the projection gives none.
+    heading: Vec2,
+    /// How far behind the front the fade reaches here, in screen pixels.
+    length: f32,
+}
+
+impl Trail {
+    /// No fade at all: a dead ray, or a live one the projection leaves standing still on screen.
+    const NONE: Self = Self { heading: Vec2::ZERO, length: 0.0 };
+
+    /// The fade at one live ray, from the screen velocity of its light and `gap`, the coordinate
+    /// time back to the front behind this one - None where this front has no neighbour to crowd it,
+    /// which is a field carrying a single pulse.
+    fn of(velocity: Vec2, gap: Option<f32>) -> Self {
+        let speed = velocity.length();
+        if speed <= 0.0 || !speed.is_finite() {
+            return Self::NONE;
+        }
+        let length = match gap {
+            Some(gap) => (Theme::FRONT_TRAIL_GAP_FRACTION * speed * gap).min(Theme::FRONT_TRAIL_PX),
+            None => Theme::FRONT_TRAIL_PX,
+        };
+        Self { heading: velocity / speed, length }
+    }
+}
+
+/// The trailing fades of one field, gathered as the bands of its fronts are laid. See the doc above
+/// `MAX_ARC_STEP` for what the fade is and why its direction is the ray velocity.
+struct Trails {
+    /// One mesh while a field's fade fits in one, and a new one past `MAX_TRAIL_MESH_VERTICES`.
+    meshes: Vec<egui::Mesh>,
+    /// Vertices a fresh mesh takes room for: a field's worth, so that the ordinary field is one
+    /// allocation rather than a doubling run that copies more than a megabyte of vertices for
+    /// nothing. See where `Trails::new` is called for where the estimate comes from.
+    reserve: usize,
+}
+
+impl Trails {
+    fn new(reserve: usize) -> Self {
+        Self { meshes: Vec::new(), reserve }
+    }
+
+    /// Lay the fade behind one drawn band of a front.
+    ///
+    /// The band is points `first ..= first + band.len() - 1` of a segment cut into `pieces` pieces,
+    /// so point k of it sits at s = (first + k) / pieces of the segment, which is the coordinate
+    /// `segment_arc` interpolated the position in and `banded_segment` cut the colour in. The fade
+    /// at that point is the same interpolation of the two end rays' `Trail`s, `from` at s = 0 and
+    /// `to` at s = 1: the heading is interpolated and put back on the unit circle, the length is
+    /// interpolated as it stands, and the tail vertex is the front vertex pushed that length along
+    /// the reverse of that heading. Both are interpolated because both are per ray - the two ends
+    /// of one segment can be running at very different screen speeds, so their fades can be very
+    /// different depths, and a band between them has to pass from the one to the other.
+    ///
+    /// A band whose fade is under `TRAIL_MIN_PX` at both ends is not laid at all.
+    ///
+    /// The tail vertex is `Color32::TRANSPARENT` rather than `colour` at alpha 0. egui carries
+    /// vertex colours premultiplied and interpolates them as they are, and the premultiplication of
+    /// any colour at alpha 0 is (0, 0, 0, 0): interpolating towards it walks the straight line from
+    /// (R a, G a, B a, a) to the origin, which unmultiplies to one constant hue at a falling alpha.
+    /// Interpolating towards the same RGB at alpha 0 - (R, G, B, 0) unpremultiplied - would instead
+    /// walk through colours brighter than the line itself and put a fringe along the whole fade.
+    fn band(
+        &mut self,
+        band: &[Pos2],
+        first: usize,
+        pieces: usize,
+        (from, to): (Trail, Trail),
+        colour: Color32,
+    ) {
+        if band.len() < 2 || pieces == 0 || from.length.max(to.length) < TRAIL_MIN_PX {
+            return;
+        }
+        let full = |m: &egui::Mesh| m.vertices.len() + 2 * band.len() > MAX_TRAIL_MESH_VERTICES;
+        if self.meshes.last().is_none_or(full) {
+            let mut mesh = egui::Mesh::default();
+            mesh.reserve_vertices(self.reserve);
+            mesh.reserve_triangles(self.reserve);
+            self.meshes.push(mesh);
+        }
+        let mesh = self.meshes.last_mut().expect("a mesh was pushed above if there was none");
+        // Each end's heading is already a unit vector or exactly zero, so the two ends of the
+        // segment need no interpolating and no normalising. At the default sampling a band *is* the
+        // one piece between two neighbouring rays, so both of its points take that path and the
+        // general case below is paid for only where the arc had to be cut up.
+        let (at_start, at_end) = (-from.heading * from.length, -to.heading * to.length);
+        for (k, at) in band.iter().enumerate() {
+            let step = first + k;
+            // No heading, no trail at this vertex: the tail sits on the front and the strip closes
+            // to nothing there, which is a fade that has run out rather than a NaN or a guess.
+            let offset = if step == 0 {
+                at_start
+            } else if step == pieces {
+                at_end
+            } else {
+                let s = (step as f64 / pieces as f64) as f32;
+                let heading = from.heading * (1.0 - s) + to.heading * s;
+                if heading.length() > TRAIL_MIN_HEADING {
+                    -heading.normalized() * (from.length * (1.0 - s) + to.length * s)
+                } else {
+                    Vec2::ZERO
+                }
+            };
+            let base = mesh.vertices.len() as u32;
+            mesh.colored_vertex(*at, colour);
+            mesh.colored_vertex(*at + offset, Color32::TRANSPARENT);
+            if k > 0 {
+                // The quad behind piece k - 1: front and tail of the last point, then of this one.
+                mesh.add_triangle(base - 2, base - 1, base + 1);
+                mesh.add_triangle(base - 2, base + 1, base);
+            }
+        }
+    }
+
+    /// Everything laid, as the one shape that goes into the slot taken before the field's first
+    /// line, or None when no band of the field cast a fade at all.
+    fn shape(self) -> Option<egui::Shape> {
+        (!self.meshes.is_empty())
+            .then(|| egui::Shape::Vec(self.meshes.into_iter().map(egui::Shape::mesh).collect()))
+    }
+}
+
 pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
     painter: &egui::Painter,
     metric: &KerrSchild,
@@ -1575,7 +1859,28 @@ pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
     // same gain colouring every other segment gets: only the weight and the opacity are special.
     let mut frozen_segments: Vec<(Vec<Pos2>, Color32)> = Vec::new();
     let mut frozen_dots: Vec<(Pos2, Color32)> = Vec::new();
-    for pulse in signal.pulses.iter() {
+    // The trailing fades of the whole field, and the place on the painter they will be put. The
+    // slot is taken before any pulse is drawn, so every fade lies under every line of this field
+    // however late the pulse that cast it is reached. With the arcs off there are no lines to
+    // annotate and no slot is taken at all.
+    let trail_slot = style.arcs.then(|| painter.add(egui::Shape::Noop));
+    // The probe step `screen_velocity` reads a screen velocity over, carried across every ray of
+    // every pulse of the field: see that function.
+    let mut probe_eps = TRAIL_PROBE_EPS;
+    // How many vertices the mesh is expected to want. Each of a pulse's n rays begins one segment,
+    // a segment whose two rays have not wound far apart is one band of the two ray positions, and
+    // a band of m points carries 2m vertices: four vertices per ray, which is 36 864 for the
+    // default field of 64 pulses of 144 rays and 37 336 measured on a real one. The deep interior
+    // cuts a segment into hundreds of pieces and runs past the estimate, and the mesh then grows as
+    // any vector does; the estimate is here so that the ordinary field is one allocation rather
+    // than a doubling run through a megabyte of vertices.
+    let mut trails = Trails::new(if style.arcs {
+        (4 * signal.pulses.iter().map(|pulse| pulse.rays.len()).sum::<usize>())
+            .min(MAX_TRAIL_MESH_VERTICES)
+    } else {
+        0
+    });
+    for (k, pulse) in signal.pulses.iter().enumerate() {
         // A spent pulse is kept in the field so that stepping backwards can bring it back, but it
         // has no front left to draw and no dot to anchor.
         if !pulse.rays.iter().any(|ray| ray.alive()) {
@@ -1619,6 +1924,40 @@ pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
             .iter()
             .map(|ray| to_screen(metric.cartesian_position(ray.r, ray.phi)))
             .collect();
+        // How long this pulse has been in flight ahead of the front behind it, which is what bounds
+        // every fade on it. `SignalField::pulses` is a deque of live pulses in emission order -
+        // `emit_if_due` pushes to the back, the cap pops the front, and `step_back` retains - so
+        // the neighbour at k + 1 is the next pulse this emitter sent. The newest pulse has no
+        // follower yet and takes the interval to the one before it, since a transmission sends at
+        // one cadence; a field carrying a single pulse has no interval at all and its fade is held
+        // only by `Theme::FRONT_TRAIL_PX`.
+        let behind = k.checked_sub(1).and_then(|p| signal.pulses.get(p));
+        let gap = match (signal.pulses.get(k + 1), behind) {
+            (Some(next), _) => Some(next.emitted_t - pulse.emitted_t),
+            (None, Some(previous)) => Some(pulse.emitted_t - previous.emitted_t),
+            (None, None) => None,
+        }
+        .filter(|interval| interval.is_finite() && *interval > 0.0)
+        .map(|interval| interval as f32);
+        // The fade at each ray: which way the light there is going on screen, and how far back the
+        // gap lets it reach. One projection probe per live ray per frame, kept here for the same
+        // reason the positions are - each ray is an end of two segments and would otherwise be
+        // probed twice. Nothing to annotate with the arcs off, so nothing is computed there either.
+        let fades: Vec<Trail> = if style.arcs {
+            pulse
+                .rays
+                .iter()
+                .zip(points.iter())
+                .map(|(ray, at)| {
+                    if !ray.alive() {
+                        return Trail::NONE;
+                    }
+                    Trail::of(screen_velocity(metric, ray, *at, to_screen, &mut probe_eps), gap)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         // The two ends of every segment dropped for winding: each is a live calculated point whose
         // segment has been withdrawn, and each is drawn as its own dot below so that the cut reads
@@ -1654,15 +1993,26 @@ pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
             // common case where the two rays carry the same gain.
             let frozen_pair = frozen[i] && frozen[j];
             let alpha = if frozen_pair { Theme::FRONT_FROZEN_ALPHA } else { Theme::SHIFT_ALPHA };
+            // How many pieces the bands are cut from, and how far into them each band starts:
+            // consecutive bands share their boundary point, so a band of m points advances the
+            // start by m - 1. That pair is s of the segment, which the trail interpolates the two
+            // rays' headings in exactly as the colour is interpolated in it.
+            let pieces = arc.len().saturating_sub(1);
+            let mut first = 0usize;
             for (band, gain) in banded_segment(arc, gains[i], gains[j]) {
+                let advance = band.len().saturating_sub(1);
+                let colour = Theme::front_colour(gain, alpha);
                 if frozen_pair {
-                    frozen_segments.push((band, Theme::front_colour(gain, alpha)));
+                    frozen_segments.push((band, colour));
                 } else {
-                    painter.add(egui::Shape::line(
-                        band,
-                        Stroke::new(1.2 * width_scale, Theme::front_colour(gain, alpha)),
-                    ));
+                    // The fade first, into the mesh that is painted under every line of this
+                    // field; the frozen pass casts none, for the reason given above `MAX_ARC_STEP`.
+                    // Its head is this band's own colour, the very colour and opacity the line
+                    // beside it is stroked in, and it falls from there to nothing.
+                    trails.band(&band, first, pieces, (fades[i], fades[j]), colour);
+                    painter.add(egui::Shape::line(band, Stroke::new(1.2 * width_scale, colour)));
                 }
+                first += advance;
             }
         }
         for (i, point) in points.iter().enumerate() {
@@ -1688,6 +2038,14 @@ pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
         // The anchor: where on Alice's trail this loop was let go of.
         let emitted = to_screen(metric.cartesian_position(pulse.emitted_r, pulse.emitted_phi));
         painter.circle_filled(emitted, 2.0, dot);
+    }
+
+    // Every fade of the field into the slot taken before the first line went down, so the whole
+    // haze sits under the whole of the field it belongs to. One `Shape::Vec` because the mesh is
+    // split when it grows past what a 16-bit index can reach; at the default settings it is one
+    // mesh of about 37 000 vertices, against the 9 216 line shapes it lies under.
+    if let (Some(slot), Some(shape)) = (trail_slot, trails.shape()) {
+        painter.set(slot, shape);
     }
 
     for (segment, colour) in frozen_segments {
@@ -2999,6 +3357,381 @@ mod tests {
         );
         assert_eq!(first.1, Theme::SHIFT_ALPHA, "the ordinary opacity, not the frozen pass");
         assert_eq!(circles, 1, "the emission dot and no beads");
+    }
+
+    /// The projection the trail tests paint through: `px` pixels per M, y up, the hole in the
+    /// middle of a 400 px canvas. The scale is a parameter because the fade's length is a screen
+    /// quantity bounded by a screen gap, so the zoom is half of what these tests are about.
+    fn test_screen(px: f32, (x, y): (f64, f64)) -> Pos2 {
+        Pos2::new(200.0 + px * x as f32, 200.0 - px * y as f32)
+    }
+
+    /// One stroked band as it reached the painter: its colour, its stroke width, and its points.
+    type Band = (Color32, f32, Vec<Pos2>);
+
+    /// One field painted into a real painter at `px` pixels per M, reduced to what a test about the
+    /// trailing fade has to read: every vertex of the trail meshes as (position, colour) in paint
+    /// order, and every stroked band likewise. The trail slot is taken before the first pulse is
+    /// drawn, so the vertices come out in the order the bands were laid however late the pulse that
+    /// cast them.
+    fn trail_frame(
+        metric: &KerrSchild,
+        field: &SignalField,
+        style: FrontStyle,
+        px: f32,
+    ) -> (Vec<(Pos2, Color32)>, Vec<Band>) {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let output = ctx.run_ui(Default::default(), |ui| {
+            let (_, painter) =
+                ui.allocate_painter(egui::Vec2::new(400.0, 400.0), egui::Sense::hover());
+            let to_screen = |p: (f64, f64)| test_screen(px, p);
+            draw_signal_field(&painter, metric, field, Theme::ALICE_COLOR, 1.0, style, &to_screen);
+        });
+        let (mut vertices, mut bands) = (Vec::new(), Vec::new());
+        fn walk(shape: &egui::Shape, vertices: &mut Vec<(Pos2, Color32)>, bands: &mut Vec<Band>) {
+            match shape {
+                egui::Shape::Mesh(mesh) => {
+                    vertices.extend(mesh.vertices.iter().map(|v| (v.pos, v.color)));
+                }
+                egui::Shape::Path(path) => {
+                    if let egui::epaint::ColorMode::Solid(colour) = path.stroke.color {
+                        bands.push((colour, path.stroke.width, path.points.clone()));
+                    }
+                }
+                egui::Shape::Vec(inner) => {
+                    for shape in inner {
+                        walk(shape, vertices, bands);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for clipped in output.shapes.iter() {
+            walk(&clipped.shape, &mut vertices, &mut bands);
+        }
+        output.drop_without_applying_deltas();
+        (vertices, bands)
+    }
+
+    /// The screen speed of the light at one ray, in pixels per M of coordinate time, worked out
+    /// independently of the drawing: the chart velocity of `KerrSchild::cartesian_velocity` times
+    /// the scale of `test_screen`, which is a plain similarity and so scales every direction alike.
+    fn ray_speed_px(metric: &KerrSchild, ray: &NullRay, px: f32) -> f32 {
+        let (vx, vy) = metric.cartesian_velocity(ray.r, ray.phi, ray.dr_dt, ray.dphi_dt);
+        px * vx.hypot(vy) as f32
+    }
+
+    /// The coordinate time back to the front behind pulse `k` of a field, worked out from the
+    /// emission times alone: the interval to the pulse that follows it, or, for the newest pulse
+    /// that nothing follows yet, the interval to the pulse before it. None where a field carries a
+    /// single pulse and there is no interval at all.
+    fn gap_behind(field: &SignalField, k: usize) -> Option<f64> {
+        let behind = k.checked_sub(1).and_then(|p| field.pulses.get(p));
+        match (field.pulses.get(k + 1), behind) {
+            (Some(next), _) => Some(next.emitted_t - field.pulses[k].emitted_t),
+            (None, Some(previous)) => Some(field.pulses[k].emitted_t - previous.emitted_t),
+            (None, None) => None,
+        }
+    }
+
+    /// What the rule says the fade at one ray must be: a fraction of the gap to the front behind
+    /// it, held under the ceiling. `gap` is the coordinate time between the two emissions, and None
+    /// where the field carries a single pulse and nothing follows it.
+    fn expected_trail_px(speed_px: f32, gap: Option<f64>) -> f32 {
+        match gap {
+            Some(gap) => (Theme::FRONT_TRAIL_GAP_FRACTION * speed_px * gap as f32)
+                .min(Theme::FRONT_TRAIL_PX),
+            None => Theme::FRONT_TRAIL_PX,
+        }
+    }
+
+    /// A single pulse let go well outside the hole and given 1 M of coordinate time to run, with
+    /// the chart position of the event it was let go at. Every ray is alive and none of them is
+    /// inside r+, so every segment of the loop is drawn in the ordinary pass and carries a trail.
+    /// Nothing follows this pulse, so every fade on it is the full `Theme::FRONT_TRAIL_PX`, and at
+    /// 60 px per M the front stands about 60 px from its own emission event - twice that length, so
+    /// a fade that runs inward cannot reach past the emission point and still be further from it
+    /// than the front is.
+    fn outside_pulse(metric: &KerrSchild) -> (SignalField, (f64, f64)) {
+        use crate::physics::observer::{Observer, WorldlineParams};
+        let emitter =
+            Observer::new_with_phi(metric, "Alice", 0.0, 8.0, 0.0, 0.0, WorldlineParams::default());
+        let mut field = SignalField::default();
+        field.emit_if_due(metric, &emitter);
+        field.advance(metric, 1.0);
+        assert_eq!(field.pulses.len(), 1, "one pulse, with nothing following it");
+        let emitted = {
+            let pulse = &field.pulses[0];
+            assert!(pulse.rays.iter().all(|r| r.alive()), "a pulse at r = 8 loses no ray in 1 M");
+            metric.cartesian_position(pulse.emitted_r, pulse.emitted_phi)
+        };
+        (field, emitted)
+    }
+
+    #[test]
+    fn test_every_trail_runs_back_toward_the_event_its_pulse_was_let_go_at() {
+        // The direction the fade is laid in is the ray's own coordinate velocity pushed through
+        // the embedding and then through the projection, so for the one case where the answer is
+        // known in advance it has to come out right: a fresh ring from a static emitter is
+        // expanding away from the event it was let go at, and every trail on it must therefore
+        // point back towards that event. Measured off a painted frame rather than off the helper's
+        // arithmetic, and measured on the tail vertices the mesh actually carries. This pulse has
+        // no front behind it, so the gap does not bind and every fade is the full length.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let (field, chart) = outside_pulse(&metric);
+        let px = 60.0;
+        let emitted = test_screen(px, chart);
+        let style = FrontStyle { arcs: true, hide_wound: true };
+        let (trail, bands) = trail_frame(&metric, &field, style, px);
+        let points: usize = bands.iter().map(|(_, _, p)| p.len()).sum();
+        assert!(!bands.is_empty(), "the ring is drawn as bands");
+        assert_eq!(trail.len(), 2 * points, "one front vertex and one tail vertex per band point");
+
+        let (mut worst_length, mut closest) = (0.0_f32, 0.0_f32);
+        for pair in trail.chunks(2) {
+            let (front, tail) = (pair[0].0, pair[1].0);
+            let length = (tail - front).length();
+            worst_length = worst_length.max((length - Theme::FRONT_TRAIL_PX).abs());
+            let (out, back) = ((front - emitted).length(), (tail - emitted).length());
+            assert!(
+                back < out,
+                "a trail on an expanding ring must run back towards the emission event: the front \
+                 vertex stands {out:.2} px from it and its tail {back:.2} px"
+            );
+            closest = closest.max(back / out);
+        }
+        assert!(
+            worst_length < 1e-3,
+            "with nothing behind this pulse every tail sits {} px behind its front: worst error \
+             {worst_length:.2e} px",
+            Theme::FRONT_TRAIL_PX
+        );
+        println!(
+            "{} trail vertices over {} bands: every tail {} px behind its front to \
+             {worst_length:.1e} px, and the least inward of them is at {:.3} of its front's \
+             distance from the emission event",
+            trail.len(),
+            bands.len(),
+            Theme::FRONT_TRAIL_PX,
+            closest
+        );
+    }
+
+    #[test]
+    fn test_a_trail_reaches_only_as_far_back_as_the_gap_to_the_front_behind_it() {
+        // The rule the whole design rests on. A fixed 30 px fade on fronts 5 px apart lay six deep
+        // and washed the field out, so a fade may occupy only `Theme::FRONT_TRAIL_GAP_FRACTION` of
+        // the gap to the front behind it: the ray's own screen speed times the coordinate time
+        // between the two emissions, held under `Theme::FRONT_TRAIL_PX`. Both factors are worked
+        // out here from the physics and the projection alone - `cartesian_velocity` times the
+        // scale, and the difference of two `emitted_t` - and measured against the vertices a real
+        // painted frame carries.
+        use crate::physics::observer::{Observer, WorldlineParams};
+        let metric = KerrSchild::new(1.0, 0.90);
+        let mut emitter =
+            Observer::new_with_phi(&metric, "Alice", 0.0, 8.0, 0.0, 0.0, WorldlineParams::default());
+        let mut field = SignalField::default();
+        let (mut t, dt) = (0.0, 0.02);
+        for _ in 0..30 {
+            field.emit_if_due(&metric, &emitter);
+            emitter.step(&metric, t, dt);
+            field.advance(&metric, dt);
+            t += dt;
+        }
+        let pulses = field.pulses.len();
+        assert!(pulses >= 4, "a train of fronts, not one front: {pulses} pulses");
+        assert!(
+            field.pulses.iter().all(|p| p.rays.iter().all(|ray| ray.alive())),
+            "every ray of every pulse is still alive out at r = 8"
+        );
+        // The deque is in emission order, which is what makes the neighbour at k + 1 the front
+        // behind this one. The drawing reads it that way, so the test states it.
+        let order: Vec<(usize, f64)> =
+            field.pulses.iter().map(|p| (p.index, p.emitted_t)).collect();
+        assert!(
+            order.windows(2).all(|w| w[0].0 < w[1].0 && w[0].1 < w[1].1),
+            "the field's pulses are in emission order: {order:?}"
+        );
+
+        let px = 60.0;
+        let style = FrontStyle { arcs: true, hide_wound: true };
+        let (trail, bands) = trail_frame(&metric, &field, style, px);
+        let n = field.pulses[0].rays.len();
+        assert_eq!(bands.len(), pulses * n, "one band a segment, so the bands run pulse by pulse");
+        assert_eq!(trail.len(), 4 * bands.len(), "two points a band, two vertices a point");
+
+        let (mut worst, mut longest, mut shortest) = (0.0_f32, 0.0_f32, f32::MAX);
+        for (b, pair) in trail.chunks(4).enumerate() {
+            let (k, i) = (b / n, b % n);
+            let gap = gap_behind(&field, k);
+            for (end, ray) in [(0, i), (2, (i + 1) % n)] {
+                let speed = ray_speed_px(&metric, &field.pulses[k].rays[ray], px);
+                let want = expected_trail_px(speed, gap);
+                let got = (pair[end + 1].0 - pair[end].0).length();
+                worst = worst.max((got - want).abs());
+                longest = longest.max(got);
+                shortest = shortest.min(got);
+                assert!(
+                    got <= Theme::FRONT_TRAIL_PX + 1e-3,
+                    "no fade may pass the ceiling: {got:.3} px on pulse {k}, ray {ray}"
+                );
+            }
+        }
+        assert!(
+            worst < 0.05,
+            "every fade is the rule's own length to {worst:.3} px, which it is not"
+        );
+        assert!(
+            longest < Theme::FRONT_TRAIL_PX,
+            "on a train of fronts the gap binds rather than the ceiling: longest fade {longest:.2} \
+             px against a ceiling of {}",
+            Theme::FRONT_TRAIL_PX
+        );
+        println!(
+            "{pulses} fronts 0.1 M of proper time apart at {px} px/M: fades from {shortest:.2} to \
+             {longest:.2} px, every one of them the gap rule's own value to {worst:.3} px",
+        );
+
+        // And zoomed far out the whole field's fades fall under a pixel, so no mesh is built at
+        // all: there is nothing there a viewer could read a direction off.
+        let (none, bands_out) = trail_frame(&metric, &field, style, 0.5);
+        assert!(!bands_out.is_empty(), "the fronts themselves are still drawn out there");
+        assert!(none.is_empty(), "but nothing sub-pixel is laid behind them");
+    }
+
+    #[test]
+    fn test_a_trail_starts_at_its_own_bands_colour_and_fades_to_a_transparent_vertex() {
+        // Full line brightness to nothing, which is what the fade was asked for: the head vertices
+        // are the band's own points in the band's own colour - the very colour and opacity the line
+        // beside them is stroked in - and the tail vertices are `Color32::TRANSPARENT` rather than
+        // that colour at alpha 0. egui carries vertex colours premultiplied, and interpolating
+        // towards an unpremultiplied (R, G, B, 0) would put a bright fringe along the whole strip.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let (field, _) = outside_pulse(&metric);
+        let style = FrontStyle { arcs: true, hide_wound: true };
+        let (trail, bands) = trail_frame(&metric, &field, style, 60.0);
+
+        let mut at = 0usize;
+        for (colour, _, points) in bands.iter() {
+            assert_eq!(colour.a(), Theme::SHIFT_ALPHA, "an ordinary band, not the frozen pass");
+            for point in points.iter() {
+                let (head, tail) = (trail[at], trail[at + 1]);
+                assert_eq!(head.0, *point, "the head of a trail is the drawn point itself");
+                assert!(tail.0.is_finite(), "no tail vertex is a NaN: {:?}", tail.0);
+                assert_eq!(head.1, *colour, "the head is its own band's colour, to the bit");
+                assert_eq!(tail.1, Color32::TRANSPARENT, "the far edge of the fade is nothing");
+                at += 2;
+            }
+        }
+        assert_eq!(at, trail.len(), "every trail vertex belongs to a band that was drawn");
+        println!(
+            "{} trail vertices, each head at its band's own colour and alpha {}, each tail at \
+             Color32::TRANSPARENT",
+            trail.len(),
+            Theme::SHIFT_ALPHA
+        );
+    }
+
+    #[test]
+    fn test_nothing_that_draws_no_line_casts_a_trail() {
+        // Three ways a piece of front goes undrawn, and none of them may leave a fade standing
+        // where its line is not: the arcs switched off altogether, a segment with a dead endpoint
+        // or one cut for winding, and the frozen family's heavy pass - whose light glides along
+        // r- at Omega_-, so its trail would lie on the front itself and smear the r- circle.
+        use crate::physics::observer::{Observer, WorldlineParams};
+        let metric = KerrSchild::new(1.0, 0.90);
+        let mut alice =
+            Observer::new_with_phi(&metric, "Alice", 0.0, 1.2, 0.0, 0.0, WorldlineParams::default());
+        let mut field = SignalField::default();
+        let mut t = 0.0;
+        for _ in 0..40 {
+            field.emit_if_due(&metric, &alice);
+            alice.step(&metric, t, 0.02);
+            field.advance(&metric, 0.02);
+            t += 0.02;
+        }
+
+        // What the drawing rules say this field is: the segments an ordinary band is laid for, the
+        // ones dropped for a dead endpoint or for winding, and the ones held back for the frozen
+        // pass. The counts are what gives the test its teeth - all three cases have to occur.
+        // The scale is deliberately deep: this field's fronts are a hundredth of an M apart in the
+        // deep interior, and the claim being made here is about what is drawn rather than about
+        // what is too small to see, so every ordinary band has to be over `TRAIL_MIN_PX`.
+        let px = 6000.0;
+        let r_plus = metric.outer_horizon();
+        let (mut ordinary, mut dropped, mut frozen_pairs) = (0usize, 0usize, 0usize);
+        let mut faintest = f32::MAX;
+        for (k, pulse) in field.pulses.iter().enumerate() {
+            if !pulse.rays.iter().any(|ray| ray.alive()) {
+                continue;
+            }
+            let n = pulse.rays.len();
+            let gap = gap_behind(&field, k);
+            let frozen: Vec<bool> = pulse
+                .rays
+                .iter()
+                .map(|ray| ray.alive() && ray.r < r_plus && ray.frozen(&metric))
+                .collect();
+            for i in 0..n {
+                let j = (i + 1) % n;
+                let dead = !pulse.rays[i].alive() || !pulse.rays[j].alive();
+                let wound = !dead
+                    && (pulse.rays[j].phi - pulse.rays[i].phi).abs() > MAX_RESOLVED_WINDING;
+                if dead || wound {
+                    dropped += 1;
+                } else if frozen[i] && frozen[j] {
+                    frozen_pairs += 1;
+                } else {
+                    ordinary += 1;
+                    let ends = [i, j].map(|end| {
+                        expected_trail_px(ray_speed_px(&metric, &pulse.rays[end], px), gap)
+                    });
+                    faintest = faintest.min(ends[0].max(ends[1]));
+                }
+            }
+        }
+        assert!(dropped > 0, "the field has segments that draw no line at all");
+        assert!(frozen_pairs > 0, "and segments held back for the frozen pass");
+        assert!(ordinary > 0, "and ordinary ones");
+        assert!(
+            faintest >= TRAIL_MIN_PX,
+            "at {px} px/M every ordinary band is over the sub-pixel cut, so every one of them must \
+             carry a fade: the faintest is {faintest:.2} px"
+        );
+
+        let style = FrontStyle { arcs: true, hide_wound: true };
+        let (trail, bands) = trail_frame(&metric, &field, style, px);
+        // The ordinary bands are the ones at the ordinary stroke width; the frozen pass draws at
+        // 2.0 and is painted after every trail mesh.
+        let head: usize = bands
+            .iter()
+            .filter(|(_, width, _)| *width == 1.2)
+            .map(|(_, _, points)| points.len())
+            .sum();
+        assert_eq!(
+            trail.len(),
+            2 * head,
+            "a trail vertex pair for every point of every ordinary band, and for nothing else: \
+             {ordinary} ordinary segments, {dropped} dropped and {frozen_pairs} frozen pairs"
+        );
+        for (pair, point) in trail.chunks(2).zip(
+            bands.iter().filter(|(_, width, _)| *width == 1.2).flat_map(|(_, _, points)| points),
+        ) {
+            assert_eq!(pair[0].0, *point, "each trail head sits on its own band's point");
+        }
+
+        // And with the arcs off there are no lines at all, so there is nothing to annotate and no
+        // mesh is built.
+        let points_only = FrontStyle { arcs: false, hide_wound: true };
+        let (none, bands_off) = trail_frame(&metric, &field, points_only, px);
+        assert!(bands_off.is_empty(), "points only: no bands");
+        assert!(none.is_empty(), "and no trail mesh either, not even an empty one");
+        println!(
+            "{ordinary} ordinary segments carry {} trail vertices; {dropped} dropped segments and \
+             {frozen_pairs} frozen pairs carry none, and the points-only frame carries none at all",
+            trail.len()
+        );
     }
 
     #[test]
