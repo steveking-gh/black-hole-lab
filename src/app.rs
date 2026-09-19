@@ -2642,7 +2642,7 @@ mod tests {
         // 144 rays a pulse, which is the count the app opens on and the one whose segment 101 this
         // happens to; at 64 the rays stand elsewhere and the crossing never met the blind spot.
         let heard = |step: f64| {
-            let app = comb_app(step, 6.0, 144);
+            let app = comb_app(step, 6.0, 144, 0.0);
             app.sim
                 .alice_signal
                 .receptions()
@@ -2695,7 +2695,7 @@ mod tests {
     /// transmissions did: every pulse's emission proper time in order, and how many arrivals each
     /// receiver recorded.
     fn comb_run(step: f64, until: f64) -> ([Vec<f64>; 2], [usize; 2]) {
-        let app = comb_app(step, until, 64);
+        let app = comb_app(step, until, 64, 0.0);
         let read = |field: &SignalField| {
             assert_eq!(
                 field.pulses.len(),
@@ -2710,13 +2710,14 @@ mod tests {
         )
     }
 
-    /// The run `comb_run` reports on, as the app it ended in, at a stated ray count.
+    /// The run `comb_run` reports on, as the app it ended in, at a stated ray count and with Bob
+    /// held at his drop radius for `bob_delay` of coordinate time before he is let go.
     ///
     /// Every setting the run reads is written here rather than inherited, including the ones that
     /// happen to match the app's own defaults: what this measures is whether the answer depends on
     /// the step size, and a default quietly moving underneath it would make that question
     /// unanswerable.
-    fn comb_app(step: f64, until: f64, rays_per_pulse: usize) -> SpacetimeApp {
+    fn comb_app(step: f64, until: f64, rays_per_pulse: usize, bob_delay: f64) -> SpacetimeApp {
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
         app.controls.step_mode = StepMode::Time;
@@ -2743,6 +2744,7 @@ mod tests {
         app.controls.alice.release = Release::CircularPrograde;
         app.controls.alice.drop_r = KerrSchild::new(1.0, 0.90).isco(true);
         app.controls.alice.drop_phi = 0.25;
+        app.controls.bob.delta_t_delay = bob_delay;
         drop_observers(&mut app);
         set_free_fall(&mut app);
         app.sim.set_max_pulses(app.controls.max_pulses);
@@ -2853,6 +2855,94 @@ mod tests {
             reference[1].len(),
             reference_heard[0],
             reference_heard[1]
+        );
+    }
+
+    #[test]
+    fn test_a_pulse_due_just_after_a_release_leaves_from_the_same_event_at_every_step_size() {
+        // Bob is held at r = 4.5 M until t = 1.07 M, where his own watch reads 0.7976 M, so the
+        // pulse due at tau = 0.8 leaves a few thousandths of his proper time after he is let go.
+        // Placing that event needs the releasing step to carry the whole of the wait onto the
+        // watch. It did not: the fall started with the reading the *previous* step boundary had
+        // left, so the watch lost (release_t - that boundary)/u^t - 0.052 M of his time at a step
+        // of 0.5 M against 0.002 at a played frame - and the loss moved every emission after the
+        // release, half an interval's worth of it, onto the user's step grid.
+        //
+        // 1.07 is a multiple of none of the three step sizes, so the release falls strictly inside
+        // a step in each of the three runs and at a different place in it each time.
+        const UNTIL: f64 = 6.0;
+        const RELEASE_T: f64 = 1.07;
+        let steps = [1.0 / 60.0, 0.1, 0.5];
+        let comb = |step: f64| {
+            let app = comb_app(step, UNTIL, 64, RELEASE_T);
+            let field = &app.sim.bob_signal;
+            assert_eq!(
+                field.pulses.len(),
+                field.next_index,
+                "the cap must not have evicted a pulse the comb is read off"
+            );
+            field
+                .pulses
+                .iter()
+                .map(|pulse| (pulse.emitted_tau, pulse.emitted_t, pulse.emitted_r))
+                .collect::<Vec<_>>()
+        };
+
+        let reference = comb(steps[0]);
+        let crossing = reference
+            .iter()
+            .position(|pulse| pulse.1 > RELEASE_T)
+            .expect("a pulse has to fall due after his release");
+        assert!(
+            crossing > 0 && reference[crossing].1 - RELEASE_T < 0.1,
+            "and the first of them close enough to it to be placed by the releasing step: \
+             pulse {crossing} at t = {}",
+            reference[crossing].1
+        );
+        assert!(
+            (reference[crossing - 1].2 - 4.5).abs() < 1e-12,
+            "the pulse before it is still sent from the hover radius: r = {}",
+            reference[crossing - 1].2
+        );
+
+        let (mut worst_t, mut worst_r) = (0.0f64, 0.0f64);
+        for &step in &steps {
+            let comb = comb(step);
+            assert_eq!(
+                comb.len(),
+                reference.len(),
+                "Bob sent {} pulses at a step of {step} and {} at a played frame",
+                comb.len(),
+                reference.len()
+            );
+            for (k, (pulse, against)) in comb.iter().zip(reference.iter()).enumerate() {
+                let due = (k as f64) * EMISSION_INTERVAL_TAU;
+                assert!(
+                    (pulse.0 - due).abs() < 1e-9,
+                    "pulse {k} left at tau = {} where the comb puts it at {due}, stepping at \
+                     {step}",
+                    pulse.0
+                );
+                worst_t = worst_t.max((pulse.1 - against.1).abs());
+                worst_r = worst_r.max((pulse.2 - against.2).abs());
+                assert!(
+                    (pulse.1 - against.1).abs() < 1e-9 && (pulse.2 - against.2).abs() < 1e-9,
+                    "pulse {k} left from (t = {}, r = {}) at a step of {step} and from \
+                     (t = {}, r = {}) at a played frame",
+                    pulse.1,
+                    pulse.2,
+                    against.1,
+                    against.2
+                );
+            }
+        }
+        println!(
+            "a release at t = {RELEASE_T}: {} pulses, the first after the release being {crossing} \
+             at t = {:.6} and r = {:.6}; worst spread over steps of {steps:?} dt = {worst_t:.3e}, \
+             dr = {worst_r:.3e}",
+            reference.len(),
+            reference[crossing].1,
+            reference[crossing].2
         );
     }
 

@@ -542,6 +542,12 @@ impl Observer {
     /// is the rate of the worldline they are about to fall on, which is what makes the release
     /// smooth. The trail is therefore a vertical segment in (t, r) either way, and turns into the
     /// infall curve at t = release_t.
+    ///
+    /// Every step below the release is one of these, and so is the first piece of the step that
+    /// crosses it: `step` hovers the remainder of the wait, up to t = release_t exactly, before it
+    /// starts the fall from there. That is what keeps the whole of the wait on the watch whatever
+    /// the step size, and it is why the interval is an argument rather than "the clock less where
+    /// the observer stands".
     fn hover(&mut self, metric: &KerrSchild, current_sim_time: f64, dt: f64) {
         self.is_active = false;
         self.t = current_sim_time;
@@ -935,16 +941,38 @@ impl Observer {
             self.hover(metric, current_sim_time, dt);
             return;
         }
-        // On the step that crosses the release, a free-faller's worldline starts at t = release_t,
-        // which is where `hover` has been holding its geodesic clock, and not at the simulation
-        // clock's previous value: the release almost never lands on a step boundary, and
-        // integrating a whole dt from release_t would put the worldline that far ahead of the
-        // clock and keep it there for the rest of the run (0.03 M of it at a release of t = 4.03
-        // stepped at 0.1). The other modes have no separate clock to start - they were already
-        // moving in t while they waited - so they cover the full step.
+        // The step that crosses the release is two pieces of worldline and not one, and it is
+        // taken as two: the wait is finished off first, exactly as far as t = release_t, and the
+        // fall then starts from the release event itself.
+        //
+        // The fall covers only `current_sim_time - release_t` because the release almost never
+        // lands on a step boundary, and integrating a whole dt from release_t would put the
+        // worldline that far ahead of the clock and keep it there for the rest of the run (0.03 M
+        // of it at a release of t = 4.03 stepped at 0.1). The hover in front of it is what pays
+        // for the rest of the step. Without it the sliver [previous boundary, release_t] never
+        // reached the watch at all: the geodesic began with the proper time the previous boundary
+        // had left there, so the observer's own clock came up short by that sliver over u^t - 0.05
+        // M of Bob's time at a release of t = 1.07 stepped at 0.5 M, 0.002 at a played frame, and
+        // the whole wait where a boundary landed exactly on release_t. It was a reading off the
+        // user's step grid rather than off the worldline, and everything keyed to it - the
+        // transmission comb above all, which is paced in the emitter's own proper time - moved
+        // with the Step Size slider. `rewind_into_hover` has always used the closed form, so
+        // forward play and rewind disagreed by the same sliver.
+        //
+        // The other modes have no separate clock to start - they were already moving in t while
+        // they waited - so they cover the full step from where they stand.
         let releasing = !self.is_active && self.effective_mode(metric) == ObserverMode::FreeFall;
+        let interval = if releasing {
+            // `hover` is closed form in the interval it is handed, and the observer's own clock is
+            // where the wait had got to, so this is the whole of the unpaid sliver and no part of
+            // it is paid twice. It also leaves the release event on the trail, which is where
+            // `rewind_to` puts a worldline back before integrating it forward again.
+            self.hover(metric, self.release_t, self.release_t - self.t);
+            (current_sim_time - self.release_t).max(0.0)
+        } else {
+            dt
+        };
         self.is_active = true;
-        let interval = if releasing { (current_sim_time - self.release_t).max(0.0) } else { dt };
         self.advance(metric, interval);
     }
 
@@ -1021,10 +1049,10 @@ impl Observer {
     ///   at 1/u^t of `hover_four_velocity`. The dispatch is on the *clock*, exactly as `step`'s is,
     ///   rather than on `is_active` - a sub-step that ends at or after the release is a released
     ///   step whatever the observer was doing when it began.
-    /// * The release inside the window is the one discontinuity, and it is `step`'s, not this
-    ///   function's: a sub-step that lands at or past `release_t` skips the hover altogether and
-    ///   integrates the geodesic from `release_t`, so the hover's contribution to tau is the one
-    ///   accumulated before the sub-step began. Both pieces are searched, the hover first.
+    /// * A sub-step that lands at or past `release_t` is two pieces of worldline, exactly as
+    ///   `step` takes it: the rest of the wait, up to `release_t`, and then the fall. So both
+    ///   pieces are searched, the hover first, and the geodesic piece starts from the reading the
+    ///   whole wait leaves on the watch and not from the one the sub-step began with.
     /// * A released free-faller is the geodesic itself, stopped on the target by
     ///   `GeodesicState::step_coord_time_until_tau` - the same integrator, and therefore the same
     ///   curve, that `advance` is about to draw.
@@ -1048,9 +1076,13 @@ impl Observer {
             return Some(0.0);
         }
         // How much of the window is spent waiting. `step` sends every sub-step whose end lands
-        // below `release_t` to `hover`, so this is the length of the hovering piece and also the
-        // sub-step length at which the released piece starts.
+        // below `release_t` to `hover`, and hovers the crossing sub-step up to `release_t` before
+        // it falls, so this is the length of the hovering piece and also the sub-step length at
+        // which the released piece starts.
         let hover_span = (self.release_t - clock).max(0.0);
+        // What the wait leaves on the watch and on the azimuth at the release, which is where the
+        // geodesic piece below starts - not the readings the sub-step began with.
+        let (mut tau_at_release, mut phi_at_release) = (self.tau, self.phi);
         if hover_span > 0.0 {
             let u = self.hover_four_velocity(metric);
             // A hover with no worldline under it - at or inside the static limit - does not move
@@ -1060,6 +1092,8 @@ impl Observer {
                 if dt < hover_span {
                     return (dt <= max_dt).then_some(dt);
                 }
+                tau_at_release = self.tau + hover_span / u[0];
+                phi_at_release = self.phi + (u[2] / u[0]) * hover_span;
             }
         }
         match self.effective_mode(metric) {
@@ -1083,19 +1117,26 @@ impl Observer {
                 }
                 // How far the geodesic runs ahead of the sub-step. A releasing step integrates from
                 // `release_t` rather than from the clock - see `step`, and `hover`, which parks the
-                // geodesic at the release event with the clock and the azimuth the wait
-                // accumulated - so the geodesic covers `clock - release_t` more than the sub-step
-                // does. That is negative while the observer is still waiting, where it is the
-                // hovering piece the geodesic does *not* cover, and zero once released.
+                // geodesic at the release event - so the geodesic covers `clock - release_t` more
+                // than the sub-step does. That is negative while the observer is still waiting,
+                // where it is the hovering piece the geodesic does *not* cover, and zero once
+                // released.
                 let offset = if self.is_active {
                     0.0
                 } else {
                     geo.t = self.release_t;
-                    geo.tau = self.tau;
-                    geo.phi = self.phi;
+                    geo.tau = tau_at_release;
+                    geo.phi = phi_at_release;
                     clock - self.release_t
                 };
-                let advanced = geo.step_coord_time_until_tau(metric, max_dt + offset, tau_target);
+                // What is left of the window for the fall. Negative means the release itself is
+                // past the end of it, and the wait does not reach the target either or the hover
+                // piece above would have said so.
+                let window = max_dt + offset;
+                if window < 0.0 {
+                    return None;
+                }
+                let advanced = geo.step_coord_time_until_tau(metric, window, tau_target);
                 (geo.tau >= tau_target - TAU_REACHED).then_some((advanced - offset).max(0.0))
             }
         }
@@ -1215,14 +1256,16 @@ impl Observer {
                 let last = self.trail[keep - 1];
                 self.restore(last);
                 if last.t < self.release_t {
-                    // The kept event is the hover, where the worldline had not started yet. It
-                    // starts at t = release_t, exactly as `step` starts it there, so that is where
-                    // the fall onto the target is integrated from - with the hover's proper time,
-                    // which is what the forward run carried into the release.
-                    self.t = self.release_t;
-                    if let Some(ref mut geo) = self.geodesic {
-                        geo.t = self.release_t;
-                    }
+                    // The kept event is inside the wait, where the worldline had not started yet.
+                    // The fall starts at t = release_t, so the rest of the wait is taken first and
+                    // in closed form, exactly as the crossing step takes it, and the landing below
+                    // is then integrated from the release event itself.
+                    //
+                    // A run stepped by this build never gets here: the crossing step leaves the
+                    // release event on the trail, so a target at or past `release_t` always keeps
+                    // it. A trail read off a file written before it did can still be short of one.
+                    self.hover(metric, self.release_t, self.release_t - last.t);
+                    self.is_active = true;
                 }
                 let remaining = t_target - self.t;
                 if remaining > 1e-12 {
@@ -2223,6 +2266,129 @@ mod tests {
             "rewound hover clock {} vs the forward run's {}",
             bob.tau,
             fresh.tau
+        );
+    }
+
+    #[test]
+    fn test_the_watch_at_a_released_event_does_not_depend_on_the_step_size() {
+        // An observer's proper time belongs to their worldline and not to the grid the user cut
+        // the run into. The releasing step used to start the fall carrying the reading the
+        // *previous* step boundary had left on the watch, so the last sliver of the wait,
+        // [previous boundary, release_t], was never paid for: a loss of
+        // (release_t - previous boundary)/u^t, which is whatever the step size happens to make
+        // it. Bob hovering at r = 4.5 M with a release at t = 1.07 M lost 0.0522 M of his own
+        // time at a step of 0.5 M, 0.0025 M at a played frame, and the whole of the wait at a
+        // step that landed exactly on the release, where the crossing step took the hover's place
+        // instead of following it.
+        //
+        // The sizes are a played frame, the panel's default hand step, the top of the Step Size
+        // slider, an uneven one, and the release itself, which puts a boundary exactly on it.
+        // 1.07 is a multiple of none of the others.
+        let metric = KerrSchild::new(1.0, 0.65);
+        const RELEASE_T: f64 = 1.07;
+        const UNTIL: f64 = 3.0;
+        let steps = [1.0 / 60.0, 0.1, 0.5, 0.0371, RELEASE_T];
+
+        // The last sub-step of each run is shortened onto the target, exactly as
+        // `Simulation::step_forward` cuts one onto an emission event, so that every run ends on
+        // the same clock and the comparison is between worldlines rather than between end times.
+        let run_to = |dt: f64, until: f64| {
+            let mut bob = Observer::new(&metric, "Bob", 0.0, 4.5, RELEASE_T);
+            let mut t = 0.0;
+            while t < until {
+                let next = (t + dt).min(until);
+                bob.step(&metric, next, next - t);
+                t = next;
+            }
+            (bob.t, bob.tau)
+        };
+
+        // The wait is a static hover - the release is a raindrop, so u^r is nowhere near zero and
+        // `hover_four_velocity` falls back on the static worldline - and that half of the watch is
+        // closed form: tau(release) = sqrt(-g_tt) release_t, with no integrator in it at all. It
+        // is checked on its own first, so that a step-independent answer that is step-
+        // independently wrong would still be caught.
+        let hover_tau = (-metric.metric_components(4.5)[0][0]).sqrt() * RELEASE_T;
+        for &dt in &steps {
+            let (t, tau) = run_to(dt, RELEASE_T);
+            assert!((t - RELEASE_T).abs() < 1e-12, "a step of {dt} must end on the release: {t}");
+            assert!(
+                (tau - hover_tau).abs() < 1e-12,
+                "stepping at {dt} put Bob's watch at tau = {tau} on his release, where the \
+                 closed form of the wait puts it at {hover_tau}"
+            );
+        }
+
+        // And past the release, where the fall is an integration and the agreement is the
+        // integrator's rather than the arithmetic's.
+        let reference = run_to(steps[0], UNTIL).1;
+        let mut worst = 0.0f64;
+        for &dt in &steps {
+            let (t, tau) = run_to(dt, UNTIL);
+            assert!((t - UNTIL).abs() < 1e-12, "a step of {dt} must end on the clock: {t}");
+            worst = worst.max((tau - reference).abs());
+            assert!(
+                (tau - reference).abs() < 1e-9,
+                "stepping at {dt} put Bob's watch at tau = {tau} at t = {UNTIL}, against \
+                 {reference} at a played frame"
+            );
+        }
+        assert!(reference > hover_tau, "the fall has to have added to the wait: {reference}");
+        println!(
+            "tau at t = {UNTIL} with a release at {RELEASE_T}: {reference}, worst spread over \
+             steps of {steps:?} {worst:.3e}"
+        );
+    }
+
+    #[test]
+    fn test_a_rewind_across_the_release_and_the_run_that_never_stopped_agree() {
+        // The wait is closed form in both directions - `hover` adds dt/u^t a step at a time and
+        // `rewind_into_hover` restores (t - t_start)/u^t outright - so the two agree only if the
+        // forward run pays for the whole of it. It did not: the fall started with the reading the
+        // last boundary below release_t left, so a run wound back to just under the release and
+        // played forward again arrived at a different watch from the one that never stopped, by
+        // 0.037 M of Bob's time in the case below.
+        let metric = KerrSchild::new(1.0, 0.65);
+        const RELEASE_T: f64 = 1.07;
+        let dt = 0.1;
+        let mut bob = Observer::new(&metric, "Bob", 0.0, 4.5, RELEASE_T);
+        let mut t = 0.0;
+        while t < 2.0 - 1e-12 {
+            t += dt;
+            bob.step(&metric, t, dt);
+        }
+        let forward = (bob.t, bob.r, bob.phi, bob.tau);
+
+        // Back to a target below the release and off the step grid, which is the case the rewind
+        // has to answer on its own: there is no recorded event there to be put back on, only the
+        // hover's closed form.
+        bob.rewind_to(&metric, 1.05);
+        assert!(!bob.is_active, "1.05 is below his release, so he is waiting again");
+        bob.step(&metric, 1.1, 0.05);
+        let mut t = 1.1;
+        while t < 2.0 - 1e-12 {
+            t += dt;
+            bob.step(&metric, t, dt);
+        }
+        let again = (bob.t, bob.r, bob.phi, bob.tau);
+        for (a, b, what) in [
+            (again.0, forward.0, "t"),
+            (again.1, forward.1, "r"),
+            (again.2, forward.2, "phi"),
+            (again.3, forward.3, "tau"),
+        ] {
+            assert!(
+                (a - b).abs() < 1e-9,
+                "across the release {what} came back as {a}, not the {b} of the run that never \
+                 stopped"
+            );
+        }
+        println!(
+            "rewind across the release: dt = {:.2e}, dr = {:.2e}, dphi = {:.2e}, dtau = {:.2e}",
+            (again.0 - forward.0).abs(),
+            (again.1 - forward.1).abs(),
+            (again.2 - forward.2).abs(),
+            (again.3 - forward.3).abs()
         );
     }
 
