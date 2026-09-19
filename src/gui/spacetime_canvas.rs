@@ -1102,6 +1102,91 @@ pub(crate) fn steep_with_hysteresis(was_steep: bool, slope_abs: f64) -> bool {
     if was_steep { slope_abs >= 0.8 } else { slope_abs >= 1.25 }
 }
 
+/// Width of a wavefront comet on the global chart, in screen points.
+///
+/// A shade heavier than the 1.0 the old full-length wedge edges were drawn at. Those edges ran the
+/// height of the canvas and forty of them overlapped; a comet is `Theme::COMET_TAIL_PX` long,
+/// stands alone, and spends most of its length below half brightness, so it wants the extra tenth
+/// of a point. Past about 1.5 the head stops reading as a point on a curve and starts reading as a
+/// blob, which is the one thing a mark whose job is to say *where* the front is must not do.
+const COMET_WIDTH: f32 = 1.2;
+
+/// One polyline lit `head_colour` at `head` and fading linearly to nothing `fade_px` further along
+/// it, as a single anti-aliased shape.
+///
+/// The gradient is a `PathStroke::new_uv` colour callback rather than a run of short segments at
+/// stepped alpha or a quad strip built by hand. epaint tessellates a stroke into the two feathered
+/// edges either side of the centre line and calls the callback once per vertex of them, then
+/// interpolates the colour across the triangles between, so one shape buys a continuous fade with
+/// exactly the anti-aliasing an ordinary stroke gets. A strip of stepped segments would cost a
+/// shape per step, and the global chart draws up to 128 pulses in each of two fields with two
+/// edges apiece; a `Mesh` written by hand would have no feathering at all, which at these widths
+/// on a sloping line is the whole of what makes the line look like a line.
+///
+/// The callback is handed a vertex position on one of those edges, half a stroke width off the
+/// centre line, and takes the straight-line distance from `head` rather than the arc length back
+/// to it. On the rest-frame chart a crest is one straight segment and the two agree exactly; on the
+/// global chart the tail is a piece of a null track `Theme::COMET_TAIL_PX` long, whose departure
+/// from its own chord is set by how fast dr/dt turns over that piece and comes to well under a
+/// point anywhere outside the last moments on the ring.
+fn fading_line(
+    points: Vec<Pos2>,
+    head: Pos2,
+    fade_px: f32,
+    width: f32,
+    head_colour: Color32,
+) -> egui::Shape {
+    let [r, g, b, a] = head_colour.to_srgba_unmultiplied();
+    // Unmultiplied in, unmultiplied out: `from_rgba_unmultiplied` does the premultiplication, so
+    // scaling the alpha alone here dims the line without shifting its hue toward black.
+    let span = fade_px.max(1.0);
+    let stroke = egui::epaint::PathStroke::new_uv(width, move |_bbox, at| {
+        let lit = 1.0 - (at.distance(head) / span).clamp(0.0, 1.0);
+        Color32::from_rgba_unmultiplied(r, g, b, (a as f32 * lit).round() as u8)
+    });
+    egui::Shape::Path(PathShape::line(points, stroke))
+}
+
+/// The head of a track as a screen polyline, cut off `max_px` back along the drawn curve.
+///
+/// `head_first` walks the track backwards from its newest point, which is where the front stands
+/// now. The cut is made on arc length on the screen rather than on coordinate time or on a count of
+/// track points, because on this chart those are nothing like proportional to each other: an edge
+/// frozen on r- packs tens of M of track into one pixel column while the outer edge of a pulse far
+/// from the hole crosses the canvas over the same interval, and only a cut on the screen gives
+/// every comet the same drawn length. The far point is interpolated onto the `max_px` mark, so the
+/// tail ends where `Theme::COMET_TAIL_PX` says and not at whatever track point lies beyond it.
+///
+/// Points that do not clear `SCREEN_SPACING` of the last one kept are dropped on the way, for the
+/// reason `thin_to_pixels` gives, and here for a second one: a track recorded every 0.02 M of
+/// coordinate time is mostly sub-pixel steps at a wide zoom, and without the thinning a single
+/// comet could put a thousand vertices a hundredth of a point apart into the tessellator. The
+/// dropping bounds the polyline at `max_px / SCREEN_SPACING` vertices however deep the track is.
+fn comet_tail(head_first: impl Iterator<Item = Pos2>, max_px: f32) -> Vec<Pos2> {
+    let mut tail: Vec<Pos2> = Vec::new();
+    let mut anchor = Pos2::ZERO;
+    let mut run = 0.0;
+    for point in head_first {
+        if tail.is_empty() {
+            anchor = point;
+            tail.push(point);
+            continue;
+        }
+        let step = anchor.distance(point);
+        if step < SCREEN_SPACING {
+            continue;
+        }
+        if run + step >= max_px {
+            tail.push(anchor + (point - anchor) * ((max_px - run) / step));
+            break;
+        }
+        run += step;
+        anchor = point;
+        tail.push(point);
+    }
+    tail
+}
+
 impl SpacetimeCanvas {
     /// Render the (t, r) spacetime foliation canvas with an integrated, perfectly aligned 1D radial track
     #[allow(clippy::too_many_arguments)]
@@ -1763,71 +1848,90 @@ Tick Enable Observer on Alice's or Bob's card",
 
         // The two transmissions. A wavefront is a closed curve in (r, phi) and this diagram has
         // no azimuth to draw it on, so what is drawn is the one thing the projection does define:
-        // the pulse's radial extent, [min r, max r] over its front, swept up in t. That is the
-        // wedge of `Pulse::extent_track`. Its lower edge is the ingoing edge of the emitter's own
-        // light cone, carried from the emission event - the 45-degree line dr/dt = -1 only for a
-        // hole with no spin, and slightly steeper than that for one that spins (-1.010 at r = 4.5M
-        // for a = 0.65, -2.27 at r = 0.2M for a = 0.90) - and its upper edge is the outermost ray,
-        // which outside r+ climbs and inside r+ falls and freezes onto r-. While the pulse is being
-        // swallowed the lower edge stands on the ring: the rays are a sampling of a continuous
-        // front, and `Pulse::radial_extent` is what says when the front itself is down there rather
-        // than only the innermost sample of it. A worldline inside a wedge is *in range* of that
-        // pulse - some part of the front stands at that radius - which is not the same as receiving
-        // it, because the diagram cannot show azimuth and the receiver may be at another one. The
-        // reception dots below are the actual arrivals.
+        // the pulse's radial extent, [min r, max r] over its front, which `Pulse::extent_track`
+        // carries swept up in t. Each of the two edges of that extent is drawn as a *comet*: full
+        // brightness at the head, where that edge stands at the chart's present, fading to nothing
+        // `Theme::COMET_TAIL_PX` back down the edge's own track. The lower edge is the ingoing edge
+        // of the emitter's own light cone, carried from the emission event - the 45-degree line
+        // dr/dt = -1 only for a hole with no spin, and slightly steeper than that for one that
+        // spins (-1.010 at r = 4.5M for a = 0.65, -2.27 at r = 0.2M for a = 0.90) - and the upper
+        // edge is the outermost ray, which outside r+ climbs and inside r+ falls and freezes onto
+        // r-. So the row of comets along the now line is where every front of both transmissions
+        // stands at this moment, and each tail says which way that edge of it is going.
         //
-        // Each field is drawn in its emitter's colour: the interior in `Theme::WEDGE_FILL_ALPHA`,
-        // faint enough that the forty-odd wedges of a whole infall stack up without flattening into
-        // a block, and the two edges as thin lines at `Theme::WEDGE_EDGE_ALPHA`. Inside r+ every
-        // upper edge freezes on r-, so those edges pile onto the Cauchy horizon, which in this
-        // chart is where the outgoing light of the whole interior accumulates, and that pile is
-        // what a later infaller cuts through.
+        // A worldline between the two edges of one pulse is *in range* of that pulse - some part
+        // of the front stands at that radius - which is not the same as receiving it, because the
+        // diagram cannot show azimuth and the receiver may be at another one. That range used to
+        // be drawn, as a faint fill between the edges. It is not drawn now: a statement that weak,
+        // laid down once per pulse, covered the whole past half of the canvas within a few M of a
+        // run starting, and the reception dots below - the actual arrivals - had to be read
+        // through it. The comets leave that half of the chart to the worldlines, the light cones
+        // and those dots.
         //
-        // The fill is laid down as a strip of quads between consecutive track points rather than as
-        // one polygon: the wedge is not convex in general - the upper edge bends back onto r- while
-        // the lower edge runs on to the ring - and a quad spanning two adjacent times, with its two
-        // horizontal sides, always is.
-        let draw_wedges = |field: &SignalField, colour: Color32| {
-            let shade = |alpha: u8| {
-                Color32::from_rgba_unmultiplied(colour.r(), colour.g(), colour.b(), alpha)
-            };
-            let fill = shade(Theme::WEDGE_FILL_ALPHA);
-            let edge_stroke = Stroke::new(1.0, shade(Theme::WEDGE_EDGE_ALPHA));
+        // Three things decide whether a pulse has a comet at all, and each of them is physics.
+        // A pulse with no live ray has no front: `Pulse::extend_track` declines to record an
+        // extent `Pulse::radial_extent` will not give it, so the track of a spent pulse stops at
+        // the death of its last ray, and drawing a head there would leave a front standing at a
+        // radius nothing occupies. Spent pulses are skipped outright - their tracks are kept
+        // because `SignalField::step_back` can bring the rays back, and a step back that does
+        // brings the comet back with them. While a pulse is being swallowed its lower edge stands
+        // on the ring rather than on any one ray, for the reason `Pulse::radial_extent` gives, and
+        // its comet is then a vertical tick on the ring, which is the front arriving there; the
+        // tick lasts until the last ring-bound ray dies and takes the whole pulse's comet with it.
+        // And every pulse emitted inside r+ has its upper edge frozen on r-, so that comet is a
+        // vertical tick riding the Cauchy horizon for as long as the pulse lives. The front really
+        // is still there, and the column of ticks is the pile of outgoing interior light that a
+        // later infaller cuts through.
+        //
+        // The head is the newest point of the track, and `Pulse::extend_track` records on a
+        // cadence of its own - `TRACK_MIN_DT`, 0.02 M, doubled once per thinning - so while a run
+        // plays the head can sit up to that far below the now line. At the 14 M window this chart
+        // opens on, over the 574 points of canvas height the perf harness's layout gives it, that
+        // is 0.8 of a point. Nothing is extrapolated to close the gap: every point of a track is a
+        // time the rays were actually stepped to, and the alternative would be to draw a front at
+        // a radius nothing has computed it to be at.
+        let draw_comets = |field: &SignalField, colour: Color32| {
+            let head_colour = Color32::from_rgba_unmultiplied(
+                colour.r(),
+                colour.g(),
+                colour.b(),
+                Theme::COMET_HEAD_ALPHA,
+            );
+            // A tail reaches at most `COMET_TAIL_PX` from its head, so a head this far outside the
+            // canvas cannot put anything on it, and the whole pulse costs one rectangle test.
+            let reach = rect.expand(Theme::COMET_TAIL_PX);
             for pulse in field.pulses.iter() {
-                let visible: Vec<(f64, f64, f64)> = pulse
-                    .extent_track
-                    .iter()
-                    .copied()
-                    .filter(|(t, _, _)| *t >= t_min && *t <= t_max)
-                    .collect();
-                if visible.len() < 2 {
+                if !pulse.rays.iter().any(NullRay::alive) {
                     continue;
                 }
-                for pair in visible.windows(2) {
-                    let (t0, lo0, hi0) = pair[0];
-                    let (t1, lo1, hi1) = pair[1];
-                    let (y0, y1) = (to_screen_y(t0), to_screen_y(t1));
-                    painter.add(PathShape::convex_polygon(
-                        vec![
-                            Pos2::new(to_screen_x(lo0), y0),
-                            Pos2::new(to_screen_x(hi0), y0),
-                            Pos2::new(to_screen_x(hi1), y1),
-                            Pos2::new(to_screen_x(lo1), y1),
-                        ],
-                        fill,
-                        egui::epaint::PathStroke::NONE,
+                let Some(newest) = pulse.extent_track.last() else {
+                    continue;
+                };
+                for hi_edge in [false, true] {
+                    let at = |&(t, lo, hi): &(f64, f64, f64)| {
+                        Pos2::new(to_screen_x(if hi_edge { hi } else { lo }), to_screen_y(t))
+                    };
+                    let head = at(newest);
+                    if !reach.contains(head) {
+                        continue;
+                    }
+                    let tail =
+                        comet_tail(pulse.extent_track.iter().rev().map(at), Theme::COMET_TAIL_PX);
+                    if tail.len() < 2 {
+                        continue;
+                    }
+                    painter.add(fading_line(
+                        tail,
+                        head,
+                        Theme::COMET_TAIL_PX,
+                        COMET_WIDTH,
+                        head_colour,
                     ));
-                }
-                for edge in [
-                    visible.iter().map(|&(t, lo, _)| Pos2::new(to_screen_x(lo), to_screen_y(t))).collect::<Vec<_>>(),
-                    visible.iter().map(|&(t, _, hi)| Pos2::new(to_screen_x(hi), to_screen_y(t))).collect::<Vec<_>>(),
-                ] {
-                    painter.add(PathShape::line(edge, edge_stroke));
                 }
             }
         };
-        draw_wedges(signals.bob, Theme::BOB_COLOR);
-        draw_wedges(signals.alice, Theme::ALICE_COLOR);
+        draw_comets(signals.bob, Theme::BOB_COLOR);
+        draw_comets(signals.alice, Theme::ALICE_COLOR);
 
         // Alice Worldline & Marker. The info boxes are registered last, below, so that a drag on
         // a box beats the canvas's own pan response instead of panning the diagram.
@@ -2455,10 +2559,28 @@ Tick Enable Observer on Alice's or Bob's card",
                 } else {
                     (0.3, 1.0)
                 };
-                painter.line_segment(
-                    [anchor - dir * half_len, anchor + dir * half_len],
-                    Stroke::new(width, crest_colour.gamma_multiply(alpha)),
-                );
+                // Graded along its length rather than flat: the crest's own colour at the future
+                // end of the stroke, falling to nothing at the past end, so a still picture says
+                // which way the wave is sweeping. `crest.dir` is the future-directed null vector
+                // (1, dr/dt, dphi/dt) pushed through the tetrad and normalised in the drawn plane,
+                // so its xi^0 component is positive and the future end is anchor + dir * half_len;
+                // the sign is read rather than assumed, because `wave_crests` hands back a fixed
+                // fallback direction where the push degenerates and a chart is a worse place than
+                // this to discover that the fallback ever changed.
+                let (past, future) = if crest.dir[1] >= 0.0 {
+                    (anchor - dir * half_len, anchor + dir * half_len)
+                } else {
+                    (anchor + dir * half_len, anchor - dir * half_len)
+                };
+                // The fade spans the whole stroke, so the alpha reaches zero exactly at the past
+                // end and the stroke keeps the two end points it has always had.
+                painter.add(fading_line(
+                    vec![past, future],
+                    future,
+                    2.0 * half_len,
+                    width,
+                    crest_colour.gamma_multiply(alpha),
+                ));
             }
             if crest.received && rect.contains(anchor) {
                 painter.circle_filled(anchor, 2.5, crest_colour);
@@ -3964,5 +4086,302 @@ mod canvas_tests {
             "a falling observer's box has no such line: {:?}",
             lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>()
         );
+    }
+
+    /// Every shape a painter was handed, flattened out of the nested `Shape::Vec`s.
+    fn flatten(shape: &egui::Shape, out: &mut Vec<egui::Shape>) {
+        match shape {
+            egui::Shape::Vec(inner) => inner.iter().for_each(|s| flatten(s, out)),
+            other => out.push(other.clone()),
+        }
+    }
+
+    /// The main canvas rectangle of a painted frame, read off the one shape that is always there:
+    /// the background, which every chart lays down over the whole canvas before anything else. The
+    /// radial track under the diagram carries the same fill, so the taller of the two is the one
+    /// wanted. Read rather than recomputed, because the layout that decides it - the track's
+    /// height, the gap, the panel's margins - is not what any of these tests is about.
+    fn canvas_rect(shapes: &[egui::Shape]) -> Rect {
+        shapes
+            .iter()
+            .filter_map(|s| match s {
+                egui::Shape::Rect(r) if r.fill == Theme::CANVAS_BG => Some(r.rect),
+                _ => None,
+            })
+            .max_by(|a, b| a.height().total_cmp(&b.height()))
+            .expect("every frame paints its canvas background")
+    }
+
+    /// Every stroke of a painted frame whose colour is graded along its length. On either of the
+    /// two charts this file draws, a `ColorMode::UV` callback means a comet of the global chart or
+    /// a crest of a rest-frame chart and nothing else.
+    fn faded_strokes(shapes: &[egui::Shape]) -> Vec<PathShape> {
+        shapes
+            .iter()
+            .filter_map(|s| match s {
+                egui::Shape::Path(p)
+                    if matches!(p.stroke.color, egui::epaint::ColorMode::UV(_)) =>
+                {
+                    Some(p.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The alpha such a stroke paints at one point of its own polyline. The callback is the only
+    /// place the gradient exists - the tessellator calls it per vertex, and nothing is stored on
+    /// the shape - so the fade is measured by asking it, at the ends the eye reads.
+    fn alpha_at(stroke: &egui::epaint::PathStroke, at: Pos2) -> u8 {
+        match &stroke.color {
+            egui::epaint::ColorMode::UV(shade) => shade(Rect::NOTHING, at).a(),
+            solid => panic!("expected a graded stroke, got {solid:?}"),
+        }
+    }
+
+    /// One real frame of the global foliation chart over a transmission of Bob's, flattened.
+    ///
+    /// The canvas is left at its defaults, so the projection the assertions rebuild - r across
+    /// (0, `max_r`), coordinate time up a `time_window`-wide window with the present three tenths
+    /// from the top - is the one the app opens on.
+    fn distant_view_pass(
+        metric: &KerrSchild,
+        bob: &Observer,
+        field: &SignalField,
+        current_time: f64,
+    ) -> Vec<egui::Shape> {
+        let mut canvas = SpacetimeCanvas::default();
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
+            ..Default::default()
+        };
+        let silent = SignalField::default();
+        let output = ctx.run_ui(input, |ui| {
+            canvas.render(
+                ui,
+                metric,
+                Some(bob),
+                None,
+                current_time,
+                600.0,
+                false,
+                ReferenceFrame::DistantObserver,
+                1.0,
+                SignalViews { alice: &silent, bob: field },
+                false,
+            );
+        });
+        let mut shapes = Vec::new();
+        for clipped in output.shapes.iter() {
+            flatten(&clipped.shape, &mut shapes);
+        }
+        output.drop_without_applying_deltas();
+        shapes
+    }
+
+    /// Bob dropped from r = 4.5M at a = 0.90 and transmitting, carried 3 M of coordinate time down
+    /// the fall with his field beside him, and the clock they both stand on.
+    ///
+    /// The step is 0.1 M, five times `TRACK_MIN_DT`, so every `SignalField::advance` records a
+    /// track point and the newest point of every live pulse stands at the field's own clock. That
+    /// is what lets the assertions place a comet head on the now line exactly rather than within
+    /// a recording cadence of it.
+    fn falling_transmission() -> (KerrSchild, Observer, SignalField, f64) {
+        use crate::physics::observer::WorldlineParams;
+        let metric = KerrSchild::new(1.0, 0.90);
+        let mut bob =
+            Observer::new_with_phi(&metric, "Bob", 0.0, 4.5, 0.0, 0.0, WorldlineParams::default());
+        let mut field = SignalField::default();
+        let dt = 0.1;
+        for i in 0..30 {
+            let t = ((i + 1) as f64) * dt;
+            bob.step(&metric, t, dt);
+            field.advance(&metric, dt);
+            field.emit_if_due(&metric, &bob);
+        }
+        // The field's own clock, not the loop's: the app paints the chart at the time the field
+        // stands on, and thirty additions of 0.1 M land an ulp away from thirty times it.
+        let now = field.t;
+        (metric, bob, field, now)
+    }
+
+    #[test]
+    fn test_the_global_chart_marks_each_live_front_with_a_comet_at_the_now_line() {
+        // What replaced the wedge. Every pulse that still has a front puts a comet on each of its
+        // two edges, at the radius that edge stands at now; nothing is filled between them any
+        // more; and each comet is bright at its head and fades away back down the track the edge
+        // has already covered, over no more than `Theme::COMET_TAIL_PX` of screen.
+        let (metric, bob, field, now) = falling_transmission();
+        let shapes = distant_view_pass(&metric, &bob, &field, now);
+        let rect = canvas_rect(&shapes);
+        let canvas = SpacetimeCanvas::default();
+        let (t_min, t_max) = (now - canvas.time_window * 0.7, now + canvas.time_window * 0.3);
+        let to_x = |r: f64| rect.left() + (r / canvas.max_r) as f32 * rect.width();
+        let to_y = |t: f64| rect.bottom() - ((t - t_min) / (t_max - t_min)) as f32 * rect.height();
+
+        // The fill is gone, in both of the ways it could be looked for: it was laid down as a
+        // strip of filled quads, and it was laid down in the emitter's own colour. The filled
+        // polygons a frame of this chart still paints are the light cones, which are triangles in
+        // the cone hues.
+        for shape in &shapes {
+            let egui::Shape::Path(path) = shape else { continue };
+            let [r, g, b, a] = path.fill.to_srgba_unmultiplied();
+            assert!(a == 0 || path.points.len() != 4, "a filled quad is a piece of a wedge fill");
+            let bob_rgb = [Theme::BOB_COLOR.r(), Theme::BOB_COLOR.g(), Theme::BOB_COLOR.b()];
+            assert!(a == 0 || [r, g, b] != bob_rgb, "a fill in the transmission's own colour");
+        }
+
+        // Where the heads have to be: the two edges of every pulse that still has a live ray, at
+        // the newest point of its track, which at this step is the field's own clock.
+        let live: Vec<(f64, f64, f64)> = field
+            .pulses
+            .iter()
+            .filter(|p| p.rays.iter().any(NullRay::alive))
+            .filter_map(|p| p.extent_track.last().copied())
+            .collect();
+        assert!(live.len() >= 10, "only {} of Bob's pulses still have a front", live.len());
+        let mut heads: Vec<Pos2> = Vec::new();
+        for &(t, lo, hi) in &live {
+            assert_eq!(t, now, "a 0.1 M step records a track point at every advance");
+            heads.push(Pos2::new(to_x(lo), to_y(t)));
+            heads.push(Pos2::new(to_x(hi), to_y(t)));
+        }
+
+        let comets = faded_strokes(&shapes);
+        let now_y = to_y(now);
+        for comet in &comets {
+            let head = comet.points[0];
+            assert!((head.y - now_y).abs() < 1e-3, "a head at y = {} off the now line", head.y);
+            assert!(
+                heads.iter().any(|h| (*h - head).length() < 1e-3),
+                "a comet at {head:?}, where no edge of a live front stands"
+            );
+        }
+        for head in heads.iter().filter(|h| rect.contains(**h)) {
+            assert!(
+                comets.iter().any(|c| (c.points[0] - *head).length() < 1e-3),
+                "no comet at {head:?}, where an edge of a live front does stand"
+            );
+        }
+
+        // The fade itself. The cut is made on arc length along the polyline while the gradient
+        // reads straight-line distance from the head, so a curved comet ends a shade above zero;
+        // the gap is what the approximation in `fading_line` costs, and it is measured here rather
+        // than assumed away.
+        let mut full_length = 0;
+        let mut worst_end_alpha = 0;
+        for comet in &comets {
+            let head = comet.points[0];
+            let far = *comet.points.last().expect("a comet has two ends");
+            let drawn: f32 = comet.points.windows(2).map(|p| p[0].distance(p[1])).sum();
+            assert_eq!(alpha_at(&comet.stroke, head), Theme::COMET_HEAD_ALPHA, "full at the head");
+            assert!(drawn <= Theme::COMET_TAIL_PX + 1e-3, "a comet {drawn} points long");
+            if drawn >= Theme::COMET_TAIL_PX - 1e-3 {
+                full_length += 1;
+                worst_end_alpha = worst_end_alpha.max(alpha_at(&comet.stroke, far));
+            }
+        }
+        println!(
+            "{} comets, {full_length} of them a full {} points long; the dimmest end of those \
+             reaches alpha {worst_end_alpha} against the head's {}",
+            comets.len(),
+            Theme::COMET_TAIL_PX,
+            Theme::COMET_HEAD_ALPHA
+        );
+        assert!(full_length > 0, "some of these tracks are longer than one tail");
+        assert!(worst_end_alpha <= 5, "a full tail must reach the background: {worst_end_alpha}");
+    }
+
+    #[test]
+    fn test_a_pulse_with_no_live_ray_draws_no_comet() {
+        // A spent pulse has no front, only a track, and the track is kept because
+        // `SignalField::step_back` can bring the rays back. Nothing of it is drawn meanwhile: the
+        // same field with every ray killed paints the same chart with no comets on it at all.
+        let (metric, bob, mut field, now) = falling_transmission();
+        let before = faded_strokes(&distant_view_pass(&metric, &bob, &field, now)).len();
+        assert!(before > 0, "the live field draws comets to begin with");
+        for pulse in field.pulses.iter_mut() {
+            for ray in pulse.rays.iter_mut() {
+                ray.death_t = Some(now);
+                ray.death_end = Some(crate::physics::wavefront::RayEnd::Ring);
+            }
+        }
+        let after = faded_strokes(&distant_view_pass(&metric, &bob, &field, now)).len();
+        println!("{before} comets with the fronts live, {after} with every ray dead");
+        assert_eq!(after, 0, "a spent pulse has no front to mark");
+    }
+
+    #[test]
+    fn test_a_crest_in_a_rest_frame_chart_is_brightest_at_its_future_end() {
+        // The same grading, on the other chart. A crest keeps the stroke it has always had - the
+        // anchor at its centre and a half length of 0.3 of the canvas either side, so the drawn
+        // length is 0.6 of it exactly - and gains a gradient along that stroke: the crest's own
+        // colour at the future end, up the screen, falling to nothing at the past end. So a still
+        // picture says which way the wave is sweeping over the observer.
+        use crate::physics::observer::{ObserverMode, WorldlineParams};
+        let metric = KerrSchild::new(1.0, 0.0);
+        let mut alice =
+            Observer::new_with_phi(&metric, "Alice", 0.0, 6.0, 0.0, 0.0, WorldlineParams::default());
+        alice.mode = ObserverMode::Static;
+        let mut bob =
+            Observer::new_with_phi(&metric, "Bob", 0.0, 4.5, 0.0, 0.0, WorldlineParams::default());
+        bob.mode = ObserverMode::Static;
+        let mut field = SignalField::default();
+        let dt = 0.1;
+        for i in 0..60 {
+            let t = ((i + 1) as f64) * dt;
+            alice.step(&metric, t, dt);
+            bob.step(&metric, t, dt);
+            field.advance(&metric, dt);
+            field.emit_if_due(&metric, &alice);
+            field.detect_receptions(&metric, &bob);
+        }
+
+        let mut canvas = SpacetimeCanvas { keep_surface_framed: false, ..Default::default() };
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
+            ..Default::default()
+        };
+        let silent = SignalField::default();
+        let output = ctx.run_ui(input, |ui| {
+            canvas.render(
+                ui,
+                &metric,
+                Some(&bob),
+                Some(&alice),
+                6.0,
+                600.0,
+                false,
+                ReferenceFrame::Bob,
+                1.0,
+                SignalViews { alice: &field, bob: &silent },
+                false,
+            );
+        });
+        let mut shapes = Vec::new();
+        for clipped in output.shapes.iter() {
+            flatten(&clipped.shape, &mut shapes);
+        }
+        output.drop_without_applying_deltas();
+
+        let rect = canvas_rect(&shapes);
+        let crests = faded_strokes(&shapes);
+        assert!(crests.len() >= 3, "{} of Alice's crests drawn at Bob", crests.len());
+        let full_len = 0.6 * rect.height().min(rect.width());
+        for crest in &crests {
+            assert_eq!(crest.points.len(), 2, "a crest is one straight null stroke");
+            let (a, b) = (crest.points[0], crest.points[1]);
+            let drawn = a.distance(b);
+            assert!((drawn - full_len).abs() < 1e-3, "{drawn} points against {full_len}");
+            // Up the screen is the future, so the smaller y is the end that must be lit.
+            let (future, past) = if a.y < b.y { (a, b) } else { (b, a) };
+            let (bright, dark) = (alpha_at(&crest.stroke, future), alpha_at(&crest.stroke, past));
+            assert!(bright > 0, "a crest lit at its future end");
+            assert_eq!(dark, 0, "and run out at its past end, {bright} against {dark}");
+        }
     }
 }

@@ -102,15 +102,16 @@
 //!
 //! What a (t, r) diagram can show of any of this is not a ray but a range. A pulse is a closed
 //! curve in (r, phi); projected onto the radial axis it is the interval its front spans, and that
-//! interval swept up in coordinate time is `Pulse::extent_track`, the wedge the spacetime canvas
-//! draws. Its lower edge is bounded exactly by the ingoing edge of the emitter's own light cone,
-//! and its upper edge freezes onto r- for every pulse emitted inside r+, which is why the wedges
-//! stack against the Cauchy horizon there. While the pulse is being swallowed the lower edge is on
-//! the ring itself and not on any one ray, for the reason `Pulse::radial_extent` gives: the rays
-//! are a sampling of the front, and the front is a continuum that stands on the ring for the whole
-//! of the interval its rays arrive over. A worldline inside a wedge is only in *range* of the
-//! pulse; whether the pulse reaches it is a question about azimuth, which the projection has thrown
-//! away and only the per-sheet crossing test of `Pulse::scan` answers.
+//! interval swept up in coordinate time is `Pulse::extent_track`, from which the spacetime canvas
+//! draws the head of each of the two edges. Its lower edge is bounded exactly by the ingoing edge
+//! of the emitter's own light cone, and its upper edge freezes onto r- for every pulse emitted
+//! inside r+, which is why the heads of the interior pulses stand in a column on the Cauchy
+//! horizon there. While the pulse is being swallowed the lower edge is on the ring itself and not
+//! on any one ray, for the reason `Pulse::radial_extent` gives: the rays are a sampling of the
+//! front, and the front is a continuum that stands on the ring for the whole of the interval its
+//! rays arrive over. A worldline between the two edges is only in *range* of the pulse; whether
+//! the pulse reaches it is a question about azimuth, which the projection has thrown away and only
+//! the per-sheet crossing test of `Pulse::scan` answers.
 //!
 //! The 2D+1 volume view wants the other projection - the whole front, azimuths and all, swept up in
 //! t - and that is a surface rather than a curve, so it is not kept for every pulse. A pulse whose
@@ -1453,8 +1454,8 @@ pub struct Pulse {
     /// truncated by `SignalField::step_back`, and it stops growing once every ray of the pulse is
     /// dead.
     ///
-    /// Drawn as a wedge, its lower edge has an exact bound, and that bound is not the 45-degree
-    /// ingoing principal ray. The steepest ingoing null direction of this chart is the inner edge
+    /// Its lower edge has an exact bound, and that bound is not the 45-degree ingoing principal
+    /// ray. The steepest ingoing null direction of this chart is the inner edge
     /// of the light cone, `KerrSchild::null_wedge(r).dr_dt_in`, which is the ingoing
     /// *zero-angular-momentum* ray and not a principal one: the null condition's discriminant at
     /// dr/dt = -1 is exactly a^2, so -1 lies strictly inside the cone wherever the hole spins. The
@@ -1840,9 +1841,10 @@ impl Pulse {
     ///
     /// The spacing is measured against the last stored point rather than accumulated per call, so
     /// a run of short frames stores one point per `track_dt` of coordinate time exactly as one long
-    /// frame does, and the drawn wedge does not depend on the frame rate. Nothing is interpolated:
-    /// a point is stored at whatever time the first call past the spacing lands on, because the
-    /// extent is read off the rays and the rays only ever stand at times they have been stepped to.
+    /// frame does, and what the canvas draws does not depend on the frame rate. Nothing is
+    /// interpolated: a point is stored at whatever time the first call past the spacing lands on,
+    /// because the extent is read off the rays and the rays only ever stand at times they have
+    /// been stepped to.
     /// A caller stepping in intervals longer than `track_dt` - Distance mode at a supermassive
     /// hole - gets one point per call and no more, which is all the resolution the rays themselves
     /// were carried at.
@@ -1852,7 +1854,7 @@ impl Pulse {
     /// buys the same span again. Both ends are kept: the seed, the emission event, is index zero,
     /// and the newest point is kept too, so the spacing coming out of a thinning is the new one
     /// everywhere rather than one and a half of it across the join. The alternative, which this
-    /// replaces, was to stop recording, and the wedge then ended in mid-air at a time that
+    /// replaces, was to stop recording, and the drawn front then stopped moving at a time that
     /// depended on how long the app had been running.
     fn extend_track(&mut self, metric: &KerrSchild, t: f64) {
         let Some(&(last_t, ..)) = self.extent_track.last() else {
