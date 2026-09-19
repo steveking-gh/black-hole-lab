@@ -619,15 +619,6 @@ impl SpatialCanvas {
         if arc.shows(bounds[1]) {
             painter.add(arc.outline(&edges[1], Stroke::new(2.0, Theme::SINGULARITY_LINE)));
         }
-        if ring_px >= 6.0 {
-            painter.text(
-                center + Vec2::new(0.0, ring_px + 4.0),
-                egui::Align2::CENTER_TOP,
-                "ring singularity r = 0 (ρ = a)",
-                egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
-                Theme::SINGULARITY_LINE,
-            );
-        }
 
         // 3. The two transmissions, drawn under the worldlines and the markers,
         // so the fronts read as something moving through the field rather than as part of the
