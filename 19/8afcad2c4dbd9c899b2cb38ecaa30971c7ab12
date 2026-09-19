@@ -1,0 +1,38 @@
+src/gui/spacetime_canvas.rs
+  s_617ff16b62779d::t_2be89320fa0ba4 1154
+  s_617ff16b62779d::t_5e5b1aa3655b74 1155-1156
+  s_617ff16b62779d::t_626cfc59a1ac67 1157-1159
+  s_617ff16b62779d::t_4631d98d54bb7f 1887-1904
+  s_617ff16b62779d::t_e01b29d9ffa3a1 4324-4326,4334-4406
+  s_617ff16b62779d::t_3170dcb3fa777e 4327-4330
+  s_617ff16b62779d::t_f0987313ccc75e 4331-4333
+  s_617ff16b62779d::t_0b82e2190bc9b4 1152
+  s_617ff16b62779d::t_104337976322db 1925
+  s_617ff16b62779d::t_5c4b57dd6ef77c 1941
+  s_617ff16b62779d::t_b084ebce366b6e 1916-1919,1921-1922,1930,1934-1939
+  s_617ff16b62779d::t_6ba9aa08ee9f03 1153
+  s_617ff16b62779d::t_2bc7bb6446c19a 4259-4263
+  s_617ff16b62779d::t_da6101a05c0902 4323
+src/physics/wavefront.rs
+  s_617ff16b62779d::t_a31f1649a8327a 106
+  s_617ff16b62779d::t_6ffabe18ada653 1804-1808
+  s_617ff16b62779d::t_4bd1910addc909 107
+  s_617ff16b62779d::t_da6a4907d3ad7f 109-110
+  s_617ff16b62779d::t_bcf1564de942e0 108
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "198afcad2c4dbd9c899b2cb38ecaa30971c7ab12",
+  "prompts": {},
+  "sessions": {
+    "s_617ff16b62779d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d664d551-dd91-446c-b763-e2346c3eed02",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
