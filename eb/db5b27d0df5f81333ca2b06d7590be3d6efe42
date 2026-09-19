@@ -1,0 +1,29 @@
+src/gui/controls.rs
+  s_1fbbbb8a53c367::t_82cd9669c87903 622-623
+  s_1fbbbb8a53c367::t_2466f8e0661616 433-434
+  s_1fbbbb8a53c367::t_1df092826c0a0d 458-466,468
+  s_1fbbbb8a53c367::t_77a65b6708d2ee 223-225
+  s_1fbbbb8a53c367::t_002fcfd5a9065b 467
+  s_1fbbbb8a53c367::t_c79b7aac5f598c 1893-1939
+  s_1fbbbb8a53c367::t_fa0c9c90357f28 624-625
+  s_1fbbbb8a53c367::t_d25c8304ba9e42 1755-1764,1767-1774,1781-1796
+  s_1fbbbb8a53c367::t_644260a1329d0f 1219-1244
+src/physics/simulation.rs
+  s_1fbbbb8a53c367::t_5c8127cab4a482 198-216
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ebdb5b27d0df5f81333ca2b06d7590be3d6efe42",
+  "prompts": {},
+  "sessions": {
+    "s_1fbbbb8a53c367": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ed2f15a7-41d1-4dd6-ba98-d9aaeb4cd695",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
