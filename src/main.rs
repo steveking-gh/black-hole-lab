@@ -26,6 +26,7 @@ mod perf;
 mod physics;
 mod save;
 mod stamp;
+mod version;
 
 use std::path::PathBuf;
 

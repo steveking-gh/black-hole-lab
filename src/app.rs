@@ -497,7 +497,10 @@ impl eframe::App for SpacetimeApp {
         // Bob) that the user never reached for: the equatorial view's right-click menu centres on
         // either observer and on the hole, and both canvases zoom on the wheel.
         egui::Panel::top("top_bar").show(ui, |ui| {
-            ui.label(egui::RichText::new("BLACK HOLE LAB").heading().strong().color(Theme::HORIZON_OUTER));
+            // The build is on the title line because it is the one line always on screen: a
+            // screenshot of a run says which build drew it without anybody being asked.
+            let title = format!("BLACK HOLE LAB  -  Version {}", crate::version::build_version());
+            ui.label(egui::RichText::new(title).heading().strong().color(Theme::HORIZON_OUTER));
         });
 
         // 2. Bottom Panel: Cauchy Effects HUD

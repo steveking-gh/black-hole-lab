@@ -220,7 +220,7 @@ pub fn document(
         format: FORMAT.to_string(),
         version: VERSION,
         written_by: v1::WrittenBy {
-            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            app_version: crate::version::build_version().to_string(),
             git: crate::stamp::git_short_hash(),
         },
         saved_at_utc: crate::stamp::now_utc_iso(),
