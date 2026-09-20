@@ -8,13 +8,13 @@ use crate::physics::local_frame::{ruler_distance, LocalFrame, SurfaceCharacter};
 use crate::physics::observer::{LocalRestFrame, LocalSpeed, Observer, ObserverMode, Who};
 use crate::physics::wavefront::{NullRay, Reception, SignalField};
 use egui::{epaint::PathShape, Color32, Pos2, Rect, Stroke, Vec2};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Plain-language gloss on every number in a telemetry box, shown on hover.
 /// Hover tip for the observer info boxes. Written as a plain multi-line literal (lines start at
 /// column 0 so no indentation leaks into the text).
 pub const TELEMETRY_HOVER_TIP: &str =
-"Drag: move the box anywhere on the canvas. On the equatorial view the box then holds that screen position while the observer moves on; on the (t, r) diagram the box keeps a fixed offset from the observer. Double-click: snap the box back to the observer. Each canvas remembers box positions per observer.
+"Drag: move the box anywhere on the canvas. On the equatorial view the box then holds that screen position while the observer moves on; on the (t, r) diagram the box keeps a fixed offset from the observer. Double-click: snap the box back to the observer. Click the triangle at the left of the title line: shut the box down to that title line, or open the box again. A shut box keeps its top-left corner and goes on reading the observer, so the title line stays live. Each canvas remembers box positions, and shut boxes, per observer.
 
 dr/dt — map speed, in c: how fast the marker crosses the (t, r) chart per tick of the chart's shared clock. Far from the hole this rate equals what a distant observer measures. Near the hole the chart runs on a clock that lets infall and light cross the horizon without freezing, so the number means something only against the drawn light wedge.
 
@@ -444,12 +444,16 @@ pub struct TelemetryBoxes {
     /// Whether a drag pins the box to the canvas where it was dropped (the equatorial view), or
     /// keeps it following the observer at the dragged offset (the (t, r) diagram, the default).
     pub(crate) pin_on_drag: bool,
+    /// The boxes the user has shut down to their title lines, under the same key as a placement
+    /// and saved beside one. A set of its own rather than a flag on the placement: a box can be
+    /// shut without ever having been dragged, and `is_placed` means dragged.
+    pub(crate) collapsed: HashSet<(Canvas, BoxId)>,
 }
 
 impl TelemetryBoxes {
     /// Boxes that stay where the user drops them, however the observer moves afterwards.
     pub fn pinning() -> Self {
-        Self { placements: HashMap::new(), pin_on_drag: true }
+        Self { pin_on_drag: true, ..Self::default() }
     }
 
     /// Lay out, register, drag and paint one observer's info box.
@@ -457,10 +461,11 @@ impl TelemetryBoxes {
     /// The box is anchored next to `pos` exactly as before until the user moves it; after that it
     /// is either displaced from that anchor by the dragged offset or pinned to the canvas where it
     /// was dropped (see `Placement`), and in both cases clamped back inside `canvas_rect`. A
-    /// double-click forgets the move. The `ui.interact` must be called after the canvas has
-    /// allocated its own painter response: within a layer egui hands an overlapping drag to the
-    /// widget registered last, so registering here is what stops a drag on the box from panning
-    /// the background or grabbing Bob's marker.
+    /// double-click forgets the move, and the triangle on the title line shuts the box down to
+    /// that line. The `ui.interact` must be called after the canvas has allocated its own painter
+    /// response: within a layer egui hands an overlapping drag to the widget registered last, so
+    /// registering here is what stops a drag on the box from panning the background or grabbing
+    /// Bob's marker.
     #[allow(clippy::too_many_arguments)]
     pub fn show(
         &mut self,
@@ -499,9 +504,18 @@ impl TelemetryBoxes {
         self.placements.contains_key(&(canvas, id))
     }
 
-    /// Draw one box of arbitrary content at `anchored`, with the drag, the double-click reset and
-    /// the remembered placement every box on these canvases gets. `show` is this with an
-    /// observer's telemetry in it; the surface and horizon boxes are this with theirs.
+    /// Draw one box of arbitrary content at `anchored`, with the drag, the double-click reset, the
+    /// disclosure triangle and the remembered placement every box on these canvases gets. `show`
+    /// is this with an observer's telemetry in it; the surface, horizon and signal boxes are this
+    /// with theirs. Every info box on every canvas comes through here, which is why the triangle
+    /// and its hit test are written here once.
+    ///
+    /// `anchored` is always measured on the whole box, open or shut, and the caller measures it:
+    /// a box anchored beside its marker is placed above or to the left of that marker by its own
+    /// height and width, so anchoring the short box would land a shut box somewhere the open one
+    /// never stood. Anchoring both on the open size leaves a shut box exactly where the open box's
+    /// title line was, and `clamp_into` then slides whichever box is actually drawn back inside
+    /// the canvas.
     #[allow(clippy::too_many_arguments)]
     fn show_lines(
         &mut self,
@@ -518,7 +532,8 @@ impl TelemetryBoxes {
     ) -> egui::Response {
         let key = (canvas, id);
         let previous = self.placements.get(&key).copied();
-        let size = telemetry_box_size(painter, lines, font_scale);
+        let mut collapsed = self.collapsed.contains(&key);
+        let size = drawn_box_size(painter, lines, font_scale, collapsed);
         let placed = resolve_placement(previous, anchored, canvas_rect.min);
         let badge_rect = clamp_into(Rect::from_min_size(placed, size), canvas_rect);
 
@@ -526,8 +541,33 @@ impl TelemetryBoxes {
         // click_and_drag rather than drag alone: egui only reports a double-click on a widget that
         // senses clicks, and the double-click is what resets the offset.
         let response = ui.interact(badge_rect, widget_id, egui::Sense::click_and_drag());
+        // The triangle registers after the box for the reason the box registers after the canvas:
+        // within a layer egui hands an overlapping press to the widget registered last. So a press
+        // on the triangle reaches the triangle rather than starting a drag of the box or counting
+        // towards the box's double-click, and a press anywhere else on the box still reaches the
+        // box. `Sense::click` against the box's `click_and_drag` obeys the same order.
+        let toggle = ui.interact(
+            disclosure_hit_rect(badge_rect, font_scale),
+            widget_id.with("disclosure"),
+            egui::Sense::click(),
+        );
+        let toggled = toggle.clicked();
+        let over_triangle = toggle.contains_pointer();
 
-        let badge_rect = if response.double_clicked() {
+        let badge_rect = if toggled {
+            // The corner the user is looking at holds still: the box is redrawn from the same
+            // top-left, shorter or taller, rather than re-anchored at its new size. Nothing is
+            // written to the placement this frame, so a click on the triangle can neither move a
+            // box nor forget where a dragged one was put.
+            collapsed = !collapsed;
+            if collapsed {
+                self.collapsed.insert(key);
+            } else {
+                self.collapsed.remove(&key);
+            }
+            let size = drawn_box_size(painter, lines, font_scale, collapsed);
+            clamp_into(Rect::from_min_size(badge_rect.min, size), canvas_rect)
+        } else if response.double_clicked() {
             self.placements.remove(&key);
             clamp_into(Rect::from_min_size(anchored, size), canvas_rect)
         } else {
@@ -550,8 +590,22 @@ impl TelemetryBoxes {
             moved
         };
 
-        paint_telemetry_box(painter, badge_rect, color, lines, font_scale);
-        response.on_hover_text(tip)
+        // A shut box paints its title line and nothing else, and no body line is measured or laid
+        // out on the way there - `drawn_box_size` asked the title alone for the size.
+        let drawn = if collapsed { &lines[..lines.len().min(1)] } else { lines };
+        paint_telemetry_box(painter, badge_rect, color, drawn, font_scale, collapsed);
+        let _ = toggle.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(if collapsed {
+            "Expand this box"
+        } else {
+            "Collapse this box to its title line"
+        });
+        // The box's own tip belongs to the rest of the box: two tooltips over one triangle would
+        // ask the reader which of the two answers the triangle.
+        if over_triangle {
+            response
+        } else {
+            response.on_hover_text(tip)
+        }
     }
 }
 
@@ -653,9 +707,84 @@ fn telemetry_fonts(font_scale: f32) -> (egui::FontId, egui::FontId) {
     )
 }
 
+/// The one layout every info box is measured and painted by: the padding inside the frame, the
+/// step from one printed line to the next, and the column the disclosure triangle stands in at the
+/// left of the title line. Measuring and painting have to agree to the point, or the triangle
+/// lands somewhere other than the room reserved for it and the title text starts over the
+/// triangle, so both ask here rather than each spelling the numbers out.
+struct BoxMetrics {
+    pad_x: f32,
+    pad_y: f32,
+    line_spacing: f32,
+    /// How far right the title line's text sits, which is how much wider the title line makes the
+    /// box. Every box pays for the column in both states: a box that changed width as it shut
+    /// would move its own right-hand edge for no reason the user asked for.
+    column: f32,
+}
+
+fn box_metrics(font_scale: f32) -> BoxMetrics {
+    let font_scale = font_scale.clamp(0.7, 2.0);
+    BoxMetrics {
+        pad_x: 10.0 * font_scale,
+        pad_y: 6.0 * font_scale,
+        line_spacing: 13.0 * font_scale,
+        column: 18.0 * font_scale,
+    }
+}
+
+/// The smallest comfortable click target, in points. The drawn triangle is smaller than this at
+/// every font scale: a mark that reads well at ten points is still a mark the mouse has to find,
+/// so the click area is the title row's left gutter grown to this square rather than the outline
+/// of the art.
+const DISCLOSURE_HIT: f32 = 16.0;
+
+/// Where the disclosure triangle is drawn: a small square centred in the title row's left gutter.
+fn disclosure_art_rect(badge_rect: Rect, font_scale: f32) -> Rect {
+    let m = box_metrics(font_scale);
+    let scale = font_scale.clamp(0.7, 2.0);
+    Rect::from_center_size(
+        Pos2::new(
+            badge_rect.left() + m.pad_x + m.column * 0.5,
+            badge_rect.top() + m.pad_y + m.line_spacing * 0.5,
+        ),
+        Vec2::new(9.0 * scale, 7.0 * scale),
+    )
+}
+
+/// What a click on the triangle has to land in: the title row's gutter, out to where the title's
+/// own text begins and down the row, grown to `DISCLOSURE_HIT` where the gutter is smaller than
+/// that and then held inside the box. It stops at the text so that a drag started on the title
+/// still moves the box, and it is held inside the box so that it never takes a press meant for
+/// the canvas underneath.
+fn disclosure_hit_rect(badge_rect: Rect, font_scale: f32) -> Rect {
+    let m = box_metrics(font_scale);
+    let text_left = badge_rect.left() + m.pad_x + m.column;
+    let width = DISCLOSURE_HIT.max(text_left - badge_rect.left());
+    let height = DISCLOSURE_HIT.max(m.pad_y + m.line_spacing);
+    Rect::from_min_max(
+        Pos2::new(text_left - width, badge_rect.top()),
+        Pos2::new(text_left, badge_rect.top() + height),
+    )
+    .intersect(badge_rect)
+}
+
+/// The size the box is drawn at this frame: the whole card, or the title line alone.
+fn drawn_box_size(
+    painter: &egui::Painter,
+    lines: &[TelemetryLine],
+    font_scale: f32,
+    collapsed: bool,
+) -> Vec2 {
+    match (collapsed, lines.first()) {
+        (true, Some(title)) => collapsed_box_size(painter, title, font_scale),
+        _ => telemetry_box_size(painter, lines, font_scale),
+    }
+}
+
 /// Width fitted to the longest line, height to the actual number of lines.
 fn telemetry_box_size(painter: &egui::Painter, lines: &[TelemetryLine], font_scale: f32) -> Vec2 {
     let font_scale = font_scale.clamp(0.7, 2.0);
+    let m = box_metrics(font_scale);
     let (font_title, font_body) = telemetry_fonts(font_scale);
     let max_text_w = lines
         .iter()
@@ -667,35 +796,57 @@ fn telemetry_box_size(painter: &egui::Painter, lines: &[TelemetryLine], font_sca
             } else {
                 font_body.clone()
             };
-            painter.layout_no_wrap(line.text.clone(), font, line.color).size().x
+            let text_w = painter.layout_no_wrap(line.text.clone(), font, line.color).size().x;
+            // The title line carries the triangle's column, so the box is wide enough for both
+            // whether the title is the longest line or not.
+            if line.is_title { text_w + m.column } else { text_w }
         })
         .fold(0.0_f32, f32::max);
 
-    let pad_x = 10.0 * font_scale;
-    let pad_y = 6.0 * font_scale;
-    let line_spacing = 13.0 * font_scale;
     Vec2::new(
-        (max_text_w + pad_x * 2.0).max(180.0 * font_scale),
-        (pad_y * 2.0 + line_spacing * (lines.len() as f32 - 0.2)).max(56.0 * font_scale),
+        (max_text_w + m.pad_x * 2.0).max(180.0 * font_scale),
+        (m.pad_y * 2.0 + m.line_spacing * (lines.len() as f32 - 0.2)).max(56.0 * font_scale),
     )
 }
 
+/// The size of a box shut down to its title line: that line, the triangle's column and the same
+/// padding, and neither of the floors the open box carries. Those floors keep a column of readings
+/// in one shape; a shut box is a label with a handle on it, and padding a label out to the width
+/// of the readings it is hiding would say the readings are still there.
+fn collapsed_box_size(painter: &egui::Painter, title: &TelemetryLine, font_scale: f32) -> Vec2 {
+    let font_scale = font_scale.clamp(0.7, 2.0);
+    let m = box_metrics(font_scale);
+    let (font_title, _) = telemetry_fonts(font_scale);
+    let font = if title.bold {
+        bold_font(painter, Theme::MIN_FONT_PT * font_scale)
+    } else {
+        font_title
+    };
+    let text_w = painter.layout_no_wrap(title.text.clone(), font, title.color).size().x;
+    Vec2::new(
+        text_w + m.column + m.pad_x * 2.0,
+        m.pad_y * 2.0 + m.line_spacing * 0.8,
+    )
+}
+
+/// Paint the card, the disclosure triangle and the lines handed in - which is the title line alone
+/// when the box stands shut.
 fn paint_telemetry_box(
     painter: &egui::Painter,
     badge_rect: Rect,
     color: Color32,
     lines: &[TelemetryLine],
     font_scale: f32,
+    collapsed: bool,
 ) {
     let font_scale = font_scale.clamp(0.7, 2.0);
+    let m = box_metrics(font_scale);
     let (font_title, font_body) = telemetry_fonts(font_scale);
-    let pad_x = 10.0 * font_scale;
-    let pad_y = 6.0 * font_scale;
-    let line_spacing = 13.0 * font_scale;
 
     // Under the box and before it, so it falls on the chart and not on the card. Boxes can
     // overlap, and when they do the upper one's shadow lands on the lower one, which is what a
-    // shadow does.
+    // shadow does. A shut box keeps the frame, the fill, the corner and the shadow of the open
+    // one: what changes is how much of the box there is, not what kind of thing the box is.
     painter.add(BOX_SHADOW.as_shape(badge_rect, BOX_CORNER_RADIUS * font_scale));
     painter.rect_filled(badge_rect, BOX_CORNER_RADIUS * font_scale, Color32::from_black_alpha(230));
     painter.rect_stroke(
@@ -705,6 +856,22 @@ fn paint_telemetry_box(
         egui::StrokeKind::Inside,
     );
 
+    // The disclosure triangle, drawn rather than set in a glyph: the bundled fonts carry no arrow,
+    // and a test context carries no font at all. Down while the box is open and right while the
+    // box is shut, which is the triangle every file list turns.
+    let art = disclosure_art_rect(badge_rect, font_scale);
+    let points = if collapsed {
+        vec![art.left_top(), art.left_bottom(), Pos2::new(art.right(), art.center().y)]
+    } else {
+        vec![art.left_top(), art.right_top(), Pos2::new(art.center().x, art.bottom())]
+    };
+    let triangle_colour = lines.first().map_or(color, |line| line.color);
+    painter.add(PathShape::convex_polygon(
+        points,
+        triangle_colour,
+        egui::epaint::PathStroke::NONE,
+    ));
+
     for (i, line) in lines.iter().enumerate() {
         let font = if line.bold {
             bold_font(painter, Theme::MIN_FONT_PT * font_scale)
@@ -713,8 +880,12 @@ fn paint_telemetry_box(
         } else {
             font_body.clone()
         };
+        let indent = if line.is_title { m.column } else { 0.0 };
         painter.text(
-            Pos2::new(badge_rect.left() + pad_x, badge_rect.top() + pad_y + line_spacing * i as f32),
+            Pos2::new(
+                badge_rect.left() + m.pad_x + indent,
+                badge_rect.top() + m.pad_y + m.line_spacing * i as f32,
+            ),
             egui::Align2::LEFT_TOP,
             line.text.clone(),
             font,
@@ -3081,6 +3252,16 @@ fn segment_y_at_x(a: Pos2, b: Pos2, x: f32) -> f32 {
     a.y + t * (b.y - a.y)
 }
 
+/// Every shape a painter was handed, flattened out of the nested `Shape::Vec`s. Shared by both of
+/// this file's test modules, which is why it sits out here rather than in either of them.
+#[cfg(test)]
+fn flatten(shape: &egui::Shape, out: &mut Vec<egui::Shape>) {
+    match shape {
+        egui::Shape::Vec(inner) => inner.iter().for_each(|s| flatten(s, out)),
+        other => out.push(other.clone()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3207,6 +3388,204 @@ mod tests {
             // The width never drops below the minimum badge width, whatever the line count.
             assert!(telemetry_box_size(painter, &six, 1.0).x >= 180.0);
         });
+    }
+
+    fn release(pos: Pos2) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::default(),
+        }
+    }
+
+    /// A box with a live title and two readings under it, which is the shape of every info box on
+    /// every canvas: the title is the first line and the body is the rest.
+    fn sample_lines() -> Vec<TelemetryLine> {
+        let reading = |text: &str| TelemetryLine {
+            text: text.to_string(),
+            color: Theme::TEXT_BRIGHT,
+            is_title: false,
+            bold: false,
+        };
+        vec![
+            TelemetryLine {
+                text: "Bob [Region II]".to_string(),
+                color: Theme::BOB_COLOR,
+                is_title: true,
+                bold: false,
+            },
+            reading("dr/dt -0.412 c"),
+            reading("tau 12.5 M"),
+        ]
+    }
+
+    /// One headless frame of a single info box, registered in the order every canvas registers
+    /// one: the background allocates its own drag response first and the box goes on top. The box
+    /// is anchored well inside the canvas, so nothing measured here is about clamping. Returns
+    /// every shape the frame painted.
+    fn telemetry_frame(
+        ctx: &egui::Context,
+        boxes: &mut TelemetryBoxes,
+        lines: &[TelemetryLine],
+        events: Vec<egui::Event>,
+    ) -> Vec<egui::Shape> {
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(420.0, 340.0))),
+            events,
+            ..Default::default()
+        };
+        let output = ctx.run_ui(input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let (canvas, painter) =
+                    ui.allocate_painter(Vec2::new(360.0, 260.0), egui::Sense::drag());
+                let anchored = canvas.rect.min + Vec2::new(60.0, 70.0);
+                let _ = boxes.show_lines(
+                    ui,
+                    &painter,
+                    Canvas::Spacetime,
+                    BoxId::Observer(Who::Bob),
+                    canvas.rect,
+                    anchored,
+                    lines,
+                    Theme::BOB_COLOR,
+                    1.0,
+                    TELEMETRY_HOVER_TIP,
+                );
+            });
+        });
+        let mut shapes = Vec::new();
+        for clipped in output.shapes.iter() {
+            flatten(&clipped.shape, &mut shapes);
+        }
+        output.drop_without_applying_deltas();
+        shapes
+    }
+
+    /// The card a frame painted, read off the one rectangle carrying the box's own fill.
+    fn painted_card(shapes: &[egui::Shape]) -> Rect {
+        shapes
+            .iter()
+            .find_map(|s| match s {
+                egui::Shape::Rect(r) if r.fill == Color32::from_black_alpha(230) => Some(r.rect),
+                _ => None,
+            })
+            .expect("the frame painted a box")
+    }
+
+    /// Every string a frame printed.
+    fn painted_text(shapes: &[egui::Shape]) -> Vec<String> {
+        shapes
+            .iter()
+            .filter_map(|s| match s {
+                egui::Shape::Text(t) => Some(t.galley.text().to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The triangle shuts the box down to its title line and opens it again, and the corner the
+    /// user is looking at does not move under either click. A box that has never been dragged is
+    /// the case that could move: the anchor a box is placed at depends on the box's size, so the
+    /// anchor is measured on the open box in both states and only the drawn size is clamped.
+    #[test]
+    fn test_a_click_on_the_triangle_shuts_a_box_to_its_title_line_and_another_click_opens_it() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let mut boxes = TelemetryBoxes::default();
+        let lines = sample_lines();
+        let key = (Canvas::Spacetime, BoxId::Observer(Who::Bob));
+
+        // The first frame only registers the widgets, which is what the next frame's hit test
+        // reads.
+        let shapes = telemetry_frame(&ctx, &mut boxes, &lines, vec![]);
+        let open = painted_card(&shapes);
+        assert!(
+            painted_text(&shapes).iter().any(|t| t == "dr/dt -0.412 c"),
+            "the open box prints its readings"
+        );
+
+        let at = disclosure_hit_rect(open, 1.0).center();
+        telemetry_frame(&ctx, &mut boxes, &lines, vec![egui::Event::PointerMoved(at)]);
+        telemetry_frame(&ctx, &mut boxes, &lines, vec![press(at)]);
+        let shapes = telemetry_frame(&ctx, &mut boxes, &lines, vec![release(at)]);
+
+        assert!(boxes.collapsed.contains(&key), "the click shut the box");
+        let shut = painted_card(&shapes);
+        assert_eq!(shut.min, open.min, "and the box's top-left corner stayed where it was");
+        let m = box_metrics(1.0);
+        assert!(
+            (shut.height() - (m.pad_y * 2.0 + m.line_spacing * 0.8)).abs() < 1e-3,
+            "a shut box is one title row tall, not {}",
+            shut.height()
+        );
+        assert!(shut.width() < open.width(), "and no wider than the title needs");
+        let printed = painted_text(&shapes);
+        assert!(printed.iter().any(|t| t == "Bob [Region II]"), "the title line is still drawn");
+        assert!(
+            !printed.iter().any(|t| t.starts_with("dr/dt") || t.starts_with("tau")),
+            "and no reading under it is: {printed:?}"
+        );
+
+        telemetry_frame(&ctx, &mut boxes, &lines, vec![press(at)]);
+        let shapes = telemetry_frame(&ctx, &mut boxes, &lines, vec![release(at)]);
+        assert!(!boxes.collapsed.contains(&key), "a second click opens the box again");
+        assert_eq!(painted_card(&shapes), open, "exactly as it was");
+        assert!(painted_text(&shapes).iter().any(|t| t == "tau 12.5 M"), "readings and all");
+    }
+
+    /// The triangle takes the click and nothing else does: within the layer it is registered after
+    /// the box, so the press reaches the triangle rather than starting a drag or counting towards
+    /// the box's double-click reset. A press on the title text itself still drags the box.
+    #[test]
+    fn test_the_triangle_takes_the_click_and_the_title_line_keeps_the_drag() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        // The pinning canvases are the strict case: there a drag is what creates the placement at
+        // all, so a placement appearing or vanishing is visible in the map.
+        let mut boxes = TelemetryBoxes::pinning();
+        let lines = sample_lines();
+        let key = (Canvas::Spacetime, BoxId::Observer(Who::Bob));
+
+        let anchored = painted_card(&telemetry_frame(&ctx, &mut boxes, &lines, vec![]));
+        assert!(boxes.placements.is_empty(), "an untouched box has no placement");
+
+        // A press on the title line, well clear of the triangle's column, and then two frames of
+        // motion: egui starts the drag on the frame that crosses its own threshold.
+        let m = box_metrics(1.0);
+        let on_title = Pos2::new(anchored.left() + m.pad_x + m.column + 30.0, anchored.top() + 8.0);
+        telemetry_frame(&ctx, &mut boxes, &lines, vec![egui::Event::PointerMoved(on_title)]);
+        telemetry_frame(&ctx, &mut boxes, &lines, vec![press(on_title)]);
+        for step in [Vec2::new(30.0, 20.0), Vec2::new(50.0, 40.0)] {
+            let to = on_title + step;
+            telemetry_frame(&ctx, &mut boxes, &lines, vec![egui::Event::PointerMoved(to)]);
+        }
+        telemetry_frame(&ctx, &mut boxes, &lines, vec![release(on_title + Vec2::new(50.0, 40.0))]);
+        let dragged = painted_card(&telemetry_frame(&ctx, &mut boxes, &lines, vec![]));
+        assert!(
+            (dragged.min - anchored.min).length() > 30.0,
+            "a drag from the title text still moves the box: {:?} from {:?}",
+            dragged.min,
+            anchored.min
+        );
+        let placement = boxes.placements.get(&key).copied().expect("and the move is remembered");
+
+        // Now the triangle, on the box where the drag left it.
+        let at = disclosure_hit_rect(dragged, 1.0).center();
+        telemetry_frame(&ctx, &mut boxes, &lines, vec![egui::Event::PointerMoved(at)]);
+        telemetry_frame(&ctx, &mut boxes, &lines, vec![press(at)]);
+        let shapes = telemetry_frame(&ctx, &mut boxes, &lines, vec![release(at)]);
+        assert!(boxes.collapsed.contains(&key), "the click shut the box");
+        assert_eq!(
+            boxes.placements.get(&key).copied(),
+            Some(placement),
+            "and left the placement alone - it neither moved the box nor reset the drag"
+        );
+        assert_eq!(
+            painted_card(&shapes).min,
+            dragged.min,
+            "a dragged box keeps its corner as it shuts, too"
+        );
     }
 
     /// A box dragged past the edge is slid back inside the canvas rather than clipped.
@@ -4110,14 +4489,6 @@ mod canvas_tests {
         );
     }
 
-    /// Every shape a painter was handed, flattened out of the nested `Shape::Vec`s.
-    fn flatten(shape: &egui::Shape, out: &mut Vec<egui::Shape>) {
-        match shape {
-            egui::Shape::Vec(inner) => inner.iter().for_each(|s| flatten(s, out)),
-            other => out.push(other.clone()),
-        }
-    }
-
     /// The main canvas rectangle of a painted frame, read off the one shape that is always there:
     /// the background, which every chart lays down over the whole canvas before anything else. The
     /// radial track under the diagram carries the same fill, so the taller of the two is the one
@@ -4252,7 +4623,16 @@ mod canvas_tests {
             let [r, g, b, a] = path.fill.to_srgba_unmultiplied();
             assert!(a == 0 || path.points.len() != 4, "a filled quad is a piece of a wedge fill");
             let bob_rgb = [Theme::BOB_COLOR.r(), Theme::BOB_COLOR.g(), Theme::BOB_COLOR.b()];
-            assert!(a == 0 || [r, g, b] != bob_rgb, "a fill in the transmission's own colour");
+            // One filled path on this chart carries Bob's colour and is no part of a wedge: the
+            // disclosure triangle on the title line of Bob's own info box. It is three points
+            // inside a ten-point square, where a wedge fill was a strip of quads laid across the
+            // whole chart, so the size tells the two apart without naming the box.
+            let bounds = Rect::from_points(&path.points);
+            let triangle = path.points.len() == 3 && bounds.width().max(bounds.height()) <= 10.0;
+            assert!(
+                a == 0 || triangle || [r, g, b] != bob_rgb,
+                "a fill in the transmission's own colour"
+            );
         }
 
         // Where the heads have to be: the two edges of every pulse that still has a live ray, at

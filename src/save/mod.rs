@@ -76,6 +76,12 @@
 //! by a build from before the dropdown, stepping by about the same amount, without letting two
 //! spellings of the same setting disagree on the way in.
 //!
+//! `Telemetry::collapsed` is the second: the disclosure triangle on a box's title line shuts that
+//! box down to the line, and the list names every box left shut, under the same slugs `placements`
+//! uses. A file written before the triangle existed carries no list and opens with every box open,
+//! which is the state that file was saved in, and a slug this build has never heard of is dropped
+//! from the list rather than refused, exactly as an unknown placement is.
+//!
 //! *A changed field is a new version.* A field whose units change, whose meaning changes, that
 //! splits in two, or that goes away, is a structural change, and a reader has to be told which
 //! spelling it is looking at. Then:

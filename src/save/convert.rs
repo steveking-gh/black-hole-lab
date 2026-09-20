@@ -682,7 +682,16 @@ fn telemetry_to_v1(boxes: &TelemetryBoxes) -> v1::Telemetry {
         })
         .collect();
     placements.sort_by(|a, b| (&a.canvas, &a.box_id).cmp(&(&b.canvas, &b.box_id)));
-    v1::Telemetry { pin_on_drag: boxes.pin_on_drag, placements }
+    let mut collapsed: Vec<v1::CollapsedBox> = boxes
+        .collapsed
+        .iter()
+        .map(|(canvas, id)| v1::CollapsedBox {
+            canvas: canvas.key().to_string(),
+            box_id: id.key().to_string(),
+        })
+        .collect();
+    collapsed.sort_by(|a, b| (&a.canvas, &a.box_id).cmp(&(&b.canvas, &b.box_id)));
+    v1::Telemetry { pin_on_drag: boxes.pin_on_drag, placements, collapsed }
 }
 
 /// A placement whose canvas or box slug this build has never heard of is dropped rather than
@@ -706,6 +715,16 @@ fn apply_telemetry_v1(saved: &v1::Telemetry, boxes: &mut TelemetryBoxes) {
             }
         };
         boxes.placements.insert((canvas, id), at);
+    }
+    // A shut box is dropped on an unknown slug exactly as a moved one is, and for the same reason.
+    // An older file has no list here at all and every box opens, which is how that file was saved.
+    boxes.collapsed.clear();
+    for shut in &saved.collapsed {
+        if let (Some(canvas), Some(id)) =
+            (Canvas::from_key(&shut.canvas), BoxId::from_key(&shut.box_id))
+        {
+            boxes.collapsed.insert((canvas, id));
+        }
     }
 }
 

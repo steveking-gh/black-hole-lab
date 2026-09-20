@@ -1,4 +1,4 @@
-//! What a save has to be true of, in eight tests.
+//! What a save has to be true of, in nine tests.
 //!
 //! The first is the one that matters and the one the others lean on: a run saved half way through,
 //! loaded into a fresh app and played on, must end on the same fingerprint as the run that was
@@ -8,7 +8,7 @@
 //!
 //! The rest cover what a fingerprint cannot see (the panel, the views, the trails and the counters),
 //! the spelling of the numbers JSON has no spelling for, the refusals, one file committed to the
-//! repository that this build has to go on being able to open, the one field the format has added
+//! repository that this build has to go on being able to open, the two fields the format has added
 //! since it shipped, and the two methods the Save and Load buttons call once a path has been
 //! chosen - which is as far into those buttons as a test can reach, because nothing headless can
 //! answer a native dialog.
@@ -197,6 +197,11 @@ fn test_a_save_round_trips_through_its_own_bytes() {
         (Canvas::Spatial, BoxId::CauchyHorizon),
         Placement::Pinned(egui::vec2(40.0, 40.0)),
     );
+    // One box shut where another was moved, and one shut on a canvas where nothing was moved at
+    // all: shutting a box is not moving it, and the two lists are written and read apart.
+    app.spacetime_canvas.telemetry.collapsed.insert((Canvas::Spacetime, BoxId::Observer(Who::Alice)));
+    app.spacetime_canvas.telemetry.collapsed.insert((Canvas::RestFrame, BoxId::Signal(Who::Bob)));
+    app.volume_canvas.telemetry.collapsed.insert((Canvas::Volume, BoxId::Observer(Who::Bob)));
     app.volume_canvas.camera.yaw = 0.42;
     app.volume_canvas.camera.t_scale = 2.5;
     app.volume_canvas.show_ghost_cones = true;
@@ -509,6 +514,85 @@ fn test_the_step_grain_comes_back_from_a_file_and_an_older_file_opens_at_the_def
     // A slug from some later version falls back the same way rather than refusing the file.
     let unknown = v1::Controls { step_grain: Some("half-a-frame".to_string()), ..written };
     assert_eq!(convert::controls_from_v1(&unknown).step_grain, default_grain);
+}
+
+#[test]
+fn test_a_shut_box_comes_back_from_a_file_and_an_older_file_opens_every_box() {
+    // The second additive field, and the same three things asked of it: a shut box is carried by
+    // the slugs it is already filed under, a file written before the disclosure triangle existed
+    // opens with every box open, and a slug this build has never heard of is dropped rather than
+    // refusing the file.
+    let mut app = default_app();
+    let shut = &mut app.spatial_canvas.telemetry.collapsed;
+    shut.insert((Canvas::Spatial, BoxId::Observer(Who::Bob)));
+    shut.insert((Canvas::Spatial, BoxId::CauchyHorizon));
+    let view =
+        convert::view_to_v1(&app.spacetime_canvas, &app.spatial_canvas, &app.volume_canvas);
+    assert_eq!(
+        view.spatial
+            .telemetry
+            .collapsed
+            .iter()
+            .map(|c| (c.canvas.as_str(), c.box_id.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("spatial", "bob"), ("spatial", "cauchy-horizon")],
+        "sorted on the slugs, so two saves of one state are one file"
+    );
+    assert!(view.spatial.telemetry.placements.is_empty(), "and a shut box is not a moved one");
+
+    // Through the JSON and back, because what a file carries is the text.
+    let text = serde_json::to_string(&view).expect("writable");
+    let read: v1::View = serde_json::from_str(&text).expect("readable");
+    let mut restored = SpacetimeApp::default();
+    let put = |view: &v1::View, app: &mut SpacetimeApp| {
+        convert::apply_view_v1(
+            view,
+            &mut app.spacetime_canvas,
+            &mut app.spatial_canvas,
+            &mut app.volume_canvas,
+        );
+    };
+    put(&read, &mut restored);
+    assert_eq!(
+        restored.spatial_canvas.telemetry.collapsed, app.spatial_canvas.telemetry.collapsed,
+        "the shut boxes came back shut"
+    );
+
+    // A box named by a canvas or a subject from some later version is skipped, exactly as an
+    // unknown placement is, and the boxes this build does know still come back.
+    let mut unknown = read.clone();
+    unknown.spatial.telemetry.collapsed = vec![
+        v1::CollapsedBox { canvas: "hyperbolic".to_string(), box_id: "bob".to_string() },
+        v1::CollapsedBox { canvas: "spatial".to_string(), box_id: "carol".to_string() },
+        v1::CollapsedBox { canvas: "spatial".to_string(), box_id: "bob".to_string() },
+    ];
+    put(&unknown, &mut restored);
+    assert_eq!(restored.spatial_canvas.telemetry.collapsed.len(), 1, "two dropped, one kept");
+    assert!(
+        restored
+            .spatial_canvas
+            .telemetry
+            .collapsed
+            .contains(&(Canvas::Spatial, BoxId::Observer(Who::Bob)))
+    );
+
+    // The committed golden file predates the triangle, so it is the real version-1 document
+    // without the field, and every box in it opens.
+    let golden = read_document(include_str!("golden/v1.json").as_bytes()).expect("the golden loads");
+    for telemetry in [
+        &golden.view.spacetime.telemetry,
+        &golden.view.spatial.telemetry,
+        &golden.view.volume.telemetry,
+    ] {
+        assert!(telemetry.collapsed.is_empty(), "the golden file shuts no box");
+    }
+    put(&golden.view, &mut restored);
+    assert!(
+        restored.spacetime_canvas.telemetry.collapsed.is_empty()
+            && restored.spatial_canvas.telemetry.collapsed.is_empty()
+            && restored.volume_canvas.telemetry.collapsed.is_empty(),
+        "so the run comes up with every box open"
+    );
 }
 
 /// How the golden file was made, and how the next one is made.

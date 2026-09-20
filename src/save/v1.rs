@@ -634,6 +634,23 @@ pub struct Telemetry {
     /// One entry per box the user has moved, sorted by (canvas, box) so that two saves of the same
     /// state are the same bytes. The live collection is a hash map, whose order is not.
     pub placements: Vec<Placement>,
+    /// One entry per box the user has shut down to its title line, in the same order and for the
+    /// same reason as `placements`.
+    ///
+    /// Additive: a file written before the disclosure triangle existed carries no list at all and
+    /// loads with every box open, which is the state that file was saved in. A box named here and
+    /// nowhere in `placements` is an ordinary case - shutting a box is not moving it.
+    #[serde(default)]
+    pub collapsed: Vec<CollapsedBox>,
+}
+
+/// One box standing shut, named by the same stable slugs a `Placement` is named by, and dropped on
+/// load for the same reason where this build knows neither slug.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CollapsedBox {
+    pub canvas: String,
+    #[serde(rename = "box")]
+    pub box_id: String,
 }
 
 /// One dragged box, named by the stable slugs of `Canvas::key` and `BoxId::key`.
