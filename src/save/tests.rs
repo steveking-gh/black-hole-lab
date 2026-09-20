@@ -524,6 +524,8 @@ fn test_a_shut_box_comes_back_from_a_file_and_an_older_file_opens_every_box() {
     // refusing the file.
     let mut app = default_app();
     let shut = &mut app.spatial_canvas.telemetry.collapsed;
+    // A fresh app starts with every box shut; this test files exactly two.
+    shut.clear();
     shut.insert((Canvas::Spatial, BoxId::Observer(Who::Bob)));
     shut.insert((Canvas::Spatial, BoxId::CauchyHorizon));
     let view =

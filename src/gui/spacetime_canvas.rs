@@ -378,8 +378,8 @@ impl Canvas {
 }
 
 /// Which box on that canvas: the subject it reads, never the words it prints. The other half of a
-/// box's identity, and the half that outlives every rewording of a title - the Cauchy box titles
-/// itself with the current r₋ in kilometres, and is this same box whatever that says.
+/// box's identity, and the half that outlives every rewording of a title or of a line under it -
+/// the Cauchy box quotes the current r₋ in kilometres, and is this same box whatever that says.
 ///
 /// Its `key` carries the same promise, and the same warning, as `Canvas::key`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -454,6 +454,18 @@ impl TelemetryBoxes {
     /// Boxes that stay where the user drops them, however the observer moves afterwards.
     pub fn pinning() -> Self {
         Self { pin_on_drag: true, ..Self::default() }
+    }
+
+    /// The same boxes with every box on `canvases` shut down to its title line, which is how the
+    /// app's own canvases start: a fresh picture shows the names of what can be read, and the
+    /// triangle on a title line opens that one box. The canvases are named rather than taken
+    /// from `Canvas::ALL` because the set is saved as it stands, and a canvas should not write
+    /// boxes of a picture it never draws into its file.
+    pub fn starting_shut(mut self, canvases: &[Canvas]) -> Self {
+        for &canvas in canvases {
+            self.collapsed.extend(BoxId::ALL.into_iter().map(|id| (canvas, id)));
+        }
+        self
     }
 
     /// Lay out, register, drag and paint one observer's info box.
@@ -929,8 +941,9 @@ Time — the proper time on your own watch between here and the crossing, ∫ r�
 
 “beyond r₊” — the path from here to r₋ would have to cross Region II, so no spacelike curve in your rest space reaches r₋ and the integral has nothing to return. r₋ does not lie on your worldline yet either, and whether r₋ ever will depends on what you do next.";
 
-/// The three lines of a horizon's box: what the surface is called, whether it is a place or a
-/// moment from where this observer stands, and the one number that reading admits.
+/// The lines of a horizon's box: what the surface is called, its radius where the caller quotes
+/// one (the (t, r) chart does, the rest-frame view does not), whether it is a place or a moment
+/// from where this observer stands, and the one number that reading admits.
 ///
 /// The place-or-moment test is region adjacency, not the local causal character the drawn line
 /// carries. `LocalLine::character` reads the tilt of r = const at the *observer's* radius and so
@@ -944,6 +957,7 @@ fn horizon_box_lines(
     obs: &Observer,
     obs_name: &str,
     title: &str,
+    radius: Option<&str>,
     r_h: f64,
     color: Color32,
 ) -> Vec<TelemetryLine> {
@@ -999,11 +1013,13 @@ fn horizon_box_lines(
         ("Moment, not a place".to_string(), when)
     };
 
-    vec![
-        TelemetryLine { text: title.to_string(), color, is_title: true, bold: false },
-        TelemetryLine { text: kind, color: Theme::TEXT_BRIGHT, is_title: false, bold: false },
-        TelemetryLine { text: detail, color: Theme::TEXT_BRIGHT, is_title: false, bold: false },
-    ]
+    let body = |text: String| TelemetryLine { text, color: Theme::TEXT_BRIGHT, is_title: false, bold: false };
+    let mut lines = vec![TelemetryLine { text: title.to_string(), color, is_title: true, bold: false }];
+    // The radius goes under the title rather than in it, so that a shut box is its name alone.
+    lines.extend(radius.map(|r| body(r.to_string())));
+    lines.push(body(kind));
+    lines.push(body(detail));
+    lines
 }
 
 
@@ -1255,7 +1271,8 @@ impl Default for SpacetimeCanvas {
             time_offset: 0.0,
             frame_max_r: FRAME_MAX_R_DEFAULT,
             keep_surface_framed: true,
-            telemetry: TelemetryBoxes::default(),
+            telemetry: TelemetryBoxes::default()
+                .starting_shut(&[Canvas::Spacetime, Canvas::RestFrame]),
             steep_boxes: std::collections::HashSet::new(),
         }
     }
@@ -1940,17 +1957,22 @@ Tick Enable Observer on Alice's or Bob's card",
         let x_rm_actual = to_screen_x(rm);
         if x_rm_actual >= rect.left() && x_rm_actual <= rect.right() {
             painter.line_segment([Pos2::new(x_rm_actual, rect.top()), Pos2::new(x_rm_actual, rect.bottom())], Stroke::new(2.5, Theme::HORIZON_CAUCHY));
-            let rm_label = if use_physical_units {
-                format!("Cauchy Horizon r₋ = {} ({:.2}M)", metric.format_km(metric.r_to_km(rm)), rm)
+            let rm_radius = if use_physical_units {
+                format!("r₋ = {} ({:.2}M)", metric.format_km(metric.r_to_km(rm)), rm)
             } else {
-                format!("Cauchy Horizon r₋ = {:.2}M ({})", rm, metric.format_physical_distance(rm))
+                format!("r₋ = {:.2}M ({})", rm, metric.format_physical_distance(rm))
             };
             if let Some(obs) = horizon_reader {
-                let box_lines =
-                    horizon_box_lines(metric, obs, &obs.name, &rm_label, rm, HORIZON_BOX_RED);
+                let box_lines = horizon_box_lines(
+                    metric,
+                    obs,
+                    &obs.name,
+                    "Cauchy Horizon",
+                    Some(&rm_radius),
+                    rm,
+                    HORIZON_BOX_RED,
+                );
                 pending_boxes.push(PendingBox {
-                    // The subject, not the title: the title carries the radius and so changes with
-                    // the Mass and Spin sliders, which would lose a box the user had dragged.
                     id: BoxId::CauchyHorizon,
                     anchor: Pos2::new(x_rm_actual + 4.0, rect.top() + 42.0),
                     lines: box_lines,
@@ -1961,7 +1983,7 @@ Tick Enable Observer on Alice's or Bob's card",
                 painter.text(
                     Pos2::new(x_rm_actual + 4.0, rect.top() + 42.0),
                     egui::Align2::LEFT_TOP,
-                    rm_label,
+                    format!("Cauchy Horizon {rm_radius}"),
                     egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
                     Theme::HORIZON_CAUCHY,
                 );
@@ -1972,17 +1994,22 @@ Tick Enable Observer on Alice's or Bob's card",
         let x_rp_actual = to_screen_x(rp);
         if x_rp_actual >= rect.left() && x_rp_actual <= rect.right() {
             painter.line_segment([Pos2::new(x_rp_actual, rect.top()), Pos2::new(x_rp_actual, rect.bottom())], Stroke::new(2.5, Theme::HORIZON_OUTER));
-            let rp_label = if use_physical_units {
-                format!("Event Horizon r₊ = {} ({:.2}M)", metric.format_km(metric.r_to_km(rp)), rp)
+            let rp_radius = if use_physical_units {
+                format!("r₊ = {} ({:.2}M)", metric.format_km(metric.r_to_km(rp)), rp)
             } else {
-                format!("Event Horizon r₊ = {:.2}M ({})", rp, metric.format_physical_distance(rp))
+                format!("r₊ = {:.2}M ({})", rp, metric.format_physical_distance(rp))
             };
             if let Some(obs) = horizon_reader {
-                let box_lines =
-                    horizon_box_lines(metric, obs, &obs.name, &rp_label, rp, Theme::HORIZON_OUTER);
+                let box_lines = horizon_box_lines(
+                    metric,
+                    obs,
+                    &obs.name,
+                    "Event Horizon",
+                    Some(&rp_radius),
+                    rp,
+                    Theme::HORIZON_OUTER,
+                );
                 pending_boxes.push(PendingBox {
-                    // The subject, not the title: the title carries the radius and so changes with
-                    // the Mass and Spin sliders, which would lose a box the user had dragged.
                     id: BoxId::OuterHorizon,
                     anchor: Pos2::new(x_rp_actual + 4.0, rect.top() + 42.0),
                     lines: box_lines,
@@ -1993,7 +2020,7 @@ Tick Enable Observer on Alice's or Bob's card",
                 painter.text(
                     Pos2::new(x_rp_actual + 4.0, rect.top() + 58.0),
                     egui::Align2::LEFT_TOP,
-                    rp_label,
+                    format!("Event Horizon {rp_radius}"),
                     egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
                     Theme::HORIZON_OUTER,
                 );
@@ -2678,7 +2705,7 @@ Tick Enable Observer on Alice's or Bob's card",
             // causal character of their line as drawn, which is the same question asked of a
             // surface whose answer never changes.
             let box_lines = if is_horizon {
-                horizon_box_lines(metric, focus_obs, &focus_obs.name, title, r_h, border)
+                horizon_box_lines(metric, focus_obs, &focus_obs.name, title, None, r_h, border)
             } else {
                 vec![
                     TelemetryLine { text: title.to_string(), color: border, is_title: true, bold: false },
@@ -4263,6 +4290,8 @@ mod canvas_tests {
         let idle = SignalField::default();
         let text_of = |frame: ReferenceFrame| {
             let mut canvas = SpacetimeCanvas { keep_surface_framed: false, ..Default::default() };
+            // The boxes start shut, and the frequencies are what an open one prints.
+            canvas.telemetry.collapsed.clear();
             let ctx = egui::Context::default();
             ctx.set_fonts(egui::FontDefinitions::empty());
             let input = egui::RawInput {

@@ -104,7 +104,7 @@ impl Default for SpatialCanvas {
             centred_on: None,
             keep_hole_centred: false,
             dragging: None,
-            telemetry: TelemetryBoxes::pinning(),
+            telemetry: TelemetryBoxes::pinning().starting_shut(&[Canvas::Spatial]),
         }
     }
 }
@@ -2521,6 +2521,8 @@ mod tests {
         let ctx = egui::Context::default();
         ctx.set_fonts(egui::FontDefinitions::empty());
         let mut canvas = SpatialCanvas::default();
+        // The boxes start shut, and the text wanted here is what an open one prints.
+        canvas.telemetry.collapsed.clear();
         let signal = SignalField::default();
         let mut details = true;
         let mut alice: Option<Observer> = None;

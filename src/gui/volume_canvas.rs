@@ -983,7 +983,7 @@ impl Default for VolumeCanvas {
             show_past_cone: false,
             past_cone: None,
             show_pulse_surfaces: true,
-            telemetry: TelemetryBoxes::pinning(),
+            telemetry: TelemetryBoxes::pinning().starting_shut(&[Canvas::Volume]),
             focus_offset: Vec2::ZERO,
         }
     }
@@ -2303,6 +2303,8 @@ mod tests {
             show_past_cone: false,
             ..Default::default()
         };
+        // The boxes start shut, and a test reading a box's lines wants what an open one prints.
+        canvas.telemetry.collapsed.clear();
         volume_frame_on(&mut canvas, metric, bob, show_distant_clock_grid)
     }
 
