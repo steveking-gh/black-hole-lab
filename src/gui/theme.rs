@@ -63,7 +63,7 @@ impl Theme {
     /// `COMET_HEAD_ALPHA` to nothing.
     ///
     /// The tail is the whole of what says which way that edge of the front is moving, so it has to
-    /// be long enough to read a slope off. The 30 points the spatial views fade over will not do
+    /// be long enough to read a slope off. The 20 points the spatial views fade over will not do
     /// here: there a front is a closed ring and its direction is plain from its shape, while on
     /// this chart a tail is a nearly straight piece of null track and its slope is the only
     /// information in it. The chart is not drawn square - the layout the perf harness measures,
@@ -335,7 +335,7 @@ impl Theme {
     /// behind each piece, in that piece's own colour and falling to nothing, names the side the
     /// light came from and leaves the direction of travel readable without playing the run.
     ///
-    /// Thirty pixels is a screen length at every zoom, and deliberately not a length in M: scaled
+    /// Twenty pixels is a screen length at every zoom, and deliberately not a length in M: scaled
     /// with the zoom it would be six pixels of fade at one zoom and half the canvas at another,
     /// which says nothing about the light. The secondary field's thinner stroke does not shorten it
     /// either - the trail is a direction cue, and the direction is the same fact in both
@@ -353,7 +353,7 @@ impl Theme {
     /// of fade as a flare all round its emitter. This ceiling is what is left to bound the case the
     /// user had in mind: a zoom deep enough, or a field sparse enough, that the gap is wide, the
     /// light is long gone and the fade would otherwise run away with the picture.
-    pub const FRONT_TRAIL_PX: f32 = 30.0;
+    pub const FRONT_TRAIL_PX: f32 = 20.0;
 
     /// How much of the gap to the following front one front's trailing fade may occupy.
     ///

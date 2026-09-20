@@ -1341,11 +1341,11 @@ fn draw_ring_spin_arrow(painter: &egui::Painter, center: Pos2, ring_px: f32, spi
 /// only the leading front legible. Bounded by the gap, no two fades of a field can overlap at any
 /// zoom or any spacing: crowded, each line keeps a soft trailing edge a few pixels deep - sharp
 /// ahead, fading behind, which is the whole of the cue - and on a deep zoom, or with the pulse
-/// count turned down, the full 30 px opens out.
+/// count turned down, the full 20 px opens out.
 ///
 /// The third length is how far this ray's light has come since the pulse was let go, and it is
 /// what holds a fresh front to where its light has actually been. A pulse emitted a moment ago is
-/// a loop a few pixels across hugging its emitter; give every ray of it 30 px of fade and the strip
+/// a loop a few pixels across hugging its emitter; give each ray the whole ceiling and the strip
 /// reaches back *through* the emission event and fans out behind the emitter as a flare, drawn over
 /// ground the light has never covered. At zero time in flight the fade is zero and it opens out of
 /// the emission event with the front, so the fade stops at the emitter rather than surrounding
