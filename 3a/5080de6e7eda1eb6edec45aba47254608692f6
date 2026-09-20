@@ -1,0 +1,44 @@
+src/save/tests.rs
+  s_3ab46a80c84bd0::t_5759952fe71a49 527-528
+src/gui/spacetime_canvas.rs
+  s_3ab46a80c84bd0::t_0a7480f8a2d389 381-382
+  s_3ab46a80c84bd0::t_907d3b5b147806 2023
+  s_3ab46a80c84bd0::t_17d6127839b988 960
+  s_3ab46a80c84bd0::t_dd3773ed1bd37d 1275
+  s_3ab46a80c84bd0::t_669cfa76b339e7 2708
+  s_3ab46a80c84bd0::t_4db0906450b8e2 1016-1022
+  s_3ab46a80c84bd0::t_7c8d51b0c777b8 1997-1998,2000,2003-2011
+  s_3ab46a80c84bd0::t_397c582c09743d 944-946
+  s_3ab46a80c84bd0::t_1045589d1975ad 459-470
+  s_3ab46a80c84bd0::t_8642e18dd4f954 1960-1961,1963,1966-1974
+  s_3ab46a80c84bd0::t_29ef751ad11cfc 4293-4294
+  s_3ab46a80c84bd0::t_3c0d40419d5171 1274
+  s_3ab46a80c84bd0::t_98f6e708de4157 1986
+src/gui/spatial_canvas.rs
+  s_3ab46a80c84bd0::t_afaaa714dd5ced 107
+  s_3ab46a80c84bd0::t_d2f52cb257b784 2524-2525
+src/gui/volume_canvas.rs
+  s_3ab46a80c84bd0::t_714f08bec11f2a 986
+  s_3ab46a80c84bd0::t_871c0ba88606bd 2306-2307
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "3a5080de6e7eda1eb6edec45aba47254608692f6",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_3ab46a80c84bd0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8d646f0a-c1d1-483c-9f98-594ec910f29b",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
