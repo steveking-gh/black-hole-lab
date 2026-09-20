@@ -869,4 +869,67 @@ mod tests {
             hi / lo
         );
     }
+
+    #[test]
+    fn test_a_zamo_measures_the_published_speed_of_a_circular_orbit() {
+        // Orthonormality says a frame is *a* frame. It cannot say that the speeds read off it are
+        // right, and no identity internal to the crate can: that takes a number from outside.
+        // Bardeen, Press and Teukolsky (1972), eq. 3.10, give the velocity of the equatorial
+        // circular orbit at r as the locally non-rotating observer there measures it,
+        //
+        //     v = ± M^{1/2} (r^2 ∓ 2 a M^{1/2} r^{1/2} + a^2) / (Delta^{1/2} (r^{3/2} ± a M^{1/2})),
+        //
+        // upper signs prograde, derived in Boyer-Lindquist coordinates with their own tetrad. A
+        // measured velocity is a scalar, so the ingoing chart and this crate's tetrads have to
+        // give the same number: that holds the metric, both tetrad constructions, the dual basis
+        // and the frame-dragging rate to a published result at once.
+        //
+        // In the axial gauge e2 lies along d_phi for a ZAMO, which is BPT's own azimuthal leg, so
+        // the orbit moves along e2 alone and the signed velocity is theirs. The Gram-Schmidt gauge
+        // starts from the ingoing chart's d_r, which is not orthogonal to d_phi, so its spatial
+        // legs are BPT's turned through an angle and only the speed is comparable.
+        let mut compared = 0;
+        for &(m, a) in &[(1.0, 0.0), (1.0, 0.5), (1.0, 0.9), (1.0, 0.998), (2.0, 1.2)] {
+            let metric = KerrSchild::new(m, a);
+            for prograde in [true, false] {
+                let sign = if prograde { 1.0 } else { -1.0 };
+                // From just outside the photon orbit, where v -> 1, through the unstable orbits
+                // and the ISCO, out to where the orbit is nearly Newtonian.
+                let r_ph = metric.photon_orbit(prograde);
+                for &r in &[r_ph * 1.02, 0.5 * (r_ph + metric.isco(prograde)), metric.isco(prograde), 10.0 * m, 50.0 * m] {
+                    let omega = metric.orbital_angular_velocity(r, prograde).expect("outside the photon orbit");
+                    let u_t = metric.circular_orbit_dilation(r, prograde).expect("timelike");
+                    let u = [u_t, 0.0, u_t * omega];
+
+                    let sqrt_m = m.sqrt();
+                    let published = sign * sqrt_m * (r * r - sign * 2.0 * a * sqrt_m * r.sqrt() + a * a)
+                        / (metric.delta(r).sqrt() * (r.powf(1.5) + sign * a * sqrt_m));
+                    assert!(published.abs() < 1.0, "BPT's own speed is subluminal: {published}");
+
+                    let zamo = zamo(&metric, r);
+                    let axial = LocalFrame::for_observer(&metric, r, &zamo).vector_to_local(&u);
+                    let (v_r, v_phi) = (axial[1] / axial[0], axial[2] / axial[0]);
+                    assert!(v_r.abs() < 1e-12, "a circular orbit has no radial velocity for a ZAMO: {v_r}");
+                    assert!(
+                        (v_phi - published).abs() < 1e-12,
+                        "axial gauge: v = {v_phi} vs BPT {published} at r = {r} (M = {m}, a = {a}, prograde = {prograde})"
+                    );
+
+                    let gram_schmidt = LocalFrame::new(&metric, r, Tetrad::from_four_velocity(&metric, r, &zamo))
+                        .vector_to_local(&u);
+                    let speed = gram_schmidt[1].hypot(gram_schmidt[2]) / gram_schmidt[0];
+                    assert!(
+                        (speed - published.abs()).abs() < 1e-12,
+                        "Gram-Schmidt gauge: |v| = {speed} vs BPT {} at r = {r} (M = {m}, a = {a})",
+                        published.abs()
+                    );
+                    // The Lorentz factor is the same scalar by a third route: -g(u_zamo, u).
+                    let gamma = 1.0 / (1.0 - published * published).sqrt();
+                    assert!((axial[0] - gamma).abs() < 1e-11 * gamma, "gamma = {} vs {gamma}", axial[0]);
+                    compared += 1;
+                }
+            }
+        }
+        assert_eq!(compared, 50);
+    }
 }
