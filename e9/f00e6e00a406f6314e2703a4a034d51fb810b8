@@ -1,0 +1,40 @@
+crates/kerr-equatorial/tests/kerrgeopy_orbits.rs
+  s_8af503c8a73c12::t_4db6e4100e9a9f 11-15,144,153
+  s_8af503c8a73c12::t_bb8b98575305a7 69-75,81,83-85,88,92-104,113,115-120
+  s_8af503c8a73c12::t_c9075ae2ce3faf 1-10,16-68,76-80,82,86-87,89-91,105-112,114,121-143,145-152,154-155
+crates/kerr-equatorial/tests/data/kerrgeopy_bound_orbits.rs
+  s_8af503c8a73c12::t_cea7a4c76a77a5 1-48
+crates/kerr-equatorial/src/local_frame.rs
+  s_8af503c8a73c12::t_8d0a4d938bf15a 872-934
+crates/kerr-equatorial/tests/data/kerr_sympy_oracle.rs
+  s_8af503c8a73c12::t_ca6fdd7e25278b 9-11,13-15,19-21,23-25,29-31,33-35,39-41,43-45,49-51,53-55,59-61,63-65
+  s_8af503c8a73c12::t_d9d4f16bd832fc 1-8,12,16-18,22,26-28,32,36-38,42,46-48,52,56-58,62,66-68
+crates/kerr-equatorial/scripts/kerr_sympy_oracle.py
+  s_8af503c8a73c12::t_14b8033e374d2d 1-133,135-137,139-198
+  s_8af503c8a73c12::t_ca6fdd7e25278b 134,138
+crates/kerr-equatorial/scripts/kerrgeopy_bound_orbits.py
+  s_8af503c8a73c12::t_ef6a8d168ff1dd 1-83
+crates/kerr-equatorial/tests/sympy_oracle.rs
+  s_8af503c8a73c12::t_b24ffb96615b53 1-83
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e9f00e6e00a406f6314e2703a4a034d51fb810b8",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_8af503c8a73c12": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bd7454b3-62f8-4e4a-bdeb-99e32d51479b",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
