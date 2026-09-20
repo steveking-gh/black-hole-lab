@@ -1,0 +1,38 @@
+Cargo.toml
+  s_ccc63bcadcbd06::t_6b15d8eaa01522 7-13,15
+src/physics/mod.rs
+  s_ccc63bcadcbd06::t_596bfdae1fe7cd 1-4
+crates/kerr-equatorial/src/tetrad.rs
+  s_ccc63bcadcbd06::t_47528539ada1e6 1-529,531-532,541-559,562,564-572,574-610,612-884
+  s_ccc63bcadcbd06::t_8d37fc1a0df608 530,533-540,560-561,563,573,611
+crates/kerr-equatorial/src/local_frame.rs
+  s_ccc63bcadcbd06::t_6341cabb27eef1 677-678,683-688
+  s_ccc63bcadcbd06::t_47528539ada1e6 1-676,679-682,689-872
+crates/kerr-equatorial/Cargo.toml
+  s_ccc63bcadcbd06::t_19d7231f2f1475 11-16
+  s_ccc63bcadcbd06::t_360c51c986bfc2 1-10,17-18
+crates/kerr-equatorial/src/lib.rs
+  s_ccc63bcadcbd06::t_b8c6b64cc1e5a3 1-29
+crates/kerr-equatorial/src/kerr_schild.rs
+  s_ccc63bcadcbd06::t_47528539ada1e6 1-1424
+crates/kerr-equatorial/src/geodesic.rs
+  s_ccc63bcadcbd06::t_47528539ada1e6 1-1373
+Cargo.lock
+  s_ccc63bcadcbd06::t_eb76ee22fa853a 463,1655-1661
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f2a8d0c0a152bb3015c289ef5f513f6b11d849d9",
+  "prompts": {},
+  "sessions": {
+    "s_ccc63bcadcbd06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "22cddeb7-c373-41e5-a9d9-933a707f495a",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
