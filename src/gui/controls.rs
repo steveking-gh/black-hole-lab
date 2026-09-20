@@ -115,6 +115,81 @@ pub enum StepMode {
     Watch,
 }
 
+/// How long one played frame is taken to be, in real seconds, when a press is quoted against the
+/// play rate: a sixtieth of a second.
+///
+/// Nominal, and deliberately so. A real frame lasts whatever the machine gives it, so a press does
+/// not replay the frames that were actually played; it advances the run by what a frame at this
+/// rate is worth. That lands on a true state of the same run rather than on a re-run of the
+/// playback, which is legitimate because nothing in the physics depends on the size of the step any
+/// more: `Simulation::step_forward` sub-steps each emission onto the emitter's own proper time, so a
+/// state reached in one press is the state reached by sixty smaller ones.
+const NOMINAL_FRAME_SECONDS: f64 = 1.0 / 60.0;
+
+/// How big one press of Step Back, Step Fwd or an arrow key is, counted in played frames.
+///
+/// A press is a slice of the Play Speed rate rather than an amount of its own, which is what makes
+/// a press at `Frame` exactly what one frame of smooth playback is worth in every step mode. The
+/// ladder is decades of a frame, with `SixtyFrames` - one second of playing - at the top, and the
+/// two entries below a frame are there for crossing an interesting event slowly without moving Play
+/// Speed away from the rate the run is being watched at.
+///
+/// `key` is how a grain is spelled outside the program, in a save file, and carries the same
+/// promise as `spacetime_canvas::Canvas::key`: the slugs are fixed once a save format version has
+/// shipped, and the labels on screen stay free to change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepGrain {
+    Hundredth,
+    Tenth,
+    Frame,
+    TenFrames,
+    SixtyFrames,
+}
+
+impl StepGrain {
+    /// Every grain there is, in the order the dropdown lists them: smallest press first.
+    pub const ALL: [Self; 5] =
+        [Self::Hundredth, Self::Tenth, Self::Frame, Self::TenFrames, Self::SixtyFrames];
+
+    /// How many played frames one press of this grain is worth.
+    pub fn frames(self) -> f64 {
+        match self {
+            Self::Hundredth => 0.01,
+            Self::Tenth => 0.1,
+            Self::Frame => 1.0,
+            Self::TenFrames => 10.0,
+            Self::SixtyFrames => 60.0,
+        }
+    }
+
+    /// What the dropdown calls this grain.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Hundredth => "1/100 frame",
+            Self::Tenth => "1/10 frame",
+            Self::Frame => "1 frame",
+            Self::TenFrames => "10 frames",
+            Self::SixtyFrames => "60 frames",
+        }
+    }
+
+    /// This grain's slug. See the type's own comment before touching one of these strings.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Hundredth => "hundredth-frame",
+            Self::Tenth => "tenth-frame",
+            Self::Frame => "frame",
+            Self::TenFrames => "ten-frames",
+            Self::SixtyFrames => "sixty-frames",
+        }
+    }
+
+    /// The grain a slug names, or None for one this version has never written.
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|grain| grain.key() == key)
+    }
+}
+
 /// The most coordinate time one played frame is allowed to take in Watch mode, in M.
 ///
 /// It is not a fudge on the physics: `watch_step` reports what it asked for and what it got, and
@@ -262,10 +337,13 @@ impl ObserverSettings {
 pub struct AppControls {
     pub is_playing: bool,
     pub step_mode: StepMode,
-    pub step_size: f64,
+    /// How big one press of Step Back, Step Fwd or an arrow key is, in played frames. A press has
+    /// no amount of its own: `press_amount` reads this against `play_speed`, so the one rate on the
+    /// panel sets what playing covers per real second and what a press covers per press. See
+    /// `StepGrain`.
+    pub step_grain: StepGrain,
     /// Playback rate while playing: coordinate time (units of M) per wall-clock second.
     pub play_speed: f64,
-    pub step_distance_km: f64,
     /// What fraction of the proper time Watch mode asked for the last played frame actually
     /// carried: `dt / (u^t Δτ)`, which is 1 whenever `WATCH_DT_CAP` did not bite and falls to
     /// 1e-10 at the stall. `None` unless a frame has just been played in Watch mode.
@@ -393,9 +471,10 @@ impl Default for AppControls {
         Self {
             is_playing: false,
             step_mode: StepMode::Time,
-            step_size: 0.1,
+            // One press is one played frame: the video-style frame step, and the grain the
+            // sub-frame entries sit under rather than a size of their own.
+            step_grain: StepGrain::Frame,
             play_speed: 1.0,
-            step_distance_km: 1000.0,
             achieved_watch_rate: None,
             transport_flash: None,
             rays_per_pulse: RAYS_PER_PULSE,
@@ -467,19 +546,16 @@ const MASS_LOCKED_TIP: &str = "The Mass slider moves only while the clock reads 
 const SPIN_LOCKED_TIP: &str = "The Spin slider moves only while the clock reads zero, because a run is a run of one hole. Spin is the geometry: every wavefront standing in the field is an exact null geodesic of the a/M the run started in, and each observer carries a four-velocity, an energy E and an angular momentum L that only that same a/M normalises. A new spin under a run already under way would leave Black Hole Lab integrating all of that light on in a metric the light is no longer null in, and would leave both worldlines obeying the old hole's equations in a new hole's field. Press Reset, which puts the clock back to zero, and then set the spin - a spin set there starts the run again in the new geometry, which costs nothing at t = 0; or click a preset, which sets mass and spin together and starts the run again the same way.";
 
 /// What the "Advance by:" label over the three mode chips says: that the mode governs playing and
-/// stepping alike, and which slider sets the amount for each.
-const ADVANCE_BY_TIP: &str = "The quantity Black Hole Lab advances the run by, whether the run is playing or a press takes one step. Time (Δt) advances the chart's coordinate time t, which is the distant observer's clock. Distance (Δr) advances the radius of whoever is moving in r, and takes however much coordinate time that Δr costs at their coordinate speed. Watch (Δτ) advances proper time on the watch of the observer the View selector names. The Play Speed slider sets how much of that quantity one real second of playing covers. The slider below Play Speed sets how much of that quantity one press of Step Back, Step Fwd or an arrow key covers.";
+/// stepping alike, and which control sets the amount for each.
+const ADVANCE_BY_TIP: &str = "The quantity Black Hole Lab advances the run by, whether the run is playing or a press takes one step. Time (Δt) advances the chart's coordinate time t, which is the distant observer's clock. Distance (Δr) advances the radius of whoever is moving in r, and takes however much coordinate time that Δr costs at their coordinate speed. Watch (Δτ) advances proper time on the watch of the observer the View selector names. The Play Speed slider sets how much of that quantity one real second of playing covers. The Step Size dropdown below Play Speed counts one press of Step Back, Step Fwd or an arrow key in played frames of that same rate.";
 
-/// What the Play Speed slider says, in every mode: one rate, read in the mode's own quantity.
-const PLAY_SPEED_TIP: &str = "How much of the Advance by quantity one real second of playing covers, in M. Time mode plays that many M of coordinate time t per real second. Distance mode plays that many M of r per real second for whoever paces the step: Bob while Bob is moving in r, otherwise Alice while Alice is falling. A played frame then lasts Δt = Δr / |dr/dt| of coordinate time, so the clock runs fastest where the pacing observer is slowest, and with nobody moving in r Distance mode plays exactly as Time mode does. Watch mode plays that many M of proper time per real second on the focus observer's watch, up to the cap of 2 M of coordinate time per frame that the line under the chips reports. Playing never reads the step slider below: that slider sets only what one press is worth.";
+/// What the Play Speed slider says, in every mode: one rate, read in the mode's own quantity, and
+/// the rate a press is a slice of as well.
+const PLAY_SPEED_TIP: &str = "How much of the Advance by quantity one real second of playing covers, in M. Time mode plays that many M of coordinate time t per real second. Distance mode plays that many M of r per real second for whoever paces the step: Bob while Bob is moving in r, otherwise Alice while Alice is falling. A played frame then lasts Δt = Δr / |dr/dt| of coordinate time, so the clock runs fastest where the pacing observer is slowest, and with nobody moving in r Distance mode plays exactly as Time mode does. Watch mode plays that many M of proper time per real second on the focus observer's watch, up to the cap of 2 M of coordinate time per frame that the line under the chips reports. This rate sets what a press is worth too: the Step Size dropdown below counts a press in played frames, so a press at 1 frame covers a sixtieth of this rate and a faster rate makes every press bigger.";
 
-/// The step-distance quick-picks in Distance step mode, as (label, km).
-const STEP_DISTANCE_PRESETS: [(&str, f64); 4] =
-    [("10k km", 10_000.0), ("1,000 km", 1000.0), ("100 km", 100.0), ("10 km", 10.0)];
-
-/// What a Distance-mode step is worth in coordinate time when nobody on the canvas is moving in r,
-/// which is `AppControls::step_size`'s own default: see `AppControls::distance_step`.
-const DISTANCE_STEP_STALLED_DT: f64 = 0.1;
+/// What the Step Size dropdown says, in every mode: a press is a slice of the play rate, counted
+/// in frames of it.
+const STEP_SIZE_TIP: &str = "How far one press of Step Back, Step Fwd or an arrow key moves the run, counted in played frames of the Play Speed above. One frame is a sixtieth of a second of playing, so a press at 1 frame covers exactly what one frame of smooth playback covers, in whichever quantity the Advance by chips name: 1 frame steps the run the way a video steps a frame at a time. The two entries below a frame cut a press to a tenth and to a hundredth of that, which is how to cross an interesting event slowly without touching Play Speed; 60 frames is one second of playing. Play Speed decides what a frame is worth, so moving Play Speed moves every press with the rate, and the label beside this dropdown always says what one press comes to in seconds or in kilometres. In Distance mode a press covers that much r, and the press still takes coordinate time: Δt = Δr / |dr/dt| at Bob's coordinate speed. A Bob who is not moving in r - hovering before release, or holding a radius as a Static or ZAMO observer - has no such time, and a Bob who is not in the simulation at all has none either, so the press follows Alice's speed instead while Alice is falling. With neither of them moving in r there is no time in which anybody covers Δr, so a press takes the amount as M of coordinate time and honours no distance at all. In Watch mode a press asks for that much proper time on the focus observer's watch and takes u^t times as much coordinate time, up to the cap of 2 M that the label reports whenever the cap bites.";
 
 /// The floor put under the coordinate speed a Distance-mode step is divided by. Near a turning
 /// point |dr/dt| runs to zero and Δr / |dr/dt| runs away with it; this bounds the step at
@@ -645,6 +721,21 @@ pub fn active_preset(metric: &KerrSchild) -> Option<&'static str> {
 /// same size so that a spin of zero can be compared at all. Every slider step is larger than this.
 fn same_to_a_millionth(x: f64, y: f64) -> bool {
     (x - y).abs() <= 1e-6 * y.abs().max(1.0)
+}
+
+/// An amount in M, for a panel that has been put into the GR convention.
+///
+/// `KerrSchild::format_physical_time` and `format_physical_distance` pick a unit that suits the
+/// size they are handed, and this does the same thing with the one unit there is: four or five
+/// figures where the amount is a readable fraction, and an exponent below a thousandth, which is
+/// where a press lands at the smallest grain and the slowest play rate.
+fn format_in_m(amount: f64) -> String {
+    match amount.abs() {
+        size if size >= 100.0 => format!("{amount:.1} M"),
+        size if size >= 1.0 => format!("{amount:.3} M"),
+        size if size >= 1e-3 => format!("{amount:.5} M"),
+        _ => format!("{amount:.2e} M"),
+    }
 }
 
 /// The part of an observer card that is fixed for that observer: who it is, the colour their name
@@ -1311,9 +1402,8 @@ impl AppControls {
     /// What one Distance-mode step is worth in coordinate time: the time an observer who is
     /// actually moving needs to cover the requested Δr at their coordinate speed |dr/dt|.
     ///
-    /// `delta_r` is that Δr in M, and `stalled_dt` is the coordinate time the step is worth when
-    /// there is nobody to pace it; both are the caller's, because a press and a played frame ask
-    /// for different amounts and fall back differently. See `step_for` and `played_step`.
+    /// `delta_r` is that Δr in M, and it is the caller's, because a press and a played frame ask
+    /// for different amounts of it. See `step_for` and `played_step`.
     ///
     /// The step is quoted for Bob, so it is his speed whenever he has one. He does not always have
     /// one. A Bob still waiting for release stands on the static worldline his clock is keeping, a
@@ -1323,8 +1413,9 @@ impl AppControls {
     /// simulation at all has no speed for the same reason and drops out of the chain the same way.
     /// Alice's coordinate speed is used instead whenever she is on the canvas and falling, since
     /// she is then the worldline crossing the radii the user is stepping through; and if neither of
-    /// them is moving in r the step falls back to `stalled_dt` of coordinate time, which claims
-    /// nothing about a distance at all.
+    /// them is moving in r the step falls back to `delta_r` itself, read as M of coordinate time,
+    /// which claims nothing about a distance at all and is exactly what Time mode would have done
+    /// with the same amount.
     ///
     /// `DISTANCE_STEP_MIN_SPEED` bounds a step taken near a turning point, and the result is
     /// clamped into [1e-8, 500] M besides.
@@ -1333,7 +1424,6 @@ impl AppControls {
         bob: Option<&Observer>,
         alice: Option<&Observer>,
         delta_r: f64,
-        stalled_dt: f64,
     ) -> f64 {
         let moving = [bob, alice]
             .into_iter()
@@ -1342,7 +1432,7 @@ impl AppControls {
             .find(|speed| *speed > 0.0);
         match moving {
             Some(speed) => (delta_r / speed.max(DISTANCE_STEP_MIN_SPEED)).clamp(1e-8, 500.0),
-            None => stalled_dt,
+            None => delta_r,
         }
     }
 
@@ -1393,42 +1483,91 @@ impl AppControls {
     /// A press and a played frame both come through here - `step_for` and `played_step` differ
     /// only in the amount they ask for - so a keypress, a click and a played frame cannot mean
     /// different things by a step.
-    fn step_of(
+    ///
+    /// Distance mode's stalled case takes `amount` as M of coordinate time, which is what a press
+    /// and a played frame both want: with nobody moving in r there is no distance to honour, and
+    /// the honest fallback is the amount the caller asked for, read on the distant clock. Distance
+    /// mode is then Time mode exactly, in a press as in a played frame. A press used to fall back
+    /// to a fixed 0.1 M instead, which is the last number on this path that had a size of its own.
+    pub fn step_of(
         &self,
         metric: &KerrSchild,
         bob: Option<&Observer>,
         alice: Option<&Observer>,
         amount: f64,
-        stalled_dt: f64,
     ) -> f64 {
         match self.step_mode {
             StepMode::Time => amount,
-            StepMode::Distance => Self::distance_step(metric, bob, alice, amount, stalled_dt),
+            StepMode::Distance => Self::distance_step(metric, bob, alice, amount),
             StepMode::Watch => self.watch_step(metric, bob, alice, amount).dt,
         }
     }
 
-    /// One press, for the arrow keys and the panel's Step Back / Step Fwd buttons: `base` is the
-    /// Step Size slider, which Distance mode sets aside for the Step Dist slider's Δr.
+    /// How much of the mode's own quantity one press of Step Back, Step Fwd or an arrow key covers,
+    /// in M: the play rate sliced into frames at `NOMINAL_FRAME_SECONDS` and multiplied by the
+    /// grain's share of a frame.
+    ///
+    /// This is the one place a press gets its amount. The panel's two buttons and the arrow keys
+    /// read it through `step_for`, and nothing else sets a press's size, so the label under the
+    /// dropdown and the step the run actually takes are the same number by construction.
+    pub fn press_amount(&self) -> f64 {
+        self.press_amount_of(self.step_grain)
+    }
+
+    /// What a press at `grain` would cover, for the entries of the Step Size dropdown: each of them
+    /// says what the grain is worth at the rate the panel is set to, so the list can be read as
+    /// sizes rather than as a count of frames.
+    fn press_amount_of(&self, grain: StepGrain) -> f64 {
+        self.play_speed * grain.frames() * NOMINAL_FRAME_SECONDS
+    }
+
+    /// What `amount` of the mode's own quantity reads as: the phrase the Step Size row prints
+    /// beside the dropdown, and the one each entry of the open list ends with.
+    ///
+    /// The quantity is named the way the step-mode chips name it - Δt, Δr or Δτ - and the figure
+    /// follows `use_physical_units`, so a panel in kilometres and seconds says "Δt = 34.1 ms" and a
+    /// panel in the GR convention says "Δt = 0.01667 M". Watch mode names the watch as well,
+    /// because a proper time belongs to somebody.
+    fn press_reading(&self, metric: &KerrSchild, amount: f64) -> String {
+        let as_time = |t: f64| {
+            if self.use_physical_units {
+                metric.format_physical_time(t)
+            } else {
+                format_in_m(t)
+            }
+        };
+        match self.step_mode {
+            StepMode::Time => format!("Δt = {}", as_time(amount)),
+            StepMode::Distance => {
+                let distance = if self.use_physical_units {
+                    metric.format_physical_distance(amount)
+                } else {
+                    format_in_m(amount)
+                };
+                format!("Δr = {distance}")
+            }
+            StepMode::Watch => {
+                format!("Δτ = {} on {}'s watch", as_time(amount), self.frame_of_ref.watch_owner())
+            }
+        }
+    }
+
+    /// One press, for the arrow keys and the panel's Step Back / Step Fwd buttons: `press_amount`
+    /// of the mode's quantity, read through the same `step_of` a played frame goes through.
     pub fn step_for(
         &self,
         metric: &KerrSchild,
         bob: Option<&Observer>,
         alice: Option<&Observer>,
-        base: f64,
     ) -> f64 {
-        let amount = match self.step_mode {
-            StepMode::Time | StepMode::Watch => base,
-            StepMode::Distance => metric.km_to_r(self.step_distance_km),
-        };
-        self.step_of(metric, bob, alice, amount, DISTANCE_STEP_STALLED_DT)
+        self.step_of(metric, bob, alice, self.press_amount())
     }
 
     /// One played frame that took `frame_dt` real seconds: `frame_dt × play_speed` M of whatever
     /// the mode steps in, so the Play Speed slider is a rate per real second in all three modes and
     /// a slow frame takes a proportionally longer step in all three.
     ///
-    /// Distance mode used to ignore the Play Speed slider and take the Step Dist slider's Δr on
+    /// Distance mode used to ignore the Play Speed slider and take a Step Dist slider's Δr on
     /// every frame, scaled by the frame time against a nominal 60 fps and clamped. A played frame
     /// now covers `frame_dt × play_speed` M of r, which needs no nominal frame rate. With nobody
     /// moving in r the frame is worth the same number of M of coordinate time, which is Time mode.
@@ -1439,8 +1578,7 @@ impl AppControls {
         alice: Option<&Observer>,
         frame_dt: f64,
     ) -> f64 {
-        let amount = frame_dt * self.play_speed;
-        self.step_of(metric, bob, alice, amount, amount)
+        self.step_of(metric, bob, alice, frame_dt * self.play_speed)
     }
 
     /// Which stateless transport button should be drawn as pressed at `now`, on egui's own clock.
@@ -1522,15 +1660,16 @@ impl AppControls {
                 }
                 // The same `step_for` the arrow keys and the play loop ask, so the three paths
                 // cannot disagree about what one step is.
-                let current_step =
-                    self.step_for(&sim.metric, sim.bob.as_ref(), sim.alice.as_ref(), self.step_size);
+                let current_step = self.step_for(&sim.metric, sim.bob.as_ref(), sim.alice.as_ref());
                 // How far back the clock can go, and why it can go no further: zero until a
                 // run is long enough for a trail to evict its own start, and that trail's oldest
                 // event afterwards. See `Simulation::rewind_floor`.
                 let floor = sim.rewind_floor();
                 let room = sim.clock - floor;
                 let back_tip = if room > 1e-9 {
-                    "Step back by Step Size / Distance (Left Arrow key)".to_string()
+                    "Step back by one Step Size, the slice of the play rate the dropdown below \
+                     names (Left Arrow key)"
+                        .to_string()
                 } else if floor > 0.0 {
                     format!(
                         "The recorded worldlines reach back only to t = {floor:.2} M. Earlier \
@@ -1567,7 +1706,8 @@ impl AppControls {
                     ui,
                     "→",
                     "Step Fwd",
-                    "Step forward by Step Size / Distance (Right Arrow key)",
+                    "Step forward by one Step Size, the slice of the play rate the dropdown below \
+                     names (Right Arrow key)",
                     flashing == Some(TransportPress::StepForward),
                 ) {
                     self.record_transport_press(TransportPress::StepForward, now);
@@ -1679,87 +1819,52 @@ impl AppControls {
                 ui.label(egui::RichText::new(text).small().color(colour));
             }
 
-            match self.step_mode {
-                StepMode::Time => {
-                    // The slider's own number is in M whichever mode the app is in, since that is
-                    // the quantity the stepper takes; what the label adds is what the current
-                    // setting is worth on the distant clock, which is the part a reader who does
-                    // not think in M needs. It used to carry no unit at all. Built before the
-                    // slider, which takes a &mut to the field the label reads.
-                    let label = if self.use_physical_units {
-                        format!("Step Size (Δt = {})", metric.format_physical_time(self.step_size))
-                    } else {
-                        "Step Size (Δt, in M)".to_string()
-                    };
-                    ui.add(
-                        egui::Slider::new(&mut self.step_size, 0.0005..=0.5)
-                            .logarithmic(true)
-                            .text(label),
-                    );
-                }
-                StepMode::Distance => {
-                    let r_grav = metric.r_grav_km();
-                    let max_dist = (r_grav * 2.0).max(100_000.0);
-                    let min_dist = (r_grav * 1e-6).max(0.1);
-                    ui.add(
-                        egui::Slider::new(&mut self.step_distance_km, min_dist..=max_dist)
-                            .logarithmic(true)
-                            .text("Step Dist (km)"),
-                    )
-                    .on_hover_text(
-                        "How far Bob should move in r per step. The step is still taken in coordinate time: Δt = Δr / |dr/dt| at his current coordinate speed. A Bob who is not moving in r — hovering before release, or holding a radius as a Static or ZAMO observer — has no such time, and one who is not in the simulation at all has none either, so Alice's speed is used instead while she is falling, and if neither of them is moving in r the step is a fixed 0.1 M of coordinate time and the distance is not being honoured at all.",
-                    );
-                    // The quick-pick that matches the slider's value is filled like the active
-                    // step mode above it, and read off the value rather than remembered, so
-                    // dragging the slider off a preset drops the fill by itself.
-                    ui.horizontal(|ui| {
-                        for (label, km) in STEP_DISTANCE_PRESETS {
-                            let active = same_to_a_millionth(self.step_distance_km, km);
-                            if chip(ui, active, label).clicked() {
-                                self.step_distance_km = km;
-                            }
+            // How big one press is, as a multiple of one played frame. Two controls stood here
+            // before: a Step Size slider in M, and, in Distance mode, a Step Dist slider in
+            // kilometres with four quick-picks under it. A press is a slice of the Play Speed rate
+            // in every mode now, so one dropdown sets the size of a press instead of two sliders in
+            // different units. See `StepGrain` and `press_amount`.
+            //
+            // The row keeps the physical reading those sliders' labels carried, and every entry in
+            // the open list carries its own, so a user can pick a grain by the size it comes to
+            // rather than by counting frames. Both readings are built before the dropdown, which
+            // takes a &mut to the field they read.
+            let amount = self.press_amount();
+            let reading = self.press_reading(metric, amount);
+            // Watch mode is the one mode that can refuse a press what it asks for, and the row says
+            // what the press takes rather than what the grain asked for. See `WATCH_DT_CAP`.
+            let capped = self.step_mode == StepMode::Watch
+                && self.watch_step(metric, sim.bob.as_ref(), sim.alice.as_ref(), amount).capped;
+            let label = if capped {
+                format!("Step Size ({reading}, capped to Δt = {WATCH_DT_CAP:.0} M)")
+            } else {
+                format!("Step Size ({reading})")
+            };
+            let entries: Vec<(StepGrain, String)> = StepGrain::ALL
+                .into_iter()
+                .map(|grain| {
+                    let worth = self.press_reading(metric, self.press_amount_of(grain));
+                    (grain, format!("{} - {worth}", grain.label()))
+                })
+                .collect();
+            ui.horizontal_wrapped(|ui| {
+                // As wide as a slider and its value box together, so that this row's label starts
+                // in the column the sliders' labels above and below it start in. The open list
+                // sets its own width from the entries, which are the long strings here.
+                let slider_and_value =
+                    ui.spacing().slider_width + ui.spacing().item_spacing.x + 40.0;
+                egui::ComboBox::from_id_salt("step_grain_combo")
+                    .selected_text(self.step_grain.label())
+                    .width(slider_and_value)
+                    .show_ui(ui, |ui| {
+                        for (grain, entry) in &entries {
+                            ui.selectable_value(&mut self.step_grain, *grain, entry);
                         }
-                    });
-                }
-                // The same slider as Time mode, read as proper time instead of coordinate time:
-                // one number for "how big is a step", whichever clock is being kept.
-                StepMode::Watch => {
-                    let label = if self.use_physical_units {
-                        format!(
-                            "Step Size (Δτ = {} on {}'s watch)",
-                            metric.format_physical_time(self.step_size),
-                            self.frame_of_ref.watch_owner()
-                        )
-                    } else {
-                        "Step Size (Δτ in M, focus watch)".to_string()
-                    };
-                    ui.add(
-                        egui::Slider::new(&mut self.step_size, 0.0005..=0.5)
-                            .logarithmic(true)
-                            .text(label),
-                    )
-                    .on_hover_text(format!(
-                        "How much proper time one step is worth on {}'s own watch - the observer \
-                         the View selector names, whose rest frame the left column \
-                         is drawn in. The step the app actually takes is Δt = u^t Δτ of \
-                         coordinate time, u^t being their time dilation at the event they are at, \
-                         so playback runs at the requested rate on their watch rather than on the \
-                         distant clock. {}",
-                        self.frame_of_ref.watch_owner(),
-                        match self.frame_of_ref {
-                            ReferenceFrame::DistantObserver | ReferenceFrame::GlobalVolume =>
-                                "The distant observer's watch is the chart's own Killing time t, \
-                                 so here Watch mode is Time mode: u^t = 1 and Δt = Δτ.",
-                            ReferenceFrame::Bob | ReferenceFrame::Alice =>
-                                "Deep in the well one tick of that watch is a great many M of the \
-                                 outside future, and on the far branch of r₋ it is about 1e10 of \
-                                 them; the step is capped at 2 M per frame and the line under the \
-                                 chips says what fraction of the asked-for tick each played frame \
-                                 carried.",
-                        }
-                    ));
-                }
-            }
+                    })
+                    .response
+                    .on_hover_text(STEP_SIZE_TIP);
+                ui.label(label).on_hover_text(STEP_SIZE_TIP);
+            });
             ui.add(
                 egui::Slider::new(&mut self.rays_per_pulse, 64..=1024)
                     .integer()

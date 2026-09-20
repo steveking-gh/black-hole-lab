@@ -23,7 +23,7 @@
 
 use std::collections::VecDeque;
 
-use crate::gui::controls::{AppControls, ObserverSettings, ReferenceFrame, StepMode};
+use crate::gui::controls::{AppControls, ObserverSettings, ReferenceFrame, StepGrain, StepMode};
 use crate::gui::spacetime_canvas::{BoxId, Canvas, Placement, SpacetimeCanvas, TelemetryBoxes};
 use crate::gui::spatial_canvas::SpatialCanvas;
 use crate::gui::volume_canvas::{Camera, VolumeCanvas};
@@ -466,16 +466,20 @@ fn who_from_v1(who: v1::Who) -> Who {
 // The panel
 // ---------------------------------------------------------------------------------------------
 
-pub fn controls_to_v1(controls: &AppControls) -> v1::Controls {
+/// `metric` is the run's own, and is here for one field: `step_distance_km` is the press amount in
+/// kilometres, and M becomes kilometres only through the geometry the run was saved in. See that
+/// field, and `step_size` above it, for why a write-only field is written at all.
+pub fn controls_to_v1(controls: &AppControls, metric: &KerrSchild) -> v1::Controls {
+    let press = controls.press_amount();
     v1::Controls {
         step_mode: match controls.step_mode {
             StepMode::Time => v1::StepMode::Time,
             StepMode::Distance => v1::StepMode::Distance,
             StepMode::Watch => v1::StepMode::Watch,
         },
-        step_size: n(controls.step_size),
+        step_size: n(press),
         play_speed: n(controls.play_speed),
-        step_distance_km: n(controls.step_distance_km),
+        step_distance_km: n(metric.r_to_km(press)),
         rays_per_pulse: controls.rays_per_pulse as u64,
         max_pulses: controls.max_pulses as u64,
         draw_front_arcs: controls.draw_front_arcs,
@@ -493,6 +497,7 @@ pub fn controls_to_v1(controls: &AppControls) -> v1::Controls {
         },
         show_distant_clock_grid: controls.show_distant_clock_grid,
         font_scale: n(controls.font_scale),
+        step_grain: Some(controls.step_grain.key().to_string()),
     }
 }
 
@@ -511,9 +516,15 @@ pub fn controls_from_v1(controls: &v1::Controls) -> AppControls {
             v1::StepMode::Distance => StepMode::Distance,
             v1::StepMode::Watch => StepMode::Watch,
         },
-        step_size: controls.step_size.0,
+        // The two amount fields are not read: see `v1::Controls::step_size`. A file from before the
+        // Step Size dropdown, or one naming a grain this build has never heard of, comes up at the
+        // panel's own default grain, and `play_speed` below then says what a press is worth.
+        step_grain: controls
+            .step_grain
+            .as_deref()
+            .and_then(StepGrain::from_key)
+            .unwrap_or(AppControls::default().step_grain),
         play_speed: controls.play_speed.0,
-        step_distance_km: controls.step_distance_km.0,
         rays_per_pulse: controls.rays_per_pulse as usize,
         max_pulses: controls.max_pulses as usize,
         draw_front_arcs: controls.draw_front_arcs,

@@ -1,4 +1,4 @@
-//! What a save has to be true of, in seven tests.
+//! What a save has to be true of, in eight tests.
 //!
 //! The first is the one that matters and the one the others lean on: a run saved half way through,
 //! loaded into a fresh app and played on, must end on the same fingerprint as the run that was
@@ -8,16 +8,17 @@
 //!
 //! The rest cover what a fingerprint cannot see (the panel, the views, the trails and the counters),
 //! the spelling of the numbers JSON has no spelling for, the refusals, one file committed to the
-//! repository that this build has to go on being able to open, and the two methods the Save and
-//! Load buttons call once a path has been chosen - which is as far into those buttons as a test can
-//! reach, because nothing headless can answer a native dialog.
+//! repository that this build has to go on being able to open, the one field the format has added
+//! since it shipped, and the two methods the Save and Load buttons call once a path has been
+//! chosen - which is as far into those buttons as a test can reach, because nothing headless can
+//! answer a native dialog.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;
 use crate::app::SpacetimeApp;
-use crate::gui::controls::{FileRequest, FileStatus, ReferenceFrame, StepMode};
+use crate::gui::controls::{FileRequest, FileStatus, ReferenceFrame, StepGrain, StepMode};
 use crate::gui::spacetime_canvas::{BoxId, Canvas, Placement};
 use crate::perf::replay::{FRAME_DT, app_for_fixtures, play_sim};
 use crate::physics::observer::{ObserverMode, Release, Who};
@@ -178,6 +179,7 @@ fn test_a_save_round_trips_through_its_own_bytes() {
     app.controls.show_distant_clock_grid = false;
     app.controls.step_mode = StepMode::Watch;
     app.controls.play_speed = 3.25;
+    app.controls.step_grain = StepGrain::Hundredth;
     app.controls.frame_of_ref = ReferenceFrame::Alice;
     app.controls.alice.mode = ObserverMode::Zamo;
     app.controls.bob.release = Release::AtRest;
@@ -469,6 +471,44 @@ fn test_this_build_still_opens_the_committed_version_1_save() {
         "and an arrival on the record, with its segment, turn, side and pass time"
     );
     assert!(!loaded.controls.is_playing, "and it comes up paused");
+}
+
+#[test]
+fn test_the_step_grain_comes_back_from_a_file_and_an_older_file_opens_at_the_default() {
+    // The Step Size dropdown is the first *additive* field this format has taken, and the three
+    // things that makes true are checked together: a file carries the grain by a slug of its own,
+    // every slug this build writes is one it reads, and a file from before the dropdown existed
+    // opens at the panel's default instead of refusing to open.
+    for grain in StepGrain::ALL {
+        assert_eq!(StepGrain::from_key(grain.key()), Some(grain), "{}", grain.key());
+    }
+
+    let metric = default_app().sim.metric;
+    let controls =
+        AppControls { step_grain: StepGrain::TenFrames, play_speed: 3.0, ..AppControls::default() };
+    let written = convert::controls_to_v1(&controls, &metric);
+    assert_eq!(written.step_grain.as_deref(), Some("ten-frames"), "a slug, not a label");
+    // The two amount fields are written for a build that has never heard of the dropdown: ten
+    // frames at 3 M a real second is half an M a press, quoted in M and in kilometres.
+    assert_eq!(controls.press_amount(), 0.5);
+    assert_eq!(written.step_size.0, 0.5);
+    assert_eq!(written.step_distance_km.0, metric.r_to_km(0.5));
+
+    // Through the JSON and back, because what a file carries is the text.
+    let text = serde_json::to_string(&written).expect("writable");
+    let read: v1::Controls = serde_json::from_str(&text).expect("readable");
+    assert_eq!(convert::controls_from_v1(&read).step_grain, StepGrain::TenFrames);
+
+    // The committed golden file predates the dropdown, so it is the real version-1 document
+    // without the field, and it loads at one played frame.
+    let golden = read_document(include_str!("golden/v1.json").as_bytes()).expect("the golden loads");
+    assert_eq!(golden.controls.step_grain, None, "the golden file carries no grain");
+    let default_grain = AppControls::default().step_grain;
+    assert_eq!(convert::controls_from_v1(&golden.controls).step_grain, default_grain);
+
+    // A slug from some later version falls back the same way rather than refusing the file.
+    let unknown = v1::Controls { step_grain: Some("half-a-frame".to_string()), ..written };
+    assert_eq!(convert::controls_from_v1(&unknown).step_grain, default_grain);
 }
 
 /// How the golden file was made, and how the next one is made.

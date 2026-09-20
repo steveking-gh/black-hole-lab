@@ -463,8 +463,20 @@ pub struct Delivery {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Controls {
     pub step_mode: StepMode,
+    /// What one press of Step Back, Step Fwd or an arrow key covers, in M of the step mode's own
+    /// quantity.
+    ///
+    /// Written, and never read back. The panel's Step Size control is a *grain* - a multiple of one
+    /// played frame, in `step_grain` below - and the amount a press comes to follows from the grain
+    /// and the play speed, so a load takes the grain and works the amount out again. What goes in
+    /// here is the amount this build's panel would take on a press, which is what the field has
+    /// always meant, so a build from before the dropdown opens one of today's files and steps by
+    /// about the same amount.
     pub step_size: Num,
     pub play_speed: Num,
+    /// What one press covers in Distance mode, in kilometres. Written and never read back, for the
+    /// reason `step_size` gives: this is `step_size` in the unit the old Step Dist slider was
+    /// dialled in, converted through the metric of the run being saved.
     pub step_distance_km: Num,
     pub rays_per_pulse: u64,
     pub max_pulses: u64,
@@ -478,6 +490,15 @@ pub struct Controls {
     pub frame_of_ref: ReferenceFrame,
     pub show_distant_clock_grid: bool,
     pub font_scale: Num,
+    /// How big one press is, as `gui::controls::StepGrain::key` spells it: the Step Size dropdown.
+    ///
+    /// Additive, and the reason the two fields above are write-only. A file written before the
+    /// dropdown existed carries no `step_grain` at all and loads with the panel's default grain,
+    /// one played frame; a slug this build has never heard of loads the same way. The amount a
+    /// press comes to is the grain against `play_speed`, which every version of this schema has
+    /// carried.
+    #[serde(default)]
+    pub step_grain: Option<String>,
 }
 
 /// `gui::controls::ObserverSettings`: one OBSERVER card.

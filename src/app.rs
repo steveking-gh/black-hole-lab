@@ -86,10 +86,10 @@ impl Default for SpacetimeApp {
 }
 
 impl SpacetimeApp {
-    /// What one press of an arrow key is worth in coordinate time: the Δt slider in Time mode, in
-    /// Distance mode the time an observer who is moving needs to cover the requested Δr at their
-    /// current coordinate speed, and in Watch mode the coordinate time the focus observer's own
-    /// watch spends the slider's Δτ over.
+    /// What one press of an arrow key is worth in coordinate time: `AppControls::press_amount` of
+    /// the mode's own quantity, which is Δt in Time mode, in Distance mode the time an observer who
+    /// is moving needs to cover that Δr at their current coordinate speed, and in Watch mode the
+    /// coordinate time the focus observer's own watch spends that Δτ over.
     ///
     /// Which observer paces a distance step, and what happens when nobody is moving in r - a
     /// hovering Bob, or a Static or ZAMO Bob holding his radius, has no time in which he covers
@@ -99,12 +99,7 @@ impl SpacetimeApp {
     /// reads the mode through the same `AppControls::step_of`, so a keypress, a click and a played
     /// frame cannot mean different things by a step.
     fn arrow_step(&self) -> f64 {
-        self.controls.step_for(
-            &self.sim.metric,
-            self.sim.bob.as_ref(),
-            self.sim.alice.as_ref(),
-            self.controls.step_size,
-        )
+        self.controls.step_for(&self.sim.metric, self.sim.bob.as_ref(), self.sim.alice.as_ref())
     }
 
     /// One step forward by hand, with what the panel currently says about the next emission.
@@ -781,7 +776,7 @@ impl eframe::App for SpacetimeApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gui::controls::{WATCH_DT_CAP, active_preset};
+    use crate::gui::controls::{StepGrain, WATCH_DT_CAP, active_preset};
     use crate::physics::geodesic::GeodesicState;
     use crate::physics::observer::{Observer, ObserverMode, Release, WorldlineParams};
     use crate::physics::wavefront::{EMISSION_INTERVAL_TAU, Pulse, SignalField};
@@ -1102,19 +1097,17 @@ mod tests {
         // are scaled by.
         assert!((app.sim.metric.r_grav_km() / 6.13e6 - 1.0).abs() < 0.01, "{}", app.sim.metric.r_grav_km());
 
-        // Distance step mode still has room to work at that scale. The default 1,000 km step is
-        // 1.63e-4 M here rather than the 0.068 M it was at ten solar masses, and the arrow step it
-        // implies sits well inside the [1e-8, 500] clamp instead of being pinned to an end of it.
-        // The slider's own range is derived from r_grav (min = max(r_grav_km * 1e-6, 0.1) = 6.1 km,
-        // max = max(r_grav_km * 2, 1e5) = 1.2e7 km), so all four quick-picks, 10 km included, stay
-        // inside it.
+        // Distance step mode still has room to work at that scale. A press at the default grain
+        // covers a played frame's worth of r - 1/60 M, which is 1.0e5 km at this mass - and the
+        // arrow step that Δr implies sits well inside the [1e-8, 500] clamp instead of being pinned
+        // to an end of it.
         let mut app = app;
         assert!((app.sim.metric.km_to_r(1000.0) / 1.63e-4 - 1.0).abs() < 0.01);
         app.controls.step_mode = StepMode::Distance;
-        app.controls.step_distance_km = 1000.0;
         let step = app.arrow_step();
         assert!(step > 1e-8 && step < 500.0, "the distance step is clamped: {step}");
-        assert!((app.sim.metric.r_grav_km() * 1e-6) < 10.0, "the 10 km quick-pick is below the slider floor");
+        let press_km = app.sim.metric.r_to_km(app.controls.press_amount());
+        assert!((press_km / 1.02e5 - 1.0).abs() < 0.05, "a press covers {press_km} km");
     }
 
     #[test]
@@ -1464,7 +1457,9 @@ mod tests {
         // over the same interval land on the same picture.
         let mut app = SpacetimeApp::default();
         app.controls.play_speed = 4.0;
-        app.controls.step_size = 0.01;
+        // A tenth of a frame at that rate: 0.0067 M a press, small enough for fifty of them to sit
+        // inside the stretch the loop below plays.
+        app.controls.step_grain = StepGrain::Tenth;
         app.controls.is_playing = true;
 
         egui::__run_test_ui(|ui| {
@@ -1498,8 +1493,8 @@ mod tests {
             app.sim.clock
         );
         // The observers came back with the clock too. Fifty presses of the left arrow at a
-        // step of 0.01 undo half an M, and each press moves the worldlines by exactly what it
-        // moves the clock by, whatever the steps that built the trail were.
+        // step of 0.0067 undo a third of an M, and each press moves the worldlines by exactly what
+        // it moves the clock by, whatever the steps that built the trail were.
         for obs in [app.sim.bob.as_ref(), app.sim.alice.as_ref()].into_iter().flatten() {
             assert!(
                 obs.has_ended() || (obs.t - app.sim.clock).abs() < 1e-12,
@@ -1857,13 +1852,15 @@ mod tests {
         // Physical units out of the box: kilometres, seconds and radians per second. The panel's
         // units checkbox is the opt-in to M, not an escape from it, so it opens unticked - which
         // is this flag being true. Nothing throttles the step near r₋ any more either: the play
-        // speed and the step size are the only things that set sim_dt.
+        // speed and the step grain are the only things that set sim_dt.
         assert!(d.use_physical_units, "the app opens in km and seconds, not in M");
         // Paused: the run the user is handed is a standing start, so that nothing has happened
         // before they have had a chance to look at it or to move anybody.
         assert!(!d.is_playing, "the app opens paused");
         assert_eq!(d.play_speed, 1.0);
-        assert_eq!(d.step_size, 0.1);
+        // One press is one played frame at that rate, which is the video-style frame step.
+        assert_eq!(d.step_grain, StepGrain::Frame);
+        assert_eq!(d.press_amount(), 1.0 / 60.0);
         // Both observers are in the run and both are transmitting out of the box.
         assert!(d.alice.enabled && d.alice.transmit);
         assert!(d.bob.enabled && d.bob.transmit);
@@ -1899,13 +1896,16 @@ mod tests {
 
     #[test]
     fn test_fixed_distance_stepping() {
-        // The default hole is Sagittarius A* (4.15e6 M_solar), where 1000 km is a fine step
-        // (1.63e-4 M); no metric override is needed any more.
+        // A press in Distance mode covers the press amount in r, and the press amount is the play
+        // rate sliced into frames: at a hundredth of a frame and this play speed that is 1.67e-4 M,
+        // which at Sagittarius A* (4.15e6 M_solar, the default hole) is a little over a thousand
+        // kilometres - a step worth quoting in km.
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
         trailing_raindrops(&mut app);
         app.controls.step_mode = StepMode::Distance;
-        app.controls.step_distance_km = 1000.0;
+        app.controls.step_grain = StepGrain::Hundredth;
+        let asked_dr = app.controls.press_amount();
 
         // The step is quoted for whoever is moving in r, and in the trailing-raindrop layout that
         // is Alice: Bob hovers at r = 4.5M until t = 8, so he has no coordinate speed to divide by
@@ -1920,13 +1920,12 @@ mod tests {
             sim_dt,
         );
         let actual_dr = (initial_r - alice_of(&app).r).abs();
-        let actual_dr_km = app.sim.metric.r_to_km(actual_dr);
 
-        // Verify that stepping by distance moves Bob by approximately 1000 km (within numerical integration tolerance)
+        // The press moves her by the Δr it asked for, within the integrator's tolerance over one
+        // step: Δt = Δr / |dr/dt| is exact only for a speed that holds over the whole step.
         assert!(
-            (actual_dr_km - 1000.0).abs() < 50.0,
-            "Expected ~1000 km movement, got {:.2} km",
-            actual_dr_km
+            (actual_dr / asked_dr - 1.0).abs() < 0.05,
+            "expected ~{asked_dr} M of r, got {actual_dr}"
         );
     }
 
@@ -1940,7 +1939,9 @@ mod tests {
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
         app.controls.step_mode = StepMode::Distance;
-        app.controls.step_distance_km = 1000.0;
+        // What a press covers in r, which is also what the stalled case falls back to in M of
+        // coordinate time: one played frame at the default rate, 1/60 M.
+        let press = app.controls.press_amount();
 
         // 1. Both falling in r: Bob's own speed, as before. That is the layout the app opens on
         //    for him - no release delay - but not for Alice, who circles the ISCO until she is
@@ -1951,8 +1952,10 @@ mod tests {
         assert!(bob_of(&app).velocity_c(&app.sim.metric) < 0.0);
         assert!(falling > 1e-8 && falling < 500.0, "a real step: {falling}");
 
-        // 2. Bob hovering, Alice falling: Alice's speed, and a step of the same order rather than
-        //    the 500 M the old 0.01c floor clamped a stationary Bob to.
+        // 2. Bob hovering, Alice falling: Alice's speed, and a step worth a couple of M rather than
+        //    the 500 M the old 0.01c floor clamped a stationary Bob to. She is barely moving this
+        //    early in her fall, so the turning-point floor of 0.01c is what divides the press here,
+        //    and even that leaves the step two orders of magnitude inside the clamp.
         app.controls.bob.delta_t_delay = 8.0;
         drop_observers(&mut app);
         app.step_forward(0.5);
@@ -1962,20 +1965,21 @@ mod tests {
         );
         let alice_paced = app.arrow_step();
         let alice_speed = alice_of(&app).velocity_c(&app.sim.metric).abs();
-        let expected = app.sim.metric.km_to_r(1000.0) / alice_speed.max(0.01);
+        let expected = press / alice_speed.max(0.01);
         assert!(
             (alice_paced - expected).abs() < 1e-12,
             "a hovering Bob is paced by Alice: {alice_paced} vs {expected}"
         );
-        assert!(alice_paced < 1.0, "and not by the 500 M clamp: {alice_paced}");
+        assert!(alice_paced < 10.0, "and not by the 500 M clamp: {alice_paced}");
 
-        // 3. Nobody moving in r: the fixed fallback, which claims nothing about a distance. An
-        //    Alice who is not in the simulation at all leaves the chain the same way a hovering
-        //    one does, and so does a Bob.
+        // 3. Nobody moving in r: the press amount is taken as M of coordinate time instead, which
+        //    claims nothing about a distance and is exactly what Time mode would have done with the
+        //    same press. An Alice who is not in the simulation at all leaves the chain the same way
+        //    a hovering one does, and so does a Bob.
         app.sim.alice = None;
-        assert!((app.arrow_step() - 0.1).abs() < 1e-12, "step = {}", app.arrow_step());
+        assert!((app.arrow_step() - press).abs() < 1e-12, "step = {}", app.arrow_step());
         app.sim.bob = None;
-        assert!((app.arrow_step() - 0.1).abs() < 1e-12, "step = {}", app.arrow_step());
+        assert!((app.arrow_step() - press).abs() < 1e-12, "step = {}", app.arrow_step());
 
         // 4. A Static Bob outside the static limit holds his radius by choice, and is treated the
         //    same way: there is no time in which he covers Δr either.
@@ -1983,16 +1987,20 @@ mod tests {
         bob.mode = ObserverMode::Static;
         assert!(bob.mode_admissible(&app.sim.metric) && bob.velocity_c(&app.sim.metric) == 0.0);
         app.sim.bob = Some(bob);
-        assert!((app.arrow_step() - 0.1).abs() < 1e-12);
+        assert!((app.arrow_step() - press).abs() < 1e-12);
 
         // 5. ...but a Static selection at a radius where it is impossible is falling, so it paces
-        //    the step like any other faller.
+        //    the step like any other faller: covering Δr costs him Δr / |dr/dt| of coordinate time,
+        //    and he falls at less than the speed of light, so the press is worth more coordinate
+        //    time than the stalled fallback rather than less.
         let mut bob = Observer::new(&app.sim.metric, "Bob", 0.0, 1.9, 0.0);
         bob.mode = ObserverMode::Static;
         assert!(!bob.mode_admissible(&app.sim.metric));
-        assert!(bob.velocity_c(&app.sim.metric) < 0.0, "he is falling, and the step follows him");
+        let speed = bob.velocity_c(&app.sim.metric);
+        assert!(speed < 0.0, "he is falling, and the step follows him");
         app.sim.bob = Some(bob);
-        assert!(app.arrow_step() < 0.1);
+        assert!((app.arrow_step() - press / speed.abs()).abs() < 1e-12);
+        assert!(app.arrow_step() > press);
     }
 
     #[test]
@@ -2005,8 +2013,6 @@ mod tests {
         app.controls.is_playing = false;
         app.controls.step_mode = StepMode::Distance;
         app.controls.play_speed = 2.0;
-        // The press's own amount, set to show that a played frame does not read it.
-        app.controls.step_distance_km = 1000.0;
         set_free_fall(&mut app);
         app.step_forward(0.05);
 
@@ -2029,13 +2035,79 @@ mod tests {
         assert!((played(&app, 10.0 / 60.0) / frame - 10.0).abs() < 1e-9);
         app.controls.play_speed = 4.0;
         assert!((played(&app, 1.0 / 60.0) / frame - 2.0).abs() < 1e-9, "and the slider is a rate");
-        app.controls.step_distance_km = 10.0;
-        assert_eq!(played(&app, 1.0 / 60.0), 2.0 * frame, "that the Step Dist slider has no say in");
+        // The grain is the press's own setting and a played frame does not read it.
+        app.controls.step_grain = StepGrain::SixtyFrames;
+        assert_eq!(played(&app, 1.0 / 60.0), 2.0 * frame, "that the Step Size grain has no say in");
 
         // Nobody moving in r: the frame is worth the same M of coordinate time, as in Time mode.
         app.sim.alice = None;
         app.sim.bob = None;
         assert_eq!(played(&app, 1.0 / 60.0), 4.0 / 60.0);
+    }
+
+    #[test]
+    fn test_one_press_at_one_frame_is_the_step_a_played_frame_at_sixty_fps_takes() {
+        // What the grain promises, and the reason a press is quoted in frames at all: at "1 frame"
+        // the arrow keys are a video's frame-step button, in every one of the three modes. The two
+        // paths ask the same `step_of` for the same amount, so the two numbers agree to the bit
+        // rather than to a tolerance.
+        let mut app = SpacetimeApp::default();
+        app.controls.is_playing = false;
+        trailing_raindrops(&mut app);
+        // Distance mode needs somebody moving in r for the press to be paced by anybody, and Watch
+        // mode needs a focus observer with a worldline to keep a watch.
+        app.step_forward(0.5);
+        app.controls.frame_of_ref = ReferenceFrame::Alice;
+        assert!(alice_of(&app).velocity_c(&app.sim.metric) < 0.0, "Alice is falling");
+
+        app.controls.step_grain = StepGrain::Frame;
+        for (mode, play_speed) in [
+            (StepMode::Time, 1.0),
+            (StepMode::Distance, 2.0),
+            (StepMode::Watch, 0.5),
+        ] {
+            app.controls.step_mode = mode;
+            app.controls.play_speed = play_speed;
+            let pressed = app.arrow_step();
+            let played = app.controls.played_step(
+                &app.sim.metric,
+                app.sim.bob.as_ref(),
+                app.sim.alice.as_ref(),
+                1.0 / 60.0,
+            );
+            assert!(pressed > 0.0, "{mode:?}: a press moves the run: {pressed}");
+            assert_eq!(pressed, played, "{mode:?}: a press is one frame of playing");
+        }
+    }
+
+    #[test]
+    fn test_the_step_grains_are_decades_of_one_played_frame_at_the_play_rate() {
+        // The ladder is a ladder of one quantity: frames of the rate the Play Speed slider names.
+        // So the five entries stand in fixed ratio to each other, and moving Play Speed moves every
+        // one of them by the same factor - which is what lets the label beside the dropdown say
+        // what a press is worth without the dropdown having an amount of its own.
+        let mut controls = AppControls { play_speed: 1.0, ..AppControls::default() };
+        assert_eq!(
+            StepGrain::ALL.map(StepGrain::frames),
+            [0.01, 0.1, 1.0, 10.0, 60.0],
+            "the ladder is decades of a frame, with one second of playing at the top"
+        );
+        for grain in StepGrain::ALL {
+            controls.step_grain = grain;
+            assert_eq!(controls.press_amount(), grain.frames() / 60.0, "{}", grain.key());
+        }
+
+        // A rate seven and a half times as fast makes every press seven and a half times as big,
+        // and the grain is untouched by the change.
+        let slow: Vec<f64> = StepGrain::ALL
+            .into_iter()
+            .map(|grain| AppControls { step_grain: grain, ..controls.clone() }.press_amount())
+            .collect();
+        controls.play_speed = 7.5;
+        for (grain, slow) in StepGrain::ALL.into_iter().zip(slow) {
+            let fast = AppControls { step_grain: grain, ..controls.clone() }.press_amount();
+            assert_eq!(fast, slow * 7.5, "{}", grain.key());
+        }
     }
 
     #[test]
@@ -2103,8 +2175,8 @@ mod tests {
         assert!((step.u_t - u_t).abs() < 1e-9, "u^t = {} rather than {u_t}", step.u_t);
         assert!((step.dt - u_t * 0.1).abs() < 1e-9, "Δt = {} rather than {}", step.dt, u_t * 0.1);
         assert!(!step.capped, "0.105 M is well inside the {WATCH_DT_CAP} M budget");
-        // And the step every path in the app takes is that number.
-        assert_eq!(controls.step_for(&metric, Some(&bob), None, 0.1), step.dt);
+        // And the step every path in the app takes for that amount is that number.
+        assert_eq!(controls.step_of(&metric, Some(&bob), None, 0.1), step.dt);
 
         // The frozen worldline is where the honest answer has to be refused. Bob asymptoting to
         // the far branch of r₋ has u^t of order 1e10, so one tick of his watch is more of the
@@ -2135,9 +2207,9 @@ mod tests {
         let step = controls.watch_step(&metric, Some(&bob), None, 0.1);
         assert_eq!((step.dt, step.u_t, step.capped), (0.1, 1.0, false));
         controls.step_mode = StepMode::Watch;
-        let watching = controls.step_for(&metric, Some(&bob), None, 0.1);
+        let watching = controls.step_of(&metric, Some(&bob), None, 0.1);
         controls.step_mode = StepMode::Time;
-        assert_eq!(watching, controls.step_for(&metric, Some(&bob), None, 0.1));
+        assert_eq!(watching, controls.step_of(&metric, Some(&bob), None, 0.1));
 
         // A focus observer whose card is unticked leaves the chain the same way: there is no watch
         // to keep, so the step is the one that was asked for.
@@ -2405,9 +2477,10 @@ mod tests {
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
         trailing_raindrops(&mut app);
-        app.controls.step_size = 0.02;
         assert_eq!(app.controls.bob.delta_t_delay, 8.0, "a hovering emitter to rewind");
 
+        // Stated here and handed to every call below, because what this measures is a rewind over a
+        // known interval rather than whatever the panel is set to.
         let step = 0.02;
         for _ in 0..150 {
             app.step_forward(step);
@@ -2716,12 +2789,13 @@ mod tests {
     /// Every setting the run reads is written here rather than inherited, including the ones that
     /// happen to match the app's own defaults: what this measures is whether the answer depends on
     /// the step size, and a default quietly moving underneath it would make that question
-    /// unanswerable.
+    /// unanswerable. `step` is the one thing the panel has no say in - it is handed straight to
+    /// `step_forward`, the way the arrow keys hand it their own amount - so that each of the three
+    /// runs is a run at a stated size in M rather than at whatever a press currently comes to.
     fn comb_app(step: f64, until: f64, rays_per_pulse: usize, bob_delay: f64) -> SpacetimeApp {
         let mut app = SpacetimeApp::default();
         app.controls.is_playing = false;
         app.controls.step_mode = StepMode::Time;
-        app.controls.step_size = step;
         // Sagittarius A*'s spin, which is the hole the app opens on and the one Alice's ISCO
         // radius below belongs to.
         app.sim.metric = KerrSchild::with_solar_mass(1.0, 0.90, 4.15e6);
@@ -2772,8 +2846,9 @@ mod tests {
         // at a mean spacing of 0.105 of her proper time, a 0.1 M step 20 at 0.111, and a 0.5 M step
         // 12 at 0.185 - three different transmissions from one worldline.
         //
-        // The three sizes are a played frame, the panel's default hand step, and the top of the
-        // Step Size slider. The largest is five times the emission interval, so every one of its
+        // The three sizes are a played frame, which is also one press at the default grain; six
+        // frames, which is a press at ten frames and a brisk play rate; and half an M, which is
+        // thirty of them. The largest is five times the emission interval, so every one of its
         // steps has several pulses due inside it, which is the case the loop exists for.
         const UNTIL: f64 = 6.0;
         let steps = [1.0 / 60.0, 0.1, 0.5];

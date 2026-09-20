@@ -956,7 +956,7 @@ impl Observer {
         // the whole wait where a boundary landed exactly on release_t. It was a reading off the
         // user's step grid rather than off the worldline, and everything keyed to it - the
         // transmission comb above all, which is paced in the emitter's own proper time - moved
-        // with the Step Size slider. `rewind_into_hover` has always used the closed form, so
+        // with the size of the step. `rewind_into_hover` has always used the closed form, so
         // forward play and rewind disagreed by the same sliver.
         //
         // The other modes have no separate clock to start - they were already moving in t while
@@ -2281,8 +2281,9 @@ mod tests {
         // step that landed exactly on the release, where the crossing step took the hover's place
         // instead of following it.
         //
-        // The sizes are a played frame, the panel's default hand step, the top of the Step Size
-        // slider, an uneven one, and the release itself, which puts a boundary exactly on it.
+        // The sizes are a played frame, a tenth of an M, a half of an M - which is what a press
+        // covers at ten frames a press and a brisk play rate - an uneven one, and the release
+        // itself, which puts a boundary exactly on it.
         // 1.07 is a multiple of none of the others.
         let metric = KerrSchild::new(1.0, 0.65);
         const RELEASE_T: f64 = 1.07;

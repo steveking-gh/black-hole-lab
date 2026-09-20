@@ -68,6 +68,14 @@
 //! field is therefore added to `v1` with `#[serde(default)]` and the version stays at 1. Older
 //! builds ignore it; this one uses it where it is there.
 //!
+//! `Controls::step_grain` is the one such field so far: the Step Size dropdown counts a press in
+//! played frames, and a file written before that dropdown existed carries no grain and loads at the
+//! panel's default of one frame. Its two neighbours `step_size` and `step_distance_km` are what the
+//! same change left behind. A press has no amount of its own any more, so this build writes the
+//! amount a press comes to into both of them and reads neither back - which keeps a file readable
+//! by a build from before the dropdown, stepping by about the same amount, without letting two
+//! spellings of the same setting disagree on the way in.
+//!
 //! *A changed field is a new version.* A field whose units change, whose meaning changes, that
 //! splits in two, or that goes away, is a structural change, and a reader has to be told which
 //! spelling it is looking at. Then:
@@ -227,7 +235,7 @@ pub fn document(
         note: note.to_string(),
         state_hash: format!("{:016x}", sim.fingerprint()),
         sim: convert::sim_to_v1(sim),
-        controls: convert::controls_to_v1(controls),
+        controls: convert::controls_to_v1(controls, &sim.metric),
         view: convert::view_to_v1(spacetime, spatial, volume),
     }
 }

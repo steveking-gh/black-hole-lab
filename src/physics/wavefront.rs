@@ -1570,7 +1570,7 @@ pub(crate) struct FrontMark {
 /// dropped them according to how long the pass was: with Bob trailing Alice down the default
 /// infall, her eighth pulse sweeps over him at t = 5.674 M and r = 0.66 M, and the ingoing ray on
 /// one side of him reaches the ring 0.17 M later. A pass shorter than that saw the arrival and a
-/// pass spanning both events did not, so Bob heard eight pulses at a Step Size of 0.3 M and seven
+/// pass spanning both events did not, so Bob heard eight pulses at a step of 0.3 M and seven
 /// at 0.4 M. A reception is an event on a worldline and cannot depend on how finely the run was
 /// stepped.
 ///

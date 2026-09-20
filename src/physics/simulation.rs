@@ -109,10 +109,11 @@ impl Simulation {
     /// of whatever step the caller happened to take made it an event on the user's step grid
     /// instead: the pulse went out at the first step boundary at or past the due reading, the
     /// cadence then counted from that boundary rather than from the due value so the comb drifted,
-    /// and a step longer than the interval - which is most of them, the Step Size slider reaching
-    /// 0.5 M and a played frame 0.33 M against an interval of 0.1 M - sent one pulse where several
-    /// were due. Measured over the same 6 M of the default layout, a frame step put 22 pulses on the
-    /// wire and a 0.5 M step 12. The physics cannot depend on how finely the user asked to watch it.
+    /// and a step longer than the interval - which is most of them, one press reaching 20 M at the
+    /// fastest play rate and a played frame 0.33 M against an interval of 0.1 M - sent one pulse
+    /// where several were due. Measured over the same 6 M of the default layout, a frame step put
+    /// 22 pulses on the wire and a 0.5 M step 12. The physics cannot depend on how finely the user
+    /// asked to watch it.
     ///
     /// Nothing is done about very long steps, deliberately: the loop splits at every pulse due
     /// inside one, which is exactly what makes a long step exact, and a Distance-mode step of

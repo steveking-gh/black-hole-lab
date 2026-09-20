@@ -4326,11 +4326,11 @@ mod canvas_tests {
         // `Pulse::extend_track` records at most once per `track_dt` - `TRACK_MIN_DT`, 0.02 M, until
         // the first thinning doubles it - so a caller stepping in shorter intervals than that
         // leaves the newest track point behind the field's clock for several steps together. The
-        // app does that routinely: the Step Size slider reaches down to 0.0005 M, a fortieth of the
-        // cadence, and even a played frame at the default one M per real second is a sixtieth of an
-        // M on a 60 Hz window, already under it. A head read off the track is then pinned to that
-        // stale point while the now line moves on, and jumps forward when the next point lands:
-        // the lag the user sees.
+        // app does that routinely: a press at the finest grain is a hundredth of a played frame,
+        // far under the cadence, and even a played frame at the default one M per real second is a
+        // sixtieth of an M on a 60 Hz window, already under it. A head read off the track is then
+        // pinned to that stale point while the now line moves on, and jumps forward when the next
+        // point lands: the lag the user sees.
         // Three steps of 0.004 M carry the field 0.012 M past the last recorded point, which is
         // under the 0.02 M cadence, so the clock here stands between two track points by
         // construction.
