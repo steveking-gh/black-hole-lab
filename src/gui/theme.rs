@@ -327,16 +327,6 @@ impl Theme {
         (Self::FRONT_LOG_MAX, Self::FRONT_VIOLET_RGB),
     ];
 
-    /// Opacity of a segment of front drawn in the frozen family's own pass, E - Omega_- L < 0.
-    ///
-    /// Those arcs collapse to within a fraction of a pixel of the magenta r- circle within a few M,
-    /// so they are only legible drawn nearly opaque and drawn last, on top of it. The colour is the
-    /// same `front_colour` every other segment gets - the frozen family is not a different kind of
-    /// thing and no longer gets a flat colour of its own - and what is left of the old treatment is
-    /// the weight it is drawn at, which is a legibility measure and says nothing about the physics:
-    /// nothing on these fronts is measured in opacity.
-    pub const FRONT_FROZEN_ALPHA: u8 = 230;
-
     /// The furthest behind a drawn piece of front its trailing fade may reach, in screen pixels.
     ///
     /// The fade is the one thing in the equatorial picture that says which way the light is going.
@@ -351,14 +341,18 @@ impl Theme {
     /// either - the trail is a direction cue, and the direction is the same fact in both
     /// transmissions.
     ///
-    /// It is a ceiling rather than the length itself. What a fade must not do is reach the front
-    /// behind it: a transmission sends one pulse every 0.1 M of the emitter's proper time, so at
-    /// the default 48 px/M the fronts of a field stand about 5 px apart, and a 30 px fade on every
-    /// one of them lay six deep and filled the whole field with one flat salmon wash - exactly the
-    /// uninteresting fill a picture of a wavefront should not have. `FRONT_TRAIL_GAP_FRACTION`
-    /// bounds each fade by the gap to the following front instead, and this ceiling is what is left
-    /// to bound the case the user had in mind: a zoom deep enough, or a field sparse enough, that
-    /// the gap is wide and the fade would otherwise run away with the picture.
+    /// It is a ceiling rather than the length itself, and the loosest of the three bounds a fade
+    /// carries. What a fade must not do is reach the front behind it: a transmission sends one
+    /// pulse every 0.1 M of the emitter's proper time, so at the default 48 px/M the fronts of a
+    /// field stand about 5 px apart, and a 30 px fade on every one of them lay six deep and filled
+    /// the whole field with one flat salmon wash - exactly the uninteresting fill a picture of a
+    /// wavefront should not have. `FRONT_TRAIL_GAP_FRACTION` bounds each fade by the gap to the
+    /// following front instead. What a fade must not do either is reach back further than its own
+    /// light has travelled, so a third bound holds it to the ray's screen speed times the time the
+    /// ray has been in flight; without it a pulse a moment old, a loop of a few pixels, wore 30 px
+    /// of fade as a flare all round its emitter. This ceiling is what is left to bound the case the
+    /// user had in mind: a zoom deep enough, or a field sparse enough, that the gap is wide, the
+    /// light is long gone and the fade would otherwise run away with the picture.
     pub const FRONT_TRAIL_PX: f32 = 30.0;
 
     /// How much of the gap to the following front one front's trailing fade may occupy.
@@ -375,7 +369,10 @@ impl Theme {
     /// the coordinate time between the two emissions. It ignores the emitter's motion between those
     /// two events and the change in the chart speed of light across the gap, and it is right to: it
     /// bounds a decoration. Nothing in the picture is measured in the length of a trail, and the
-    /// gain colouring, the arrival marks and the reception test all read exactly as they did.
+    /// gain colouring, the arrival marks and the reception test all read exactly as they did. The
+    /// third bound, the distance the light has covered since its pulse was let go, is the same
+    /// screen speed times the ray's own time in flight and is an estimate in the same sense; that
+    /// one carries no fraction, because a fade may honestly reach the event its light started from.
     pub const FRONT_TRAIL_GAP_FRACTION: f32 = 0.85;
 
     /// The colour of a wavefront gain nu(infaller here) / nu(infaller at the emission event), at

@@ -860,7 +860,7 @@ impl SpatialCanvas {
                  measured as it left: red ×1 (every front is born red), orange ×3, yellow ×10,\n\
                  green ×30, blue ×1000, violet ×100000, grey below ×1. One lightness throughout,\n\
                  so the colour carries the shift and nothing else\n\
-                 Beaded arcs on r₋: the frozen family (E − Ω₋L < 0, never crosses this branch)\n\
+                 Arcs piled on r₋: the frozen family (E − Ω₋L < 0, never crosses this branch)\n\
                  {}\
                  Bob's fronts: same gain colours at half stroke, mint emission dots\n\
                  Receptions: triangle on the receiver's trail in the sender's colour (amber = Alice → Bob, mint = Bob → Alice)\n\
@@ -897,7 +897,7 @@ impl SpatialCanvas {
                  measured as it left: red ×1 (every front is born red), orange ×3, yellow ×10,\n\
                  green ×30, blue ×1000, violet ×100000, grey below ×1. One lightness throughout,\n\
                  so the colour carries the shift and nothing else\n\
-                 Beaded arcs on r₋: the frozen family (E − Ω₋L < 0, never crosses this branch)\n\
+                 Arcs piled on r₋: the frozen family (E − Ω₋L < 0, never crosses this branch)\n\
                  {}\
                  Bob's fronts: same gain colours at half stroke, mint emission dots\n\
                  Receptions: triangle on the receiver's trail in the sender's colour (amber = Alice → Bob, mint = Bob → Alice)\n\
@@ -1314,30 +1314,16 @@ fn draw_ring_spin_arrow(painter: &egui::Painter, center: Pos2, ring_px: f32, spi
 /// the radius the pulse left them at, and the loop's outer edge never gets further from the hole
 /// than that dot, which is the statement the drawing exists to make.
 ///
-/// The frozen family is drawn twice over, heavily, because otherwise it cannot be seen at all.
-/// Every ray whose `NullRay::inner_horizon_energy` is negative approaches r- as r - r- ~
-/// exp(-kappa_- t) while co-rotating at Omega_-, so within a few M of coordinate time the whole arc
-/// has collapsed to a fraction of a pixel of the magenta r- circle, where a hairline stroke leaves
-/// it indistinguishable from the circle underneath. So: a segment with *both* ends frozen is drawn
-/// at width 2 and at `Theme::FRONT_FROZEN_ALPHA`, and every frozen ray also gets a small filled dot,
-/// so an arc squeezed below a pixel of width still reads as a beaded arc riding the Cauchy horizon.
-/// All of it is drawn after every ordinary segment of every pulse, so no later front paints over it.
-/// What is *not* special about it any more is its colour: it takes the same `Theme::front_colour` of
-/// the same gain as every other segment, and the dots take their own ray's, so the exponential climb
-/// of the frozen stack up the ramp - it is what runs the ramp out to a gain of 1e5 - is on screen
-/// instead of being flattened into one marker colour. The extra weight is legibility and says
-/// nothing about the physics. A segment with one frozen end and one crossing end is drawn in the
-/// ordinary pass: that pair is the tear in the loop, where the front is being pulled apart into its
-/// two families, and it belongs to neither.
-///
-/// The heavy pass is applied only inside r+. The sign of E - Omega_- L is a property of the ray
-/// from birth, and outside r+ it is carried by most of the prograde half of every ring an emitter
-/// sends - light that is nowhere near r- and may never get there, since a ray let go at 4.5 M with
-/// that sign can escape just as well as fall. Drawn heavily out there it split each fresh ring into
-/// a bright half and a faint one for no reason the picture could show, since the weight exists to
-/// keep an arc visible once it has collapsed onto r-, and nothing outside r+ has. Inside r+ every
-/// ray of the family is on its way to r- and reaches a pixel of it within a few M, which is where
-/// the weight is needed and the only place it is now applied.
+/// One arc of each pulse is the frozen family: the rays whose `NullRay::inner_horizon_energy` is
+/// negative, E - Omega_- L < 0, which approach r- as r - r- ~ exp(-kappa_- t) while co-rotating at
+/// Omega_-. Within a few M of coordinate time that arc has collapsed onto the magenta r- circle,
+/// and its gain climbs the colour ramp all the way to the 1e5 the ramp runs out to, which is what
+/// the top of the ramp is there for. Nothing about it is drawn specially: it takes the same stroke,
+/// the same `Theme::SHIFT_ALPHA`, the same gain colouring and the same trail as every other piece
+/// of front, and no ray of it carries a bead. It used to be drawn heavily over a second pass, and
+/// the sign of E - Omega_- L is fixed from the ray's birth, so that whole arc of every front
+/// changed weight the instant it crossed r+ and broke the fade there - a seam at r+ that said
+/// nothing about the light, which goes through r+ without noticing it.
 ///
 /// Behind every drawn piece of front lies its trail: a strip in that piece's own colour at the
 /// line and transparent at its far edge, laid on the side the light has come *from*. A front on a
@@ -1347,22 +1333,40 @@ fn draw_ring_spin_arrow(painter: &egui::Painter, center: Pos2, ring_px: f32, spi
 /// painter before the first line of the first pulse goes down, so the fades lie under every front
 /// of the field and a line stays exactly as crisp as it was.
 ///
-/// How deep the strip is at a ray is `Theme::FRONT_TRAIL_GAP_FRACTION` of the gap back to the front
-/// behind it, held under `Theme::FRONT_TRAIL_PX`. The bound is what makes the cue readable at all:
-/// a transmission sends every 0.1 M of the emitter's proper time, so at the default 48 px/M its
-/// fronts stand about 5 px apart, and a fixed 30 px fade on every one of them lay six deep and
-/// turned the whole field into one flat wash with only the leading front legible. Bounded by the
-/// gap, no two fades of a field can overlap at any zoom or any spacing: crowded, each line keeps a
-/// soft trailing edge a few pixels deep - sharp ahead, fading behind, which is the whole of the
-/// cue - and on a deep zoom, or with the pulse count turned down, the full 30 px opens out.
+/// How deep the strip is at a ray is the least of three lengths. `Theme::FRONT_TRAIL_PX` is the
+/// ceiling, a screen length at every zoom. `Theme::FRONT_TRAIL_GAP_FRACTION` of the gap back to the
+/// front behind it is what makes the cue readable at all: a transmission sends every 0.1 M of the
+/// emitter's proper time, so at the default 48 px/M its fronts stand about 5 px apart, and a fixed
+/// 30 px fade on every one of them lay six deep and turned the whole field into one flat wash with
+/// only the leading front legible. Bounded by the gap, no two fades of a field can overlap at any
+/// zoom or any spacing: crowded, each line keeps a soft trailing edge a few pixels deep - sharp
+/// ahead, fading behind, which is the whole of the cue - and on a deep zoom, or with the pulse
+/// count turned down, the full 30 px opens out.
 ///
-/// The gap is estimated rather than measured: the ray's own screen speed times the coordinate time
-/// between the two emissions, which ignores the emitter's motion between those events and the
-/// change in the chart speed of light across the gap. That is the right standard for it, because
-/// the number bounds a decoration - nothing in the picture is measured in the length of a fade, and
-/// a fade drawn a pixel too short or too long says nothing false about the light. It is per ray
-/// rather than per front because the rays of one pulse move at wildly different screen speeds, so
-/// the fade narrows by itself exactly where that pulse and the one behind it have converged.
+/// The third length is how far this ray's light has come since the pulse was let go, and it is
+/// what holds a fresh front to where its light has actually been. A pulse emitted a moment ago is
+/// a loop a few pixels across hugging its emitter; give every ray of it 30 px of fade and the strip
+/// reaches back *through* the emission event and fans out behind the emitter as a flare, drawn over
+/// ground the light has never covered. At zero time in flight the fade is zero and it opens out of
+/// the emission event with the front, so the fade stops at the emitter rather than surrounding
+/// them. No fraction is applied to this one, unlike the gap: the emission event is where the light
+/// really started, and a fade that stopped short of it would be claiming otherwise.
+///
+/// Both of those lengths are estimated rather than measured: the ray's own screen speed *now*,
+/// times the coordinate time between the two emissions in the one case and the time this ray has
+/// been in flight - `NullRay::t` less `Pulse::emitted_t` - in the other. Neither integrates the
+/// speed along the path the light took, and the emitter's motion between two emissions does not
+/// enter. That is the right standard for both, because the number bounds a decoration - nothing in
+/// the picture is measured in the length of a fade, and a fade drawn a pixel too short or too long
+/// says nothing false about the light. The time in flight is used rather than the straight screen
+/// distance from the drawn vertex back to the emission point, which would look like the tighter
+/// statement and is not: inside the ergosphere the hole drags a ray round and carries it past its
+/// own emission point again long after it left, where the straight distance is small and the
+/// journey is not, and the fade would collapse exactly there. The time in flight only grows.
+///
+/// All three are per ray rather than per front because the rays of one pulse move at wildly
+/// different screen speeds, so the fade narrows by itself exactly where that pulse and the one
+/// behind it have converged.
 ///
 /// What "behind" means at a point of a front is decided by the *ray's* coordinate velocity there,
 /// (dr/dt, dphi/dt) off the integrated `NullRay`, and not by the normal of the drawn polyline. The
@@ -1386,10 +1390,9 @@ fn draw_ring_spin_arrow(painter: &egui::Painter, center: Pos2, ring_px: f32, spi
 /// opposite ways - gets its tail vertex on top of its front vertex, so the strip closes to nothing
 /// there instead of jumping to a made-up heading. A segment that draws no line has no trail either,
 /// which covers the dead endpoints, the wound segments `hide_wound` cuts, and the whole points-only
-/// mode. Neither does the frozen family's heavy pass: its light glides *along* r- at Omega_-, so a
-/// trail there would lie on the front itself and along the magenta r- circle: a smear over the one
-/// place in the picture that is already hardest to read, answering a question - which way is this
-/// going? - that a family standing still in radius does not raise.
+/// mode. On r- the frozen family's light glides *along* the front at Omega_-, so its strip lies on
+/// the front itself and covers almost no area at all - the fade there says, correctly, that the
+/// light is going nowhere across the front it belongs to.
 /// Largest azimuthal span of one drawn piece of a wavefront segment, in radians.
 ///
 /// A segment of the front is the piece of null surface between two neighbouring rays, and what it
@@ -1494,7 +1497,8 @@ fn segment_arc<F: Fn((f64, f64)) -> Pos2>(
 }
 
 /// The radius, times the field's stroke scale, of the dot each calculated point of a front is
-/// drawn as: every live ray when the arcs are switched off, and the frozen family's beads always.
+/// drawn as: every live ray when the arcs are switched off, and the two ends of a segment the
+/// winding cut has withdrawn.
 ///
 /// The Arcs between wavefront points checkbox is a drawing choice and only a drawing choice. On,
 /// each segment of a front between two neighbouring rays is drawn as the curve of `segment_arc`,
@@ -1510,8 +1514,8 @@ fn segment_arc<F: Fn((f64, f64)) -> Pos2>(
 /// The same dot marks each end of a segment dropped for winding past `MAX_RESOLVED_WINDING`, in
 /// that ray's own gain colour and at the ordinary `Theme::SHIFT_ALPHA`: those two calculated points
 /// are still calculated points, and it is only the inference between them that has been withdrawn.
-/// A ray already drawn as a dot - every live ray in points-only mode, and the frozen family's
-/// heavier beads - is not drawn twice for it.
+/// Every dot on a front is that one dot: in points-only mode a ray already carrying it is not drawn
+/// a second time for ending a cut segment.
 const FRONT_POINT_RADIUS: f32 = 1.6;
 
 /// Below this drawn radius the ring is a dot on the screen and the spin arrow is not drawn: it
@@ -1705,11 +1709,12 @@ fn screen_velocity<F: Fn((f64, f64)) -> Pos2>(
 /// The fade behind one ray: which way the light there is going on screen, and how far back the fade
 /// may reach at that ray.
 ///
-/// The length is `Theme::FRONT_TRAIL_GAP_FRACTION` of the estimated gap to the front behind this
-/// one, held under `Theme::FRONT_TRAIL_PX`. It is per ray rather than per front because the gap is:
-/// the rays of one pulse run at wildly different screen speeds - one settling onto r- has almost
-/// none, its neighbour crossing has all of it - so the fade narrows exactly where the fronts crowd
-/// and opens out where they do not.
+/// The length is the least of three: `Theme::FRONT_TRAIL_PX`, `Theme::FRONT_TRAIL_GAP_FRACTION` of
+/// the estimated gap to the front behind this one, and the distance this ray's light has covered
+/// since it was let go. It is per ray rather than per front because all three are: the rays of one
+/// pulse run at wildly different screen speeds - one settling onto r- has almost none, its
+/// neighbour crossing has all of it - so the fade narrows exactly where the fronts crowd and opens
+/// out where they do not.
 #[derive(Clone, Copy)]
 struct Trail {
     /// Unit screen direction of travel, or zero where the projection gives none.
@@ -1722,18 +1727,26 @@ impl Trail {
     /// No fade at all: a dead ray, or a live one the projection leaves standing still on screen.
     const NONE: Self = Self { heading: Vec2::ZERO, length: 0.0 };
 
-    /// The fade at one live ray, from the screen velocity of its light and `gap`, the coordinate
-    /// time back to the front behind this one - None where this front has no neighbour to crowd it,
-    /// which is a field carrying a single pulse.
-    fn of(velocity: Vec2, gap: Option<f32>) -> Self {
+    /// The fade at one live ray, from the screen velocity of its light, `gap`, the coordinate time
+    /// back to the front behind this one - None where this front has no neighbour to crowd it,
+    /// which is a field carrying a single pulse - and `elapsed`, the coordinate time this ray has
+    /// been in flight since its pulse was let go.
+    ///
+    /// The same screen speed serves both bounds, so both are estimates in the same sense: the speed
+    /// the light has here and now, rather than the speed integrated along the path it took. A fade
+    /// is a decoration and nothing in the picture is measured in the length of one.
+    fn of(velocity: Vec2, gap: Option<f32>, elapsed: f32) -> Self {
         let speed = velocity.length();
         if speed <= 0.0 || !speed.is_finite() {
             return Self::NONE;
         }
-        let length = match gap {
-            Some(gap) => (Theme::FRONT_TRAIL_GAP_FRACTION * speed * gap).min(Theme::FRONT_TRAIL_PX),
-            None => Theme::FRONT_TRAIL_PX,
-        };
+        // The distance covered since emission is the bound that holds a fresh pulse to where its
+        // light has been: at emission it is zero, and the fade grows out of the emission event with
+        // the front rather than reaching back through it.
+        let mut length = Theme::FRONT_TRAIL_PX.min(speed * elapsed.max(0.0));
+        if let Some(gap) = gap {
+            length = length.min(Theme::FRONT_TRAIL_GAP_FRACTION * speed * gap);
+        }
         Self { heading: velocity / speed, length }
     }
 }
@@ -1854,11 +1867,6 @@ pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
         emission_colour.b(),
         150,
     );
-    // The frozen family of every pulse, held back and drawn last so that it lies on top of both the
-    // r- circle and the ordinary fronts it is buried in. Each carries its own colour, which is the
-    // same gain colouring every other segment gets: only the weight and the opacity are special.
-    let mut frozen_segments: Vec<(Vec<Pos2>, Color32)> = Vec::new();
-    let mut frozen_dots: Vec<(Pos2, Color32)> = Vec::new();
     // The trailing fades of the whole field, and the place on the painter they will be put. The
     // slot is taken before any pulse is drawn, so every fade lies under every line of this field
     // however late the pulse that cast it is reached. With the arcs off there are no lines to
@@ -1907,18 +1915,10 @@ pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
                 ray.gain_between(metric, pulse.emitted_r, &u_emit, &[ut, ur, up])
             })
             .collect();
-        // One classification and one projection per ray per frame, both of which the segment loop
-        // would otherwise repeat for each of the two segments a ray belongs to.
-        // "Frozen" for the drawing is the frozen family *inside r+*, the only place the heavy pass
-        // is needed: see the doc above `MAX_ARC_STEP`.
-        let r_plus = metric.outer_horizon();
-        let frozen: Vec<bool> = pulse
-            .rays
-            .iter()
-            .map(|ray| ray.alive() && ray.r < r_plus && ray.frozen(metric))
-            .collect();
-        // The ray positions themselves, which the frozen dots sit on; the segments between them
-        // are drawn as arcs in (r, phi) between them, or not at all when the arcs are off.
+        // One projection per ray per frame, which the segment loop would otherwise repeat for each
+        // of the two segments a ray belongs to. The ray positions themselves, which the dots of a
+        // withdrawn segment sit on; the segments between them are drawn as arcs in (r, phi) between
+        // them, or not at all when the arcs are off.
         let points: Vec<Pos2> = pulse
             .rays
             .iter()
@@ -1940,9 +1940,12 @@ pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
         .filter(|interval| interval.is_finite() && *interval > 0.0)
         .map(|interval| interval as f32);
         // The fade at each ray: which way the light there is going on screen, and how far back the
-        // gap lets it reach. One projection probe per live ray per frame, kept here for the same
-        // reason the positions are - each ray is an end of two segments and would otherwise be
-        // probed twice. Nothing to annotate with the arcs off, so nothing is computed there either.
+        // gap and the flight so far let it reach. One projection probe per live ray per frame, kept
+        // here for the same reason the positions are - each ray is an end of two segments and would
+        // otherwise be probed twice. Nothing to annotate with the arcs off, so nothing is computed
+        // there either. `NullRay::t` is the coordinate time the ray itself stands at, so the time
+        // in flight is that clock less the pulse's own emission time, and it is zero on the frame a
+        // pulse is emitted.
         let fades: Vec<Trail> = if style.arcs {
             pulse
                 .rays
@@ -1952,7 +1955,12 @@ pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
                     if !ray.alive() {
                         return Trail::NONE;
                     }
-                    Trail::of(screen_velocity(metric, ray, *at, to_screen, &mut probe_eps), gap)
+                    let elapsed = (ray.t - pulse.emitted_t) as f32;
+                    Trail::of(
+                        screen_velocity(metric, ray, *at, to_screen, &mut probe_eps),
+                        gap,
+                        elapsed,
+                    )
                 })
                 .collect()
         } else {
@@ -1991,8 +1999,7 @@ pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
             // The gain is carried along the segment rather than averaged over it: one polyline per
             // band of at most `FRONT_BAND_DECADES`, and a single band over the whole arc in the
             // common case where the two rays carry the same gain.
-            let frozen_pair = frozen[i] && frozen[j];
-            let alpha = if frozen_pair { Theme::FRONT_FROZEN_ALPHA } else { Theme::SHIFT_ALPHA };
+            //
             // How many pieces the bands are cut from, and how far into them each band starts:
             // consecutive bands share their boundary point, so a band of m points advances the
             // start by m - 1. That pair is s of the segment, which the trail interpolates the two
@@ -2001,17 +2008,12 @@ pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
             let mut first = 0usize;
             for (band, gain) in banded_segment(arc, gains[i], gains[j]) {
                 let advance = band.len().saturating_sub(1);
-                let colour = Theme::front_colour(gain, alpha);
-                if frozen_pair {
-                    frozen_segments.push((band, colour));
-                } else {
-                    // The fade first, into the mesh that is painted under every line of this
-                    // field; the frozen pass casts none, for the reason given above `MAX_ARC_STEP`.
-                    // Its head is this band's own colour, the very colour and opacity the line
-                    // beside it is stroked in, and it falls from there to nothing.
-                    trails.band(&band, first, pieces, (fades[i], fades[j]), colour);
-                    painter.add(egui::Shape::line(band, Stroke::new(1.2 * width_scale, colour)));
-                }
+                let colour = Theme::front_colour(gain, Theme::SHIFT_ALPHA);
+                // The fade first, into the mesh that is painted under every line of this field. Its
+                // head is this band's own colour, the very colour and opacity the line beside it is
+                // stroked in, and it falls from there to nothing.
+                trails.band(&band, first, pieces, (fades[i], fades[j]), colour);
+                painter.add(egui::Shape::line(band, Stroke::new(1.2 * width_scale, colour)));
                 first += advance;
             }
         }
@@ -2019,19 +2021,14 @@ pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
             if !pulse.rays[i].alive() {
                 continue;
             }
-            let alpha = if frozen[i] { Theme::FRONT_FROZEN_ALPHA } else { Theme::SHIFT_ALPHA };
-            if frozen[i] {
-                // A frozen ray already carries a bead, which is this same dot drawn heavier, so it
-                // is not drawn a second time for being the end of a cut segment.
-                frozen_dots.push((*point, Theme::front_colour(gains[i], alpha)));
-            } else if !style.arcs || cut_end[i] {
+            if !style.arcs || cut_end[i] {
                 // The calculated point itself: with the arcs on it is implied by the two segments
                 // meeting there, with them off it is all there is of this ray, and at the end of a
                 // segment dropped for winding it is what is left once the inference is withdrawn.
                 painter.circle_filled(
                     *point,
                     FRONT_POINT_RADIUS * width_scale,
-                    Theme::front_colour(gains[i], alpha),
+                    Theme::front_colour(gains[i], Theme::SHIFT_ALPHA),
                 );
             }
         }
@@ -2046,13 +2043,6 @@ pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
     // mesh of about 37 000 vertices, against the 9 216 line shapes it lies under.
     if let (Some(slot), Some(shape)) = (trail_slot, trails.shape()) {
         painter.set(slot, shape);
-    }
-
-    for (segment, colour) in frozen_segments {
-        painter.add(egui::Shape::line(segment, Stroke::new(2.0 * width_scale, colour)));
-    }
-    for (point, colour) in frozen_dots {
-        painter.circle_filled(point, FRONT_POINT_RADIUS * width_scale, colour);
     }
 }
 
@@ -3204,7 +3194,7 @@ mod tests {
     }
 
     /// Count what `draw_signal_field` puts into a painter for one field: the polylines (segments
-    /// of front) and the filled circles (calculated points, frozen beads and emission dots).
+    /// of front) and the filled circles (calculated points and emission dots).
     fn count_front_shapes(
         metric: &KerrSchild,
         field: &SignalField,
@@ -3252,7 +3242,7 @@ mod tests {
         use crate::physics::wavefront::SignalField;
         let metric = KerrSchild::new(1.0, 0.90);
         // An emitter let go inside r+ (1.436 at this spin), so the fronts it sends carry a frozen
-        // family too and the beads are part of what is counted.
+        // family settling onto r- as well as a crossing one, and both are counted the same way.
         let mut alice =
             Observer::new_with_phi(&metric, "Alice", 0.0, 1.2, 0.0, 0.0, WorldlineParams::default());
         let mut field = SignalField::default();
@@ -3287,28 +3277,35 @@ mod tests {
             live + live_pulses.len(),
             "with the arcs off every live ray is one dot, plus one emission dot per pulse"
         );
-        assert!(circles_off > circles_on, "and that is more dots than the frozen beads alone");
+        assert!(
+            circles_off > circles_on,
+            "and that is more dots than the arcs-on frame carries, where the only dots are the \
+             emission ones and the ends of the segments the winding cut withdrew"
+        );
     }
 
     #[test]
-    fn test_outside_r_plus_a_fresh_ring_is_drawn_at_one_weight() {
-        // A ring let go at r = 4.5 has a prograde half with E - Omega_- L < 0 - the sign is fixed
-        // at birth - but nothing about it has collapsed onto r-, so nothing about it needs the
-        // heavy frozen pass, and drawing it heavily split every ring into a bright half and a
-        // faint one. Every polyline of such a ring must come out at the same stroke width and the
-        // same opacity, and no bead at all.
+    fn test_a_front_is_drawn_at_one_weight_wherever_it_stands_and_whatever_family_it_is() {
+        // One front, drawn one way. The sign of E - Omega_- L is fixed at a ray's birth, so the
+        // frozen family is carried by most of the prograde half of every ring an emitter sends,
+        // and a pulse let go inside r+ has an arc of it already settling onto r-. That arc once
+        // came out at twice the stroke width, at a higher opacity, and beaded with dots, which
+        // made a seam of every front at r+ and left a gap in the fade there. Every polyline of a
+        // pulse must now come out at the same stroke width and the same opacity, inside r+ as
+        // outside it, and no bead at all.
         use crate::physics::observer::{Observer, WorldlineParams};
         let metric = KerrSchild::new(1.0, 0.90);
         let emitter =
-            Observer::new_with_phi(&metric, "Bob", 0.0, 4.5, 0.0, 0.0, WorldlineParams::default());
+            Observer::new_with_phi(&metric, "Bob", 0.0, 1.2, 0.0, 0.0, WorldlineParams::default());
         let mut field = SignalField::default();
         field.emit_if_due(&metric, &emitter);
         field.advance(&metric, 0.5);
         let rays = &field.pulses[0].rays;
-        assert!(rays.iter().all(|ray| ray.alive() && ray.r > metric.outer_horizon()));
+        assert!(rays.iter().all(|ray| ray.alive()), "no ray of this pulse has reached the ring");
+        let r_plus = metric.outer_horizon();
         assert!(
-            rays.iter().any(|ray| ray.frozen(&metric)),
-            "the ring does carry rays of the frozen family, which is what the test is about"
+            rays.iter().any(|ray| ray.r < r_plus && ray.frozen(&metric)),
+            "the pulse carries rays of the frozen family inside r+, which is what the test is about"
         );
 
         let ctx = egui::Context::default();
@@ -3348,15 +3345,25 @@ mod tests {
             walk(&clipped.shape, &mut strokes, &mut circles);
         }
         output.drop_without_applying_deltas();
-        assert_eq!(strokes.len(), rays.len(), "one polyline per segment of the ring");
+        assert!(
+            strokes.len() >= rays.len(),
+            "at least one polyline per segment of the loop: {} over {} rays",
+            strokes.len(),
+            rays.len()
+        );
         let first = strokes[0];
         assert!(
             strokes.iter().all(|s| *s == first),
             "every segment at one width and one opacity: {:?}",
             strokes.iter().collect::<std::collections::HashSet<_>>()
         );
-        assert_eq!(first.1, Theme::SHIFT_ALPHA, "the ordinary opacity, not the frozen pass");
-        assert_eq!(circles, 1, "the emission dot and no beads");
+        assert_eq!(first.1, Theme::SHIFT_ALPHA, "the one opacity a front is drawn at");
+        assert_eq!(
+            f32::from_bits(first.0),
+            1.2 * Theme::SECONDARY_FRONT_WIDTH,
+            "and the one width, which is the field's own stroke scale and nothing else"
+        );
+        assert_eq!(circles, 1, "the emission dot, and no beads on the frozen arc");
     }
 
     /// The projection the trail tests paint through: `px` pixels per M, y up, the hole in the
@@ -3435,24 +3442,28 @@ mod tests {
         }
     }
 
-    /// What the rule says the fade at one ray must be: a fraction of the gap to the front behind
-    /// it, held under the ceiling. `gap` is the coordinate time between the two emissions, and None
-    /// where the field carries a single pulse and nothing follows it.
-    fn expected_trail_px(speed_px: f32, gap: Option<f64>) -> f32 {
+    /// What the rule says the fade at one ray must be: the least of the ceiling, a fraction of the
+    /// gap to the front behind it, and the distance the light has covered since its pulse was let
+    /// go. `gap` is the coordinate time between the two emissions, and None where the field carries
+    /// a single pulse and nothing follows it; `elapsed` is the ray's own clock less its pulse's
+    /// emission time.
+    fn expected_trail_px(speed_px: f32, gap: Option<f64>, elapsed: f64) -> f32 {
+        let flown = speed_px * elapsed as f32;
         match gap {
             Some(gap) => (Theme::FRONT_TRAIL_GAP_FRACTION * speed_px * gap as f32)
-                .min(Theme::FRONT_TRAIL_PX),
-            None => Theme::FRONT_TRAIL_PX,
+                .min(Theme::FRONT_TRAIL_PX)
+                .min(flown),
+            None => Theme::FRONT_TRAIL_PX.min(flown),
         }
     }
 
     /// A single pulse let go well outside the hole and given 1 M of coordinate time to run, with
     /// the chart position of the event it was let go at. Every ray is alive and none of them is
-    /// inside r+, so every segment of the loop is drawn in the ordinary pass and carries a trail.
-    /// Nothing follows this pulse, so every fade on it is the full `Theme::FRONT_TRAIL_PX`, and at
-    /// 60 px per M the front stands about 60 px from its own emission event - twice that length, so
-    /// a fade that runs inward cannot reach past the emission point and still be further from it
-    /// than the front is.
+    /// inside r+, so every segment of the loop is drawn and carries a trail. Nothing follows this
+    /// pulse, so the gap does not bind, and the light has covered about 60 px at 60 px per M -
+    /// twice the ceiling - so the flight does not bind either and every fade is the full
+    /// `Theme::FRONT_TRAIL_PX`. A fade that runs inward therefore cannot reach past the emission
+    /// point and still be further from it than the front is.
     fn outside_pulse(metric: &KerrSchild) -> (SignalField, (f64, f64)) {
         use crate::physics::observer::{Observer, WorldlineParams};
         let emitter =
@@ -3565,16 +3576,17 @@ mod tests {
         for (b, pair) in trail.chunks(4).enumerate() {
             let (k, i) = (b / n, b % n);
             let gap = gap_behind(&field, k);
-            for (end, ray) in [(0, i), (2, (i + 1) % n)] {
-                let speed = ray_speed_px(&metric, &field.pulses[k].rays[ray], px);
-                let want = expected_trail_px(speed, gap);
+            for (end, index) in [(0, i), (2, (i + 1) % n)] {
+                let ray = &field.pulses[k].rays[index];
+                let speed = ray_speed_px(&metric, ray, px);
+                let want = expected_trail_px(speed, gap, ray.t - field.pulses[k].emitted_t);
                 let got = (pair[end + 1].0 - pair[end].0).length();
                 worst = worst.max((got - want).abs());
                 longest = longest.max(got);
                 shortest = shortest.min(got);
                 assert!(
                     got <= Theme::FRONT_TRAIL_PX + 1e-3,
-                    "no fade may pass the ceiling: {got:.3} px on pulse {k}, ray {ray}"
+                    "no fade may pass the ceiling: {got:.3} px on pulse {k}, ray {index}"
                 );
             }
         }
@@ -3601,6 +3613,132 @@ mod tests {
     }
 
     #[test]
+    fn test_a_fade_reaches_no_further_back_than_its_light_has_come_since_the_pulse_left() {
+        // A pulse a moment old is a loop a few pixels across hugging its emitter, and the gap to
+        // the front behind it is a whole emission interval wide, so the gap rule alone let every
+        // ray of it wear the full 30 px: the strip reached back *through* the emission event and
+        // fanned out behind the emitter as a flare, over ground the light had never covered. The
+        // third bound is the distance the light has come since the pulse was let go - the ray's own
+        // screen speed times its own clock less `Pulse::emitted_t` - and it holds the fade to
+        // exactly the emission event. The older fronts of the same field stand far enough out that
+        // the bound does not reach them, and they are measured here to say so.
+        use crate::physics::observer::{Observer, WorldlineParams};
+        let metric = KerrSchild::new(1.0, 0.90);
+        let mut emitter =
+            Observer::new_with_phi(&metric, "Alice", 0.0, 8.0, 0.0, 0.0, WorldlineParams::default());
+        let mut field = SignalField::default();
+        let (mut t, dt) = (0.0, 0.02);
+        for _ in 0..30 {
+            field.emit_if_due(&metric, &emitter);
+            emitter.step(&metric, t, dt);
+            field.advance(&metric, dt);
+            t += dt;
+        }
+        // Five steps with nothing sent, so the newest pulse below stands a known interval behind
+        // the one before it and the gap rule is wide open; then one pulse, then one short step.
+        for _ in 0..5 {
+            emitter.step(&metric, t, dt);
+            field.advance(&metric, dt);
+            t += dt;
+        }
+        let flight = 0.002;
+        field.interval_tau = 0.0;
+        assert!(field.emit_if_due(&metric, &emitter), "the fresh pulse goes out");
+        field.advance(&metric, flight);
+
+        let pulses = field.pulses.len();
+        let fresh = pulses - 1;
+        let n = field.pulses[0].rays.len();
+        assert!(pulses >= 4, "a train of fronts with the fresh one at its back: {pulses} pulses");
+        assert!(
+            field.pulses.iter().all(|p| p.rays.iter().all(|ray| ray.alive())),
+            "every ray of every pulse is still alive out at r = 8"
+        );
+        for (k, pulse) in field.pulses.iter().enumerate() {
+            let elapsed = pulse.rays[0].t - pulse.emitted_t;
+            if k == fresh {
+                assert!(
+                    (elapsed - flight).abs() < 1e-9,
+                    "the fresh pulse has been in flight {elapsed:.4} M, which is the short step"
+                );
+            } else {
+                assert!(
+                    elapsed >= 5.0 * dt,
+                    "every older pulse has been in flight at least the five idle steps: \
+                     pulse {k} has {elapsed:.4} M"
+                );
+            }
+        }
+
+        // Deep enough that the gap rule on its own would hand every ray of the fresh pulse the
+        // whole ceiling, which is what makes the bound under test the only thing holding it back.
+        let px = 4000.0;
+        let gap = gap_behind(&field, fresh).expect("the fresh pulse has a front behind it");
+        let slowest = (0..n)
+            .map(|i| ray_speed_px(&metric, &field.pulses[fresh].rays[i], px))
+            .fold(f32::MAX, f32::min);
+        assert!(
+            Theme::FRONT_TRAIL_GAP_FRACTION * slowest * gap as f32 > Theme::FRONT_TRAIL_PX,
+            "the gap rule alone would give the ceiling here: {:.0} px at the slowest ray",
+            Theme::FRONT_TRAIL_GAP_FRACTION * slowest * gap as f32
+        );
+
+        let style = FrontStyle { arcs: true, hide_wound: true };
+        let (trail, bands) = trail_frame(&metric, &field, style, px);
+        assert_eq!(bands.len(), pulses * n, "one band a segment, so the bands run pulse by pulse");
+        assert_eq!(trail.len(), 4 * bands.len(), "two points a band, two vertices a point");
+
+        let (mut worst_fresh, mut longest_fresh, mut worst_old) = (0.0_f32, 0.0_f32, 0.0_f32);
+        for (b, pair) in trail.chunks(4).enumerate() {
+            let (k, i) = (b / n, b % n);
+            for (end, index) in [(0, i), (2, (i + 1) % n)] {
+                let ray = &field.pulses[k].rays[index];
+                let elapsed = (ray.t - field.pulses[k].emitted_t) as f32;
+                let flown = ray_speed_px(&metric, ray, px) * elapsed;
+                let got = (pair[end + 1].0 - pair[end].0).length();
+                if k == fresh {
+                    // The slack is the probe's: `screen_velocity` reads its speed off a finite
+                    // difference of two f32 screen positions, where this test strikes the exact
+                    // Jacobian, so the two agree to a twentieth of a pixel rather than to the bit.
+                    assert!(
+                        got <= flown + 0.05,
+                        "the fresh pulse's fade may not outrun its own light: {got:.3} px against \
+                         {flown:.3} px covered, on ray {index}"
+                    );
+                    worst_fresh = worst_fresh.max((got - flown).abs());
+                    longest_fresh = longest_fresh.max(got);
+                } else {
+                    // Every older front is far enough out that the ceiling still binds, so the new
+                    // bound leaves those fades exactly where they were.
+                    worst_old = worst_old.max((got - Theme::FRONT_TRAIL_PX).abs());
+                }
+            }
+        }
+        assert!(
+            worst_fresh < 0.05,
+            "every fade on the fresh pulse is the distance its own light has covered, to \
+             {worst_fresh:.3} px"
+        );
+        assert!(
+            longest_fresh < 0.5 * Theme::FRONT_TRAIL_PX,
+            "and that is far under the ceiling the gap rule alone would have given: \
+             {longest_fresh:.2} px against {}",
+            Theme::FRONT_TRAIL_PX
+        );
+        assert!(
+            worst_old < 0.05,
+            "while the older fronts still wear the full ceiling, to {worst_old:.3} px"
+        );
+        println!(
+            "at {px} px/M a pulse {flight} M old wears {longest_fresh:.2} px of fade, the distance \
+             its light has covered to {worst_fresh:.1e} px, while the {} fronts behind it keep the \
+             full {} px",
+            pulses - 1,
+            Theme::FRONT_TRAIL_PX
+        );
+    }
+
+    #[test]
     fn test_a_trail_starts_at_its_own_bands_colour_and_fades_to_a_transparent_vertex() {
         // Full line brightness to nothing, which is what the fade was asked for: the head vertices
         // are the band's own points in the band's own colour - the very colour and opacity the line
@@ -3614,7 +3752,7 @@ mod tests {
 
         let mut at = 0usize;
         for (colour, _, points) in bands.iter() {
-            assert_eq!(colour.a(), Theme::SHIFT_ALPHA, "an ordinary band, not the frozen pass");
+            assert_eq!(colour.a(), Theme::SHIFT_ALPHA, "every band at the one opacity");
             for point in points.iter() {
                 let (head, tail) = (trail[at], trail[at + 1]);
                 assert_eq!(head.0, *point, "the head of a trail is the drawn point itself");
@@ -3635,10 +3773,10 @@ mod tests {
 
     #[test]
     fn test_nothing_that_draws_no_line_casts_a_trail() {
-        // Three ways a piece of front goes undrawn, and none of them may leave a fade standing
-        // where its line is not: the arcs switched off altogether, a segment with a dead endpoint
-        // or one cut for winding, and the frozen family's heavy pass - whose light glides along
-        // r- at Omega_-, so its trail would lie on the front itself and smear the r- circle.
+        // Two ways a piece of front goes undrawn, and neither may leave a fade standing where its
+        // line is not: the arcs switched off altogether, and a segment with a dead endpoint or one
+        // cut for winding. Every segment that *is* drawn carries a fade, the frozen family on r-
+        // included - there is one pass now, and one rule.
         use crate::physics::observer::{Observer, WorldlineParams};
         let metric = KerrSchild::new(1.0, 0.90);
         let mut alice =
@@ -3652,15 +3790,16 @@ mod tests {
             t += 0.02;
         }
 
-        // What the drawing rules say this field is: the segments an ordinary band is laid for, the
-        // ones dropped for a dead endpoint or for winding, and the ones held back for the frozen
-        // pass. The counts are what gives the test its teeth - all three cases have to occur.
-        // The scale is deliberately deep: this field's fronts are a hundredth of an M apart in the
-        // deep interior, and the claim being made here is about what is drawn rather than about
-        // what is too small to see, so every ordinary band has to be over `TRAIL_MIN_PX`.
+        // What the drawing rules say this field is: the segments a band is laid for and the ones
+        // dropped for a dead endpoint or for winding. The counts are what gives the test its teeth
+        // - both cases have to occur, and the drawn ones have to include pairs of the frozen family
+        // inside r+, which used to be held back and now are not. The scale is deliberately deep:
+        // this field's fronts are a hundredth of an M apart in the deep interior, and the claim
+        // being made here is about what is drawn rather than about what is too small to see, so
+        // every drawn band has to be over `TRAIL_MIN_PX`.
         let px = 6000.0;
         let r_plus = metric.outer_horizon();
-        let (mut ordinary, mut dropped, mut frozen_pairs) = (0usize, 0usize, 0usize);
+        let (mut drawn, mut dropped, mut frozen_pairs) = (0usize, 0usize, 0usize);
         let mut faintest = f32::MAX;
         for (k, pulse) in field.pulses.iter().enumerate() {
             if !pulse.rays.iter().any(|ray| ray.alive()) {
@@ -3680,44 +3819,47 @@ mod tests {
                     && (pulse.rays[j].phi - pulse.rays[i].phi).abs() > MAX_RESOLVED_WINDING;
                 if dead || wound {
                     dropped += 1;
-                } else if frozen[i] && frozen[j] {
-                    frozen_pairs += 1;
-                } else {
-                    ordinary += 1;
-                    let ends = [i, j].map(|end| {
-                        expected_trail_px(ray_speed_px(&metric, &pulse.rays[end], px), gap)
-                    });
-                    faintest = faintest.min(ends[0].max(ends[1]));
+                    continue;
                 }
+                drawn += 1;
+                if frozen[i] && frozen[j] {
+                    frozen_pairs += 1;
+                }
+                let ends = [i, j].map(|end| {
+                    let ray = &pulse.rays[end];
+                    expected_trail_px(ray_speed_px(&metric, ray, px), gap, ray.t - pulse.emitted_t)
+                });
+                faintest = faintest.min(ends[0].max(ends[1]));
             }
         }
         assert!(dropped > 0, "the field has segments that draw no line at all");
-        assert!(frozen_pairs > 0, "and segments held back for the frozen pass");
-        assert!(ordinary > 0, "and ordinary ones");
+        assert!(frozen_pairs > 0, "and segments of the frozen family inside r+");
+        assert!(drawn > frozen_pairs, "and segments of the crossing family");
         assert!(
             faintest >= TRAIL_MIN_PX,
-            "at {px} px/M every ordinary band is over the sub-pixel cut, so every one of them must \
+            "at {px} px/M every drawn band is over the sub-pixel cut, so every one of them must \
              carry a fade: the faintest is {faintest:.2} px"
         );
 
         let style = FrontStyle { arcs: true, hide_wound: true };
         let (trail, bands) = trail_frame(&metric, &field, style, px);
-        // The ordinary bands are the ones at the ordinary stroke width; the frozen pass draws at
-        // 2.0 and is painted after every trail mesh.
-        let head: usize = bands
-            .iter()
-            .filter(|(_, width, _)| *width == 1.2)
-            .map(|(_, _, points)| points.len())
-            .sum();
+        // Every band of a front is at the one stroke width, the frozen family's included.
+        assert!(
+            bands.iter().all(|(_, width, _)| *width == 1.2),
+            "one pass, one width: {:?}",
+            bands
+                .iter()
+                .map(|(_, width, _)| width.to_bits())
+                .collect::<std::collections::HashSet<_>>()
+        );
+        let head: usize = bands.iter().map(|(_, _, points)| points.len()).sum();
         assert_eq!(
             trail.len(),
             2 * head,
-            "a trail vertex pair for every point of every ordinary band, and for nothing else: \
-             {ordinary} ordinary segments, {dropped} dropped and {frozen_pairs} frozen pairs"
+            "a trail vertex pair for every point of every drawn band, and for nothing else: \
+             {drawn} drawn segments, {frozen_pairs} of them frozen pairs, and {dropped} dropped"
         );
-        for (pair, point) in trail.chunks(2).zip(
-            bands.iter().filter(|(_, width, _)| *width == 1.2).flat_map(|(_, _, points)| points),
-        ) {
+        for (pair, point) in trail.chunks(2).zip(bands.iter().flat_map(|(_, _, p)| p)) {
             assert_eq!(pair[0].0, *point, "each trail head sits on its own band's point");
         }
 
@@ -3728,8 +3870,9 @@ mod tests {
         assert!(bands_off.is_empty(), "points only: no bands");
         assert!(none.is_empty(), "and no trail mesh either, not even an empty one");
         println!(
-            "{ordinary} ordinary segments carry {} trail vertices; {dropped} dropped segments and \
-             {frozen_pairs} frozen pairs carry none, and the points-only frame carries none at all",
+            "{drawn} drawn segments, {frozen_pairs} of them frozen pairs, carry {} trail \
+             vertices; {dropped} dropped segments carry none, and the points-only frame carries \
+             none at all",
             trail.len()
         );
     }
@@ -3830,13 +3973,9 @@ mod tests {
         let n = field.pulses[0].rays.len();
         assert_eq!(n, 12);
         assert!(field.pulses[0].rays.iter().all(|ray| ray.alive()), "a fresh pulse is all alive");
-        // The wound pair is put between two rays of the crossing family, so that the two dots the
-        // cut leaves are ordinary dots rather than beads the frozen pass would have drawn anyway.
-        let frozen: Vec<bool> =
-            field.pulses[0].rays.iter().map(|ray| ray.frozen(&metric)).collect();
-        let i0 = (0..n - 1)
-            .find(|&i| !frozen[i] && !frozen[i + 1])
-            .expect("a pulse let go at r = 4.5 has neighbouring rays outside the frozen family");
+        // Which pair carries the winding does not matter: every dot on a front is the same dot,
+        // so the two the cut leaves are the only two the frame gains.
+        let i0 = 0;
         let tau = std::f64::consts::TAU;
         let mut phi = 0.0;
         for k in 0..n {
