@@ -213,6 +213,24 @@ const DUE_TOLERANCE: f64 = 1e-9;
 /// That is `SignalField::dropped_in_flight`, and raising the cap to 256 recovers all 447 arrivals.
 pub const R_ESCAPE: f64 = 32.0;
 
+/// The largest radius an observer can be dropped from, in M: the top of the drop-radius slider in
+/// both of its unit flavours.
+///
+/// It lives here, and the slider reads it from here, because it is half of a pair. `R_ESCAPE`
+/// retires a ray that climbs past it, so the escape boundary has to sit outside this or the app can
+/// place a pair whose own light is deleted before it crosses between them - which is exactly what
+/// it did while this was 30 and that was 16, leaving every layout past about 17 M deaf.
+/// `test_a_pair_at_the_widest_drop_radius_can_still_hear_each_other` measures that a pair out here
+/// really does hear each other; the assertion below is the cheaper half of the same guard, and it
+/// fails the build rather than a test run.
+pub const WIDEST_DROP_R: f64 = 30.0;
+
+const _: () = assert!(
+    WIDEST_DROP_R < R_ESCAPE,
+    "the drop-radius slider reaches past R_ESCAPE, so the app can place observers whose own \
+     light is retired before it reaches them"
+);
+
 /// Largest |dr| allowed in one integration substep, in units of M.
 const MAX_DR_PER_SUBSTEP: f64 = 0.02;
 
@@ -6215,8 +6233,6 @@ mod tests {
         // there the way the app puts them, has to hear each other. The arithmetic half of the
         // guard - that the slider cannot reach past `R_ESCAPE` at all - is a `const` assertion
         // beside `WIDEST_DROP_R` itself, so that failure is a build error and never a test run.
-        use crate::gui::controls::WIDEST_DROP_R;
-
         let metric = KerrSchild::new(1.0, 0.65);
         let params = WorldlineParams::default();
         // Held in place for the whole run: released far in the future, so both hover. Out here the

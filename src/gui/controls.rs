@@ -3,7 +3,7 @@ use crate::physics::geodesic::GeodesicState;
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::{Observer, ObserverMode, Release, WorldlineParams};
 use crate::physics::simulation::{Simulation, Transmit};
-use crate::physics::wavefront::{MAX_PULSES, RAYS_PER_PULSE, SignalField};
+use crate::physics::wavefront::{MAX_PULSES, RAYS_PER_PULSE, SignalField, WIDEST_DROP_R};
 
 /// Why one M is a mass, a length and a duration at the same time.
 const M_UNITS_TIP: &str =
@@ -1215,24 +1215,6 @@ const TRANSPORT_CORNER: f32 = 8.0;
 /// moves. So the same fill is shown for a moment and then let go. A sixth of a second is long
 /// enough to see and short enough that holding the arrow key still reads as a series of presses.
 const TRANSPORT_FLASH_SECONDS: f64 = 0.17;
-
-/// The largest radius an observer can be dropped from, in M: the top of the drop-radius slider in
-/// both of its unit flavours.
-///
-/// It is named because it is half of a pair. `wavefront::R_ESCAPE` retires a ray that climbs past
-/// it, so the escape boundary has to sit outside this or the app can place a pair whose own light
-/// is deleted before it crosses between them - which is exactly what it did while this was 30 and
-/// that was 16, leaving every layout past about 17 M deaf.
-/// `test_a_pair_at_the_widest_drop_radius_can_still_hear_each_other` measures that a pair out here
-/// really does hear each other; the assertion below is the cheaper half of the same guard, and it
-/// fails the build rather than a test run.
-pub const WIDEST_DROP_R: f64 = 30.0;
-
-const _: () = assert!(
-    WIDEST_DROP_R < crate::physics::wavefront::R_ESCAPE,
-    "the drop-radius slider reaches past R_ESCAPE, so the app can place observers whose own \
-     light is retired before it reaches them"
-);
 
 /// One of them. Returns whether it was clicked, so the caller reads exactly as it did when these
 /// were `ui.button(..).clicked()`.
