@@ -442,119 +442,6 @@ impl SpatialCanvas {
             |(x, y): (f64, f64)| center + Vec2::new(x as f32 * zoom, -(y as f32) * zoom);
         // Direction vectors (velocities, tangents) need the same y flip as positions.
 
-        // 0. Spatial Coordinate Axes (X and Y)
-        let axis_stroke = Stroke::new(1.0, Color32::from_rgba_premultiplied(55, 65, 88, 120));
-        if center.y >= rect.top() && center.y <= rect.bottom() {
-            painter.line_segment([Pos2::new(rect.left(), center.y), Pos2::new(rect.right(), center.y)], axis_stroke);
-        }
-        if center.x >= rect.left() && center.x <= rect.right() {
-            painter.line_segment([Pos2::new(center.x, rect.top()), Pos2::new(center.x, rect.bottom())], axis_stroke);
-        }
-
-        // Ticks and labels along X and Y axes
-        if use_physical_units {
-            let px_per_km = zoom / (metric.r_grav_km() as f32);
-            let max_span_km = ((rect.width().max(rect.height()) * 0.7) / px_per_km.max(1e-6)) as f64;
-            let km_step = axis::round_step((max_span_km / 5.0).max(1e-4));
-
-            let mut km = km_step;
-            while km <= max_span_km {
-                let offset_px = (km as f32) * px_per_km;
-                let km_str = metric.format_grid_km(km, km_step);
-                // +X tick
-                let px_x = center.x + offset_px;
-                if px_x <= rect.right() - 5.0 && center.y >= rect.top() && center.y <= rect.bottom() {
-                    painter.line_segment([Pos2::new(px_x, center.y - 3.0), Pos2::new(px_x, center.y + 3.0)], axis_stroke);
-                    painter.text(Pos2::new(px_x, center.y + 5.0), egui::Align2::CENTER_TOP, format!("+{}", km_str), egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::TEXT_MUTED);
-                }
-                // -X tick
-                let px_neg_x = center.x - offset_px;
-                if px_neg_x >= rect.left() + 5.0 && center.y >= rect.top() && center.y <= rect.bottom() {
-                    painter.line_segment([Pos2::new(px_neg_x, center.y - 3.0), Pos2::new(px_neg_x, center.y + 3.0)], axis_stroke);
-                    painter.text(Pos2::new(px_neg_x, center.y + 5.0), egui::Align2::CENTER_TOP, format!("-{}", km_str), egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::TEXT_MUTED);
-                }
-                // +Y tick
-                let py_pos = center.y - offset_px;
-                if py_pos >= rect.top() + 5.0 && center.x >= rect.left() && center.x <= rect.right() {
-                    painter.line_segment([Pos2::new(center.x - 3.0, py_pos), Pos2::new(center.x + 3.0, py_pos)], axis_stroke);
-                    painter.text(Pos2::new(center.x + 5.0, py_pos), egui::Align2::LEFT_CENTER, format!("+{}", km_str), egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::TEXT_MUTED);
-                }
-                // -Y tick
-                let py_neg = center.y + offset_px;
-                if py_neg <= rect.bottom() - 5.0 && center.x >= rect.left() && center.x <= rect.right() {
-                    painter.line_segment([Pos2::new(center.x - 3.0, py_neg), Pos2::new(center.x + 3.0, py_neg)], axis_stroke);
-                    painter.text(Pos2::new(center.x + 5.0, py_neg), egui::Align2::LEFT_CENTER, format!("-{}", km_str), egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::TEXT_MUTED);
-                }
-                km += km_step;
-            }
-        } else {
-            let visible_m = (rect.width().max(rect.height()) as f64 / zoom as f64) * 0.7;
-            let r_step = axis::round_step((visible_m / 8.0).max(1e-6));
-
-            let max_ticks = 15;
-            let mut s = r_step;
-            for _ in 0..max_ticks {
-                let offset_px = (s as f32) * zoom;
-                if offset_px > rect.width().max(rect.height()) * 0.8 {
-                    break;
-                }
-                let label = metric.format_grid_m(s, r_step);
-
-                // +X tick
-                let px_x = center.x + offset_px;
-                if px_x <= rect.right() - 5.0 && center.y >= rect.top() && center.y <= rect.bottom() {
-                    painter.line_segment([Pos2::new(px_x, center.y - 3.0), Pos2::new(px_x, center.y + 3.0)], axis_stroke);
-                    painter.text(Pos2::new(px_x, center.y + 5.0), egui::Align2::CENTER_TOP, format!("+{}", label), egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::TEXT_MUTED);
-                }
-                // -X tick
-                let px_neg_x = center.x - offset_px;
-                if px_neg_x >= rect.left() + 5.0 && center.y >= rect.top() && center.y <= rect.bottom() {
-                    painter.line_segment([Pos2::new(px_neg_x, center.y - 3.0), Pos2::new(px_neg_x, center.y + 3.0)], axis_stroke);
-                    painter.text(Pos2::new(px_neg_x, center.y + 5.0), egui::Align2::CENTER_TOP, format!("-{}", label), egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::TEXT_MUTED);
-                }
-                // +Y tick
-                let py_pos = center.y - offset_px;
-                if py_pos >= rect.top() + 5.0 && center.x >= rect.left() && center.x <= rect.right() {
-                    painter.line_segment([Pos2::new(center.x - 3.0, py_pos), Pos2::new(center.x + 3.0, py_pos)], axis_stroke);
-                    painter.text(Pos2::new(center.x + 5.0, py_pos), egui::Align2::LEFT_CENTER, format!("+{}", label), egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::TEXT_MUTED);
-                }
-                // -Y tick
-                let py_neg = center.y + offset_px;
-                if py_neg <= rect.bottom() - 5.0 && center.x >= rect.left() && center.x <= rect.right() {
-                    painter.line_segment([Pos2::new(center.x - 3.0, py_neg), Pos2::new(center.x + 3.0, py_neg)], axis_stroke);
-                    painter.text(Pos2::new(center.x + 5.0, py_neg), egui::Align2::LEFT_CENTER, format!("-{}", label), egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale), Theme::TEXT_MUTED);
-                }
-                s += r_step;
-            }
-        }
-
-        // Axis Titles with Physical Conversion
-        let phys_m_str = metric.format_physical_distance(1.0);
-        let x_title = if use_physical_units {
-            "► Spatial x  [Kilometers (km)]".to_string()
-        } else {
-            format!("► Spatial x  [Units of M = GM/c² : 1M = {}]", phys_m_str)
-        };
-        painter.text(
-            Pos2::new(rect.right() - 8.0, rect.bottom() - 4.0),
-            egui::Align2::RIGHT_BOTTOM,
-            x_title,
-            egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
-            Theme::TEXT_BRIGHT,
-        );
-        let y_title = if use_physical_units {
-            "▲ Spatial y  [Kilometers (km)]".to_string()
-        } else {
-            format!("▲ Spatial y  [Units of M = GM/c² : 1M = {}]", phys_m_str)
-        };
-        painter.text(
-            Pos2::new(rect.right() - 8.0, rect.top() + 8.0),
-            egui::Align2::RIGHT_TOP,
-            y_title,
-            egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
-            Theme::TEXT_MUTED,
-        );
-
         // 1. Concentric Zone Fills, every boundary at its Cartesian radius sqrt(r^2 + a^2).
         // Each zone is its own band between two boundaries rather than a disc laid over the discs
         // outside it, so that a region's pixel colour is its fill over the canvas background - the
@@ -920,6 +807,52 @@ impl SpatialCanvas {
                 self.zoom,
             )
         };
+
+        // The distance marker: a ruler along the bottom edge, from nought, ticked at a round step
+        // of the units in force and drawn at the view's own scale. It measures the plane the way
+        // the plane is drawn, which is Cartesian distance in the Kerr-Schild embedding - the
+        // Details block says how that differs from r. It belongs to the canvas rather than to the
+        // hole, so it stays put under any pan and is never off the view. Pixels per km has no
+        // floor under it, because it has no natural one: a heavy hole at the widest zoom is
+        // 1e-10 px/km, and a floor above that spaces the ticks for one scale and places them by
+        // another. The zoom is clamped above zero and r_g is positive, so the division needs no
+        // guard either.
+        let extent_px = f64::from(rect.width().max(rect.height()));
+        let (px_per_unit, marker_step) = if use_physical_units {
+            let px_per_km = zoom_px / metric.r_grav_km();
+            (px_per_km, axis::round_step((extent_px * 0.7 / px_per_km / 5.0).max(1e-4)))
+        } else {
+            (zoom_px, axis::round_step((extent_px * 0.7 / zoom_px / 8.0).max(1e-6)))
+        };
+        let marker_step_px = (marker_step * px_per_unit) as f32;
+        let marker_font = egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale);
+        let marker_stroke = Stroke::new(1.0, Theme::TEXT_BRIGHT);
+        let marker_left = rect.left() + 24.0;
+        let marker_y = rect.bottom() - 10.0 - Theme::MIN_FONT_PT * font_scale;
+        // As many steps as fit in the left half of the canvas, and one at the least.
+        let marker_steps = ((rect.width() * 0.5 / marker_step_px).floor() as usize).clamp(1, 4);
+        let marker_right = marker_left + marker_step_px * marker_steps as f32;
+        painter.line_segment(
+            [Pos2::new(marker_left, marker_y), Pos2::new(marker_right, marker_y)],
+            marker_stroke,
+        );
+        for k in 0..=marker_steps {
+            let x = marker_left + marker_step_px * k as f32;
+            painter.line_segment([Pos2::new(x, marker_y - 4.0), Pos2::new(x, marker_y)], marker_stroke);
+            let value = marker_step * k as f64;
+            let label = if use_physical_units {
+                metric.format_grid_km(value, marker_step)
+            } else {
+                metric.format_grid_m(value, marker_step)
+            };
+            painter.text(
+                Pos2::new(x, marker_y + 3.0),
+                egui::Align2::CENTER_TOP,
+                label,
+                marker_font.clone(),
+                Theme::TEXT_BRIGHT,
+            );
+        }
 
         // The Details button sits just above the block it shows and hides, set in the block's own
         // font so it reads as the block's first line. It is a widget placed over the canvas, so

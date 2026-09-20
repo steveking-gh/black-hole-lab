@@ -1008,7 +1008,7 @@ mod tests {
             "the (t, r) diagram's own radial axis should be drawn in the 1D+1 chart"
         );
         assert!(!flat.contains("2D+1 Volume"), "and the volume view should not be");
-        assert!(flat.contains("Spatial x"), "the equatorial view is drawn either way");
+        assert!(flat.contains("Equatorial View"), "the equatorial view is drawn either way");
 
         app.controls.frame_of_ref = ReferenceFrame::GlobalVolume;
         let volume = painted_text(&mut app);
@@ -1020,7 +1020,7 @@ mod tests {
             !volume.contains("Radial Distance r"),
             "and take the (t, r) diagram out of it: the two share the column"
         );
-        assert!(volume.contains("Spatial x"), "the equatorial view is untouched by the swap");
+        assert!(volume.contains("Equatorial View"), "the equatorial view is untouched by the swap");
     }
 
     #[test]
