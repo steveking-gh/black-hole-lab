@@ -1,5 +1,5 @@
-use crate::physics::kerr_schild::KerrSchild;
-use crate::physics::tetrad::Tetrad;
+use crate::kerr_schild::KerrSchild;
+use crate::tetrad::Tetrad;
 
 /// A straight line in the drawn (xi^1, xi^0) plane of the observer's local frame: the point is
 /// (xi^1, xi^0) and the direction is a Euclidean-unit vector in the same ordering, so
@@ -251,7 +251,7 @@ const RULER_STEPS: usize = 2048;
 /// One RK4 derivative of the state (r, v^t, v^r, v^phi) against arclength.
 fn ruler_deriv(metric: &KerrSchild, y: &[f64; 4]) -> [f64; 4] {
     let v = [y[1], y[2], y[3]];
-    let a = crate::physics::geodesic::geodesic_accel(metric, y[0], &v);
+    let a = crate::geodesic::geodesic_accel(metric, y[0], &v);
     [y[2], a[0], a[1], a[2]]
 }
 
@@ -393,7 +393,7 @@ mod tests {
 
 
     use super::*;
-    use crate::physics::geodesic::GeodesicState;
+    use crate::geodesic::GeodesicState;
     use std::f64::consts::PI;
 
     fn raindrop(metric: &KerrSchild, r: f64) -> [f64; 3] {
@@ -674,22 +674,18 @@ mod tests {
     /// question the distant clock grid asks is exactly "how much of the observer's own time is one
     /// unit of t worth", and that is u^t.
     fn walk(metric: &KerrSchild, l_ang: f64, dt: f64, t_end: f64) -> Vec<(f64, f64, [f64; 3])> {
-        use crate::physics::observer::{Observer, WorldlineParams};
-        let mut bob = Observer::new_with_phi(
-            metric,
-            "Bob",
-            0.0,
-            4.5,
-            0.0,
-            0.0,
-            WorldlineParams::new(1.0, l_ang, false),
-        );
+        use crate::geodesic::R_STOP;
+        let mut bob = GeodesicState::new_with_direction(metric, 0.0, 4.5, 1.0, l_ang, false);
         let mut out = Vec::new();
         let mut t = 0.0;
         while t < t_end && bob.r > 1e-3 {
             t += dt;
-            bob.step(metric, t, dt);
-            out.push((t, bob.r, bob.four_velocity(metric)));
+            // The app's free-falling observer steps its geodesic under exactly this gate: settled
+            // on the far branch of r- the state is held, and so is one that has reached the ring.
+            if !bob.stalled && bob.r > R_STOP {
+                bob.step_coord_time(metric, dt);
+            }
+            out.push((t, bob.r, bob.u));
         }
         out
     }

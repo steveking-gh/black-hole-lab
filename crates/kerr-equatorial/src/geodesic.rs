@@ -1,4 +1,4 @@
-use crate::physics::kerr_schild::KerrSchild;
+use crate::kerr_schild::KerrSchild;
 
 /// Geodesic state and numerical integrator for observers (Alice, Bob, etc.).
 ///
@@ -83,7 +83,7 @@ const U_STEP_FRACTION: f64 = 0.004;
 type StateVec = [f64; 7];
 
 /// The geodesic acceleration -Gamma^mu_{alpha beta} u^alpha u^beta at radius r.
-pub(crate) fn geodesic_accel(metric: &KerrSchild, r: f64, u: &[f64; 3]) -> [f64; 3] {
+pub fn geodesic_accel(metric: &KerrSchild, r: f64, u: &[f64; 3]) -> [f64; 3] {
     let gamma = metric.christoffel(r);
     let mut acc = [0.0f64; 3];
     for (mu, a) in acc.iter_mut().enumerate() {
@@ -293,7 +293,7 @@ impl GeodesicState {
 
     /// R(r) = P^2 - Delta [r^2 + (L - aE)^2] = r^4 (dr/dtau)^2, with P = E (r^2 + a^2) - a L.
     /// Negative R marks a region no timelike geodesic with these constants can reach.
-    pub(crate) fn radial_potential(metric: &KerrSchild, r: f64, energy: f64, l_ang: f64) -> f64 {
+    pub fn radial_potential(metric: &KerrSchild, r: f64, energy: f64, l_ang: f64) -> f64 {
         let r = r.max(R_FLOOR);
         let a = metric.a;
         let r2 = r * r;
@@ -333,7 +333,7 @@ impl GeodesicState {
     /// See `new_with_direction` for the outgoing expressions and why they are refused at
     /// Delta = 0. Being a function of r alone, this is also what the observer code differentiates
     /// to check that the integrated worldline is weightless.
-    pub(crate) fn branch_four_velocity_at(
+    pub fn branch_four_velocity_at(
         &self,
         metric: &KerrSchild,
         r: f64,
@@ -540,7 +540,7 @@ impl GeodesicState {
     ///     r^2 t'_KS = [P^2 (r^2 + a^2 + 2Mr) + 4M^2 r^2 (r^2 + (L-aE)^2)] / [(r^2+a^2) P + 2Mr sqrt(R)] + a (L - aE)
     ///     r^2 f'_KS = (L - aE) + a (r^2 + (L-aE)^2) / (P + sqrt(R))
     /// These are finite and smooth through r+ and r- (Delta never appears).
-    pub(crate) fn derivatives(&self, metric: &KerrSchild, r: f64) -> (f64, f64, f64) {
+    pub fn derivatives(&self, metric: &KerrSchild, r: f64) -> (f64, f64, f64) {
         let r = r.max(R_FLOOR);
         let m = metric.m;
         let a = metric.a;

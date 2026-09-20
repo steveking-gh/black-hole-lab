@@ -1,4 +1,4 @@
-use crate::physics::kerr_schild::KerrSchild;
+use crate::kerr_schild::KerrSchild;
 
 /// Bilinear form g_{mu nu} a^mu b^nu at radius r, for two contravariant vectors written in the
 /// equatorial Kerr-Schild chart (t, r, phi). `KerrSchild::norm` is the diagonal case a = b.
@@ -332,7 +332,7 @@ impl Tetrad {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::physics::geodesic::GeodesicState;
+    use crate::geodesic::GeodesicState;
 
     /// Raindrop (E = 1, L = 0) 4-velocity. It exists at every r > 0, so it is the one reference
     /// frame available in all three regions.
@@ -527,18 +527,17 @@ mod tests {
         // sign along the way - under the old rule g(e1, d_r) = |v1| was positive by construction,
         // so a sign change proves the old e1 and the new one differ by a sign somewhere, i.e. that
         // the old e1 reversed on this worldline.
-        use crate::physics::observer::{Observer, WorldlineParams};
+        use crate::geodesic::R_STOP;
         let metric = KerrSchild::new(1.0, 0.90);
         let (r_plus, r_minus) = (metric.outer_horizon(), metric.inner_horizon());
-        let mut bob = Observer::new_with_phi(
-            &metric,
-            "Bob",
-            0.0,
-            4.5,
-            0.0,
-            0.0,
-            WorldlineParams::new(1.0, 2.0, false),
-        );
+        let mut bob = GeodesicState::new_with_direction(&metric, 0.0, 4.5, 1.0, 2.0, false);
+        // The app's free-falling observer steps its geodesic under exactly this gate: settled on
+        // the far branch of r- the state is held, and so is one that has reached the ring.
+        let step = |bob: &mut GeodesicState, dt: f64| {
+            if !bob.stalled && bob.r > R_STOP {
+                bob.step_coord_time(&metric, dt);
+            }
+        };
         // Components of a vector in the raindrop tetrad at r. Two of Bob's frames at neighbouring
         // events are compared through these rather than by dotting coordinate components taken
         // at two different radii: for a frame boosted by u^t ~ 30 that mismatch is an error of
@@ -558,10 +557,10 @@ mod tests {
         // where u^t runs away; the cap, because near r_- one tick of his clock is many M.
         let d_tau = 0.02;
         let mut t = 0.0;
-        // One step first, so every frame below is the free-faller's own and not the static
-        // observer's that `four_velocity` reports before release.
+        // One step first, so every frame below is one the integrator produced and not the
+        // closed-form 4-velocity the state was seeded with.
         t += d_tau;
-        bob.step(&metric, t, d_tau);
+        step(&mut bob, d_tau);
         let d_r = [0.0, 1.0, 0.0];
         let mut prev: Option<[f64; 3]> = None;
         let mut proj_min = f64::INFINITY;
@@ -571,7 +570,7 @@ mod tests {
         let mut steps = 0;
         while bob.r > r_minus + 1e-3 && t < 60.0 && steps < 10_000 {
             let r = bob.r;
-            let u = bob.four_velocity(&metric);
+            let u = bob.u;
             let f = Tetrad::from_four_velocity_axial(&metric, r, &u);
             let legs = [f.e0, f.e1, f.e2];
             // Rounding in the products of components of size u^t, which runs into the thousands
@@ -609,7 +608,7 @@ mod tests {
             // u^t = dt / d tau, so one tick of the observer's clock is this much coordinate time.
             let dt = (d_tau * u[0]).min(0.05);
             t += dt;
-            bob.step(&metric, t, dt);
+            step(&mut bob, dt);
             steps += 1;
         }
         println!(

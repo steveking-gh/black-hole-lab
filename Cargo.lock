@@ -460,6 +460,7 @@ dependencies = [
  "eframe",
  "egui",
  "flate2",
+ "kerr-equatorial",
  "nalgebra",
  "rfd",
  "serde",
@@ -1649,6 +1650,13 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "kerr-equatorial"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

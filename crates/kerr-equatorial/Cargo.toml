@@ -1,0 +1,18 @@
+[package]
+name = "kerr-equatorial"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "Kerr spacetime on the equatorial plane in horizon-penetrating Kerr-Schild coordinates: metric, geodesics, tetrads and local frames"
+# Not for crates.io yet. The boundary is what this crate is for at the moment; the API is whatever
+# Black Hole Lab happened to need, and a published version can be yanked but never taken back.
+publish = false
+
+# The doc comments set their formulae as indented blocks, which rustdoc takes for Rust and tries to
+# compile. Nothing here is a doctest; before this crate is published the blocks want fencing as
+# ```text, which also stops rustdoc colouring them as code.
+[lib]
+doctest = false
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }

@@ -4,7 +4,15 @@ version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 
+# The geometry core is a crate of its own so that the boundary is enforced rather than intended:
+# it cannot reach into the app, and `cargo doc` renders it as the library it is. Both are default
+# members so that a bare `cargo test` still runs every test there is.
+[workspace]
+members = [".", "crates/kerr-equatorial"]
+default-members = [".", "crates/kerr-equatorial"]
+
 [dependencies]
+kerr-equatorial = { path = "crates/kerr-equatorial" }
 eframe = "0.36.2"
 egui = "0.36.2"
 # gzip for the save format. Already in the tree behind eframe's image decoders, so naming it here

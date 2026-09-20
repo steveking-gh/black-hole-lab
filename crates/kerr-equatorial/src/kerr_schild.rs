@@ -1371,7 +1371,7 @@ mod tests {
         // app already has: a circular orbit is a turning point of R(r), so its E is exactly the
         // energy floor at that L, and a geodesic started there with the app's own integrator
         // stays at that radius.
-        use crate::physics::geodesic::GeodesicState;
+        use crate::geodesic::GeodesicState;
         // The constructor stops the spin a hair short of extremal (a = 0.9999 M), which moves the
         // prograde radii off their extremal values of exactly M by a few percent and leaves the
         // retrograde ones, which are insensitive there, at 9 M and 4 M.

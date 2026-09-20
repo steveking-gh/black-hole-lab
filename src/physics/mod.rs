@@ -1,8 +1,8 @@
-pub mod kerr_schild;
-pub mod local_frame;
-pub mod tetrad;
+// The geometry core lives in the `kerr-equatorial` crate (crates/kerr-equatorial). Its modules are
+// re-exported under their old names so that `crate::physics::kerr_schild::KerrSchild` and the rest
+// read exactly as they did when the files sat in this directory.
+pub use kerr_equatorial::{geodesic, kerr_schild, local_frame, tetrad};
 pub mod observer;
-pub mod geodesic;
 pub mod wavefront;
 pub mod simulation;
 
