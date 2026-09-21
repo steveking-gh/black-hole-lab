@@ -80,8 +80,7 @@ you and becomes a moment in your past!  Inside, time itself (your future) points
 toward the middle of the black hole.  To get back out, you need rocket engines
 strong enough to prevent tomorrow from happening.
 
-Complicating matters, physicists debate whether general relativity even works
-there at the event horizon.  A future [Theory of
+Complicating matters, physicists debate whether general relativity is correct about the event horizon.  A future [Theory of
 Everything](https://en.wikipedia.org/wiki/Theory_of_everything) could describe
 very different physics at the event horizon. See
 [Fuzzballs](https://www.youtube.com/watch?v=351JCOvKcYw) and
