@@ -1,5 +1,6 @@
 ![GPL licensed](https://img.shields.io/badge/license-GPL-blue.svg)
 
+# BLACK HOLE LAB IS WORK IN PROGRESS
 ## Introduction
 
 Black Hole Lab is a physics simulation of a rotating black hole and two
