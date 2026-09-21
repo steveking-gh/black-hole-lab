@@ -313,11 +313,13 @@ fn resolve_placement(placement: Option<Placement>, anchored: Pos2, canvas_min: P
 
 /// What to remember after a frame in which the box ended up at `moved_min`.
 ///
-/// A following box records its offset every frame, so a drag against the canvas edge does not
-/// build up an offset that snaps back later. A pinning box is left alone until the user actually
-/// drags it, since a box that has never been touched should keep following its observer; from
-/// the first drag on it records where it stands relative to the canvas every frame, which is what
-/// keeps a box that a resize has pushed inward from jumping back out again.
+/// Either kind of box is left alone until the user actually drags it: a placement is what
+/// `is_placed` reads, and a box nobody has touched has to go on counting as untouched, or
+/// `TelemetryBoxes::flush` stops nudging it clear of its neighbours after its first frame. From the
+/// first drag on, a following box records its offset every frame, so a drag against the canvas
+/// edge does not build up an offset that snaps back later, and a pinning box records where it
+/// stands relative to the canvas every frame, which is what keeps a box that a resize has pushed
+/// inward from jumping back out again.
 fn remembered_placement(
     pin_on_drag: bool,
     dragged: bool,
@@ -326,12 +328,12 @@ fn remembered_placement(
     anchored: Pos2,
     canvas_min: Pos2,
 ) -> Option<Placement> {
-    if !pin_on_drag {
-        Some(Placement::Offset(moved_min - anchored))
-    } else if dragged || previous.is_some() {
+    if !dragged && previous.is_none() {
+        None
+    } else if pin_on_drag {
         Some(Placement::Pinned(moved_min - canvas_min))
     } else {
-        None
+        Some(Placement::Offset(moved_min - anchored))
     }
 }
 
@@ -397,12 +399,15 @@ pub enum BoxId {
     Ergosphere,
     /// The ring singularity r = 0, likewise.
     RingSingularity,
+    /// The canvas's own legend: what the picture is, its scale and its keys. The equatorial view
+    /// and the 2D+1 volume each have one.
+    Legend,
 }
 
 impl BoxId {
     /// Every box there is, for iterating the set, read by `crate::save` exactly as `Canvas::ALL`
     /// is.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Observer(Who::Alice),
         Self::Observer(Who::Bob),
         Self::Signal(Who::Alice),
@@ -411,6 +416,7 @@ impl BoxId {
         Self::CauchyHorizon,
         Self::Ergosphere,
         Self::RingSingularity,
+        Self::Legend,
     ];
 
     /// This box's slug, the payload of the two per-observer variants spelled into it. See the
@@ -425,6 +431,7 @@ impl BoxId {
             Self::CauchyHorizon => "cauchy-horizon",
             Self::Ergosphere => "ergosphere",
             Self::RingSingularity => "ring-singularity",
+            Self::Legend => "legend",
         }
     }
 
@@ -468,47 +475,81 @@ impl TelemetryBoxes {
         self
     }
 
-    /// Lay out, register, drag and paint one observer's info box.
+    /// Paint every deferred info box, in order, once the rest of the canvas is down.
     ///
-    /// The box is anchored next to `pos` exactly as before until the user moves it; after that it
-    /// is either displaced from that anchor by the dragged offset or pinned to the canvas where it
-    /// was dropped (see `Placement`), and in both cases clamped back inside `canvas_rect`. A
-    /// double-click forgets the move, and the triangle on the title line shuts the box down to
-    /// that line. The `ui.interact` must be called after the canvas has allocated its own painter
-    /// response: within a layer egui hands an overlapping drag to the widget registered last, so
-    /// registering here is what stops a drag on the box from panning the background or grabbing
-    /// Bob's marker.
-    #[allow(clippy::too_many_arguments)]
-    pub fn show(
+    /// A box still sitting where it was put is nudged down clear of the ones already placed, so a
+    /// stack of surfaces whose lines all leave by the same corner stays readable, and so does an
+    /// observer's box whose marker has carried it over a surface's or over the other observer's.
+    /// One the user has
+    /// dragged is left exactly where they dragged it, overlap or not: they can see the overlap and
+    /// they chose it.
+    pub(crate) fn flush(
         &mut self,
         ui: &mut egui::Ui,
         painter: &egui::Painter,
         canvas: Canvas,
-        id: BoxId,
-        canvas_rect: Rect,
-        pos: Pos2,
-        title: &str,
-        color: Color32,
-        obs: &Observer,
-        metric: &KerrSchild,
-        use_physical_units: bool,
+        rect: Rect,
+        pending: &[PendingBox],
         font_scale: f32,
-    ) -> egui::Response {
-        let lines = telemetry_lines(title, color, obs, metric, use_physical_units);
-        let size = telemetry_box_size(painter, &lines, font_scale);
-        let anchored = default_badge_pos(canvas_rect, pos, size);
-        self.show_lines(
-            ui,
-            painter,
-            canvas,
-            id,
-            canvas_rect,
-            anchored,
-            &lines,
-            color,
-            font_scale,
-            TELEMETRY_HOVER_TIP,
-        )
+    ) {
+        let mut occupied: Vec<Rect> = Vec::new();
+        for b in pending {
+            // The size as drawn, so that a row of shut boxes packs as a row of title lines and not
+            // as the open boxes they are not showing.
+            let shut = self.collapsed.contains(&(canvas, b.id));
+            let size = drawn_box_size(painter, &b.lines, font_scale, shut);
+            let was_placed = self.is_placed(canvas, b.id);
+            let anchor = if was_placed {
+                b.anchor
+            } else {
+                // Slide past whatever is in the way, by no more than clears it: down first, and up
+                // if the bottom of the canvas stops the box before it is clear. A box that cannot
+                // be cleared either way stays where it was asked for.
+                let start = clamp_into(Rect::from_min_size(b.anchor, size), rect);
+                let slide = |down: bool| -> Option<Rect> {
+                    let mut r = start;
+                    for _ in 0..16 {
+                        let Some(p) = occupied.iter().find(|p| p.intersects(r)) else {
+                            return Some(r);
+                        };
+                        let y = if down { p.bottom() + 6.0 } else { p.top() - 6.0 - size.y };
+                        let next = clamp_into(Rect::from_min_size(Pos2::new(r.left(), y), size), rect);
+                        if next == r {
+                            return None;
+                        }
+                        r = next;
+                    }
+                    None
+                };
+                slide(true).or_else(|| slide(false)).unwrap_or(start).min
+            };
+            let response = self.show_lines(
+                ui, painter, canvas, b.id, rect, anchor, &b.lines, b.color, font_scale, b.tip,
+            );
+            // A drag that began this frame measured its offset from the nudged anchor, and every
+            // later frame resolves it from the plain one. Rebase it once, here, or the box jumps
+            // back by the nudge on the second frame of the drag.
+            if !was_placed
+                && let Some(Placement::Offset(v)) = self.placements.get_mut(&(canvas, b.id))
+            {
+                *v += anchor - b.anchor;
+            }
+            occupied.push(response.rect);
+        }
+    }
+
+    /// Whether this box stands shut down to its title line.
+    pub fn is_shut(&self, canvas: Canvas, id: BoxId) -> bool {
+        self.collapsed.contains(&(canvas, id))
+    }
+
+    /// Shut this box or open it, as the triangle on its title line does.
+    pub fn set_shut(&mut self, canvas: Canvas, id: BoxId, shut: bool) {
+        if shut {
+            self.collapsed.insert((canvas, id));
+        } else {
+            self.collapsed.remove(&(canvas, id));
+        }
     }
 
     /// Whether this box has been dragged somewhere and left there.
@@ -517,9 +558,9 @@ impl TelemetryBoxes {
     }
 
     /// Draw one box of arbitrary content at `anchored`, with the drag, the double-click reset, the
-    /// disclosure triangle and the remembered placement every box on these canvases gets. `show`
-    /// is this with an observer's telemetry in it; the surface, horizon and signal boxes are this
-    /// with theirs. Every info box on every canvas comes through here, which is why the triangle
+    /// disclosure triangle and the remembered placement every box on these canvases gets. An
+    /// observer's telemetry, a surface's or a horizon's reading, a signal and a canvas's legend are
+    /// all this with their own lines in it. Every info box on every canvas comes through here, which is why the triangle
     /// and its hit test are written here once.
     ///
     /// `anchored` is always measured on the whole box, open or shut, and the caller measures it:
@@ -624,7 +665,7 @@ impl TelemetryBoxes {
 /// An info box worked out while its subject was being drawn and painted only once everything else
 /// on the canvas is down. Deferring them is what makes the opaque fill mean anything: a box painted
 /// in the middle of the pass gets a worldline, a light cone or a grid line drawn straight across it.
-struct PendingBox {
+pub(crate) struct PendingBox {
     /// Also what its remembered position is filed under, so it has to be unique per canvas. The
     /// title the box prints is the first of its `lines` and is no part of this.
     id: BoxId,
@@ -634,8 +675,55 @@ struct PendingBox {
     tip: &'static str,
 }
 
+impl PendingBox {
+    /// A canvas's legend as a deferred box: a title, and under it the block of text the canvas
+    /// used to paint for itself, one box line per line of `body`. It stands at `anchor` until
+    /// dragged, and goes first in the queue so that the other boxes are slid clear of it.
+    pub(crate) fn legend(anchor: Pos2, title: &str, body: &str, tip: &'static str) -> Self {
+        let line = |text: &str, is_title: bool| TelemetryLine {
+            text: text.to_string(),
+            color: Theme::TEXT_BRIGHT,
+            is_title,
+            bold: false,
+        };
+        let mut lines = vec![line(title, true)];
+        lines.extend(body.lines().map(|text| line(text, false)));
+        Self { id: BoxId::Legend, anchor, lines, color: Theme::CHIP_OUTLINE, tip }
+    }
+
+    /// An observer's telemetry as a deferred box, anchored beside their marker at `pos`. Every
+    /// canvas sends the observers' boxes through the same queue as its other boxes, so that `TelemetryBoxes::flush` keeps
+    /// every untouched box on the canvas clear of every other. `extra` is whatever the canvas has
+    /// to say about this observer that is true only on that canvas, printed under the telemetry.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn observer(
+        painter: &egui::Painter,
+        canvas_rect: Rect,
+        who: Who,
+        pos: Pos2,
+        title: &str,
+        color: Color32,
+        obs: &Observer,
+        metric: &KerrSchild,
+        use_physical_units: bool,
+        font_scale: f32,
+        extra: Vec<TelemetryLine>,
+    ) -> Self {
+        let mut lines = telemetry_lines(title, color, obs, metric, use_physical_units);
+        lines.extend(extra);
+        let size = telemetry_box_size(painter, &lines, font_scale);
+        Self {
+            id: BoxId::Observer(who),
+            anchor: default_badge_pos(canvas_rect, pos, size),
+            lines,
+            color,
+            tip: TELEMETRY_HOVER_TIP,
+        }
+    }
+}
+
 /// One printed line of a telemetry box: the text, its colour and whether it is the title.
-struct TelemetryLine {
+pub(crate) struct TelemetryLine {
     text: String,
     color: Color32,
     is_title: bool,
@@ -940,6 +1028,22 @@ Ruler Distance — defined as the arclength of the spacelike geodesic that leave
 Time — the proper time on your own watch between here and the crossing, ∫ r² dr / √R with R = r⁴(dr/dτ)², integrated along the worldline your E and L put you on. R is a square and never changes sign, which is why a horizon has a time even where that horizon has no distance, while the distance integral carries a √Δ that goes imaginary throughout Region II.
 
 “beyond r₊” — the path from here to r₋ would have to cross Region II, so no spacelike curve in your rest space reaches r₋ and the integral has nothing to return. r₋ does not lie on your worldline yet either, and whether r₋ ever will depends on what you do next.";
+
+/// Hover tip for the static limit's box on the (t, r) chart, which quotes a radius and nothing
+/// that depends on an observer.
+pub const ERGOSPHERE_CHART_TIP: &str =
+"The static limit r_E — defined as the radius where the Killing vector ∂_t turns null, g_tt = 0. In the equatorial plane that radius is 2M whatever the spin.
+
+Inside r_E frame dragging carries every timelike worldline round with the hole, so no rocket holds a fixed azimuth against the distant stars. A rocket inside r_E can still hold a fixed radius and can still climb back out, so r_E is a place on this chart and not a horizon.";
+
+/// A surface's box where no observer is being quoted: its name, and its radius on the line under
+/// the name, so that a shut box is the name alone.
+fn surface_radius_lines(title: &str, radius: &str, color: Color32) -> Vec<TelemetryLine> {
+    vec![
+        TelemetryLine { text: title.to_string(), color, is_title: true, bold: false },
+        TelemetryLine { text: radius.to_string(), color: Theme::TEXT_BRIGHT, is_title: false, bold: false },
+    ]
+}
 
 /// The lines of a horizon's box: what the surface is called, its radius where the caller quotes
 /// one (the (t, r) chart does, the rest-frame view does not), whether it is a place or a moment
@@ -1940,7 +2044,8 @@ Tick Enable Observer on Alice's or Bob's card",
         // *is* - a place with a distance, or a moment on somebody's clock - is a statement about an
         // observer, not about the chart, so the box is drawn against one and every line of it names
         // whoever it is quoting. Bob if he is on the canvas, otherwise Alice; with neither there is
-        // nothing to read and the plain label stands.
+        // nothing to read and the box is the name and the radius alone. The static limit's box is
+        // that in every case: nothing about it changes kind with where an observer stands.
         let horizon_reader = bob.or(alice);
         let mut pending_boxes: Vec<PendingBox> = Vec::new();
 
@@ -1962,32 +2067,24 @@ Tick Enable Observer on Alice's or Bob's card",
             } else {
                 format!("r₋ = {:.2}M ({})", rm, metric.format_physical_distance(rm))
             };
-            if let Some(obs) = horizon_reader {
-                let box_lines = horizon_box_lines(
-                    metric,
-                    obs,
-                    &obs.name,
-                    "Cauchy Horizon",
-                    Some(&rm_radius),
-                    rm,
-                    HORIZON_BOX_RED,
-                );
-                pending_boxes.push(PendingBox {
-                    id: BoxId::CauchyHorizon,
-                    anchor: Pos2::new(x_rm_actual + 4.0, rect.top() + 42.0),
-                    lines: box_lines,
-                    color: HORIZON_BOX_RED,
-                    tip: HORIZON_BOX_TIP,
-                });
-            } else {
-                painter.text(
-                    Pos2::new(x_rm_actual + 4.0, rect.top() + 42.0),
-                    egui::Align2::LEFT_TOP,
-                    format!("Cauchy Horizon {rm_radius}"),
-                    egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
-                    Theme::HORIZON_CAUCHY,
-                );
-            }
+            pending_boxes.push(PendingBox {
+                id: BoxId::CauchyHorizon,
+                anchor: Pos2::new(x_rm_actual + 4.0, rect.top() + 42.0),
+                lines: match horizon_reader {
+                    Some(obs) => horizon_box_lines(
+                        metric,
+                        obs,
+                        &obs.name,
+                        "Cauchy Horizon",
+                        Some(&rm_radius),
+                        rm,
+                        HORIZON_BOX_RED,
+                    ),
+                    None => surface_radius_lines("Cauchy Horizon", &rm_radius, HORIZON_BOX_RED),
+                },
+                color: HORIZON_BOX_RED,
+                tip: HORIZON_BOX_TIP,
+            });
         }
 
         // Outer Event Horizon r+
@@ -1999,50 +2096,42 @@ Tick Enable Observer on Alice's or Bob's card",
             } else {
                 format!("r₊ = {:.2}M ({})", rp, metric.format_physical_distance(rp))
             };
-            if let Some(obs) = horizon_reader {
-                let box_lines = horizon_box_lines(
-                    metric,
-                    obs,
-                    &obs.name,
-                    "Event Horizon",
-                    Some(&rp_radius),
-                    rp,
-                    Theme::HORIZON_OUTER,
-                );
-                pending_boxes.push(PendingBox {
-                    id: BoxId::OuterHorizon,
-                    anchor: Pos2::new(x_rp_actual + 4.0, rect.top() + 42.0),
-                    lines: box_lines,
-                    color: Theme::HORIZON_OUTER,
-                    tip: HORIZON_BOX_TIP,
-                });
-            } else {
-                painter.text(
-                    Pos2::new(x_rp_actual + 4.0, rect.top() + 58.0),
-                    egui::Align2::LEFT_TOP,
-                    format!("Event Horizon {rp_radius}"),
-                    egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
-                    Theme::HORIZON_OUTER,
-                );
-            }
+            pending_boxes.push(PendingBox {
+                id: BoxId::OuterHorizon,
+                anchor: Pos2::new(x_rp_actual + 4.0, rect.top() + 42.0),
+                lines: match horizon_reader {
+                    Some(obs) => horizon_box_lines(
+                        metric,
+                        obs,
+                        &obs.name,
+                        "Event Horizon",
+                        Some(&rp_radius),
+                        rp,
+                        Theme::HORIZON_OUTER,
+                    ),
+                    None => surface_radius_lines("Event Horizon", &rp_radius, Theme::HORIZON_OUTER),
+                },
+                color: Theme::HORIZON_OUTER,
+                tip: HORIZON_BOX_TIP,
+            });
         }
 
         // Ergosphere boundary line
         let x_re_actual = to_screen_x(re);
         if x_re_actual >= rect.left() && x_re_actual <= rect.right() {
             painter.line_segment([Pos2::new(x_re_actual, rect.top()), Pos2::new(x_re_actual, rect.bottom())], Stroke::new(1.5, Theme::ERGOSPHERE_LINE));
-            let re_label = if use_physical_units {
-                format!("Ergosphere r_E = {} ({:.2}M)", metric.format_km(metric.r_to_km(re)), re)
+            let re_radius = if use_physical_units {
+                format!("r_E = {} ({:.2}M)", metric.format_km(metric.r_to_km(re)), re)
             } else {
-                format!("Ergosphere r_E = {:.2}M ({})", re, metric.format_physical_distance(re))
+                format!("r_E = {:.2}M ({})", re, metric.format_physical_distance(re))
             };
-            painter.text(
-                Pos2::new(x_re_actual + 4.0, rect.top() + 74.0),
-                egui::Align2::LEFT_TOP,
-                re_label,
-                egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
-                Theme::ERGOSPHERE_LINE,
-            );
+            pending_boxes.push(PendingBox {
+                id: BoxId::Ergosphere,
+                anchor: Pos2::new(x_re_actual + 4.0, rect.top() + 42.0),
+                lines: surface_radius_lines("Ergosphere", &re_radius, Theme::ERGOSPHERE_LINE),
+                color: Theme::ERGOSPHERE_LINE,
+                tip: ERGOSPHERE_CHART_TIP,
+            });
         }
 
         // The two transmissions. A wavefront is a closed curve in (r, phi) and this diagram has
@@ -2244,14 +2333,16 @@ Tick Enable Observer on Alice's or Bob's card",
         }
 
         // Everything left on this canvas is Bob's: his worldline, his light cone, his marker and
-        // the two boxes read off him. With no Bob in the simulation there is none of it.
+        // the two boxes read off him. With no Bob in the simulation there is none of it, and the
+        // surfaces' boxes are painted here instead.
         let Some(bob) = bob else {
             if let (Some(al), Some(alice_pos)) = (alice, alice_box) {
-                self.telemetry.show(
-                    ui, painter, Canvas::Spacetime, BoxId::Observer(Who::Alice), rect, alice_pos,
-                    "Alice", Theme::ALICE_COLOR, al, metric, use_physical_units, font_scale,
-                );
+                pending_boxes.push(PendingBox::observer(
+                    painter, rect, Who::Alice, alice_pos, "Alice", Theme::ALICE_COLOR, al, metric,
+                    use_physical_units, font_scale, Vec::new(),
+                ));
             }
+            self.telemetry.flush(ui, painter, Canvas::Spacetime, rect, &pending_boxes, font_scale);
             return;
         };
 
@@ -2273,56 +2364,20 @@ Tick Enable Observer on Alice's or Bob's card",
         painter.circle_stroke(apex, bob_radius + 2.0, Stroke::new(1.5, Color32::WHITE));
 
         // Every info box on this canvas is painted here, after everything else is down, so that
-        // the opaque fill of a box actually blocks out what is behind it.
-        self.flush_pending_boxes(ui, painter, Canvas::Spacetime, rect, &pending_boxes, font_scale);
-
+        // the opaque fill of a box actually blocks out what is behind it. The surfaces first, then
+        // Alice, then Bob, which is also the order in which a box gives way: a later one is nudged
+        // clear of the earlier ones.
         if let (Some(al), Some(alice_pos)) = (alice, alice_box) {
-            self.telemetry.show(
-                ui, painter, Canvas::Spacetime, BoxId::Observer(Who::Alice), rect, alice_pos, "Alice",
-                Theme::ALICE_COLOR, al, metric, use_physical_units, font_scale,
-            );
+            pending_boxes.push(PendingBox::observer(
+                painter, rect, Who::Alice, alice_pos, "Alice", Theme::ALICE_COLOR, al, metric,
+                use_physical_units, font_scale, Vec::new(),
+            ));
         }
-        self.telemetry.show(
-            ui, painter, Canvas::Spacetime, BoxId::Observer(Who::Bob), rect, apex, "Bob", Theme::BOB_COLOR, bob,
-            metric, use_physical_units, font_scale,
-        );
-    }
-
-    /// Paint every deferred info box, in order, once the rest of the canvas is down.
-    ///
-    /// A box still sitting where it was put is nudged down clear of the ones already placed, so a
-    /// stack of surfaces whose lines all leave by the same corner stays readable. One the user has
-    /// dragged is left exactly where they dragged it, overlap or not: they can see the overlap and
-    /// they chose it.
-    fn flush_pending_boxes(
-        &mut self,
-        ui: &mut egui::Ui,
-        painter: &egui::Painter,
-        canvas: Canvas,
-        rect: Rect,
-        pending: &[PendingBox],
-        font_scale: f32,
-    ) {
-        let mut occupied: Vec<Rect> = Vec::new();
-        for b in pending {
-            let size = telemetry_box_size(painter, &b.lines, font_scale);
-            let anchor = if self.telemetry.is_placed(canvas, b.id) {
-                b.anchor
-            } else {
-                let mut r = clamp_into(Rect::from_min_size(b.anchor, size), rect);
-                for _ in 0..8 {
-                    if !occupied.iter().any(|p| p.intersects(r)) {
-                        break;
-                    }
-                    r = clamp_into(r.translate(Vec2::new(0.0, size.y + 6.0)), rect);
-                }
-                r.min
-            };
-            let response = self.telemetry.show_lines(
-                ui, painter, canvas, b.id, rect, anchor, &b.lines, b.color, font_scale, b.tip,
-            );
-            occupied.push(response.rect);
-        }
+        pending_boxes.push(PendingBox::observer(
+            painter, rect, Who::Bob, apex, "Bob", Theme::BOB_COLOR, bob, metric, use_physical_units,
+            font_scale, Vec::new(),
+        ));
+        self.telemetry.flush(ui, painter, Canvas::Spacetime, rect, &pending_boxes, font_scale);
     }
 
     /// The rest-frame window that puts the next surface the observer meets `FRAME_SURFACE_FRACTION`
@@ -2864,6 +2919,7 @@ Tick Enable Observer on Alice's or Bob's card",
         let cone_len = (rect.height() * 0.35).min(rect.width() * 0.35);
         let apex = center;
         let (focus_future_fill, focus_past_fill, focus_edge) = Theme::cone_colours(Some(focus_who));
+        let mut focus_extra: Vec<TelemetryLine> = Vec::new();
 
         if focus_obs.r > 0.02 && focus_obs.is_active {
             let p_fut_out = apex + Vec2::new(cone_len, -cone_len);
@@ -2904,13 +2960,13 @@ Tick Enable Observer on Alice's or Bob's card",
         } else if focus_obs.is_active {
             painter.circle_filled(center, 12.0, Theme::SINGULARITY_FILL);
             painter.circle_stroke(center, 15.0, Stroke::new(2.0, Theme::SINGULARITY_LINE));
-            painter.text(
-                Pos2::new(center.x + 18.0, center.y),
-                egui::Align2::LEFT_CENTER,
-                "SINGULARITY IMPACT\nLight cone terminated at r = 0",
-                egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
-                Theme::WARNING_RED,
-            );
+            // Said in the observer's own box, as a condition of theirs, not beside the marker.
+            focus_extra.push(TelemetryLine {
+                text: "Singularity impact: light cone terminated at r = 0".to_string(),
+                color: Theme::WARNING_RED,
+                is_title: false,
+                bold: true,
+            });
         }
 
         // No outline. A white ring round the dot said nothing the dot did not already say, and the
@@ -2920,7 +2976,7 @@ Tick Enable Observer on Alice's or Bob's card",
         // 4. The other observer: their event, their worldline direction and their light cone, all
         // from the same linear map. The azimuthal component xi^2 is dropped from the picture and
         // printed instead, so the projection is on the record.
-        let mut other_box: Option<(&Observer, Who, Pos2, Color32)> = None;
+        let mut other_box: Option<(&Observer, Who, Pos2, Color32, Vec<TelemetryLine>)> = None;
         if let Some(other) = other_obs
             && other.is_active
     {
@@ -2970,20 +3026,19 @@ Tick Enable Observer on Alice's or Bob's card",
                 painter.circle_stroke(other_pos, 7.5, Stroke::new(1.0, Color32::WHITE));
                 painter.line_segment([center, other_pos], Stroke::new(1.2, Color32::from_white_alpha(120)));
 
+                // The two numbers this frame alone has about them, under their telemetry in their
+                // own box on this canvas.
                 let v_rel = (v[1] / v[0].abs().max(1e-12)).abs();
-                painter.text(
-                    other_pos + Vec2::new(9.0, 9.0),
-                    egui::Align2::LEFT_TOP,
-                    format!(
-                        "azimuthal offset ξ² = {}\nradial speed in this frame = {:.3}c",
-                        metric.format_r(xi[2], use_physical_units),
-                        v_rel.min(9.999)
-                    ),
-                    egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
-                    Theme::TEXT_MUTED,
-                );
+                let in_this_frame = [
+                    format!("In {}'s frame:", focus_obs.name),
+                    format!("azimuthal offset ξ² = {}", metric.format_r(xi[2], use_physical_units)),
+                    format!("radial speed = {:.3}c", v_rel.min(9.999)),
+                ]
+                .into_iter()
+                .map(|text| TelemetryLine { text, color: Theme::TEXT_BRIGHT, is_title: false, bold: false })
+                .collect();
 
-                other_box = Some((other, other_who, other_pos, other_color));
+                other_box = Some((other, other_who, other_pos, other_color, in_this_frame));
             }
         }
 
@@ -3012,18 +3067,19 @@ Tick Enable Observer on Alice's or Bob's card",
 
         // Every info box on this canvas goes here, after the head banner and everything else, so
         // that the opaque fill of a box blocks out what is behind it and dragging one wins over
-        // the canvas's own drag response. The surfaces first, the observers over them.
-        self.flush_pending_boxes(ui, painter, Canvas::RestFrame, rect, &pending_boxes, font_scale);
-        if let Some((other, other_who, other_pos, other_color)) = other_box {
-            self.telemetry.show(
-                ui, painter, Canvas::RestFrame, BoxId::Observer(other_who), rect, other_pos, &other.name, other_color,
-                other, metric, use_physical_units, font_scale,
-            );
+        // the canvas's own drag response. The surfaces first, the observers over them, which is
+        // also the order in which a box gives way: a later one is nudged clear of the earlier ones.
+        if let Some((other, other_who, other_pos, other_color, in_this_frame)) = other_box {
+            pending_boxes.push(PendingBox::observer(
+                painter, rect, other_who, other_pos, &other.name, other_color, other, metric,
+                use_physical_units, font_scale, in_this_frame,
+            ));
         }
-        self.telemetry.show(
-            ui, painter, Canvas::RestFrame, BoxId::Observer(focus_who), rect, apex, &focus_obs.name, obs_color,
-            focus_obs, metric, use_physical_units, font_scale,
-        );
+        pending_boxes.push(PendingBox::observer(
+            painter, rect, focus_who, apex, &focus_obs.name, obs_color, focus_obs, metric,
+            use_physical_units, font_scale, focus_extra,
+        ));
+        self.telemetry.flush(ui, painter, Canvas::RestFrame, rect, &pending_boxes, font_scale);
     }
 }
 

@@ -1,7 +1,7 @@
 use crate::gui::axis;
 use crate::gui::controls::{ReferenceFrame, SignalViews};
 use crate::gui::polyline::{SCREEN_SPACING, thin_to_pixels};
-use crate::gui::spacetime_canvas::{BoxId, Canvas, TelemetryBoxes};
+use crate::gui::spacetime_canvas::{BoxId, Canvas, PendingBox, TelemetryBoxes};
 use crate::gui::theme::Theme;
 use crate::physics::geodesic::GeodesicState;
 use crate::physics::kerr_schild::KerrSchild;
@@ -698,8 +698,8 @@ impl SpatialCanvas {
         // The cut, stated on the canvas as well as in the panel's tip: a gap in a drawn front has
         // to say for itself that it is deliberate.
         let wound_line = if style.hide_wound {
-            "Segments wound past a full turn are not drawn: the front there straddles a photon\n\
-             orbit and two rays cannot resolve it\n"
+            "Segments wound past a full turn are not drawn: the front there straddles\n\
+             a photon orbit and two rays cannot resolve it\n"
         } else {
             ""
         };
@@ -718,23 +718,9 @@ impl SpatialCanvas {
                     .to_string()
             }
         };
-        let legend_text = if !*show_details {
-            // Collapsed: the view's name and the one number that changes under the mouse.
-            match (self.keep_hole_centred, self.centred_on) {
-                (true, _) => format!(
-                    "Equatorial View (θ = π/2)   {:.0} px/M   centered on the black hole",
-                    self.zoom
-                ),
-                (false, Some(who)) => format!(
-                    "Equatorial View (θ = π/2)   {:.0} px/M   centered on {}",
-                    self.zoom,
-                    who.name()
-                ),
-                (false, None) => format!("Equatorial View (θ = π/2)   {:.0} px/M", self.zoom),
-            }
-        } else if use_physical_units {
+        let legend_text = if use_physical_units {
             format!(
-                "Equatorial View (θ = π/2, x + iy = (r + ia) e^{{iϕ}})\n\
+                "θ = π/2, x + iy = (r + ia) e^{{iϕ}}\n\
                  Cartesian radius ρ = √(r²+a²); ring singularity at ρ = a\n\
                  Units: Kilometers (km) & Seconds (s)\n\
                  Scale: 1M = {}\n\
@@ -750,7 +736,8 @@ impl SpatialCanvas {
                  Arcs piled on r₋: the frozen family (E − Ω₋L < 0, never crosses this branch)\n\
                  {}\
                  Bob's fronts: same gain colours at half stroke, mint emission dots\n\
-                 Receptions: triangle on the receiver's trail in the sender's colour (amber = Alice → Bob, mint = Bob → Alice)\n\
+                 Receptions: triangle on the receiver's trail in the sender's colour\n\
+                 (amber = Alice → Bob, mint = Bob → Alice)\n\
                  {}\
                  Zoom: {:.0} px/M (scroll to zoom, drag the background to pan,\n\
                  drag either observer's marker to put them anywhere in the plane)",
@@ -771,7 +758,7 @@ impl SpatialCanvas {
             )
         } else {
             format!(
-                "Equatorial View (θ = π/2, x + iy = (r + ia) e^{{iϕ}})\n\
+                "θ = π/2, x + iy = (r + ia) e^{{iϕ}}\n\
                  Cartesian radius ρ = √(r²+a²); ring singularity at ρ = a\n\
                  Physical Scale: 1M = GM/c² = {}\n\
                  Time Scale:     1M/c = GM/c³ = {}\n\
@@ -787,7 +774,8 @@ impl SpatialCanvas {
                  Arcs piled on r₋: the frozen family (E − Ω₋L < 0, never crosses this branch)\n\
                  {}\
                  Bob's fronts: same gain colours at half stroke, mint emission dots\n\
-                 Receptions: triangle on the receiver's trail in the sender's colour (amber = Alice → Bob, mint = Bob → Alice)\n\
+                 Receptions: triangle on the receiver's trail in the sender's colour\n\
+                 (amber = Alice → Bob, mint = Bob → Alice)\n\
                  {}\
                  Zoom: {:.0} px/M (scroll to zoom, drag the background to pan,\n\
                  drag either observer's marker to put them anywhere in the plane)",
@@ -854,48 +842,36 @@ impl SpatialCanvas {
             );
         }
 
-        // The Details button sits just above the block it shows and hides, set in the block's own
-        // font so it reads as the block's first line. It is a widget placed over the canvas, so
-        // it takes the click instead of the canvas drag.
-        let legend_font = egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale);
-        let button_label = if *show_details { "▾ Details" } else { "▸ Details" };
-        let button_size = Vec2::new(80.0 * font_scale, 16.0 * font_scale);
-        let button_rect = egui::Rect::from_min_size(rect.left_top() + Vec2::new(8.0, 6.0), button_size);
-        let button = egui::Button::new(
-            egui::RichText::new(button_label).font(legend_font.clone()).color(Theme::TEXT_BRIGHT),
-        )
-        .frame(false);
-        if ui
-            .put(button_rect, button)
-            .on_hover_text(
-                "Show or hide the block of details below: horizon radii, scale, spin, and the \
-                 colour keys.",
-            )
-            .clicked()
-        {
-            *show_details = !*show_details;
-        }
-        painter.text(
-            Pos2::new(rect.left() + 10.0, button_rect.bottom() + 2.0),
-            egui::Align2::LEFT_TOP,
-            legend_text,
-            legend_font,
-            Theme::TEXT_BRIGHT,
-        );
+        // The legend is an info box like any other on this canvas, shut to its title until the
+        // triangle opens it. Whether it stands open is the panel's `show_details`, which is what a
+        // save file has always carried, so the box is told that state before it is drawn and the
+        // state is read back from it afterwards: one fact, held in one place.
+        self.telemetry.set_shut(Canvas::Spatial, BoxId::Legend, !*show_details);
 
         // 8. Draggable info boxes, registered last so they take the drag instead of the canvas.
+        // They go through the queue every canvas uses, so that an untouched one is slid clear of
+        // the other observer's.
+        let mut pending = vec![PendingBox::legend(
+            rect.left_top() + Vec2::new(8.0, 6.0),
+            "Equatorial View",
+            &legend_text,
+            "What this view draws and how to read it: the embedding, the scale, the horizon radii, \
+             the spin and the drag rate, the colour keys of the fronts, and the mouse controls.",
+        )];
         if let (Some(al), Some(al_pos)) = (alice.as_ref(), alice_box) {
-            self.telemetry.show(
-                ui, &painter, Canvas::Spatial, BoxId::Observer(Who::Alice), rect, al_pos, "Alice", Theme::ALICE_COLOR,
-                al, metric, use_physical_units, font_scale,
-            );
+            pending.push(PendingBox::observer(
+                &painter, rect, Who::Alice, al_pos, "Alice", Theme::ALICE_COLOR, al, metric,
+                use_physical_units, font_scale, Vec::new(),
+            ));
         }
         if let (Some(b), Some(bob_pos)) = (bob.as_ref(), bob_box) {
-            self.telemetry.show(
-                ui, &painter, Canvas::Spatial, BoxId::Observer(Who::Bob), rect, bob_pos, "Bob", Theme::BOB_COLOR,
-                b, metric, use_physical_units, font_scale,
-            );
+            pending.push(PendingBox::observer(
+                &painter, rect, Who::Bob, bob_pos, "Bob", Theme::BOB_COLOR, b, metric,
+                use_physical_units, font_scale, Vec::new(),
+            ));
         }
+        self.telemetry.flush(ui, &painter, Canvas::Spatial, rect, &pending, font_scale);
+        *show_details = !self.telemetry.is_shut(Canvas::Spatial, BoxId::Legend);
     }
 }
 

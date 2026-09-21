@@ -4,7 +4,7 @@ use std::ops::Range;
 use crate::gui::axis;
 use crate::gui::controls::{ReferenceFrame, SignalViews};
 use crate::gui::polyline::{SCREEN_SPACING, thin_to_pixels};
-use crate::gui::spacetime_canvas::{CHART_BANNER, COARSE_ZOOM_STEPS, BoxId, Canvas, TelemetryBoxes};
+use crate::gui::spacetime_canvas::{CHART_BANNER, COARSE_ZOOM_STEPS, Canvas, PendingBox, TelemetryBoxes};
 use crate::gui::spatial_canvas::{
     CENTRED_RING_GAP, FrontStyle, Who, draw_reception_tick, draw_signal_field, draw_spatial_trail,
     frame_focus,
@@ -1999,13 +1999,6 @@ impl VolumeCanvas {
 
         // 13. The legend: what the picture is, where the eye is standing, and what the vertical
         // axis means, since a viewer arriving at a 3D diagram has no way to know any of the three.
-        painter.text(
-            rect.left_top() + Vec2::new(10.0, 6.0),
-            egui::Align2::LEFT_TOP,
-            "2D+1 Volume (x, y, t)",
-            legend_font.clone(),
-            Theme::TEXT_BRIGHT,
-        );
         // The same line the (t, r) chart carries, for the same reason: see `CHART_BANNER`.
         painter.text(
             Pos2::new(rect.center().x, rect.top() + 6.0),
@@ -2014,52 +2007,54 @@ impl VolumeCanvas {
             egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
             Color32::WHITE,
         );
-        painter.text(
-            rect.left_top() + Vec2::new(10.0, 8.0 + Theme::MIN_FONT_PT * font_scale),
-            egui::Align2::LEFT_TOP,
-            format!(
-                "yaw {:.0}°  pitch {:.0}°  {:.0} px/M  t×{:.2}\n\
-                 window {:.1} … {:.1} M  (floor = now)\n\
-                 drag: pan  shift-drag: orbit  wheel: zoom  ctrl-wheel: coarse zoom  \
-                 shift-wheel: time scale  \
-                 right-click: menu\n\
-                 below the floor: the past · above: the future · pipes: r = const · cones: exact \
-                 null generators{}{}",
-                camera.yaw.to_degrees(),
-                camera.pitch.to_degrees(),
-                camera.scale,
-                t_scale,
-                t_min,
-                t_max,
-                // Terse, on the end of the line that says what the other shapes are.
-                if self.show_past_cone {
-                    "\npast cone: the event's null geodesics run backwards"
-                } else {
-                    ""
-                },
-                if self.show_pulse_surfaces {
-                    "\npulse surfaces: every 8th pulse's light cone, coloured by gain"
-                } else {
-                    ""
-                },
-            ),
-            legend_font.clone(),
-            Theme::TEXT_MUTED,
+        let legend_body = format!(
+            "yaw {:.0}°  pitch {:.0}°  {:.0} px/M  t×{:.2}\n\
+             window {:.1} … {:.1} M  (floor = now)\n\
+             drag: pan  shift-drag: orbit  wheel: zoom\n\
+             ctrl-wheel: coarse zoom  shift-wheel: time scale\n\
+             right-click: menu\n\
+             below the floor: the past · above: the future\n\
+             pipes: r = const · cones: exact null generators{}{}",
+            camera.yaw.to_degrees(),
+            camera.pitch.to_degrees(),
+            camera.scale,
+            t_scale,
+            t_min,
+            t_max,
+            // Terse, on the end of the line that says what the other shapes are.
+            if self.show_past_cone {
+                "\npast cone: the event's null geodesics run backwards"
+            } else {
+                ""
+            },
+            if self.show_pulse_surfaces {
+                "\npulse surfaces: every 8th pulse's light cone,\ncoloured by gain"
+            } else {
+                ""
+            },
         );
 
         buf.paint_labels(&painter, legend_font);
 
         // 14. Draggable info boxes, registered last so they take the drag instead of the canvas.
+        // The observers' boxes go through the queue every canvas uses, so that an untouched one
+        // is slid clear of the legend and of the other observer's.
+        let mut pending = vec![PendingBox::legend(
+            // Under the banner, which an open legend would otherwise cover.
+            rect.left_top() + Vec2::new(8.0, 12.0 + Theme::MIN_FONT_PT * font_scale),
+            "2D+1 Volume (x, y, t)",
+            &legend_body,
+            "What this view draws and how to read it: where the camera stands, the stretch of \
+             coordinate time the volume holds, the mouse controls, and what each drawn shape is.",
+        )];
         for (obs, who) in present {
             let Some((_, at)) = markers.iter().copied().find(|(w, _)| *w == who) else {
                 continue;
             };
-            self.telemetry.show(
-                ui,
+            pending.push(PendingBox::observer(
                 &painter,
-                Canvas::Volume,
-                BoxId::Observer(who),
                 rect,
+                who,
                 at,
                 who.name(),
                 colour_of(who),
@@ -2067,8 +2062,10 @@ impl VolumeCanvas {
                 metric,
                 use_physical_units,
                 font_scale,
-            );
+                Vec::new(),
+            ));
         }
+        self.telemetry.flush(ui, &painter, Canvas::Volume, rect, &pending, font_scale);
     }
 }
 
