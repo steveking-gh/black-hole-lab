@@ -106,6 +106,22 @@ pub const MIN_GRID_PX: f32 = 28.0;
 /// hand-over between images is late by a few per cent of an orbit at worst.
 const YOUNGEST_CHECK_INTERVAL: f64 = 1.0;
 
+/// How far the focus observer's own clock has to move, in M of proper time, before the picture
+/// of the other observer is solved again rather than held from the last solve.
+///
+/// What an observer sees is a function of their own event. Two events on one worldline this
+/// close together see pictures that differ by that much and no more, which is far under a screen
+/// point at any zoom; so between them the last solve *is* the picture. It matters for one
+/// observer only: one freezing onto the far branch of r-, whose u^t climbs through 1e6 and on to
+/// 1e10 while their clock all but stops - a few 1e-8 M a frame - and whose frame is by then
+/// boosted past what the solver can resolve. Measured with Bob on the E = 1, L = 2.2 worldline
+/// watching Alice's raindrop: the picture was steady (g = 0.028, lambda = 0.626 M) and the solve
+/// still came back "no image" on a third of the frames from u^t ~ 8e6 to the stall, and where it
+/// did come back its g wandered by 15%. Every one of those frames sits inside 1e-6 M of Bob's
+/// clock. Holding the picture is the exact statement that nothing has changed, and it also
+/// keeps the drawn plane from snapping to the radial one and back as the solve comes and goes.
+const HELD_PICTURE_TAU: f64 = 1e-3;
+
 const FRAME_MAX_R_MIN: f64 = 1e-12;
 
 /// The rest-frame view's default window, and the widest that the automatic framing will open it to.
@@ -1045,7 +1061,7 @@ An \"Incomplete\" line means the Wavefronts kept cap has evicted pulses that cou
 pub const SURFACE_BOX_TIP: &str =
 "What the surface is, read straight off the slope its trace has where that trace passes your own event. Steeper than 45 degrees means timelike - the world-tube of observers holding that radius, something a rocket can stay off. Exactly 45 degrees means null. Flatter than 45 degrees means spacelike: not a place at all but a moment of your history, which arrives whatever you do. Nothing about the tilt goes in by hand; the tilt follows from the metric at your own radius through the dual tetrad, so the reading stays exact at the dot.
 
-The reading belongs to the trace and not always to the surface. This canvas draws one plane through your event - the plane of your time axis and your line of sight to the other observer - and what you see of a surface is where that plane cuts it. The cut of a plane by a plane is still a line, so there is always a slope to read, and where your line of sight runs along the outward radial direction the line is the surface's own and the two readings agree. Where the line of sight has swung round, the cut is taken at an angle, and a slice through a null surface taken at an angle is a timelike line. The box then reports the trace, honestly, and the region tag in your own title reports the surface.
+The reading belongs to the trace and not always to the surface. This canvas draws one plane through your event - the plane of your time axis and your line of sight to the other observer - and what you see of a surface is where that plane cuts it. The cut of a plane by a plane is still a line, so there is always a slope to read, and where your line of sight runs along the outward radial direction the line is the surface's own and the two readings agree. Where the line of sight has swung round, the plane cuts the surface at an angle, and such a cut can only flatten a trace, never steepen it: the trace of a null surface is a spacelike line, flatter than 45°, or exactly null when the plane holds the surface's own null generator, and a trace steeper than 45° belongs only to a timelike surface, such as r = const outside r₊. No sub-light path ever slips past a horizon drawn here. The box reports the trace, honestly, and the region tag in your own title reports the surface.
 
 The box takes that reading at your own event and nowhere else. The drawn curve gives the exact position of the surface in your chart, and a curve bends: far from you the same surface tilts differently, and that far tilt says something about a distant event rather than about the event you are standing on.
 
@@ -1445,6 +1461,9 @@ pub struct SpacetimeCanvas {
     /// few milliseconds, so it runs once per `YOUNGEST_CHECK_INTERVAL` of the focus observer's
     /// time rather than once a frame. View state, like the seeds.
     seen_checked: HashMap<(Who, Who), f64>,
+    /// The last solved picture of each pair and the focus observer's proper time it was solved
+    /// at, held and redrawn until that clock has moved `HELD_PICTURE_TAU`. View state.
+    seen_held: HashMap<(Who, Who), (AsSeen, f64)>,
     /// The drawn surface curves, and what they were sampled for. Sampling all four surfaces costs
     /// about 270 microseconds, which is worth paying once per change of the observer's event and
     /// not once per frame: with the run paused, every frame after the first reuses this.
@@ -1464,6 +1483,7 @@ impl Default for SpacetimeCanvas {
                 .starting_shut(&[Canvas::Spacetime, Canvas::RestFrame]),
             seen_seeds: HashMap::new(),
             seen_checked: HashMap::new(),
+            seen_held: HashMap::new(),
             surfaces: SurfaceCurves::default(),
         }
     }
@@ -2526,6 +2546,7 @@ Tick Enable Observer on Alice's or Bob's card",
         let u_focus = focus_obs.four_velocity(metric);
         let axial = Tetrad::from_four_velocity_axial(metric, focus_obs.r, &u_focus);
         let mut other_seen: Option<(Who, &Observer, Result<AsSeen, NoImage>)> = None;
+        let mut seen_held_for: Option<f64> = None;
         if let Some(other) = other_obs.filter(|o| o.is_active) {
             let other_who = Who::of(other).unwrap_or(Who::Bob);
             let key = (focus_who, other_who);
@@ -2535,29 +2556,43 @@ Tick Enable Observer on Alice's or Bob's card",
             // younger one born beside it costs some milliseconds, so it runs once per interval
             // of the focus observer's own time - and after any cold solve, since a cold march
             // lands on whichever image it lands on.
-            let due = self
-                .seen_checked
+            // Held from the last solve while the focus observer's own clock has not moved: see
+            // `HELD_PICTURE_TAU`. `held` is how far it has moved, for the box.
+            let held = self
+                .seen_held
                 .get(&key)
-                .is_none_or(|last| (focus_obs.t - last).abs() >= YOUNGEST_CHECK_INTERVAL);
-            let mut answer = if due {
-                as_seen_youngest(metric, focus_obs, other, seed)
-            } else {
-                as_seen(metric, focus_obs, other, seed)
-            };
-            if due {
-                self.seen_checked.insert(key, focus_obs.t);
-            } else if let Ok(seen) = &answer
-                && seen.cold
-            {
-                self.seen_checked.insert(key, focus_obs.t);
-                if let Some(younger) = younger_image(metric, focus_obs, other, seen) {
-                    answer = Ok(younger);
+                .map(|(_, tau)| focus_obs.tau - tau)
+                .filter(|moved| moved.abs() < HELD_PICTURE_TAU);
+            let answer = match held {
+                Some(_) => Ok(self.seen_held[&key].0),
+                None => {
+                    let due = self.seen_checked.get(&key).is_none_or(|last| {
+                        (focus_obs.t - last).abs() >= YOUNGEST_CHECK_INTERVAL
+                    });
+                    let mut answer = if due {
+                        as_seen_youngest(metric, focus_obs, other, seed)
+                    } else {
+                        as_seen(metric, focus_obs, other, seed)
+                    };
+                    if due {
+                        self.seen_checked.insert(key, focus_obs.t);
+                    } else if let Ok(seen) = &answer
+                        && seen.cold
+                    {
+                        self.seen_checked.insert(key, focus_obs.t);
+                        if let Some(younger) = younger_image(metric, focus_obs, other, seen) {
+                            answer = Ok(younger);
+                        }
+                    }
+                    if let Ok(seen) = &answer {
+                        self.seen_seeds.insert(key, seen.seed());
+                        self.seen_held.insert(key, (*seen, focus_obs.tau));
+                    }
+                    answer
                 }
-            }
-            if let Ok(seen) = &answer {
-                self.seen_seeds.insert(key, seen.seed());
-            }
+            };
             other_seen = Some((other_who, other, answer));
+            seen_held_for = held;
         }
         let sight = other_seen
             .as_ref()
@@ -3242,7 +3277,18 @@ Tick Enable Observer on Alice's or Bob's card",
                     // The box reads the emission event, so it is built on a snapshot of the other
                     // observer standing there rather than on the observer standing here.
                     let snapshot = seen_snapshot(other, &seen);
-                    let extra = as_seen_lines(metric, &seen, rest_nm, other);
+                    let mut extra = as_seen_lines(metric, &seen, rest_nm, other);
+                    if seen_held_for.is_some() {
+                        extra.push(TelemetryLine {
+                            text: format!(
+                                "picture held: your clock has moved under {HELD_PICTURE_TAU} M \
+                                 since this image was solved, so it cannot have changed"
+                            ),
+                            color: Theme::TEXT_MUTED,
+                            is_title: false,
+                            bold: false,
+                        });
+                    }
                     other_box = Some(
                         PendingBox::observer(
                             painter,
@@ -6125,6 +6171,65 @@ mod rest_frame_tests {
                 && local[2].abs() < 1e-9,
             "the light arrives in the drawn plane, along the line of sight: {local:?}"
         );
+    }
+
+    #[test]
+    fn test_the_picture_is_held_while_the_observers_clock_stands_still() {
+        // The user's report: Bob freezing onto the far branch of r- with Alice's image deep in
+        // redshift, and on one frame in three the box read "Alice: no image" and the drawn plane
+        // snapped to the radial one, so r- flipped from a shallow line across his future to a
+        // 45-degree line and back. Past u^t ~ 1e7 the solver cannot resolve his frame, but his
+        // clock is moving under 1e-8 M a frame, so the picture at his event is the picture it was:
+        // the view holds it and says so, and the plane stays put.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let mut bob = Observer::new_with_phi(
+            &metric,
+            "Bob",
+            0.0,
+            4.5,
+            0.0,
+            0.0,
+            WorldlineParams::new(1.0, 2.2, false),
+        );
+        let mut alice = raindrop(&metric, "Alice", 4.45, 0.0);
+        let mut canvas = fresh(16.0);
+        let mut no_image_frames = 0;
+        let mut held_frames = 0;
+        let mut frames = 0;
+        let mut angle: Option<String> = None;
+        let mut angle_changes = 0;
+        while bob.four_velocity(&metric)[0] < 1e8 {
+            play(&metric, &mut bob, &mut alice, 1, 0.05);
+            assert!(!bob.is_frozen(), "the run must reach u^t = 1e8 before the stall");
+            let p = pass_on(&mut canvas, &metric, Some(&alice), Some(&bob), ReferenceFrame::Bob);
+            frames += 1;
+            if p.text.contains("no image") {
+                no_image_frames += 1;
+            }
+            if p.text.contains("picture held") {
+                held_frames += 1;
+            }
+            // The header's direction, as the plane's witness: it may not flip to the radial
+            // fallback and back once the picture is deep.
+            if bob.four_velocity(&metric)[0] > 1e5 {
+                let now = p
+                    .text
+                    .lines()
+                    .find(|line| line.contains("of outward") || line.contains("of inward"))
+                    .map(str::to_string);
+                if angle.is_some() && now != angle {
+                    angle_changes += 1;
+                }
+                angle = now;
+            }
+        }
+        println!(
+            "{frames} frames to u^t = {:.2e}: {no_image_frames} with no image,              {held_frames} held, the header's direction changed {angle_changes} times past              u^t = 1e5",
+            bob.four_velocity(&metric)[0]
+        );
+        assert_eq!(no_image_frames, 0, "the picture never goes out");
+        assert!(held_frames > 0, "and it is held once his clock has stopped");
+        assert_eq!(angle_changes, 0, "and the plane does not snap");
     }
 
     #[test]

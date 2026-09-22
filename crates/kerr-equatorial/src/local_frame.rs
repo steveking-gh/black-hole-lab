@@ -137,10 +137,13 @@ impl LocalFrame {
     /// gauge is the one that makes e2^r vanish, so in it the drawn trace of a surface r = const
     /// carries that surface's own causal character exactly. Turn the legs and the third one picks
     /// up a radial component, n_2 = e2^r is no longer zero, and
-    /// -n_0^2 + n_1^2 = g^rr - n_2^2 rather than g^rr: the *trace* of the surface in the drawn
-    /// plane can then be timelike where the surface itself is null or spacelike. That is not an
-    /// error in either reading - a plane cut through a null surface at an angle really is a
-    /// timelike line - and it is why the view's tip says the character it prints is the character
+    /// -n_0^2 + n_1^2 = g^rr - n_2^2 rather than g^rr. The trace is timelike exactly when that is
+    /// positive, so turning the legs can only make a trace *flatter*: a timelike surface's trace
+    /// can come out null or spacelike once n_2^2 reaches g^rr, while a null or spacelike surface
+    /// has g^rr <= 0 and its trace is spacelike or null in every plane through the observer's
+    /// time axis, never timelike. (A plane holding a timelike direction meets a null hyperplane in
+    /// a line that is spacelike unless it is the null generator itself.) That is not an error in
+    /// either reading, and it is why the view's tip says the character it prints is the character
     /// of the drawn trace.
     pub fn for_observer_plane(metric: &KerrSchild, r: f64, u: &[f64; 3], s: &[f64; 3]) -> Self {
         let tetrad = Tetrad::from_four_velocity_axial(metric, r, u).turned_towards(metric, r, s);

@@ -520,6 +520,16 @@ impl Observer {
     /// observer is no longer on - E is the energy of a release that happened at a different radius -
     /// so the marker came to rest somewhere it had no business being at rest, or shot inward from a
     /// radius it should have been hanging at.
+    ///
+    /// A drag made before the run has started is not a teleport but the initial condition: with
+    /// the clock at zero the card and the observer are the same thing, and the card already takes
+    /// the drag (`AppControls::remember_drop_positions`). So the release event moves with it,
+    /// and the trail the drag wrote - a few hundred events all at the same instant - is thrown
+    /// away, because there was no history to record. Without this the observer stood at the
+    /// dropped position while their `start` stayed where the drag began, and anything reading the
+    /// worldline from before the run - the other observer's view of them, which extends it
+    /// backwards from `start` - saw them 0.009 M away from where they were drawn, in a run where
+    /// they had been dropped 0.00015 M from the other observer.
     pub fn release_from_drag(&mut self, metric: &KerrSchild, mode: ObserverMode) {
         if let Some(old) = self.geodesic {
             // Both constants are re-read: L is carried across as the user's own choice, except
@@ -533,6 +543,11 @@ impl Observer {
         self.mode = mode;
         self.release_t = self.release_t.min(self.t);
         self.is_active = true;
+        if self.t <= self.start.t + 1e-12 {
+            self.start = self.current_point();
+            self.trail.clear();
+            self.trail.push_back(self.start);
+        }
     }
 
     /// While waiting for release the observer holds their radius on the worldline of
@@ -2171,6 +2186,40 @@ mod tests {
         assert!(bob.r < 4.6, "free fall resumes from the dropped radius: r = {}", bob.r);
         assert!(bob.r > r_before_drag, "and from the new event, not the pre-drag one");
         assert!((bob.t - 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_a_drag_before_the_run_starts_moves_the_release_event_and_writes_no_history() {
+        // The user's own starting file: Alice dragged next to Bob with the clock at zero, 167
+        // trail events all at t = 0 from the pointer's path, and a `start` still at the drag's
+        // first frame 0.009 M away. Before the run there is nothing to record; the drop *is* the
+        // start.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let mut alice = Observer::new(&metric, "Alice", 0.0, 4.5, 0.0);
+        for i in 1..=40 {
+            alice.set_drag_position(0.0, 4.5 + 0.02 * (i as f64));
+            alice.phi = -0.002 + 0.00005 * (i as f64);
+        }
+        assert!(alice.trail.len() > 1, "the drag itself records, as it always has");
+        alice.release_from_drag(&metric, ObserverMode::FreeFall);
+        assert_eq!(alice.trail.len(), 1, "no history before the run");
+        assert_eq!(alice.start.r, alice.r, "the release event is where the marker was dropped");
+        assert_eq!(alice.start.phi, alice.phi);
+        assert_eq!(alice.trail[0], alice.start);
+        let u = alice.four_velocity(&metric);
+        assert_eq!(alice.start.u, u, "and carries the release's own 4-velocity");
+
+        // A drag once the run is under way is a teleport, and the history before it is real.
+        let mut bob = Observer::new(&metric, "Bob", 0.0, 4.5, 0.0);
+        for i in 1..=10 {
+            bob.step(&metric, 0.1 * (i as f64), 0.1);
+        }
+        let recorded = bob.trail.len();
+        let start = bob.start;
+        bob.set_drag_position(1.0, 6.0);
+        bob.release_from_drag(&metric, ObserverMode::FreeFall);
+        assert_eq!(bob.start, start, "the release event of a run under way does not move");
+        assert!(bob.trail.len() > recorded, "and the teleport is on the record");
     }
 
     #[test]

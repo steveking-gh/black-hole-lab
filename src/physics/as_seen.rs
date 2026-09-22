@@ -156,10 +156,36 @@ const MAX_NEWTON: u32 = 24;
 /// the ray's event and the other observer's event at the same coordinate time, in M.
 const NEWTON_TOL: f64 = 1e-9;
 
-/// Step in arrival angle used for the finite-difference column of the Jacobian. The residual is
-/// smooth in the angle and of order one, so this trades four digits of the derivative for four
-/// digits of the difference; Newton converges quadratically on the rest.
+/// How far the finite-difference column of the Jacobian moves the launched ray's coordinate
+/// velocity (dr/dt, r dphi/dt): the step in arrival angle is chosen to produce this, see
+/// `Solver::alpha_step`. The residual is smooth in the ray's direction and of order one, so this
+/// trades four digits of the derivative for four digits of the difference; Newton converges
+/// quadratically on the rest.
 const ALPHA_STEP: f64 = 1e-6;
+
+/// How far back in coordinate time an emission event may come, from one frame's answer to the
+/// next, and still count as the same image. It is a hundred times `NEAR_MISS`: a residual of
+/// 1e-5 M in position is at most that in the emission time along a worldline that moves at less
+/// than the speed of light, so the floor is 1e-5 and this stands well above it, while an image
+/// that is not the same is tens of M away in emission time - or, at a caustic, the same to four
+/// decimals and caught by the second guard on lambda.
+const EMISSION_SLACK: f64 = 100.0 * NEAR_MISS;
+
+/// A solve that ends this close, in M, without reaching `NEWTON_TOL` is still the picture: the
+/// residual is carried in the answer for anyone who wants to know. It used to be 1e-6, which is
+/// where the refinement stalls once the focus observer's frame is boosted past u^t ~ 1e6 on the
+/// way onto the far branch of r-: measured there, with Alice's image steady at g = 0.028 and
+/// lambda = 0.626 M, the Newton stopped descending at separations of 1.1e-6 to 4e-6 M and
+/// reported no image on frame after frame of a picture that was not changing. 1e-5 M is a
+/// tenth of a metre of the app's smallest hole, well under a screen point at any zoom, and the
+/// measured floor sits under it.
+const NEAR_MISS: f64 = 1e-5;
+
+/// The bounds on that step in the angle itself. The lower bound is where the angle's own floating
+/// point resolution starts to matter; the upper is a secant over a twentieth of a radian, which
+/// is still a fair derivative of a residual this smooth.
+const ALPHA_STEP_MIN: f64 = 1e-9;
+const ALPHA_STEP_MAX: f64 = 0.05;
 
 /// Where on the other observer's worldline the emission event was read from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -518,8 +544,16 @@ pub fn as_seen_youngest(
 ///   magnitude and still catches the jump.
 ///
 /// A refusal costs the cold path, which is what the caller would have paid with no seed at all.
+///
+/// The slack on the first guard is `EMISSION_SLACK`, which has to sit above the solve's own
+/// resolution and not at it. It was 1e-6 M, and that is where a frozen image jitters: once the
+/// focus observer is freezing onto the far branch of r- their picture stops changing - Alice's
+/// emission event sat at t = 4.87435 M frame after frame - and the converged emission time
+/// came back 1e-6 to 6e-6 M *earlier* than the seed's from one frame to the next, pure
+/// rounding. The guard refused every one of those honest frames, the cold march could not do
+/// better, and the view reported no image for a picture that had not moved.
 fn continues(next: &AsSeen, emission_t: f64, lambda: f64, now: f64) -> bool {
-    next.emission.t >= emission_t - 1e-6
+    next.emission.t >= emission_t - EMISSION_SLACK
         && next.emission.t < now
         && next.lambda <= 4.0 * lambda + 1.0
         && next.lambda + 1.0 >= 0.25 * lambda
@@ -1195,7 +1229,7 @@ impl<'a> Solver<'a> {
         // Out of iterations, or out of descent. A solve that got within a hair is still a picture -
         // the residual is reported so a caller can decide - but one that did not is not, and says
         // so.
-        if separation <= 1e-6 {
+        if separation <= NEAR_MISS {
             self.finish(probe, alpha, separation, MAX_NEWTON, cold)
         } else {
             Err(NoImage::NotConverged)
@@ -1206,17 +1240,39 @@ impl<'a> Solver<'a> {
     /// of the arrival angle can be evaluated. `None` when neither can, which means the refinement
     /// has walked onto an angle whose neighbouring rays both die before they reach the worldline.
     fn angle_column(&self, probe: &Probe, alpha: f64, age: f64) -> Option<[f64; 2]> {
-        if let Ok(ahead) = self.probe(alpha + ALPHA_STEP, age) {
-            return Some([
-                (ahead.gap[0] - probe.gap[0]) / ALPHA_STEP,
-                (ahead.gap[1] - probe.gap[1]) / ALPHA_STEP,
-            ]);
+        let h = self.alpha_step(alpha);
+        if let Ok(ahead) = self.probe(alpha + h, age) {
+            return Some([(ahead.gap[0] - probe.gap[0]) / h, (ahead.gap[1] - probe.gap[1]) / h]);
         }
-        let behind = self.probe(alpha - ALPHA_STEP, age).ok()?;
-        Some([
-            (probe.gap[0] - behind.gap[0]) / ALPHA_STEP,
-            (probe.gap[1] - behind.gap[1]) / ALPHA_STEP,
-        ])
+        let behind = self.probe(alpha - h, age).ok()?;
+        Some([(probe.gap[0] - behind.gap[0]) / h, (probe.gap[1] - behind.gap[1]) / h])
+    }
+
+    /// The finite-difference step in the arrival angle, sized so that the launched ray's
+    /// coordinate velocity moves by about `ALPHA_STEP`.
+    ///
+    /// The angle is measured in the focus observer's own frame, and that frame can be boosted
+    /// out of all proportion: an observer freezing onto the far branch of r- has u^t in the
+    /// hundreds of thousands, and aberration then folds almost the whole of their sky into one
+    /// direction, so a fixed step of 1e-6 in the angle moves the ray's actual direction by 1e-12
+    /// on the folded side and the difference of two residuals over it is integration noise. The
+    /// Newton then walks on a derivative that means nothing and stops descending a hair short -
+    /// measured at u^t = 4.5e5 with Alice's image steady at g = 0.028, it gave up at separations
+    /// of 1e-5 to 1e-6 on forty of sixty frames. Sizing the step by what it does to the ray
+    /// keeps the column honest whatever the boost, and is the old step exactly for a frame that
+    /// is not boosted at all.
+    fn alpha_step(&self, alpha: f64) -> f64 {
+        let here = self.launch(alpha);
+        let there = self.launch(alpha + ALPHA_STEP);
+        let r = self.focus.r;
+        let slope = (there.dr_dt - here.dr_dt).hypot(r * (there.dphi_dt - here.dphi_dt)) / ALPHA_STEP;
+        // The negation is the point rather than a way of writing <=: a slope that has come out
+        // NaN has to take this branch too.
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
+        if !(slope > 0.0) || !slope.is_finite() {
+            return ALPHA_STEP;
+        }
+        (ALPHA_STEP / slope).clamp(ALPHA_STEP_MIN, ALPHA_STEP_MAX)
     }
 
     /// Turn a converged probe into the answer: the affine length of the ray and the frequency
@@ -1548,7 +1604,23 @@ impl<'a> OtherWorldline<'a> {
         let geodesic = self.obs.geodesic.as_ref()?;
         let mut pre_run = self.pre_run.borrow_mut();
         if pre_run.is_empty() {
-            pre_run.push_back(start);
+            // Anchored on the release event, which is the observer's current event while the run
+            // has not started. The two differ only in a file saved by a build whose marker drag
+            // left `start` behind (see `Observer::release_from_drag`), and the picture is drawn
+            // from the current event, so that is the one the worldline is continued from.
+            let anchor = if self.obs.t <= start.t + 1e-12 {
+                TrailPoint {
+                    t: self.obs.t,
+                    r: self.obs.r,
+                    phi: self.obs.phi,
+                    tau: self.obs.tau,
+                    u: geodesic.u,
+                    stalled: false,
+                }
+            } else {
+                start
+            };
+            pre_run.push_back(anchor);
         }
         let mut state = {
             let oldest = pre_run.front().expect("seeded just above");
@@ -2827,6 +2899,63 @@ mod tests {
         let seen = as_seen(&metric, &hover_a, &hover_b, None).expect("hovering pair");
         assert_eq!(seen.source, WorldlineSource::Hold);
     }
+
+
+
+
+
+    #[test]
+    fn test_a_frozen_picture_is_not_refused_for_jittering_backwards_by_rounding() {
+        // Bob on the one worldline that freezes onto the far branch of r- (E = 1, L = 2.2 at
+        // a = 0.90), watching Alice's raindrop fall in ahead of him. Once his u^t passes 1e5 his
+        // clock all but stops and the picture with it: Alice's emission event stood at
+        // t = 4.87435 M for frame after frame while the solve's rounding moved it 1e-6 to 6e-6 M
+        // *earlier* each time, and the continuity guard - whose slack was 1e-6 - refused every
+        // one of those frames as a different image. Threaded at the app's own pace, the chain has
+        // to hold to u^t = 1e6 without a single refusal; beyond about 8e6 the frame is boosted
+        // past what the solver resolves and the view holds the picture instead (see
+        // `spacetime_canvas::HELD_PICTURE_TAU`).
+        let metric = KerrSchild::new(1.0, 0.90);
+        let mut bob = Observer::new_with_phi(
+            &metric,
+            "Bob",
+            0.0,
+            4.5,
+            0.0,
+            0.0,
+            WorldlineParams::new(1.0, 2.2, false),
+        );
+        let mut alice = raindrop(&metric, "Alice", 4.45, 0.0);
+        let mut seed = None;
+        let mut frames = 0;
+        let mut failures = 0;
+        let mut last: Option<AsSeen> = None;
+        while bob.four_velocity(&metric)[0] < 1e6 {
+            play(&metric, &mut bob, &mut alice, 1, 0.05);
+            assert!(!bob.is_frozen(), "the run must reach u^t = 1e6 before the stall");
+            frames += 1;
+            match as_seen(&metric, &bob, &alice, seed) {
+                Ok(seen) => {
+                    seed = Some(seen.seed());
+                    last = Some(seen);
+                }
+                Err(_) => failures += 1,
+            }
+        }
+        let last = last.expect("Bob saw Alice");
+        println!(
+            "{frames} frames to u^t = {:.3e}, {failures} refused; the picture at the end: g = \
+             {:.4}, lambda = {:.4} M, emission at t = {:.5} M, r = {:.5} M",
+            bob.four_velocity(&metric)[0],
+            last.g,
+            last.lambda,
+            last.emission.t,
+            last.emission.r
+        );
+        assert_eq!(failures, 0, "a picture that is not changing must not be refused");
+        assert!(last.g < 0.05, "and it is the deeply redshifted one: g = {}", last.g);
+    }
+
 
     #[test]
     fn test_the_fan_enumerates_the_higher_order_images_as_well_as_the_direct_one() {
