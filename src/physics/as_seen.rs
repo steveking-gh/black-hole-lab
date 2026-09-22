@@ -164,31 +164,34 @@ const NEWTON_TOL: f64 = 1e-9;
 const ALPHA_STEP: f64 = 1e-6;
 
 /// How far back in coordinate time an emission event may come, from one frame's answer to the
-/// next, and still count as the same image. It is a hundred times `NEAR_MISS`: a residual of
-/// 1e-5 M in position is at most that in the emission time along a worldline that moves at less
-/// than the speed of light, so the floor is 1e-5 and this stands well above it, while an image
-/// that is not the same is tens of M away in emission time - or, at a caustic, the same to four
-/// decimals and caught by the second guard on lambda.
-const EMISSION_SLACK: f64 = 100.0 * NEAR_MISS;
+/// next, and still count as the same image, in M. A frozen image's emission time jitters back by
+/// 1e-6 to 6e-6 M from one frame to the next by rounding alone (see `continues`), so the slack
+/// stands well above that, while an image that is not the same is tens of M away in emission time
+/// - or, at a caustic, the same to four decimals and caught by the second guard on lambda.
+const EMISSION_SLACK: f64 = 1e-3;
 
-/// A solve that ends this close, in M, without reaching `NEWTON_TOL` is still the picture: the
-/// residual is carried in the answer for anyone who wants to know. It used to be 1e-6, which is
-/// where the refinement stalls once the focus observer's frame is boosted past u^t ~ 1e6 on the
-/// way onto the far branch of r-: measured there, with Alice's image steady at g = 0.028 and
-/// lambda = 0.626 M, the Newton stopped descending at separations of 1.1e-6 to 4e-6 M and
-/// reported no image on frame after frame of a picture that was not changing. 1e-5 M is a
-/// tenth of a metre of the app's smallest hole, well under a screen point at any zoom, and the
-/// measured floor sits under it.
-const NEAR_MISS: f64 = 1e-5;
-
-/// The same acceptance stated against the image's own distance: a solve that ends within this
-/// fraction of lambda of the worldline is the picture. Two observers freezing onto r- together,
-/// 1e-3 M apart with u^t in the tens of thousands, are seen at lambda = 0.003 M, and there the
-/// Newton stalls at separations of 1.0e-5 to 1.2e-5 M - a floor set by the interpolated
-/// worldline and the ray, and 0.4% of the distance to the image - which sat just over the
-/// absolute hair and turned a steady image into a solve that failed on every other frame and
-/// fell through to an older image. One per cent of the distance is under a screen point at any
-/// zoom that shows the image at all.
+/// A solve that ends within this fraction of the image's own distance lambda of the other
+/// worldline, without reaching `NEWTON_TOL`, is still the picture: the residual is carried in the
+/// answer for anyone who wants to know.
+///
+/// The acceptance is relative and only relative. It used to be an absolute 1e-5 M as well, and
+/// that absolute hair took in a wrong answer: two raindrops released 1.5e-4 M apart with E = 1,
+/// L = 2 at a = 0.90 are seen at lambda = 4e-5 M and closing, and once the focus observer's boost
+/// passed u^t ~ 20 the Newton, seeded a few hundredths of a radian off, stalled at a separation
+/// of 2.5e-6 M - an eighth of the distance to the image - at whatever angle it was seeded with,
+/// and the absolute hair accepted it. Its lambda came out half the true image's, so its emission
+/// was later, so the sweep for the youngest image adopted it, and the drawn plane swung by 0.4
+/// radians in one frame and then stood still for as long as the run lasted, because a stalled
+/// solve seeded from itself never moves. Against the image's distance that answer is a 12% miss
+/// and is refused, and the refusal sends the solve back to the cold march, which finds the true
+/// image at a residual of 5e-10 M.
+///
+/// The fraction is what the two measured stalls need. A far image (lambda = 0.626 M, Alice's
+/// raindrop seen from Bob freezing onto r-) stalls at 1e-6 to 4e-6 M once u^t is past 1e6, and
+/// two observers freezing onto r- together, 1e-3 M apart with u^t in the tens of thousands, are
+/// seen at lambda = 0.003 M and stall at 1.0e-5 to 1.2e-5 M - a floor set by the interpolated
+/// worldline and the ray. Both sit under one per cent, and one per cent of the distance is under
+/// a screen point at any zoom that shows the image at all.
 const NEAR_MISS_OF_LAMBDA: f64 = 1e-2;
 
 /// The bounds on that step in the angle itself. The lower bound is where the angle's own floating
@@ -1243,11 +1246,8 @@ impl<'a> Solver<'a> {
         }
 
         // Out of iterations, or out of descent. A solve that got within a hair is still a picture -
-        // the residual is reported so a caller can decide - and a hair is measured against the
-        // image's own distance as well as in absolute terms: see `NEAR_MISS_OF_LAMBDA`.
-        if separation <= NEAR_MISS {
-            return self.finish(probe, alpha, separation, MAX_NEWTON, cold);
-        }
+        // the residual is reported so a caller can decide - and the hair is measured against the
+        // image's own distance, never in absolute terms: see `NEAR_MISS_OF_LAMBDA`.
         let found = self.finish(probe, alpha, separation, MAX_NEWTON, cold)?;
         if separation <= NEAR_MISS_OF_LAMBDA * found.lambda {
             Ok(found)
