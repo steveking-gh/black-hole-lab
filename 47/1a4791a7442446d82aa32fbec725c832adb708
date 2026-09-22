@@ -1,0 +1,19 @@
+src/physics/as_seen.rs
+  s_3ab46a80c84bd0::t_82bbbbc25d6cc8 167-194,1249-1250
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "471a4791a7442446d82aa32fbec725c832adb708",
+  "prompts": {},
+  "sessions": {
+    "s_3ab46a80c84bd0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8d646f0a-c1d1-483c-9f98-594ec910f29b",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
