@@ -64,15 +64,17 @@ More details:
 [Anton Petrov](https://www.youtube.com/watch?v=crnxcK2UazM),
 [PBS Space Time](https://www.youtube.com/watch?v=UjgGdGzDFiM)
 
-### The Black Hole Event Horizon
+### The Black Hole Event Horizon (Region II)
 
 Next inside the ergosphere is the light blue *event horizon*.  The event horizon
 marks the boundary where the vacuum of space moves *into* the black hole faster
 than the speed of light.  This is the point of no return!  An object can cross
-the event horizon going in, but cannot cross back into our universe.
+the event horizon going in, but cannot cross back into *our* universe.  Crossing
+the event horizon puts you in what physicists call `region II` of the black
+hole.
 
 Note that general relativity says spinning black holes have *two* event
-horizons!  The horizon we're discussing here is the *outer horizon* that
+horizons.  The horizon we're discussing here is the *outer horizon* that
 physicists give the shorthand name `r+`.
 
 To put it mildly, interesting things happen at the outer event horizon.  For
@@ -83,7 +85,7 @@ strong enough to prevent tomorrow from happening.
 
 Complicating matters, physicists debate whether general relativity is correct about the event horizon.  A future [Theory of
 Everything](https://en.wikipedia.org/wiki/Theory_of_everything) could describe
-very different physics at the event horizon. See
+very different physics there. See
 [Fuzzballs](https://www.youtube.com/watch?v=351JCOvKcYw) and
 [Firewalls](https://www.youtube.com/watch?v=4uQF9Egc-fM&t=14s) for example.
 Black Hole Lab, being a general relativity simulation, inherits the **smooth no
@@ -91,23 +93,77 @@ drama** view.
 
 ### The Black Hole Inner (Cauchy) Horizon
 
-The Cauchy or inner horizon exists in spinning black holes, which is probably
-every real black hole in our universe.
+The next magenta colored ring inside the event horizon is the Cauchy or inner
+horizon.  This horizon exists in spinning black holes, which is probably every
+real black hole in our universe.  Physicists use the shorthand name `r_` for the
+inner horizon. If the outer horizon is strange, the inner horizon is bizarre.  A
+few of the more mind-boggling aspects to think about:
+
+* The inner horizon is the boundary where the arrow of time stops pointing
+  strictly inward and tilts back to point into the future like normal space.  An
+  observer can once again move around in 3 dimensions.
+
+* Like the outer horizon, the inner horizon can be both a moment in time or a
+  place in space depending on which side you find yourself.
+
+* Unlike the outer horizon, the inner horizon profoundly compresses incoming
+  time.  As you get close, the outside universe appears to run ever faster
+  relative to your clock.  In general relativity, this effect grows
+  exponentially and without bound!  Unfortunately for you, this time compression
+  effect also gives incoming light an unbounded energy boost.  Physicists refer
+  to this phenomenon as "infinite blueshift". You fry in a bath of future light
+  boosted to extreme energy.
+
+* Whether you pass through the inner horizon or just asymptotically approach
+  depends on how much angular momentum you have, i.e. how steep is your fall
+  inward.
+
+Our understanding of the physics at this layer is even less clear than at the
+outer event horizon.  As before, Black Hole Lab let's general relativity be the
+only word on the physics.
+
+### The Ring Singularity
+
+If you cross the inner horizon you enter what physicists call `region III` of
+the black hole.  This deep in a black hole arguably exists only in the math of
+general relativity.  As in ancient maps with uncharted edges, "Here Be Dragons".
+
+Below you in `region III` is the *ring singularity*.  In the math, the ring
+singularity contains the mass of the black hole in a skinny spinning donut of
+infinite density.  In Black Hole Lab, the ring singularity is mathematically
+radius r = 0.  In `region III`, the arrow of time once again points toward the
+future and an observer can move around in 3 dimensions.
+
+If you enter `region III` with enough angular momentum, you swing back out
+toward the inner horizon, but this time asymptotically approaching from below.
+
+
+
+
+
+
+
+
 
 # Other Text
 
 A few things to keep in mind about the event horizon:
 
-*
 
-* Your frame of reference makes all the difference!  Imagine Bob and Alice
-  falling into the black hole together while we watch from a safe and much less
-  adventurous location.  We never see them cross the horizon!  Their light
-  becomes increasingly stretched, aka red-shifted, and we see their clocks run
-  slower and slower.  At some point, Bob and Alice are just barely above the
-  event horizon but are too dim for us to perceive anymore.  You can think of
-  the light reflecting off them as being "exhausted" from swimming upstream
-  against the flow of space into the black hole.
+## Frame's of Reference
+
+In Einstein's relativity theories, your frame of reference makes all the
+difference!  Your *frame of reference* is your local spacetime, e.g. inside your
+rocket ship, where your physic experiments measure the speed of light as 'c' in
+all directions.
+
+Imagine Bob and Alice falling into the black hole together while we
+watch from a safe and much less adventurous location.  We never see them cross
+the horizon!  Their light becomes increasingly stretched, aka redshifted, and
+we see their clocks run slower and slower.  At some point, Bob and Alice are
+just barely above the event horizon but are too dim for us to perceive anymore.
+You can think of the light reflecting off them as being "exhausted" from
+swimming upstream against the flow of space into the black hole.
 
 
 
