@@ -999,7 +999,7 @@ impl Observer {
     /// user has just switched away from. The one case where they legitimately differ is the wait
     /// before release, where `hover` parks the geodesic at t = release_t - the event the fall
     /// starts at - while the observer's own clock tracks the simulation below it. Hence the `max`.
-    fn geodesic_stands_on_current_event(&self) -> bool {
+    pub(crate) fn geodesic_stands_on_current_event(&self) -> bool {
         match self.geodesic {
             None => false,
             Some(geo) => {

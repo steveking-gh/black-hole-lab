@@ -181,6 +181,16 @@ const EMISSION_SLACK: f64 = 100.0 * NEAR_MISS;
 /// measured floor sits under it.
 const NEAR_MISS: f64 = 1e-5;
 
+/// The same acceptance stated against the image's own distance: a solve that ends within this
+/// fraction of lambda of the worldline is the picture. Two observers freezing onto r- together,
+/// 1e-3 M apart with u^t in the tens of thousands, are seen at lambda = 0.003 M, and there the
+/// Newton stalls at separations of 1.0e-5 to 1.2e-5 M - a floor set by the interpolated
+/// worldline and the ray, and 0.4% of the distance to the image - which sat just over the
+/// absolute hair and turned a steady image into a solve that failed on every other frame and
+/// fell through to an older image. One per cent of the distance is under a screen point at any
+/// zoom that shows the image at all.
+const NEAR_MISS_OF_LAMBDA: f64 = 1e-2;
+
 /// The bounds on that step in the angle itself. The lower bound is where the angle's own floating
 /// point resolution starts to matter; the upper is a secant over a twentieth of a radian, which
 /// is still a fair derivative of a residual this smooth.
@@ -1200,7 +1210,13 @@ impl<'a> Solver<'a> {
             }
             let (g0, g1) = (probe.gap[0], probe.gap[1]);
             let full_alpha = (-(g0 * d_age[1] - g1 * d_age[0]) / det).clamp(-0.5, 0.5);
-            let cap_age = (0.5 * age).max(1e-3);
+            // The age may move by half of itself, or by the current separation if that is more:
+            // light covers a separation in about that much coordinate time, so a seed at a
+            // near-zero age can still step out to the crossing in one go. The floor used to be a
+            // fixed 1e-3 M, which is five times the age of the direct image of an observer
+            // 2e-4 M away - two observers freezing onto r- together - so every step overshot
+            // it and the Newton ended 3e-4 M off, twice the distance to the image, on every frame.
+            let cap_age = (0.5 * age).max(separation).max(1e-9);
             let full_age = (-(d_alpha[0] * g1 - d_alpha[1] * g0) / det).clamp(-cap_age, cap_age);
 
             let mut scale = 1.0;
@@ -1227,10 +1243,14 @@ impl<'a> Solver<'a> {
         }
 
         // Out of iterations, or out of descent. A solve that got within a hair is still a picture -
-        // the residual is reported so a caller can decide - but one that did not is not, and says
-        // so.
+        // the residual is reported so a caller can decide - and a hair is measured against the
+        // image's own distance as well as in absolute terms: see `NEAR_MISS_OF_LAMBDA`.
         if separation <= NEAR_MISS {
-            self.finish(probe, alpha, separation, MAX_NEWTON, cold)
+            return self.finish(probe, alpha, separation, MAX_NEWTON, cold);
+        }
+        let found = self.finish(probe, alpha, separation, MAX_NEWTON, cold)?;
+        if separation <= NEAR_MISS_OF_LAMBDA * found.lambda {
+            Ok(found)
         } else {
             Err(NoImage::NotConverged)
         }
@@ -2914,7 +2934,7 @@ mod tests {
         // one of those frames as a different image. Threaded at the app's own pace, the chain has
         // to hold to u^t = 1e6 without a single refusal; beyond about 8e6 the frame is boosted
         // past what the solver resolves and the view holds the picture instead (see
-        // `spacetime_canvas::HELD_PICTURE_TAU`).
+        // `spacetime_canvas::PICTURE_BOOST_LIMIT`).
         let metric = KerrSchild::new(1.0, 0.90);
         let mut bob = Observer::new_with_phi(
             &metric,

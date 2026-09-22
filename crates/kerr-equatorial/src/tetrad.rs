@@ -304,9 +304,25 @@ impl Tetrad {
     /// the normalisation; a caller handing over an exactly unit vector orthogonal to u gets back
     /// the frame whose e1 *is* that vector. A vector with no spatial part at all leaves the frame
     /// as it was, which is the only answer a direction with no direction in it admits.
+    ///
+    /// Reading the components back is a cancellation, and a caller that already holds them should
+    /// hand them to [`Self::turned`] instead. g(s, e1) is a sum of products of components, and for
+    /// a frame boosted to u^t those components are of size u^t, so the sum is delivered to a
+    /// rounding of 1e-16 (u^t)^2 whatever the vectors are: a component of order one is good to
+    /// 1e-4 at u^t = 1e6, to 1e-2 at 1e7, and is noise by 1e8. Measured on the rest-frame view
+    /// with Bob freezing onto the far branch of r- and the plane's angle held fixed, the drawn
+    /// trace of r- was steady to 1e6 and then drifted through a percent, five per cent and finally
+    /// the whole quadrant, with the frame itself - which has no such cancellation in it - exact
+    /// throughout.
     pub fn turned_towards(&self, metric: &KerrSchild, r: f64, s: &[f64; 3]) -> Self {
-        let c1 = inner(metric, r, s, &self.e1);
-        let c2 = inner(metric, r, s, &self.e2);
+        self.turned(inner(metric, r, s, &self.e1), inner(metric, r, s, &self.e2))
+    }
+
+    /// The same turn, by the components (c1, c2) of the wanted leg in the frame's own (e1, e2):
+    /// exact at any boost, since nothing is read back through the metric. The pair is normalised,
+    /// so any positive multiple of it names the same turn, and a pair with no length at all - or
+    /// with a NaN in it - leaves the frame as it was.
+    pub fn turned(&self, c1: f64, c2: f64) -> Self {
         let length = c1.hypot(c2);
         // The negation is the point rather than a way of writing <=: a length that has come out
         // NaN has to take this branch too, and `length <= 0.0` would let it through.

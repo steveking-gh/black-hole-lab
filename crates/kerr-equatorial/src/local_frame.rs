@@ -329,6 +329,37 @@ fn ruler_deriv(metric: &KerrSchild, y: &[f64; 4]) -> [f64; 4] {
 /// happily and hand back a number about a curve that has left the observer's rest space, so
 /// `gui::spacetime_canvas` only asks across intervals on which Delta > 0 throughout.
 pub fn ruler_distance(metric: &KerrSchild, r0: f64, u: &[f64; 3], r_target: f64) -> Option<f64> {
+    let tetrad = Tetrad::from_four_velocity_axial(metric, r0.max(1e-4), u);
+    ruler_distance_along(metric, r0, &tetrad.e1, r_target)
+}
+
+/// The same integral along a spacelike leg the caller names, rather than along the observer's own
+/// radial one.
+///
+/// [`ruler_distance`] is this function with the radial leg e1 of the axial tetrad handed in, and
+/// the two are one piece of arithmetic rather than two: the leg fixes the direction the spacelike
+/// geodesic sets off in, and everything after that - the RK4 in arclength, the geometric grading
+/// of the mesh into the surface, the refusals - is the same.
+///
+/// It exists because the rest-frame view no longer draws the radial plane. That view draws
+/// span(e0, s) with s the line of sight to the other observer, its horizontal axis is s, and the
+/// drawn surface curve crosses that axis at the affine length along s. Quoting the *radial*
+/// integral beside that picture put two different numbers on one canvas again: measured from a
+/// static observer at r = 3 M of an a = 0.90 hole whose sight line runs 51 degrees off radial, the
+/// radial leg reaches r+ after 4.156 M of arclength and the drawn leg after 3.606 M, 13 per cent
+/// less. The turned leg sets off across the surface rather than square at it, and this close to
+/// the photon sphere the curvature bends that leg inwards faster than the radial one travels. So
+/// the view hands in the leg it draws, and the box's number is the crossing the eye can see.
+///
+/// `leg` is read in coordinate components (v^t, v^r, v^phi), as a tetrad leg comes. Its
+/// orientation does not matter: the function takes whichever of the two senses moves r towards the
+/// surface, since the two senses of one leg span the same geodesic line.
+pub fn ruler_distance_along(
+    metric: &KerrSchild,
+    r0: f64,
+    leg: &[f64; 3],
+    r_target: f64,
+) -> Option<f64> {
     let r0 = r0.max(1e-4);
     let gap = r_target - r0;
     if gap.abs() < 1e-14 {
@@ -336,9 +367,8 @@ pub fn ruler_distance(metric: &KerrSchild, r0: f64, u: &[f64; 3], r_target: f64)
     }
     let sign = gap.signum();
 
-    let tetrad = Tetrad::from_four_velocity_axial(metric, r0, u);
-    // e1 is the unit outward leg; take whichever orientation moves r toward the surface.
-    let mut v = tetrad.e1;
+    // Take whichever orientation of the leg moves r toward the surface.
+    let mut v = *leg;
     if v[1] * sign < 0.0 {
         v = [-v[0], -v[1], -v[2]];
     }

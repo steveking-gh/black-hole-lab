@@ -154,8 +154,11 @@ pub(crate) const SECONDS_PER_YEAR: f64 = 86400.0 * 365.25;
 /// exterior observer wants is measured in tens of microseconds.
 ///
 /// It runs on down to femtoseconds for the approach to r-. An observer asymptoting to the far
-/// branch of the Cauchy horizon is a finite and *shrinking* proper time from it - the r- line
-/// crosses their own time axis at exactly Delta r / u^r (see `LocalFrame::surface_r_const`) - and
+/// branch of the Cauchy horizon is a finite and *shrinking* proper time from it - the r- curve
+/// crosses their own time axis at the affine length of the worldline from here to the crossing,
+/// which `normal_coords::affine_length_to_surface` integrates exactly and the rest-frame view
+/// draws (Delta r / u^r is that same quantity linearised, and the view stopped using it: from the
+/// prograde ISCO of an a = 0.90 hole the two answers for r+ are 3.020 M and 1.647 M) - and
 /// at the point where `geodesic::U_T_STALL` stops the worldline that is about two femtoseconds for
 /// a ten solar-mass hole. A ladder that stopped at the microsecond could not put a single line
 /// between them and the horizon there, which is the one place in the app where the number is the

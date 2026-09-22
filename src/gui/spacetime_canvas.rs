@@ -8,13 +8,14 @@ use crate::physics::as_seen::{
     as_seen, as_seen_youngest, younger_image, AsSeen, AsSeenSeed, NoImage, WorldlineSource,
 };
 use crate::physics::kerr_schild::KerrSchild;
-use crate::physics::geodesic::proper_time_between;
-use crate::physics::local_frame::{ruler_distance, LocalFrame, SurfaceCharacter};
+use crate::physics::geodesic::{proper_time_between, R_STOP};
+use crate::physics::local_frame::{ruler_distance_along, LocalFrame, SurfaceCharacter};
 use crate::physics::observer::{LocalRestFrame, LocalSpeed, Observer, ObserverMode, Who};
 use crate::physics::wavefront::{NullRay, Reception, SignalField};
 use egui::{epaint::PathShape, Color32, Pos2, Rect, Stroke, Vec2};
 use crate::physics::normal_coords::{
-    HorizonBranch, SurfaceSampling, affine_length_to_surface, sample_surface_in_plane,
+    HorizonBranch, RadialConstants, SurfaceSampling, affine_length_to_surface,
+    sample_surface_in_frame,
 };
 use crate::physics::tetrad::Tetrad;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -83,11 +84,15 @@ Why the line of sight rather than the radial axis. Light from an observer on a f
 
 Two constructions share this canvas, and the canvas does not pretend otherwise.
 
-Exact, in Riemann normal coordinates. The view draws each surface r = const — the horizons, the static limit, the ring singularity — as the curve that surface really is: the point of a surface at chart angle ψ sits at the affine length of the geodesic that leaves the focus observer's event in the direction ψ, inside the drawn plane, and arrives on that surface. Where the curve meets the now-axis is the ruler distance the horizon box prints, and the two agree because the two are the same integral. The other observer's dot carries the same construction: the dot marks the event on the other worldline that the focus observer's past light cone passes through, and stands at the affine length of the arriving light ray, in the direction the ray arrives from — which in this plane is the horizontal axis itself, so the dot lands exactly on the 45° past cone. The dot and the surface curves then measure along the very same directions, so the dot stands beyond a curve exactly when the light really did come from beyond that surface along that ray.
+Exact, in Riemann normal coordinates. The view draws each surface r = const — the horizons, the static limit, the ring singularity — as the curve that surface really is: the point of a surface at chart angle ψ sits at the affine length of the geodesic that leaves the focus observer's event in the direction ψ, inside the drawn plane, and arrives on that surface. Where the curve meets the now-axis is the ruler distance the horizon box prints, and the two agree because the two are the same integral — both of them taken along the drawn axis, which is the line of sight rather than the radial direction whenever the view has turned its plane. The box says “along this axis” for that reason: hold r = 3 M of an a = 0.90 hole with the line of sight 51° off radial, and the drawn leg reaches r₊ after 3.606 M of ruler distance where the radial leg takes 4.156 M. The two legs leave the same event in different directions and arrive on the same surface, so they measure different lengths, and the one this canvas can show you is the one it prints. The other observer's dot carries the same construction: the dot marks the event on the other worldline that the focus observer's past light cone passes through, and stands at the affine length of the arriving light ray, in the direction the ray arrives from — which in this plane is the horizontal axis itself, so the dot lands exactly on the 45° past cone. The dot and the surface curves then measure along the very same directions, so the dot stands beyond a curve exactly when the light really did come from beyond that surface along that ray.
 
-A horizon is two surfaces, and the curve says which. The heavy stroke is the branch the observer's own future turns on — the future horizon for r₊, the far branch for r₋, the one a worldline freezes on — and the light stroke of the same colour is the other branch, the past horizon of r₊ that nothing crosses, or the branch of r₋ an infaller has already come through. The two meet at a corner, and that corner is the bifurcation, where the arriving geodesic runs tangent to the horizon rather than through it. Each horizon's box names the branches on the canvas.
+A horizon is two surfaces, and the curve says which. The heavy stroke is the branch the focus observer's own future turns on, and the light stroke of the same colour is the other branch. For r₊ that heavy branch is the future horizon, the same one for everybody, and the light stroke is the past horizon that nothing crosses. For r₋ the two swap according to who is standing here: a geodesic with E − Ω₋L < 0, where Ω₋ = a/(r₋² + a²) is the dragging rate on r₋, freezes onto the far branch and the view draws that far branch heavy; a geodesic with E − Ω₋L > 0 goes through the other branch instead, and the view draws the branch it crosses heavy. Read E and L off your own box and check the sign. An observer on no geodesic at all — a hovering observer, a marker under the mouse — reaches neither branch while the engine burns, and the view keeps the far branch heavy for them by convention; the horizon's own box says as much. The two branches meet at a corner, and that corner is the bifurcation, where the arriving geodesic runs tangent to the horizon rather than through it. Each horizon's box names the branches on the canvas.
 
-First order, from the tetrad at the focus observer's own event. The distant clock's grid lines — the surfaces t = const — come through the linear map as straight lines, and so do the signal crests. Each of those lines is exact where it crosses the focus observer's worldline, which is the one place the view reads it, and linearised away from there.";
+First order in the tilt, exact in the crossing. The distant clock's grid lines — the surfaces t = const — come through the linear map as straight lines, and so do the signal crests. A grid line's tilt is that first-order one: exact at the focus observer's own event, where the drawn line touches the worldline, and linearised away from it. Where the line crosses the worldline is not first order. The view walks the focus observer's own worldline to find each crossing — forward with the same integrator that steps the run, backward along the trail the run has already drawn — and puts the line through the proper time that observer really reads there.
+
+The two answers part company without bound on the way to the far branch of r₋, where dt/dτ grows like exp(κ₋t). The first-order spacing dt/u^t marches on down the canvas at a fixed pitch and takes the grid straight past r₋, which says that the observer outlives t = ∞; the true crossings saturate at the proper time the observer has left, so infinitely many of the distant clock's readings pile into the band just above r₋. Lines the worldline meets only past the stall — where the integration of that approach stops, because the chart can no longer resolve r − r₋ — the view draws not at all.
+
+One warning about which distant clock the grid is counting. These slices are the surfaces t = const of the app's own chart, the ingoing Kerr-Schild one, and the label on a slice reads that t in seconds: the time a clock at rest far from the hole keeps, since far away the chart's t and that clock's own reading run together. How much distant time one gap stands for survives the choice of chart — the ingoing t and a Boyer–Lindquist t march along the one Killing vector ∂_t, so five minutes of grid is five minutes of the far clock either way. Two other things do not survive it: which slice passes through your own event, and the dt/dτ the head of the canvas prints. The two times differ by a function of the radius alone, t = t_BL + ∫ (2Mr/Δ) dr, and two things follow from that. Which events count as simultaneous with yours differs, because the two families of slices cut each other wherever dr ≠ 0: the line the canvas draws through your event is the ingoing chart's answer and never the other one's, whatever you are doing. And dt/dτ differs by exactly (2Mr/Δ)(dr/dτ), which is nothing at all while you hold r and runs away as you cross r₊ — that term is the whole difference between a horizon crossing at a finite reading and one that takes until t = ∞. The app charts in the ingoing coordinates for exactly that reason, and this grid inherits the choice.";
 
 /// Smallest on-screen gap, in points at `font_scale` = 1, that `distant_clock_grid_step` will
 /// leave between two neighbouring lines of the distant clock grid. Below this the lines stop being
@@ -106,36 +111,33 @@ pub const MIN_GRID_PX: f32 = 28.0;
 /// hand-over between images is late by a few per cent of an orbit at worst.
 const YOUNGEST_CHECK_INTERVAL: f64 = 1.0;
 
-/// How far the focus observer's own clock has to move, in M of proper time, before the picture
-/// of the other observer is solved again rather than held from the last solve.
-///
-/// What an observer sees is a function of their own event. Two events on one worldline this
-/// close together see pictures that differ by that much and no more, which is far under a screen
-/// point at any zoom; so between them the last solve *is* the picture. It matters for one
-/// observer only: one freezing onto the far branch of r-, whose u^t climbs through 1e6 and on to
-/// 1e10 while their clock all but stops - a few 1e-8 M a frame - and whose frame is by then
-/// boosted past what the solver can resolve. Measured with Bob on the E = 1, L = 2.2 worldline
-/// watching Alice's raindrop: the picture was steady (g = 0.028, lambda = 0.626 M) and the solve
-/// still came back "no image" on a third of the frames from u^t ~ 8e6 to the stall, and where it
-/// did come back its g wandered by 15%. Every one of those frames sits inside 1e-6 M of Bob's
-/// clock. Holding the picture is the exact statement that nothing has changed, and it also
-/// keeps the drawn plane from snapping to the radial one and back as the solve comes and goes.
-const HELD_PICTURE_TAU: f64 = 1e-3;
 
-/// The boost, as dt/dtau, past which the focus observer's tetrad is no longer built from the
-/// live 4-velocity but held from the last frame that was under it.
+/// The boost, as dt/dtau, past which the picture of the other observer - the image, its line of
+/// sight and the plane drawn through it - is held from the last frame under the limit rather
+/// than solved again.
 ///
-/// This is a limit of double precision and not of the physics. The tetrad is built from the
-/// coordinate components of u, and its orthonormality is a cancellation among terms of order
-/// (u^t)^2: with u^t = 1e6 those terms are 1e12 and the cancellation keeps ten digits; at 1e8
-/// they are 1e16 and it keeps none, and every frame then builds a different, meaningless frame.
-/// Measured with Bob freezing onto the far branch of r-, the drawn r- surface jumped between the
-/// outward side, flat ahead and the inward side from one frame to the next, and the distant
-/// clock's grid came out horizontal on some frames, which would put him at rest relative to a
-/// clock at infinity. Beyond this limit his own clock moves by 1e-8 M a frame or less, so the
-/// frame at his event is, to that order, the frame it was: holding the last trustworthy one is
-/// the exact statement, and the chart's coordinate blow-up on the far branch is the artefact.
-const FRAME_BOOST_LIMIT: f64 = 1e6;
+/// This is a limit of the solve and not of the frame. The tetrad itself is good at any boost:
+/// `Tetrad::from_four_velocity_axial` is built in closed forms with no cancellation in them, and
+/// measured with Bob freezing onto the far branch of r- with the frame built live, the drawn r-
+/// trace crossed his own worldline at exactly the proper time the horizon box quotes at every
+/// decade of u^t out to 1e9, and its slope beside him held steady (0.64 in the plane of Alice's
+/// raindrop) for as long as the image was being found. What fails is the line of sight. Aberration
+/// at a boost of u^t crowds the whole sky into a cone about the direction of motion, so the
+/// arrival angle the solver has to resolve shrinks like 1/u^t while the solver's own step floor
+/// does not: past u^t ~ 1e7 it reported no image on a third of the frames from Alice's raindrop,
+/// and with Alice freezing beside Bob it found an image every frame but at a wandering angle, and
+/// the drawn plane wandered with it - r- swung from the outward side to flat ahead to the inward
+/// side, and the distant clock's grid came out horizontal on the frames where the plane had turned
+/// tangent to the horizon. Every one of those swings was the plane, not the frame.
+///
+/// So the hold is on the picture alone: the image and its arrival angle are kept, the angle is
+/// re-read in the live tetrad, and the frame, the surfaces, the grid and the auto-zoom are built
+/// at the observer's live event. Holding the frame as well, as the view once did, drew the
+/// surfaces from an event the observer had left: with the file's four-million-sun hole, Bob at
+/// the stall had 5 ns left to r- and the picture showed it 52 us ahead, which was the time left
+/// at the held event. The held picture is stale by the same amount, but against the light-travel
+/// distance of the image rather than against the window, and the box quotes both.
+const PICTURE_BOOST_LIMIT: f64 = 1e6;
 
 const FRAME_MAX_R_MIN: f64 = 1e-12;
 
@@ -213,12 +215,21 @@ pub struct GridStep {
 /// then decades of years, that leaves at least `MIN_GRID_PX` * `font_scale` points between
 /// neighbouring lines.
 ///
-/// The lines are the surfaces t = const of the chart's Killing time, and
-/// `LocalFrame::surface_t_const` puts consecutive ones, `step_m` apart in t, exactly
-/// `step_m / u^t` of the observer's proper time apart on their worldline. The drawn plane carries
-/// `px_per_m` points per M of xi, so that proper-time separation *is* the on-screen gap: the rung
-/// has to satisfy `step_m / u_t >= MIN_GRID_PX * font_scale / px_per_m`, and the answer is
-/// returned as `step_m = rung * u_t`.
+/// The lines are the surfaces t = const of the chart's Killing time, and the rate dt/dtau = u^t at
+/// the observer's own event puts two of them, `step_m` apart in t, `step_m / u^t` of that
+/// observer's proper time apart *there*. The drawn plane carries `px_per_m` points per M of xi, so
+/// that proper-time separation is the on-screen gap beside the observer: the rung has to satisfy
+/// `step_m / u_t >= MIN_GRID_PX * font_scale / px_per_m`, and the answer is returned as
+/// `step_m = rung * u_t`.
+///
+/// "Beside the observer" is the whole of the claim, and the view no longer makes a larger one.
+/// `step_m / u^t` is the first-order spacing, exact only at the event the rung is chosen at;
+/// `clock_grid_crossings` walks the worldline to find where each slice is really crossed, and on
+/// the approach to the far branch of r- those crossings close up above the observer and open out
+/// below, because u^t is growing. So this rung sets the pitch of the grid at the observer's own
+/// now, which is where a reader measures it, and the lines above that now crowd together as they
+/// climb - which is the picture of infinitely many of the distant clock's readings fitting inside
+/// the proper time the observer has left.
 ///
 /// u^t therefore drops out of the choice. The rung depends on the zoom, the font scale and the
 /// hole's mass and on nothing else, so it is fixed for a whole fall and changes only when the user
@@ -272,6 +283,247 @@ pub fn distant_clock_grid_step(
         step_m: seconds / seconds_per_m * u_t,
         label: label.clone(),
     }
+}
+
+/// How much coordinate time one call of the integrator covers while the distant clock's grid walks
+/// the focus observer's worldline forward, in M.
+///
+/// It is `GeodesicState::step_coord_time`'s own widest substep, so a chunk is one substep out in
+/// the weak field and a handful of them on the approach to r-, where the velocity cap settles the
+/// substep at 0.0045 M. Marching in chunks rather than handing a whole slice gap to one call is
+/// what keeps that function's own 10 000-substep guard out of this picture: the guard answers with
+/// a short advance, and a short advance is how the march below recognises a worldline that has
+/// ended instead.
+const CLOCK_GRID_CHUNK_M: f64 = 0.05;
+
+/// How many of those chunks one rebuild of the grid may march before it stops and draws no further
+/// slices.
+///
+/// The march normally ends long before this: it stops at the last slice the canvas has room for, at
+/// the observer's own clock passing the top of the canvas, at the ring, or at the stall. Measured
+/// on the worldline this whole construction is for - Bob at E = 1, L = 2.2 on an a = 0.90 hole,
+/// freezing onto the far branch of r- - on a 900 x 700 canvas with the automatic framing on, a
+/// whole rebuild costs 0.72 ms at u^t = 1e2, 1e4 and 1e6, 0.40 ms at 1e8 and 0.20 ms at 1e9, and
+/// the grid comes out complete at every one of them. A raindrop out at r = 17 M costs 39 us. The
+/// framed window asks for about twenty slices ahead and reaching the furthest of them takes some
+/// 460 chunks, so 768 leaves half as much again for a taller canvas; at 384 the framed grid starts
+/// losing its outermost slices, which is what sets the floor.
+///
+/// The budget is for the one case none of those stops reaches - the user zooming the window *out*
+/// while the observer is deep on the approach to r-, where the canvas asks for slices decades of
+/// coordinate time away and the march would walk all of it at the substep the velocity cap allows.
+/// That case costs 1.25 ms and draws no slice ahead of the observer at all, and drawing none is
+/// the right answer there: at u^t = 1e4 he has 2.6e-4 M of his own time left against a window of
+/// 5.5 M, so every slice he has yet to meet lands inside a hundredth of a screen point of his own
+/// now-axis.
+const CLOCK_GRID_MAX_CHUNKS: usize = 768;
+
+/// How short a slice gap has to be, as a fraction of the observer's own coordinate time, before the
+/// march is skipped and the first-order intercept dt / u^t is used instead.
+///
+/// Two slices this close together are a gap the integrator cannot resolve - `step_coord_time`
+/// abandons a residue under 1e-12 M, and t itself carries about 1e-16 of relative precision - and
+/// over an interval that short u^t cannot change in double precision either, so dt / u^t *is* the
+/// exact answer. The guard is written against `1 + |t|` rather than against 1 M because it is the
+/// representation of t that runs out, and t grows without bound on the approach to r-.
+const CLOCK_GRID_RESOLUTION: f64 = 1e-9;
+
+/// Everything the crossings below depend on. Two keys that compare equal name the same crossings,
+/// so the march is skipped and the last answer redrawn: on a paused run that is every frame after
+/// the first, which is the case the cache exists for.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ClockGridKey {
+    /// Whose worldline was walked. The view swaps focus without moving anybody.
+    who: Who,
+    /// The event the march started from, and the state it started in.
+    t: f64,
+    tau: f64,
+    r: f64,
+    u: [f64; 3],
+    frozen: bool,
+    /// The grid the march was asked about: the step in t, how many slices each way, and how far up
+    /// the canvas reaches in the observer's own proper time.
+    step_m: f64,
+    k_max: i64,
+    reach: f64,
+}
+
+/// Where each slice of the distant clock's grid cuts the focus observer's own worldline, as that
+/// observer's own proper time from the event they stand on.
+///
+/// This is the one number the view draws each slice through, and it is not `dt / u^t`.
+/// `LocalFrame::surface_t_const` is a first-order chart: its intercept is the rate dt/dtau *at the
+/// observer's own event*, carried out to a finite dt as if that rate never changed. Along a
+/// worldline freezing onto the far branch of r- the rate changes without bound - u^t grows like
+/// exp(kappa_- t) - so the true intercepts tau_k = integral dt / u^t saturate at the proper time
+/// the observer has left, and infinitely many slices pile into the band below r- while the
+/// first-order estimate marches linearly past it. Drawn from the estimate the grid said that the
+/// observer outlives t = infinity, which is the one thing this approach is about.
+#[derive(Debug, Clone, Default)]
+struct ClockGridCrossings {
+    key: Option<ClockGridKey>,
+    /// The crossing of slice k = 1, 2, 3, ... in order, as a proper time after the observer's own
+    /// now. Shorter than the canvas asked for where the worldline stops reaching the slices.
+    future: Vec<f64>,
+    /// The crossing of slice k = -1, -2, -3, ... in order, as a proper time before that now, so
+    /// every entry is negative.
+    past: Vec<f64>,
+}
+
+impl ClockGridCrossings {
+    /// The crossing of slice `k`, or `None` for a slice the worldline never reaches.
+    fn at(&self, k: i64) -> Option<f64> {
+        if k == 0 {
+            Some(0.0)
+        } else if k > 0 {
+            self.future.get((k - 1) as usize).copied()
+        } else {
+            self.past.get((-k - 1) as usize).copied()
+        }
+    }
+}
+
+/// The focus observer's own clock at a coordinate time in their past, read off the worldline they
+/// have actually been drawn along.
+///
+/// `Observer::trail` records (t, tau, u) at every step taken and t increases along it, so the slice
+/// sits inside one recorded interval and a binary search finds which. The interpolation across that
+/// interval is a cubic Hermite rather than a straight line because both ends carry the integrated
+/// 4-velocity, and dtau/dt = 1/u^t: with the two values and the two slopes the interpolant is
+/// third-order accurate in the recorded spacing instead of first. That matters on exactly the
+/// approach this whole construction is for, where tau saturates inside a single recorded step and
+/// a chord across that step would cut the corner.
+///
+/// `None` before the oldest event the trail still holds - the trail has a cap, so a long run drops
+/// its own beginning - and the caller falls back to the first-order estimate there and nowhere
+/// else.
+fn trail_tau_at(obs: &Observer, u_t_now: f64, t_target: f64) -> Option<f64> {
+    let oldest = obs.trail.front()?;
+    if t_target < oldest.t {
+        return None;
+    }
+    // The first recorded event *after* the target; the one before it is the interval's near end.
+    let i = obs.trail.partition_point(|p| p.t <= t_target).max(1);
+    let lo = obs.trail[i - 1];
+    // The trail ends on the observer's current event on every stepped frame, but a mode that holds
+    // r fixed records nothing and a freshly released worldline has only its start, so the current
+    // event closes the interval where the trail does not.
+    let (t1, tau1, ut1) = match obs.trail.get(i) {
+        Some(hi) => (hi.t, hi.tau, hi.u[0]),
+        None => (obs.t, obs.tau, u_t_now),
+    };
+    let h = t1 - lo.t;
+    // Two events the trail recorded at the same t, which a step that advanced nothing leaves
+    // behind: the near end's reading is the whole of what the interval has to say.
+    if h.is_nan() || h <= 0.0 {
+        return Some(lo.tau);
+    }
+    let s = ((t_target - lo.t) / h).clamp(0.0, 1.0);
+    let (s2, s3) = (s * s, s * s * s);
+    let m0 = h / lo.u[0].max(1e-300);
+    let m1 = h / ut1.max(1e-300);
+    Some(
+        (2.0 * s3 - 3.0 * s2 + 1.0) * lo.tau
+            + (s3 - 2.0 * s2 + s) * m0
+            + (-2.0 * s3 + 3.0 * s2) * tau1
+            + (s3 - s2) * m1,
+    )
+}
+
+/// Walk the focus observer's worldline and report where each slice of the distant clock's grid
+/// cuts it. See `ClockGridCrossings`.
+///
+/// The three cases, and why each is the exact answer rather than an approximation of one:
+///
+/// * A worldline of constant 4-velocity - Static, ZAMO, a dragged marker, and an observer still
+///   waiting for release - keeps t = u^t tau for good, so the first-order intercept dt / u^t is
+///   exact both ways and a march would only cost time to confirm it.
+/// * The past comes off the recorded trail (`trail_tau_at`), which is the worldline the app has
+///   already drawn, so the grid agrees with the picture of the fall by construction rather than by
+///   a second integration of it.
+/// * The future comes from a *copy* of the observer's own `GeodesicState`, marched forward with
+///   `step_coord_time` - the very function `Observer::advance` steps the worldline with, so the
+///   copy traces the curve the observer is about to be drawn along and not a neighbouring one, and
+///   the substep caps that hold E, L and g(u, u) at their double-precision floor come with it. The
+///   copy lands on each slice's own t, so there is no interpolation on this side at all.
+///
+/// Slices the copy never reaches are not reported, and the view draws nothing for them. Four things
+/// stop it: the ring, where the worldline ends; the observer's own clock passing `reach`, the top
+/// of the canvas, after which every later slice is off the picture anyway; the chunk budget; and
+/// `geodesic::U_T_STALL`, where the integration of a worldline freezing onto the far branch of r-
+/// is abandoned because the chart can no longer resolve r - r-. The last of those is the one to be
+/// careful about: t runs to infinity on that branch, so the worldline really does meet every one of
+/// the distant clock's slices before it reaches r-, and the slices past the stall are slices this
+/// app cannot place. Drawing them at the first-order estimate puts them above the proper time the
+/// observer has left, which is the defect this replaced; drawing none of them says what is true,
+/// that the picture stops where the integration stops.
+fn clock_grid_crossings(
+    metric: &KerrSchild,
+    obs: &Observer,
+    u_t: f64,
+    step_m: f64,
+    k_max: i64,
+    reach: f64,
+) -> ClockGridCrossings {
+    let mut out = ClockGridCrossings::default();
+    if k_max <= 0 || !step_m.is_finite() || step_m <= 0.0 || !u_t.is_finite() || u_t <= 0.0 {
+        return out;
+    }
+    let linear = |k: i64| (k as f64) * step_m / u_t;
+
+    // A worldline the app moves at a fixed 4-velocity, and the wait before release. Exact.
+    let free_fall = obs.is_active
+        && obs.effective_mode(metric) == ObserverMode::FreeFall
+        && obs.geodesic_stands_on_current_event();
+    let Some(geo) = obs.geodesic.filter(|_| free_fall) else {
+        out.future = (1..=k_max).map(linear).collect();
+        out.past = (1..=k_max).map(|k| linear(-k)).collect();
+        return out;
+    };
+
+    // The past, off the trail, with the first-order estimate beyond its start.
+    out.past = (1..=k_max)
+        .map(|k| {
+            let dt = -(k as f64) * step_m;
+            trail_tau_at(obs, u_t, obs.t + dt).map_or_else(|| linear(-k), |tau| tau - obs.tau)
+        })
+        .collect();
+
+    // The future. A gap the integrator cannot resolve is answered in closed form instead.
+    let mut geo = geo;
+    let (t0, tau0) = (geo.t, geo.tau);
+    if step_m <= CLOCK_GRID_RESOLUTION * (1.0 + t0.abs()) {
+        out.future = (1..=k_max).map(linear).collect();
+        return out;
+    }
+    let mut chunks = 0usize;
+    for k in 1..=k_max {
+        let target = t0 + (k as f64) * step_m;
+        // The landing tolerance is the representation of t and nothing else: `step_coord_time`
+        // abandons a residue under 1e-12 M, and `CLOCK_GRID_RESOLUTION` above keeps the slice gap
+        // three decades clear of that.
+        while target - geo.t > 1e-12 * (1.0 + target.abs()) {
+            if geo.stalled || geo.r <= R_STOP || chunks >= CLOCK_GRID_MAX_CHUNKS {
+                return out;
+            }
+            let advanced = geo.step_coord_time_until_tau(
+                metric,
+                (target - geo.t).min(CLOCK_GRID_CHUNK_M),
+                f64::INFINITY,
+            );
+            chunks += 1;
+            if advanced <= 0.0 {
+                return out;
+            }
+        }
+        let tau = geo.tau - tau0;
+        out.future.push(tau);
+        // Everything above the top of the canvas is drawn nowhere, so it is worked out nowhere.
+        if tau > reach {
+            break;
+        }
+    }
+    out
 }
 
 /// A compact, signed reading of the distant clock `seconds` away from the observer's now: the label
@@ -1074,18 +1326,20 @@ pub const SIGNAL_BOX_TIP: &str = "The other observer's transmission, read as a w
 An \"Incomplete\" line means the Wavefronts kept cap has evicted pulses that could still have arrived, so this box is reading a trimmed run: arrivals are missing, and a receive frequency measured across the gap they left is wrong rather than merely coarse. The count is how many went. Raise Wavefronts kept to stop losing them - the evicted ones do not come back, so a run that matters wants the cap raised before it starts. The count is exact for a receiver who stays outside r+ and a floor for one who crosses, since a crosser also meets the frozen arcs standing on r-, which this test treats as already past arriving.";
 
 pub const SURFACE_BOX_TIP: &str =
-"What the surface is, read straight off the slope its trace has where that trace passes your own event. Steeper than 45 degrees means timelike - the world-tube of observers holding that radius, something a rocket can stay off. Exactly 45 degrees means null. Flatter than 45 degrees means spacelike: not a place at all but a moment of your history, which arrives whatever you do. Nothing about the tilt goes in by hand; the tilt follows from the metric at your own radius through the dual tetrad, so the reading stays exact at the dot.
+"What the surface is, taken from the surface and not from the line the canvas draws of it. A surface r = const is timelike wherever Δ = r² − 2Mr + a² stays positive — the world-tube of the observers who hold that radius, something a rocket can stay off — spacelike wherever Δ is negative, which is a moment of your history rather than a place and arrives whatever you do, and null at a horizon, where Δ vanishes and the surface is built out of light. The static limit r_E sits at Δ = a², outside r₊, so r_E reads timelike at every spin; everything strictly between the horizons has Δ < 0 and reads spacelike; r₊ and r₋ read null wherever you stand. A spacelike surface lies in your future when it sits below you and in your past when it sits above you, because everything in Region II falls inward. The box adds “(crossing now)” only when your own radius sits on the surface to the last bit a double carries, which is the same test the horizon boxes print “On it” from.
 
-The reading belongs to the trace and not always to the surface. This canvas draws one plane through your event - the plane of your time axis and your line of sight to the other observer - and what you see of a surface is where that plane cuts it. The cut of a plane by a plane is still a line, so there is always a slope to read, and where your line of sight runs along the outward radial direction the line is the surface's own and the two readings agree. Where the line of sight has swung round, the plane cuts the surface at an angle, and such a cut can only flatten a trace, never steepen it: the trace of a null surface is a spacelike line, flatter than 45°, or exactly null when the plane holds the surface's own null generator, and a trace steeper than 45° belongs only to a timelike surface, such as r = const outside r₊. No sub-light path ever slips past a horizon drawn here. The box reports the trace, honestly, and the region tag in your own title reports the surface.
+Why the words no longer come off the drawn line. This canvas draws one plane through your event — the plane of your time axis and your line of sight to the other observer — and what you see of a surface is where that plane cuts it. The cut of a plane by a plane is a line, so there is always a slope to read, and where your line of sight runs along the outward radial direction that line is the surface's own and the two readings agree. Where the line of sight has swung round, the plane cuts the surface at an angle, and such a cut can only flatten a trace, never steepen it: the trace's own norm is cos²θ·Δ/r² − sin²θ·(u^r)², against g^rr for the surface itself. From r = 3 M a sight line more than about 39° off radial flattens the r₊ trace past 45°, and words read off that slope called the outer horizon null, and then spacelike, while you stood a ruler distance outside it. The canvas draws the trace honestly; the words were never the trace's to give.
 
-The box takes that reading at your own event and nowhere else. The drawn curve gives the exact position of the surface in your chart, and a curve bends: far from you the same surface tilts differently, and that far tilt says something about a distant event rather than about the event you are standing on.
+trace moves at / trace closes at — the one number in the box that does belong to the drawn line, taken where that line passes your own event. For a timelike trace it is the speed at which that world-tube crosses this frame; for a spacelike one it is your own speed against the observers whose simultaneity slice the surface is; for a null one it is c. One slope gives all three, and that slope follows from the metric at your own radius through the dual tetrad, so nothing about the tilt goes in by hand.
 
-Moving at / closing at - for a timelike trace, the speed at which that world-tube crosses this frame; for a spacelike one, your own speed relative to the observers whose simultaneity slice the surface is. The same slope gives both.";
+The box takes that reading at your own event and nowhere else. The drawn curve gives the exact position of the surface in your chart, and a curve bends: far from you the same surface tilts differently, and that far tilt says something about a distant event rather than about the event you are standing on.";
 
 /// Hover gloss on the other observer's box in a rest-frame view, which reports the event that
 /// observer is *seen* at rather than the event that observer is at.
 pub const AS_SEEN_BOX_TIP: &str =
-"As seen - defined as the event on the other observer's worldline that lies on this observer's past light cone. Nobody sees anybody now; what arrives at an event is light, and this box reads the event that light left. The direct image only: a ray that has wound round the hole and come back would deliver a second, older picture, and this box ignores that second picture.
+"As seen - defined as the event on the other observer's worldline that lies on this observer's past light cone. Nobody sees anybody now; what arrives at an event is light, and this box reads the event that light left.
+
+The youngest image - defined as the one whose light left latest. A real observer sees every image at once: the direct ray, and rays that have wound round the hole once, twice, and on without end, each of them a genuine null path between the same two worldlines. Those wound rays take longer to arrive, so each wound image shows an earlier moment of the other observer's life, and each one is fainter than the last. The view draws the youngest image alone, and this box reads that one image. Where the youngest image the solver finds is itself a wound one - which happens when the direct ray misses, or when the solver has not yet swept it up - a line in the box says how many turns that ray made.
 
 Where the dot stands. The view follows the arriving ray back to the emission event and puts the dot where the exact normal-coordinate rule puts that event: at the affine length of that ray, in the direction the light arrives from. Normalise the ray so that this observer's own clock measures unit frequency on the ray, and the affine length λ becomes at once how far away the emission event lies and how long ago the emission event happened - which is exactly what puts the dot on the 45° past cone. The thin line from the dot to this observer's event is that ray: in normal coordinates a null geodesic runs as a straight 45° line, so the line is the light itself rather than an annotation over the top of the picture.
 
@@ -1105,7 +1359,7 @@ watch - the other observer's own clock at the emission event. Before the run beg
 
 beacon - each observer carries a beacon whose rest wavelength is the dominant wavelength of that observer's own marker colour. The view paints the dot the colour that beacon arrives in: the seen wavelength is the rest wavelength divided by g, the CIE 1931 colour matching functions give that wavelength its chromaticity, and the dot's brightness is the bolometric factor g⁴ times the eye's own response at the seen wavelength against the eye's response at the rest wavelength. Once the seen light leaves the visible band, or once what is left of the light falls below what a screen can show against this background, the dot becomes a dashed grey ring at the same exact position: the light still arrives, and the eye no longer has anything to see.
 
-brightness and watch rate - the flux factor g⁴, and the rate this observer sees the other observer's clock run at, which is g. Both numbers belong to what this observer receives rather than to anything the other observer does.
+brightness and watch rate - the flux factor g⁴, and the rate this observer sees the other observer's clock run at, which is g. Both numbers belong to what this observer receives rather than to anything the other observer does. g⁴ - defined as the bolometric factor for a source of fixed solid angle: one power of g for the energy each photon carries, one for the rate the photons arrive at, and two for the solid angle aberration squeezes the source into. What that factor leaves out is the magnification of the hole's own lensing - the Jacobian of the ray bundle, which spreads or concentrates the same photons over a different patch of this observer's sky - and any falloff with distance. So the dot carries the shift honestly and the lens not at all, and a wound image, whose bundle the hole has stretched thin, is painted brighter here than the eye would really find it.
 
 The two cases worth watching. An observer who stays outside r₊ never sees the other cross it: the seen radius falls towards r₊ and the dot piles up where the inward half of the past cone meets the drawn r₊ curve, dimming without limit. An observer who falls in sees the crossing happen exactly as that observer crosses r₊, because r₊ is a null surface whose generators stand still in r, so light let go on the horizon waits there until the next worldline arrives.";
 
@@ -1119,13 +1373,15 @@ pub const HORIZON_BOX_TIP: &str =
 
 Outside r₊ and inside r₋ the metric function Δ = r² − 2Mr + a² stays positive, r is an ordinary radial direction, and a surface r = const is a timelike world-tube — something that persists, that you can hold station beside, and that has a distance. Between the horizons Δ < 0, r turns timelike, and that same surface becomes a moment of your history instead: the surface arrives, no rocket hovers beside the surface, and asking how far away the surface lies has no answer. The read-out flips at each horizon because the geometry flips there.
 
-Ruler Distance — defined as the arclength of the spacelike geodesic that leaves your event along your own radial axis and runs until meeting the surface: the radial coordinate of Fermi normal coordinates built on your tetrad. That construction performs the length contraction exactly. Do not read the figure as the static observers' chain of rulers divided by your Lorentz factor, which rescales somebody else's ruler and answers a different question; unlike that chain, this geodesic survives inside the ergosphere, where nothing can hold station to lay rulers out. The figure does assume a simultaneity — your own — because the question “how far away is that surface right now” carries no meaning without one.
+Ruler Distance — defined as the arclength of the spacelike geodesic that leaves your event along the axis the canvas draws and runs until meeting the surface: a coordinate of Fermi normal coordinates built on your tetrad. That construction performs the length contraction exactly. Which axis that is depends on the picture, and the box says so: on the (t, r) chart it is your own radial direction, and on the rest-frame view it is the horizontal axis of that view, the line of sight to the other observer. Two legs that leave one event in different directions reach the same surface at different lengths, so the two readings differ once the rest-frame view turns its plane — from r = 3 M of an a = 0.90 hole a sight line 51° off radial reaches r₊ in 3.606 M against the radial leg's 4.156 M — and the rest-frame reading is the one its drawn curve crosses the now-axis at. Do not read the figure as the static observers' chain of rulers divided by your Lorentz factor, which rescales somebody else's ruler and answers a different question; unlike that chain, this geodesic survives inside the ergosphere, where nothing can hold station to lay rulers out. The figure does assume a simultaneity — your own — because the question “how far away is that surface right now” carries no meaning without one.
 
 Time — the proper time on your own watch between here and the crossing, ∫ r² dr / √R with R = r⁴(dr/dτ)², integrated along the worldline your E and L put you on. R is a square and never changes sign, which is why a horizon has a time even where that horizon has no distance, while the distance integral carries a √Δ that goes imaginary throughout Region II.
 
+“(frozen)” — the tag on a time to the far branch of r₋ for a worldline that settles onto that branch instead of crossing it. Your own watch reads a finite proper time to the horizon and the box prints it; the chart's t runs to infinity on the way there, so dt/dτ grows without bound, and the integrator abandons the worldline at dt/dτ = 1e10 rather than chasing a limit double precision cannot reach. So the number is what your watch really has left, and the run stops a little short of spending it.
+
 “beyond r₊” — the path from here to r₋ would have to cross Region II, so no spacelike curve in your rest space reaches r₋ and the integral has nothing to return. r₋ does not lie on your worldline yet either, and whether r₋ ever will depends on what you do next.
 
-heavy / light — a horizon is two surfaces, and on the rest-frame view this line says which of them the canvas holds. The heavy stroke is the branch your own future turns on: the future horizon of r₊, and the far branch of r₋ that a worldline with E − Ω₋L < 0 settles onto for ever. The light stroke of the same colour is the other branch: the past horizon of r₊, which no worldline crosses and which your past light cone merely runs down onto, and the branch of r₋ an infaller has already come through. Where both appear the curve has a corner between them. That corner is the bifurcation — defined as the one direction whose geodesic arrives tangent to the horizon rather than through it — and it is geometry rather than a kink in the drawing: at that direction the quantity P(r_H) = E(r_H² + a²) − aL of the arriving geodesic passes through zero, which is exactly the test that decides which crossings this chart has.";
+heavy / light — a horizon is two surfaces, and on the rest-frame view this line says which of them the canvas holds. The heavy stroke is the branch your own future turns on, and the light stroke of the same colour is the other branch. For r₊ the heavy one is the future horizon, and the light one is the past horizon, which no worldline crosses and which your past light cone merely runs down onto. For r₋ the choice is yours rather than the hole's: your geodesic settles onto the far branch for ever when E − Ω₋L < 0, with Ω₋ = a/(r₋² + a²) the dragging rate on r₋, and goes through the other branch when E − Ω₋L > 0, so the view draws whichever of the two your own E and L send you to in the heavy stroke and the other in the light one. Your own box prints that E and that L, so you can check the sign for yourself. Hold a radius, or let the mouse drag your marker, and you are on no geodesic at all: your future turns on neither branch while the engine burns, and the view falls back on the far branch, which is the Cauchy horizon this app is about and the one branch no worldline ever goes through. That fallback is a convention and not a reading of your worldline — cut the engine and the E and L you carry decide the answer, and for a drop from rest they decide it the other way. Where both appear the curve has a corner between them. That corner is the bifurcation — defined as the one direction whose geodesic arrives tangent to the horizon rather than through it — and it is geometry rather than a kink in the drawing: at that direction the quantity P(r_H) = E(r_H² + a²) − aL of the arriving geodesic passes through zero, which is exactly the test that decides which crossings this chart has.";
 
 /// Hover tip for the static limit's box on the (t, r) chart, which quotes a radius and nothing
 /// that depends on an observer.
@@ -1147,6 +1403,14 @@ fn surface_radius_lines(title: &str, radius: &str, color: Color32) -> Vec<Teleme
 /// one (the (t, r) chart does, the rest-frame view does not), whether it is a place or a moment
 /// from where this observer stands, and the one number that reading admits.
 ///
+/// `leg` is the spacelike direction the distance is measured along, in coordinate components, and
+/// the caller owns it because the two callers draw different axes. The (t, r) chart hands in the
+/// observer's own radial leg, which is the direction its horizontal axis runs in. The rest-frame
+/// view hands in the leg it draws - the line of sight to the other observer - so that the number
+/// printed here is the crossing a reader can see the drawn curve make on the now-axis. Handing in
+/// the radial leg from both was the defect: once the drawn plane turns away from radial the two
+/// integrals part company, and one canvas carried two answers again.
+///
 /// The place-or-moment test is region adjacency, not the local causal character the drawn line
 /// carries. `LocalLine::character` reads the tilt of r = const at the *observer's* radius and so
 /// returns the same answer for both horizons; what decides whether a spacelike path from the
@@ -1154,6 +1418,10 @@ fn surface_radius_lines(title: &str, radius: &str, color: Color32) -> Vec<Teleme
 /// between them, i.e. whether that interval avoids Region II. Outside r+ that holds for r+ and
 /// fails for r-; inside r- it holds for r- and fails for r+; in Region II it fails for both, which
 /// is exactly the set of cases where the surface is on the worldline instead.
+// Eight, and every one of them is a different thing the box needs to know: the geometry, the
+// observer, what to call them, the surface's name and radius, the surface itself, the axis to
+// measure along, and the colour. Bundling any two of them into a struct would only move the list.
+#[allow(clippy::too_many_arguments)]
 fn horizon_box_lines(
     metric: &KerrSchild,
     obs: &Observer,
@@ -1161,6 +1429,7 @@ fn horizon_box_lines(
     title: &str,
     radius: Option<&str>,
     r_h: f64,
+    leg: &[f64; 3],
     color: Color32,
 ) -> Vec<TelemetryLine> {
     let rp = metric.outer_horizon();
@@ -1174,14 +1443,22 @@ fn horizon_box_lines(
     let (kind, detail) = if (r - r_h).abs() < 1e-12 {
         ("On it".to_string(), "crossing now".to_string())
     } else if is_place {
-        match ruler_distance(metric, r, &obs.four_velocity(metric), r_h) {
+        match ruler_distance_along(metric, r, leg, r_h) {
             Some(d) => (
                 "Place".to_string(),
-                format!("{} from {}", ruler_distance_label(metric, d), obs_name),
+                format!(
+                    "{} from {obs_name} along this axis",
+                    ruler_distance_label(metric, d)
+                ),
             ),
+            // A place it is, and the integral along *this* axis is what has no answer: the leg
+            // reaches a turning point in r, or curls away, before it arrives. Saying "no spacelike
+            // path reaches it from here" contradicted the line above it, since a place is defined
+            // by a spacelike path existing, and a reader who turned the drawn plane until the leg
+            // curled read that the horizon had stopped being a place.
             None => (
                 "Place".to_string(),
-                "no spacelike path reaches it from here".to_string(),
+                "no distance along this axis (leg turns back)".to_string(),
             ),
         }
     } else if r > rp {
@@ -1476,17 +1753,26 @@ pub struct SpacetimeCanvas {
     /// few milliseconds, so it runs once per `YOUNGEST_CHECK_INTERVAL` of the focus observer's
     /// time rather than once a frame. View state, like the seeds.
     seen_checked: HashMap<(Who, Who), f64>,
-    /// The last solved picture of each pair and the focus observer's proper time it was solved
-    /// at, held and redrawn until that clock has moved `HELD_PICTURE_TAU`. View state.
-    seen_held: HashMap<(Who, Who), (AsSeen, f64)>,
-    /// The focus observer's last trustworthy event for building their frame - (r, u, tau) at the
-    /// last frame with u^t under `FRAME_BOOST_LIMIT` - held and used in place of the live one once
-    /// the boost has gone past that limit. View state.
-    frame_held: HashMap<Who, (f64, [f64; 3], f64)>,
+    /// The last picture of each pair solved under `PICTURE_BOOST_LIMIT`, with the focus observer's
+    /// proper time and boost dt/dtau when it was solved, held and redrawn once the boost is past
+    /// the limit. View state.
+    seen_held: HashMap<(Who, Who), (AsSeen, f64, f64)>,
+    /// The focus observer's coordinate time at which a solve first came back with an *older*
+    /// image than the one drawn, per pair; see the youngest-in-time rule in `render_observer_frame`.
+    seen_older_since: HashMap<(Who, Who), f64>,
+    /// The focus observer's coordinate time on the previous frame, per pair. The persistence rule
+    /// above only makes sense while that time is going forwards, and the transport runs backwards
+    /// too (`Simulation::step_back`, the left arrow key), so the rule has to be able to tell the
+    /// two apart. View state.
+    seen_prev_t: HashMap<(Who, Who), f64>,
     /// The drawn surface curves, and what they were sampled for. Sampling all four surfaces costs
     /// about 270 microseconds, which is worth paying once per change of the observer's event and
     /// not once per frame: with the run paused, every frame after the first reuses this.
     surfaces: SurfaceCurves,
+    /// Where the distant clock's slices cut the focus observer's worldline, and what they were
+    /// walked for. See `ClockGridCrossings`; the cache is keyed the same way the surfaces are, and
+    /// pays for itself in the same case.
+    clock_crossings: ClockGridCrossings,
 }
 
 impl Default for SpacetimeCanvas {
@@ -1503,8 +1789,10 @@ impl Default for SpacetimeCanvas {
             seen_seeds: HashMap::new(),
             seen_checked: HashMap::new(),
             seen_held: HashMap::new(),
-            frame_held: HashMap::new(),
+            seen_older_since: HashMap::new(),
+            seen_prev_t: HashMap::new(),
             surfaces: SurfaceCurves::default(),
+            clock_crossings: ClockGridCrossings::default(),
         }
     }
 }
@@ -2083,6 +2371,13 @@ Tick Enable Observer on Alice's or Bob's card",
         // nothing to read and the box is the name and the radius alone. The static limit's box is
         // that in every case: nothing about it changes kind with where an observer stands.
         let horizon_reader = bob.or(alice);
+        // The axis this chart draws is r itself, so the leg the distance is measured along is the
+        // reader's own radial one - `ruler_distance`'s leg, and the answer this box has always
+        // printed. Only the rest-frame view, which draws a plane it may have turned, hands in
+        // anything else.
+        let horizon_leg = horizon_reader.map(|obs| {
+            Tetrad::from_four_velocity_axial(metric, obs.r, &obs.four_velocity(metric)).e1
+        });
         let mut pending_boxes: Vec<PendingBox> = Vec::new();
 
         // Singularity (r = 0)
@@ -2114,6 +2409,7 @@ Tick Enable Observer on Alice's or Bob's card",
                         "Cauchy Horizon",
                         Some(&rm_radius),
                         rm,
+                        &horizon_leg.unwrap_or([0.0, 1.0, 0.0]),
                         HORIZON_BOX_RED,
                     ),
                     None => surface_radius_lines("Cauchy Horizon", &rm_radius, HORIZON_BOX_RED),
@@ -2143,6 +2439,7 @@ Tick Enable Observer on Alice's or Bob's card",
                         "Event Horizon",
                         Some(&rp_radius),
                         rp,
+                        &horizon_leg.unwrap_or([0.0, 1.0, 0.0]),
                         Theme::HORIZON_OUTER,
                     ),
                     None => surface_radius_lines("Event Horizon", &rp_radius, Theme::HORIZON_OUTER),
@@ -2441,20 +2738,14 @@ Tick Enable Observer on Alice's or Bob's card",
     /// expression asks for a window of M early on and of femtometres of r on the approach to r-,
     /// where the observer's remaining proper time is femtoseconds and the gap is nine decades
     /// below anything the view has ever had to draw.
-    #[cfg(test)]
     pub(crate) fn framed_window(metric: &KerrSchild, obs: &Observer, rect: Rect) -> Option<f64> {
-        Self::framed_window_at(metric, obs.r, &obs.four_velocity(metric), rect)
-    }
-
-    /// `framed_window` for an event given directly, which is how the rest frame asks once it is
-    /// holding the observer's event rather than reading it live (see `FRAME_BOOST_LIMIT`).
-    fn framed_window_at(metric: &KerrSchild, r: f64, u: &[f64; 3], rect: Rect) -> Option<f64> {
         if rect.height() <= 1.0 || rect.width() <= 1.0 {
             return None;
         }
+        let u = obs.four_velocity(metric);
         let ahead = [metric.outer_horizon(), metric.inner_horizon(), 0.0]
             .into_iter()
-            .filter_map(|r_h| affine_length_to_surface(metric, r, u, r_h))
+            .filter_map(|r_h| affine_length_to_surface(metric, obs.r, &u, r_h))
             .filter(|tau| tau.is_finite() && *tau > 0.0)
             .fold(f64::INFINITY, f64::min);
         if !ahead.is_finite() {
@@ -2505,25 +2796,16 @@ Tick Enable Observer on Alice's or Bob's card",
         show_distant_clock_grid: bool,
         signals: SignalViews<'_>,
     ) {
-        // The event the frame is built at: the live one, or - once the boost is past what double
-        // precision can build a tetrad from - the last one that was not. See `FRAME_BOOST_LIMIT`.
-        // `frame_held_since` is how far the observer's own clock has moved since, for the box.
-        let focus_key = Who::of(focus_obs).unwrap_or(Who::Bob);
-        let u_live = focus_obs.four_velocity(metric);
-        let (focus_r, u_focus, frame_held_since) = match self.frame_held.get(&focus_key) {
-            Some(&(r, u, tau)) if u_live[0] > FRAME_BOOST_LIMIT => (r, u, Some(focus_obs.tau - tau)),
-            _ => {
-                if u_live[0] <= FRAME_BOOST_LIMIT {
-                    self.frame_held.insert(focus_key, (focus_obs.r, u_live, focus_obs.tau));
-                }
-                (focus_obs.r, u_live, None)
-            }
-        };
+        // The frame is built at the observer's live event at any boost; what the boost limits is
+        // the picture of the other observer. See `PICTURE_BOOST_LIMIT`.
+        let focus_r = focus_obs.r;
+        let u_focus = focus_obs.four_velocity(metric);
+        let picture_held = u_focus[0] > PICTURE_BOOST_LIMIT;
         // Keep the next surface the observer meets on the canvas, if the user has not taken the
         // wheel. The window follows from one number and the same rule serves the whole fall, so
         // there is no threshold anywhere in this and no special case for the last moments.
         if self.keep_surface_framed
-            && let Some(target) = Self::framed_window_at(metric, focus_r, &u_focus, rect)
+            && let Some(target) = Self::framed_window(metric, focus_obs, rect)
         {
             let current = self.frame_max_r.max(FRAME_MAX_R_MIN);
             self.frame_max_r = current * (target / current).powf(FRAME_ZOOM_LERP);
@@ -2585,25 +2867,34 @@ Tick Enable Observer on Alice's or Bob's card",
             if focus_who == Who::Alice { Theme::ALICE_COLOR } else { Theme::BOB_COLOR };
         let axial = Tetrad::from_four_velocity_axial(metric, focus_r, &u_focus);
         let mut other_seen: Option<(Who, &Observer, Result<AsSeen, NoImage>)> = None;
-        let mut seen_held_for: Option<f64> = None;
+        // How far the focus observer's clock has moved since the held picture was solved, and the
+        // boost it was solved at, for the box. `None` while the picture is live.
+        let mut seen_held_for: Option<(f64, f64)> = None;
+        // Whether this frame redrew the image of an earlier solve instead of the one the solver
+        // has just come back with, for the box. See the youngest-in-time rule below.
+        let mut seen_older_kept = false;
         if let Some(other) = other_obs.filter(|o| o.is_active) {
             let other_who = Who::of(other).unwrap_or(Who::Bob);
             let key = (focus_who, other_who);
+            // Which way the focus observer's own clock moved between this frame and the last. The
+            // persistence rule below is a statement about a *growing* past light cone, so it holds
+            // only while the clock goes forwards, and the app steps backwards as readily as
+            // forwards (`Simulation::step_back`, the left arrow key).
+            let going_back = self
+                .seen_prev_t
+                .insert(key, focus_obs.t)
+                .is_some_and(|prev| focus_obs.t < prev);
             let seed = self.seen_seeds.get(&key).copied();
             // The image the view draws is the *youngest* one (see `as_seen::younger_image`).
             // The warm solve keeps one image continuous frame to frame, and the sweep for a
             // younger one born beside it costs some milliseconds, so it runs once per interval
             // of the focus observer's own time - and after any cold solve, since a cold march
             // lands on whichever image it lands on.
-            // Held from the last solve while the focus observer's own clock has not moved: see
-            // `HELD_PICTURE_TAU`. `held` is how far it has moved, for the box.
-            let held = self
-                .seen_held
-                .get(&key)
-                .map(|(_, tau)| focus_obs.tau - tau)
-                .filter(|moved| moved.abs() < HELD_PICTURE_TAU);
+            // Past the boost limit the picture is the last one solved under it, and its arrival
+            // angle is read in the live tetrad below. See `PICTURE_BOOST_LIMIT`.
+            let held = if picture_held { self.seen_held.get(&key).copied() } else { None };
             let answer = match held {
-                Some(_) => Ok(self.seen_held[&key].0),
+                Some((seen, _, _)) => Ok(seen),
                 None => {
                     let due = self.seen_checked.get(&key).is_none_or(|last| {
                         (focus_obs.t - last).abs() >= YOUNGEST_CHECK_INTERVAL
@@ -2623,35 +2914,119 @@ Tick Enable Observer on Alice's or Bob's card",
                             answer = Ok(younger);
                         }
                     }
+                    // The youngest image's emission time cannot go backwards while that image
+                    // exists: the observer's past light cone only grows. So an answer *older* than
+                    // the image drawn last frame is one of two things - the young image has gone
+                    // out, or the solve has lost it for a frame and the cold fallback has landed
+                    // on an older one - and the two are told apart by persistence: the drawn
+                    // image is kept, and its seed retried, until the younger image has been
+                    // missing for a whole youngest-check interval. Measured with two observers
+                    // freezing onto r- together, where Alice's worldline runs nearly tangent to
+                    // Bob's past light cone and the solve wanders along that valley: without this
+                    // the picture flipped between images 2 M apart in emission time every few
+                    // dozen frames, and the box with it.
+                    //
+                    // The rule reads the *time direction* first, because the premise is that the
+                    // past light cone only ever grows and a rewind shrinks it. Stepping back, every
+                    // solve is legitimately older than the one drawn and `focus_obs.t - since`
+                    // never climbs, so the interval above never runs out: the view went on redrawing
+                    // an image whose emission event the rewind had carried into the observer's own
+                    // future, and said nothing. On any frame whose focus time is below the last
+                    // frame's the persistence is dropped and the fresh answer is taken.
+                    if going_back {
+                        self.seen_older_since.remove(&key);
+                    } else if let Ok(fresh) = &answer
+                        && let Some((drawn, _, _)) = self.seen_held.get(&key)
+                        && fresh.emission.t < drawn.emission.t - 1e-3
+                    {
+                        let since = *self.seen_older_since.entry(key).or_insert(focus_obs.t);
+                        if focus_obs.t - since < YOUNGEST_CHECK_INTERVAL {
+                            answer = Ok(*drawn);
+                            seen_older_kept = true;
+                        } else {
+                            self.seen_older_since.remove(&key);
+                        }
+                    } else {
+                        self.seen_older_since.remove(&key);
+                    }
                     if let Ok(seen) = &answer {
                         self.seen_seeds.insert(key, seen.seed());
-                        self.seen_held.insert(key, (*seen, focus_obs.tau));
+                        // Only a fresh solve is stored, and the picture the boost limit holds is
+                        // the last fresh one under it. Re-stamping the held entry on a frame that
+                        // merely redrew it would move its tau and its boost to this frame, and the
+                        // box quotes both as the moment of the solve: "your clock has moved ..."
+                        // measures from the last solve, not from the last redraw.
+                        if !picture_held && !seen_older_kept {
+                            self.seen_held.insert(key, (*seen, focus_obs.tau, u_focus[0]));
+                        }
                     }
                     answer
                 }
             };
             other_seen = Some((other_who, other, answer));
-            seen_held_for = held;
+            seen_held_for = held.map(|(_, tau, boost)| (focus_obs.tau - tau, boost));
         }
         let sight = other_seen
             .as_ref()
             .and_then(|(_, _, answer)| answer.as_ref().ok())
             .map(|seen| seen.plane_leg());
-        let s_leg: [f64; 3] = match sight {
-            Some(leg) => {
-                core::array::from_fn(|mu| leg[0] * axial.e1[mu] + leg[1] * axial.e2[mu])
-            }
-            None => axial.e1,
+        // The tetrad is turned by the leg's components directly rather than towards the vector
+        // they name: reading a vector's components back through the metric is a cancellation of
+        // terms of size (u^t)^2, and past u^t ~ 1e7 it turned a steady plane into a wandering
+        // one (see `Tetrad::turned_towards`). The leg itself is kept as the surface cache's key.
+        let plane = match sight {
+            Some(leg) => axial.turned(leg[0], leg[1]),
+            None => axial,
         };
-        let frame = LocalFrame::for_observer_plane(metric, focus_r, &u_focus, &s_leg);
+        let s_leg = plane.e1;
+        let frame = LocalFrame::new(metric, focus_r, plane);
+
+        // What the two 45-degree legs of the focus observer's own light cone are called, worked
+        // out here where the line of sight is and painted with the cone further down.
+        //
+        // They used to read "+45 Outward" and "-45 Inward" whatever the picture held, and once the
+        // canvas turned its plane to the line of sight that was simply untrue: light from an
+        // observer on a fast orbit arrives nearly tangentially, the horizontal axis then points
+        // almost round the hole, and a leg labelled "Outward" carried the reader off by most of a
+        // right angle. The radial words are kept where they are still the best ones - a line of
+        // sight within ten degrees of radial, where the drawn axis and the radial axis are the
+        // same direction to the eye - and elsewhere the legs are named after the one thing the
+        // axis certainly does point at, which is the other observer. `AsSeen::sight_sign` says
+        // which side of the canvas they are drawn on, and the near leg is the one on that side.
+        // (the right-hand leg, the left-hand leg). The signs belong to the sides and never move:
+        // the right leg is the +45-degree one in every picture.
+        let cone_leg_labels: (String, String) = match other_seen
+            .as_ref()
+            .and_then(|(_, other, answer)| answer.as_ref().ok().map(|seen| (other, seen)))
+        {
+            Some((other, seen)) if off_radial_degrees(seen.sight_angle()) > 10.0 => {
+                let toward = format!("toward {}", other.name);
+                let away = format!("away from {}", other.name);
+                let (right, left) = if seen.sight_sign() > 0.0 {
+                    (toward, away)
+                } else {
+                    (away, toward)
+                };
+                (format!("+45° {right}"), format!("-45° {left}"))
+            }
+            _ => ("+45° Outward".to_string(), "-45° Inward".to_string()),
+        };
 
         // 2. The distant clock's own slices: the surfaces t = const of the chart's Killing time,
-        // which is proper time on a clock at rest at infinity. `surface_t_const` places each of
-        // them from the covector dt in local components, so a line labelled "+5 min" is the set of
-        // events the distant clock reads five minutes after it read the observer's now, and it
-        // meets this worldline at exactly 5 min / u^t of the observer's own proper time. The step
+        // which is proper time on a clock at rest at infinity. A line labelled "+5 min" is the set
+        // of events the distant clock reads five minutes after it read the observer's now. The step
         // is picked from u^t and the pixel scale alone, so the grid stays readable while the
         // outside clock runs away.
+        //
+        // Each line is drawn through its own crossing of the focus observer's worldline, which
+        // `clock_grid_crossings` walks the worldline to find, and along the direction
+        // `LocalFrame::surface_t_const` gives. The two halves of that are different orders of the
+        // same chart and the split is deliberate: the tilt is the first-order one, exact *at* the
+        // observer's event, which is where the drawn line touches the worldline; the crossing is
+        // exact, because dt / u^t - the first-order intercept the view used to place the whole
+        // line by - is only the rate at the observer's event carried out as though it never
+        // changed, and on the approach to the far branch of r- it changes without bound. See
+        // `ClockGridCrossings`.
         //
         // `scale` is the pixel scale of the drawn plane: points per M of xi. The physical second
         // per M of coordinate time is t_g / M, the same conversion `format_physical_time` uses.
@@ -2760,10 +3135,39 @@ Tick Enable Observer on Alice's or Bob's card",
                 1
             };
             let label_colour = Color32::from_rgba_premultiplied(140, 165, 195, 180);
+            // Where the last label went, so that the next one can stand clear of it. `label_every`
+            // above thins the labels by the first-order spacing, which is the spacing beside the
+            // observer and no longer the spacing further up: the crossings crowd together as u^t
+            // runs away, and on a deep approach the whole of the future half of the grid arrives
+            // inside a few points. k runs upward and the crossings increase with it, so comparing
+            // against the last label drawn is the whole of the test.
+            let mut last_label_y: Option<f32> = None;
+            let key = ClockGridKey {
+                who: focus_who,
+                t: focus_obs.t,
+                tau: focus_obs.tau,
+                r: focus_obs.r,
+                u: u_focus,
+                frozen: focus_obs.is_frozen(),
+                step_m: clock_grid.step_m,
+                k_max,
+                reach,
+            };
+            if self.clock_crossings.key != Some(key) {
+                self.clock_crossings =
+                    clock_grid_crossings(metric, focus_obs, u_t, clock_grid.step_m, k_max, reach);
+                self.clock_crossings.key = Some(key);
+            }
             for k in -k_max..=k_max {
                 let dt = (k as f64) * clock_grid.step_m;
+                // A slice the worldline never reaches is not drawn at all; the whole point of
+                // walking the worldline is that the estimate would have drawn it anyway, past the
+                // proper time the observer has left. See `clock_grid_crossings`.
+                let Some(tau_k) = self.clock_crossings.at(k) else {
+                    continue;
+                };
                 let line = frame.surface_t_const(dt);
-                let anchor = to_screen(line.point[0], line.point[1]);
+                let anchor = to_screen(0.0, tau_k);
                 let dir = Vec2::new(line.dir[0] as f32, -(line.dir[1] as f32));
                 let Some((end_a, end_b)) = clip_line_to_rect(anchor, dir, rect) else {
                     continue;
@@ -2777,6 +3181,12 @@ Tick Enable Observer on Alice's or Bob's card",
                 }
                 let x = rect.left() + 6.0;
                 let y = segment_y_at_x(end_a, end_b, x);
+                if let Some(prev) = last_label_y
+                    && (y - prev).abs() < CLOCK_LABEL_MIN_PX * font_scale
+                {
+                    continue;
+                }
+                last_label_y = Some(y);
                 // Two lines through the observer's own event both say "now": their own, which is
                 // horizontal, and this clock's, which is tilted by how fast they move through its
                 // frame. Only the horizontal one is theirs, so the tilted one names its clock.
@@ -2798,14 +3208,17 @@ Tick Enable Observer on Alice's or Bob's card",
 
         // 2b. The observer's own clock, ticked up his own worldline.
         //
-        // The surface t = t_obs + k * step_m crosses xi^1 = 0 at xi^0 = k * step_m / u^t - set
-        // xi^1 = 0 in the line `LocalFrame::surface_t_const` returns and everything else cancels -
-        // so the grid's own lines cut this axis at exact multiples of the round step the rung was
-        // chosen to be, and the axis can be ticked with the same numbers the grid is spaced by.
-        // They are the reading the grid's labels give, taken on the other clock: at the scale the
-        // automatic framing settles on near r- they are in femtoseconds, and the r- line's crossing
-        // of this same axis - at Delta r / u^r, the proper time left before it - is then read
-        // straight off them.
+        // These are exact multiples of the round step the rung was chosen to be, marked on the
+        // observer's own proper time, and they are a ruler on that clock and nothing else. At the
+        // scale the automatic framing settles on near r- they are in femtoseconds, and the r- line's
+        // crossing of this same axis - the proper time left before it - is read straight off them.
+        //
+        // The grid's own slices used to land on exactly these ticks, because the view placed each
+        // slice at the first-order intercept k * step_m / u^t. It no longer does: a slice is drawn
+        // through the crossing the worldline really has (section 2, `clock_grid_crossings`), and
+        // those crossings crowd together as u^t runs away while these ticks stay evenly spaced.
+        // Where the two coincide - any worldline of constant 4-velocity - the picture is the one it
+        // always was.
         //
         // Drawn whether or not the distant grid is, because this is the observer's own clock rather
         // than the distant one's, and each label names its own unit.
@@ -2930,7 +3343,7 @@ Tick Enable Observer on Alice's or Bob's card",
             self.surfaces.runs = surfaces
                 .iter()
                 .map(|&(r_h, ..)| {
-                    sample_surface_in_plane(metric, focus_r, &u_focus, &s_leg, r_h, &opts)
+                    sample_surface_in_frame(metric, focus_r, &plane, r_h, &opts)
                         .into_iter()
                         .map(|run| DrawnRun {
                             // A run never mixes branches, so the first point that names one names
@@ -2955,15 +3368,16 @@ Tick Enable Observer on Alice's or Bob's card",
             // way to the clip because the far end of a run can be many decades outside the window
             // and an f32 would have overflowed on the way.
             // A horizon is two surfaces and the sweep meets both, so the drawing says which is
-            // which. The branch drawn in the full stroke is the one the observer's own future
-            // turns on - the future horizon for r+, the far branch for r-, the Cauchy horizon
-            // proper that a worldline with E - Omega_- L < 0 freezes on - and the other branch is
-            // drawn in a light stroke of the same colour: the past horizon of r+, which nothing
-            // ever crosses, and the branch of r- an infaller has already come through. Same
+            // which. The branch drawn in the full stroke is the one *this* observer's own future
+            // turns on: the future horizon for r+, which is the same branch for everybody, and for
+            // r- whichever branch the focus observer's own E and L send them to - the far branch
+            // they freeze on where E - Omega_- L < 0, the crossing branch they go through where it
+            // is positive. The other branch is drawn in a light stroke of the same colour. Same
             // colour because the two are the same surface r = const and a reader hunting for r-
             // must find all of it; different weight because they are different halves of it. The
-            // curves meet at the bifurcation point, which both runs carry.
-            let heavy = branch_in_full_stroke(metric, r_h, is_horizon);
+            // curves meet at the bifurcation point, which both runs carry. See
+            // `branch_in_full_stroke`.
+            let heavy = branch_in_full_stroke(metric, focus_obs, r_h, is_horizon);
             let mut visible: Vec<Vec<Pos2>> = Vec::new();
             let mut drawn_branches: Vec<Option<HorizonBranch>> = Vec::new();
             for run in self.surfaces.runs.get(idx).into_iter().flatten() {
@@ -2995,39 +3409,67 @@ Tick Enable Observer on Alice's or Bob's card",
                 visible.extend(pieces);
             }
 
-            // The line the *box* reads is still `surface_r_const`, and deliberately so. That line
-            // is the exact tangent of this surface at the observer's own event: its slope is the
-            // causal character and the closing speed there, which is what the box quotes. Reading
-            // either off the far curve would be reading a statement about a distant event.
+            // The line the *box* reads is `surface_r_const`: the exact tangent, at the observer's
+            // own event, of the trace this surface leaves in the drawn plane. Reading it off the
+            // far curve would be reading a statement about a distant event.
             let line = frame.surface_r_const(r_h);
+            let trace = line.character(2e-3);
 
-            // The causal character is read straight off that slope: |d xi^0 / d xi^1| > 1 is
-            // a timelike surface, = 1 a null one, < 1 a spacelike one. The 2e-3 tolerance is a
-            // display band on that comparison, not a physical fudge.
-            let note = match line.character(2e-3) {
-                SurfaceCharacter::Null => "Null Surface (crossing now)",
-                SurfaceCharacter::Timelike => "Timelike Surface (avoidable)",
-                SurfaceCharacter::Spacelike => {
-                    if line.xi0_at_axis().unwrap_or(0.0) >= 0.0 {
-                        "Spacelike Surface (in your future)"
-                    } else {
-                        "Spacelike Surface (in your past)"
-                    }
+            // What the surface *is*, which is a statement about the surface and not about the
+            // plane the canvas happens to be drawing. Delta = r^2 - 2Mr + a^2 decides it: a
+            // surface r = const is timelike where Delta > 0 (the static limit, and any r = const
+            // outside r+ or inside r-), spacelike where Delta < 0 (everywhere in Region II), and
+            // null at a horizon, where Delta = 0 and the surface is the Killing horizon's own null
+            // generator congruence.
+            //
+            // It used to be read off the *trace's* slope instead, and that was wrong as soon as
+            // the canvas started drawing the plane of the line of sight rather than the radial
+            // plane. Turning the plane away from radial can only flatten a trace - the trace's
+            // norm is cos^2(theta) Delta / r^2 - sin^2(theta) (u^r)^2 against the surface's own
+            // g^rr - so from r = 3 M a sight line more than about 39 degrees off radial flattened
+            // the r+ trace to 45 degrees and past it, and the box printed "Null Surface (crossing
+            // now)" and then "Spacelike Surface (in your future)" for a horizon the observer stood
+            // a ruler distance away from. The flattening is real and the trace is drawn honestly;
+            // it is the *words* that were never about the trace. `SURFACE_BOX_TIP` says which is
+            // which, and the speed below still comes off the trace and is labelled as the trace's.
+            //
+            // "crossing now" uses the same 1e-12 test `horizon_box_lines` uses for "On it", so the
+            // two lines of one box cannot disagree about whether the observer is on the surface.
+            // Delta = 0 away from a horizon happens at one radius only - the ring of a hole with
+            // no spin, where r- has closed onto r = 0 - and the `>` below sends it to the
+            // spacelike arm, which is what the singularity of a Schwarzschild hole is.
+            let note = if is_horizon {
+                if (focus_r - r_h).abs() < 1e-12 {
+                    "Null Surface (crossing now)"
+                } else {
+                    "Null Surface"
                 }
+            } else if metric.delta(r_h) > 0.0 {
+                "Timelike Surface (avoidable)"
+            } else if r_h < focus_r {
+                // Region II: r runs timelike, every worldline in there falls inward, so a surface
+                // below the observer arrives and one above it has already gone by.
+                "Spacelike Surface (in your future)"
+            } else {
+                "Spacelike Surface (in your past)"
             };
 
-            // The one number the box keeps: a timelike surface is the world-tube of observers
-            // hovering at that r, and in this frame it moves at 1/|slope| (a boosted vertical
-            // line has slope 1/v); a spacelike surface is a simultaneity slice of the observers
-            // there, closing at |slope|; a null one moves at c.
+            // The one number the box keeps, and it belongs to the drawn trace rather than to the
+            // surface: a timelike trace is the world-tube of observers hovering at that r cut by
+            // this plane, and in this frame it crosses at 1/|slope| (a boosted vertical line has
+            // slope 1/v); a spacelike trace is a simultaneity slice of the observers there,
+            // closing at |slope|; a null one moves at c. The label says "trace" and "in this
+            // plane" for the same reason the words above no longer come from here.
             let slope_abs = line.slope().abs();
-            let detail = match line.character(2e-3) {
+            let detail = match trace {
                 SurfaceCharacter::Timelike => {
                     let speed = if slope_abs.is_finite() { 1.0 / slope_abs.max(1e-9) } else { 0.0 };
-                    format!("Moving at {speed:.2}c")
+                    format!("trace moves at {speed:.2}c in this plane")
                 }
-                SurfaceCharacter::Null => "Moving at 1.00c".to_string(),
-                SurfaceCharacter::Spacelike => format!("Closing at {slope_abs:.2}c"),
+                SurfaceCharacter::Null => "trace moves at 1.00c in this plane".to_string(),
+                SurfaceCharacter::Spacelike => {
+                    format!("trace closes at {slope_abs:.2}c in this plane")
+                }
             };
 
             // Every surface answers in a box now. A horizon reports what it is to this observer -
@@ -3042,7 +3484,33 @@ Tick Enable Observer on Alice's or Bob's card",
                 continue;
             };
             let mut box_lines = if is_horizon {
-                horizon_box_lines(metric, focus_obs, &focus_obs.name, title, None, r_h, border)
+                let mut lines = horizon_box_lines(
+                    metric,
+                    focus_obs,
+                    &focus_obs.name,
+                    title,
+                    None,
+                    r_h,
+                    // The leg this canvas draws, which is the line of sight where there is an
+                    // image and the radial leg where there is not (section 1b). It is what puts
+                    // the box's distance and the drawn curve's now-axis crossing back on the same
+                    // number once the plane has turned.
+                    &s_leg,
+                    border,
+                );
+                // Under the title, where the other two surfaces carry it: a horizon is a null
+                // surface, and saying so plainly is what stops a reader from inferring the
+                // character from a trace that the turn of the plane has flattened.
+                lines.insert(
+                    1,
+                    TelemetryLine {
+                        text: note.to_string(),
+                        color: Theme::TEXT_BRIGHT,
+                        is_title: false,
+                        bold: false,
+                    },
+                );
+                lines
             } else {
                 vec![
                     TelemetryLine { text: title.to_string(), color: border, is_title: true, bold: false },
@@ -3090,9 +3558,13 @@ Tick Enable Observer on Alice's or Bob's card",
 
         // 3. The focus observer's own light cone: 45 degrees through the origin, by construction.
         // 3b. The other observer's transmission as a wave: every pulse is a crest, and a crest is
-        // a null surface, so through this plane it is a line at 45 degrees when it arrives
-        // radially and steeper when it arrives obliquely, since only the radial part of its motion
-        // lies in the drawn plane. A received crest passes through its arrival on the observer's
+        // a null surface, so through this plane it is a line at 45 degrees when the light travels
+        // wholly along the drawn leg and steeper when part of its motion leaves the plane - only
+        // the component along that leg is in the picture. The leg is the line of sight to this
+        // very sender (section 1b), so the crest arriving *now* stands at 45 degrees by
+        // construction; one that arrived while the sender lay in some other direction, which an
+        // orbit sweeps through in a few M, carries the rest of its motion out of the plane and
+        // leans steeper for it. A received crest passes through its arrival on the observer's
         // own worldline, which is exact; one still in flight is placed by its nearest ray's
         // current event, to first order. The spacing of the arrivals up the axis *is* the
         // received period on the observer's own clock, and against the emitter's spacing it is
@@ -3215,20 +3687,6 @@ Tick Enable Observer on Alice's or Bob's card",
         let apex = center;
         let (focus_future_fill, focus_past_fill, focus_edge) = Theme::cone_colours(Some(focus_who));
         let mut focus_extra: Vec<TelemetryLine> = Vec::new();
-        if frame_held_since.is_some() {
-            focus_extra.push(TelemetryLine {
-                text: format!(
-                    "frame held: your boost dt/dτ = {} is past what the chart can build a frame \
-                     from, so this is your frame at dt/dτ = {}; your clock has moved under \
-                     {HELD_PICTURE_TAU} M since",
-                    loose_number(u_live[0]),
-                    loose_number(u_focus[0])
-                ),
-                color: Theme::TEXT_MUTED,
-                is_title: false,
-                bold: false,
-            });
-        }
 
         if focus_obs.r > 0.02 && focus_obs.is_active {
             let p_fut_out = apex + Vec2::new(cone_len, -cone_len);
@@ -3255,14 +3713,14 @@ Tick Enable Observer on Alice's or Bob's card",
             painter.text(
                 p_fut_out + Vec2::new(4.0, -2.0),
                 egui::Align2::LEFT_BOTTOM,
-                "+45° Outward",
+                cone_leg_labels.0.clone(),
                 egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
                 focus_edge,
             );
             painter.text(
                 p_fut_in + Vec2::new(-4.0, -2.0),
                 egui::Align2::RIGHT_BOTTOM,
-                "-45° Inward",
+                cone_leg_labels.1.clone(),
                 egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
                 focus_edge,
             );
@@ -3354,12 +3812,38 @@ Tick Enable Observer on Alice's or Bob's card",
                     // observer standing there rather than on the observer standing here.
                     let snapshot = seen_snapshot(other, &seen);
                     let mut extra = as_seen_lines(metric, &seen, rest_nm, other);
-                    if seen_held_for.is_some() {
-                        extra.push(TelemetryLine {
-                            text: format!(
-                                "picture held: your clock has moved under {HELD_PICTURE_TAU} M \
-                                 since this image was solved, so it cannot have changed"
+                    if let Some((moved, boost)) = seen_held_for {
+                        let seconds = |m: f64| m / metric.m.max(1e-12) * metric.t_grav_seconds();
+                        // Four lines rather than one: a box is as wide as its widest line, and
+                        // one long line made it wider than the canvas.
+                        for text in [
+                            format!("picture held from dt/dτ = {}:", loose_number(boost)),
+                            "past that boost the chart cannot resolve".to_string(),
+                            format!(
+                                "the line of sight; your clock has moved {}",
+                                duration_label(seconds(moved))
                             ),
+                            format!(
+                                "since, against {} of light travel",
+                                duration_label(seconds(seen.lambda))
+                            ),
+                        ] {
+                            extra.push(TelemetryLine {
+                                text,
+                                color: Theme::TEXT_MUTED,
+                                is_title: false,
+                                bold: false,
+                            });
+                        }
+                    }
+                    // The other way a drawn image can be older than this frame's solve: the view
+                    // is holding the image it drew last frame while it retries for the younger one
+                    // beside it. It says so, because a reader comparing this box's numbers against
+                    // the run's own clock otherwise has no way to know that the picture is one
+                    // frame or several behind the solver.
+                    if seen_older_kept {
+                        extra.push(TelemetryLine {
+                            text: "older image held; retrying for a younger".to_string(),
                             color: Theme::TEXT_MUTED,
                             is_title: false,
                             bold: false,
@@ -3535,8 +4019,13 @@ impl WaveCrests {
 ///
 /// A received crest is placed through its arrival on the observer's worldline, xi^1 = 0 at
 /// xi^0 = tau_arrival - tau_now, which is exact. Its direction is that of the pulse's ray
-/// nearest the observer in azimuth, pushed into the chart: a radial arrival is a 45 degree
-/// line, an oblique one steeper, since only the radial part of its motion is in the drawn plane.
+/// nearest the observer in azimuth, pushed into the chart, and the push keeps the two components
+/// the plane holds and drops the third: light travelling along the drawn spacelike leg draws a 45
+/// degree line, and light crossing that leg draws a steeper one, since only the component of its
+/// motion along the leg is in the picture. The view's leg is the line of sight to this same
+/// sender, so the arrival happening now is the radial case of the old radial plane - it lies
+/// along the axis exactly - and an older arrival, sent from a direction the sender has since left,
+/// is the oblique one.
 /// A crest still in flight is placed by that ray's current event through the linearised chart,
 /// and only within twice `reach` M of the observer, the window the picture is framed to, which
 /// is the region the chart can speak for.
@@ -3795,22 +4284,50 @@ fn clip_polyline_to_rect(points: &[[f64; 2]], rect: Rect) -> Vec<Vec<Pos2>> {
 /// r+ is drawn heavy on the branch a worldline crosses, the future horizon, because that is the
 /// surface an observer's own future turns on; its other branch is the past horizon, which nothing
 /// ever crosses and which the picture only ever shows because an outside observer's past light
-/// cone runs down onto it. r- is drawn heavy on the branch worldlines freeze on - the far branch,
-/// the Cauchy horizon proper, the one this app is about - and light on the branch an infaller has
-/// already come through.
+/// cone runs down onto it. That much is the same for every observer: the ingoing chart has one
+/// future horizon and every timelike worldline that meets r+ at all meets that one.
+///
+/// r- is not the same for every observer, and this is the observer's own answer. A geodesic
+/// crosses r- in this chart exactly when P(r-) = E(r-^2 + a^2) - aL is positive, which is
+/// E - Omega_- L > 0 with Omega_- = a/(r-^2 + a^2) (`RadialConstants::crosses_in_chart` derives
+/// the test from the regularity of the chart, and `GeodesicState` freezes a worldline on the same
+/// sign). So a worldline with E - Omega_- L < 0 settles onto the far branch for ever and that far
+/// branch is the one its future turns on; a worldline with E - Omega_- L > 0 goes through the
+/// crossing branch instead, and the far branch is then something it only ever sees beside it. The
+/// heavy stroke follows the observer's own sign, taken from the E and L of the geodesic they are
+/// on - the same two numbers their own box prints.
+///
+/// Where the focus observer is on no geodesic at all - a hovering observer, a marker the user is
+/// dragging - their own future turns on neither branch, since they are not going to r- while they
+/// hold station, and the far branch keeps the heavy stroke as a convention. It is declared as one
+/// in `HORIZON_BOX_TIP` rather than dressed up as a reading: the hold they are on carries an E and
+/// an L all the same, and for a drop from rest those would send them through the *other* branch.
+/// The far branch is the one the app is about and the one no worldline ever goes through, which is
+/// what makes it the fallback worth having.
 fn branch_in_full_stroke(
     metric: &KerrSchild,
+    obs: &Observer,
     r_h: f64,
     is_horizon: bool,
 ) -> Option<HorizonBranch> {
     if !is_horizon {
         return None;
     }
-    Some(if r_h >= metric.outer_horizon() {
-        HorizonBranch::Crossing
-    } else {
-        HorizonBranch::Asymptotic
-    })
+    if r_h >= metric.outer_horizon() {
+        return Some(HorizonBranch::Crossing);
+    }
+    // The gate is `effective_mode`, not `geodesic.is_some()`: a Static or ZAMO observer carries a
+    // geodesic state too - the one they will join when the engine cuts - and their own future
+    // turns on nothing at r-, since they are not going there while they hold the radius.
+    //
+    // mu2 plays no part in P, which is linear in the tangent through E and L alone, so the unit
+    // timelike normalisation goes in unread and the expression is the crate's own rather than a
+    // second copy of it here.
+    let crosses = obs.effective_mode(metric) == ObserverMode::FreeFall
+        && obs.geodesic.is_some_and(|g| {
+            RadialConstants { energy: g.energy, l_ang: g.l_ang, mu2: 1.0 }.p_at(metric, r_h) > 0.0
+        });
+    Some(if crosses { HorizonBranch::Crossing } else { HorizonBranch::Asymptotic })
 }
 
 /// What this horizon is called on each of its branches, in the words the box prints.
@@ -3858,7 +4375,8 @@ fn branches_drawn_line(
 ///
 /// The now-axis crossing first. xi^0 = 0 is the observer's own rest space, so where the curve cuts
 /// it is where the surface is *at this moment* for this observer - and it is the point the box's
-/// own ruler distance names, so the box and the number in it stand at the same place. Failing that,
+/// own ruler distance names, since the box measures along this same drawn leg
+/// (`ruler_distance_along`), so the box and the number in it stand at the same place. Failing that,
 /// the visible point nearest the middle of the canvas, which is the one a reader is most likely to
 /// be looking at.
 ///
@@ -4026,6 +4544,23 @@ fn as_seen_lines(
         loose_number(seen.g)
     )));
 
+    // How far round the hole this ray came. `AsSeen::windings` counts the ray's own azimuthal
+    // excursion less the direct one, in whole turns, so zero is the direct image and anything else
+    // says the light has been round the photon sphere on its way here. The view draws the youngest
+    // image and nothing says the youngest image is the direct one: where the direct ray misses -
+    // the other observer standing behind the hole, say - the youngest light that arrives at all is
+    // a wound ray, and a reader comparing this box's delay against the pair's separation needs to
+    // know that. Only printed when there is something to print, since "0 turns" is a line about
+    // the ordinary case.
+    if seen.windings != 0 {
+        let turns = seen.windings.abs();
+        let sense = if seen.windings > 0 { "prograde" } else { "retrograde" };
+        lines.push(body(format!(
+            "ray wound {turns} {} {sense} round the hole",
+            if turns == 1 { "turn" } else { "turns" }
+        )));
+    }
+
     // Which way the canvas is looking. The view draws the plane of the focus observer's time axis
     // and this line of sight, so the horizontal axis points at the source and the angle says where
     // that is against the one direction a reader already has a name for. Nothing is dropped from
@@ -4074,6 +4609,18 @@ fn as_seen_lines(
 /// the side rather than leaving a signed number to be read as one. Straight out and straight in
 /// get their own wording, because "0° prograde of outward" is a sentence about nothing. The
 /// leading space belongs to the string so that a caller can concatenate it onto a name.
+/// How far a line of sight lies from the radial direction, in degrees on [0, 90].
+///
+/// Either radial direction counts: a sight line 3 degrees off straight inward is as radial as one
+/// 3 degrees off straight outward, because the drawn plane is the same plane and the view's own
+/// sign convention (`AsSeen::plane_leg`) puts outward on the right either way. The rest-frame
+/// view's cone legs keep their radial names below ten degrees of this and take the other
+/// observer's name above it.
+fn off_radial_degrees(radians: f64) -> f64 {
+    let degrees = radians.to_degrees().abs();
+    degrees.min(180.0 - degrees)
+}
+
 fn sight_angle_label(radians: f64) -> String {
     let degrees = radians.to_degrees();
     if degrees.abs() < 0.5 {
@@ -5803,6 +6350,9 @@ mod canvas_tests {
 #[cfg(test)]
 mod rest_frame_tests {
     use super::*;
+    // The radial-leg integral, which the view itself no longer calls: these tests check the
+    // drawn leg's answer against it.
+    use crate::physics::local_frame::ruler_distance;
     use crate::physics::observer::{Release, WorldlineParams};
 
     /// One painted frame of an observer's rest frame, with everything the assertions read.
@@ -5895,6 +6445,37 @@ mod rest_frame_tests {
                 .collect()
         }
 
+        /// The distant clock's slices, as the proper times at which the painted lines cross the
+        /// focus observer's own worldline xi^1 = 0, in order.
+        ///
+        /// The chart's own two axes carry the same stroke, and one thing tells them apart from a
+        /// slice: each of them runs at a constant screen coordinate. No slice of a moving
+        /// observer's grid does, the tilt of a slice being e1^t / u^t, which vanishes only for an
+        /// observer who holds r.
+        fn grid_crossings(&self) -> Vec<f64> {
+            let c = self.rect.center();
+            let mut out: Vec<f64> = self
+                .shapes
+                .iter()
+                .filter_map(|s| match s {
+                    egui::Shape::LineSegment { points, stroke }
+                        if stroke.color == Theme::GRID_LINE
+                            && stroke.width == Theme::GRID_LINE_WIDTH =>
+                    {
+                        let (a, b) = (points[0], points[1]);
+                        if (a.y - b.y).abs() < 1e-6 || (a.x - b.x).abs() < 1e-6 {
+                            return None;
+                        }
+                        let f = (c.x - a.x) / (b.x - a.x);
+                        Some(self.to_chart(Pos2::new(c.x, a.y + f * (b.y - a.y)))[1])
+                    }
+                    _ => None,
+                })
+                .collect();
+            out.sort_by(f64::total_cmp);
+            out
+        }
+
         /// How many wedges of `who`'s light cone were painted. A cone is two filled triangles in
         /// that observer's own cone colours, and nothing else on this canvas is filled in them -
         /// an info box's disclosure triangle is a filled triangle too, which is why the fill is
@@ -5959,6 +6540,20 @@ mod rest_frame_tests {
         bob: Option<&Observer>,
         frame: ReferenceFrame,
     ) -> Pass {
+        pass_on_with_grid(canvas, metric, alice, bob, frame, false)
+    }
+
+    /// The same, with the distant clock's grid switched on or off. It is off in every test but the
+    /// one about the grid itself, where thirty extra lines in the chart's own colour would be
+    /// thirty extra shapes for every other assertion to filter out.
+    fn pass_on_with_grid(
+        canvas: &mut SpacetimeCanvas,
+        metric: &KerrSchild,
+        alice: Option<&Observer>,
+        bob: Option<&Observer>,
+        frame: ReferenceFrame,
+        grid: bool,
+    ) -> Pass {
         canvas.telemetry.collapsed.clear();
         let ctx = egui::Context::default();
         ctx.set_fonts(egui::FontDefinitions::empty());
@@ -5980,7 +6575,7 @@ mod rest_frame_tests {
                 frame,
                 1.0,
                 SignalViews { alice: &silent, bob: &silent },
-                false,
+                grid,
             );
         });
         let mut shapes = Vec::new();
@@ -6279,16 +6874,22 @@ mod rest_frame_tests {
             WorldlineParams::new(1.0, 2.2, false),
         );
         let mut alice = raindrop(&metric, "Alice", 4.45, 0.0);
-        let mut canvas = fresh(16.0);
+        // With the window following the next surface ahead, as the app's does: the frame is
+        // built live at any boost and the trace shrinks with his time left, so a fixed 16 M
+        // window would have it under a pixel past u^t ~ 1e5 and its slope would be the pixel
+        // grid's.
+        let mut canvas =
+            SpacetimeCanvas { frame_max_r: 16.0, keep_surface_framed: true, ..Default::default() };
         let mut no_image_frames = 0;
         let mut held_frames = 0;
         let mut frames = 0;
         let mut angle: Option<String> = None;
         let mut angle_changes = 0;
         // The drawn r- trace's slope nearest Bob, frame by frame past the boost limit. Before
-        // the frame was held it jumped between the outward side, flat ahead and the inward side.
+        // the picture was held it jumped between the outward side, flat ahead and the inward
+        // side as the solved line of sight wandered and the drawn plane turned with it.
         let mut slopes: Vec<f64> = Vec::new();
-        let mut frame_held_frames = 0;
+        let mut held_past_limit = 0;
         while bob.four_velocity(&metric)[0] < 1e8 {
             play(&metric, &mut bob, &mut alice, 1, 0.05);
             assert!(!bob.is_frozen(), "the run must reach u^t = 1e8 before the stall");
@@ -6300,13 +6901,13 @@ mod rest_frame_tests {
             if p.text.contains("picture held") {
                 held_frames += 1;
             }
-            if bob.four_velocity(&metric)[0] > FRAME_BOOST_LIMIT {
+            if bob.four_velocity(&metric)[0] > PICTURE_BOOST_LIMIT {
                 assert!(
-                    p.text.contains("frame held"),
-                    "past the boost limit the box says the frame is held: {}",
+                    p.text.contains("picture held"),
+                    "past the boost limit the box says the picture is held: {}",
                     p.text
                 );
-                frame_held_frames += 1;
+                held_past_limit += 1;
                 let mut nearest = f64::INFINITY;
                 let mut slope = None;
                 for run in p.curve(Theme::HORIZON_CAUCHY) {
@@ -6349,14 +6950,14 @@ mod rest_frame_tests {
             (lo.min(*s), hi.max(*s))
         });
         println!(
-            "{frame_held_frames} frames past the boost limit with the frame held; the r- trace's \
+            "{held_past_limit} frames past the boost limit with the picture held; the r- trace's \
              slope beside Bob ran from {lo:.4} to {hi:.4} over {} of them",
             slopes.len()
         );
-        assert!(frame_held_frames > 0 && slopes.len() > 10, "the run has to reach the held frames");
+        assert!(held_past_limit > 0 && slopes.len() > 10, "the run has to reach the held frames");
         assert!(
             hi - lo < 0.05,
-            "the r- trace does not jump about once the frame is held: {lo} to {hi}"
+            "the r- trace does not jump about once the picture is held: {lo} to {hi}"
         );
     }
 
@@ -6703,6 +7304,203 @@ mod rest_frame_tests {
     }
 
     #[test]
+    fn test_the_cone_legs_are_named_outward_only_while_the_axis_is_radial() {
+        // The legs used to read "+45 Outward" and "-45 Inward" in every picture, including the
+        // ones where the horizontal axis had swung most of a right angle round the hole to follow
+        // the line of sight. Now the radial words appear only where the drawn axis really is the
+        // radial one, and elsewhere the legs are named after the observer the axis points at.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let alice = hovering(&metric, "Alice", 3.0, 0.0);
+        let legs = |p: &Pass| -> Vec<String> {
+            p.text
+                .lines()
+                .filter(|line| line.starts_with("+45°") || line.starts_with("-45°"))
+                .map(str::to_string)
+                .collect()
+        };
+
+        // Bob a radian round and outward: his light reaches Alice 51 degrees off her radial axis,
+        // and the right-hand leg - the side `AsSeen::sight_sign` draws him on - points at him.
+        let p = pass(
+            &metric,
+            Some(&alice),
+            Some(&hovering(&metric, "Bob", 4.0, 1.0)),
+            ReferenceFrame::Alice,
+            8.0,
+        );
+        println!("51 degrees off radial: {:?}", legs(&p));
+        assert_eq!(legs(&p), vec!["+45° toward Bob", "-45° away from Bob"]);
+
+        // Bob almost straight out: three degrees off radial, where "Outward" is the better word
+        // and the reader loses nothing by it.
+        let p = pass(
+            &metric,
+            Some(&alice),
+            Some(&hovering(&metric, "Bob", 4.0, 0.2)),
+            ReferenceFrame::Alice,
+            8.0,
+        );
+        println!("3 degrees off radial: {:?}", legs(&p));
+        assert_eq!(legs(&p), vec!["+45° Outward", "-45° Inward"]);
+
+        // Bob inward and round behind, 26 degrees off the inward radial direction. Right is still
+        // outward, so now the right-hand leg is the one pointing away from him.
+        let p = pass(
+            &metric,
+            Some(&alice),
+            Some(&hovering(&metric, "Bob", 2.0, 0.02)),
+            ReferenceFrame::Alice,
+            8.0,
+        );
+        println!("26 degrees off inward: {:?}", legs(&p));
+        assert_eq!(legs(&p), vec!["+45° away from Bob", "-45° toward Bob"]);
+
+        // With nobody to see, the axis falls back to the radial one and so do the words.
+        let p = pass(&metric, Some(&alice), None, ReferenceFrame::Alice, 8.0);
+        println!("no other observer: {:?}", legs(&p));
+        assert_eq!(legs(&p), vec!["+45° Outward", "-45° Inward"]);
+    }
+
+    #[test]
+    fn test_the_heavy_branch_of_r_minus_follows_the_observers_own_e_and_l() {
+        // The rule the heavy stroke and both hover tips claim: the heavy branch is the one *this*
+        // observer's own future turns on, which for r- depends on the sign of E - Omega_- L and so
+        // on who is standing here. The view used to draw the far branch heavy for everybody, which
+        // told a raindrop - who goes straight through r- - that the branch they never meet is the
+        // one their future turns on.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let (rp, rm) = (metric.outer_horizon(), metric.inner_horizon());
+        let omega_m = metric.a / (rm * rm + metric.a * metric.a);
+
+        let rain = raindrop(&metric, "Rain", 8.0, 0.0);
+        let isco = Observer::new_with_phi(
+            &metric,
+            "Orbiter",
+            0.0,
+            metric.isco(true),
+            0.0,
+            0.0,
+            WorldlineParams::released(&metric, metric.isco(true), 0.0, Release::CircularPrograde),
+        );
+        let hover = hovering(&metric, "Hover", 8.0, 0.0);
+        let sign_of = |obs: &Observer| obs.geodesic.map(|g| g.energy - omega_m * g.l_ang);
+        println!(
+            "Omega_- = {omega_m:.4}/M; the raindrop has E - Omega_- L = {:?} and the prograde \
+             ISCO orbiter {:?}; the hovering observer holds its radius under thrust and is not \
+             going to r- at all, whatever the release it carries ({:?}) would have done",
+            sign_of(&rain),
+            sign_of(&isco),
+            sign_of(&hover)
+        );
+
+        // A raindrop carries L = 0, so E - Omega_- L is its energy and is positive: it crosses r-,
+        // and the branch it crosses is the one drawn heavy.
+        assert_eq!(
+            branch_in_full_stroke(&metric, &rain, rm, true),
+            Some(HorizonBranch::Crossing),
+            "a raindrop goes through r-"
+        );
+        // The prograde ISCO carries enough angular momentum to reverse the sign - E = 0.844 against
+        // Omega_- L = 1.675 - so that plunge freezes on the far branch instead.
+        assert!(
+            sign_of(&isco).expect("the orbiter is on a geodesic") < 0.0,
+            "the ISCO plunge must have E - Omega_- L < 0"
+        );
+        assert_eq!(
+            branch_in_full_stroke(&metric, &isco, rm, true),
+            Some(HorizonBranch::Asymptotic),
+            "the ISCO plunge freezes on the far branch"
+        );
+        // Not free-falling, so there is no sign to read and the far branch keeps the heavy stroke
+        // by convention. The hovering observer's own release state would answer the other way -
+        // E = 0.866 with L = 0 is a crossing - which is exactly why the gate is the mode and not
+        // the mere presence of a geodesic state.
+        assert_eq!(
+            branch_in_full_stroke(&metric, &hover, rm, true),
+            Some(HorizonBranch::Asymptotic),
+            "a hovering observer is not falling to r- at all"
+        );
+        // r+ never depends on the observer: the ingoing chart has one future horizon.
+        for obs in [&rain, &isco, &hover] {
+            assert_eq!(
+                branch_in_full_stroke(&metric, obs, rp, true),
+                Some(HorizonBranch::Crossing),
+                "r+ is drawn heavy on its future horizon for everybody"
+            );
+        }
+        // And a surface that is no horizon has no branches to tell apart.
+        assert_eq!(branch_in_full_stroke(&metric, &rain, 0.0, false), None);
+    }
+
+    #[test]
+    fn test_the_horizon_box_measures_along_the_drawn_axis_when_the_plane_has_turned() {
+        // The second half of the same inconsistency. The drawn curve and the box agreed while the
+        // canvas drew the radial plane, because both were the radial integral; once the view
+        // turned its plane to the line of sight the curve crossed the now-axis along the *drawn*
+        // leg while the box went on quoting the radial one, and the two numbers parted company
+        // again. `ruler_distance_along` is what puts them back together.
+        //
+        // Alice hovers at r = 3 M of an a = 0.90 hole and Bob hovers out at r = 4 M, a radian
+        // round from her, which lands his light on her at about 51 degrees off her outward radial
+        // direction: far enough round for the two integrals to differ by much more than any
+        // tolerance here, and nothing like the edge case of a sight line gone tangential.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let rp = metric.outer_horizon();
+        let alice = hovering(&metric, "Alice", 3.0, 0.0);
+        let bob = hovering(&metric, "Bob", 4.0, 1.0);
+        let u = alice.four_velocity(&metric);
+
+        // The leg the view draws, built here the way section 1b builds it: the axial tetrad turned
+        // by the line of sight's own components.
+        let seen = as_seen_youngest(&metric, &alice, &bob, None).expect("Alice sees Bob");
+        let leg = seen.plane_leg();
+        let drawn_leg = Tetrad::from_four_velocity_axial(&metric, alice.r, &u)
+            .turned(leg[0], leg[1])
+            .e1;
+        let along = ruler_distance_along(&metric, alice.r, &drawn_leg, rp)
+            .expect("the drawn leg reaches r+");
+        let radial = ruler_distance(&metric, alice.r, &u, rp).expect("so does the radial leg");
+
+        let p = pass(&metric, Some(&alice), Some(&bob), ReferenceFrame::Alice, 8.0);
+        // psi = pi is the now-direction the drawn leg reaches r+ along: the leg's own r-component
+        // is positive (e2 carries none in the axial gauge, and `AsSeen::plane_leg` fixes the sign
+        // so that the outward component is the positive one), so the half of the axis that closes
+        // on the horizon is the other one.
+        let crossing = curve_radius_at(&p.curve(Theme::HORIZON_OUTER), std::f64::consts::PI)
+            .expect("the r+ curve crosses that half of the now-axis on this canvas");
+        println!(
+            "Alice at r = 3 M sees Bob {}: the drawn r+ curve cuts the now-axis at \
+             {crossing:.9} M, the box prints {} ({along:.9} M along the drawn leg), and the \
+             radial leg reaches r+ in {radial:.9} M - a difference of {:.1}%",
+            sight_angle_label(seen.sight_angle()).trim(),
+            ruler_distance_label(&metric, along),
+            100.0 * (along - radial) / radial
+        );
+
+        assert!(
+            (seen.sight_angle().to_degrees() - 51.0).abs() < 2.0,
+            "the configuration has to keep its sight angle: {} degrees",
+            seen.sight_angle().to_degrees()
+        );
+        assert!(
+            (crossing - along).abs() <= 1e-6 * along,
+            "the drawn curve says {crossing} M and the box's integral says {along} M"
+        );
+        assert!(
+            (along - radial).abs() > 0.05 * radial,
+            "and the radial integral is a different number: {radial} M against {along} M"
+        );
+        assert!(
+            p.text.contains(&format!(
+                "{} from Alice along this axis",
+                ruler_distance_label(&metric, along)
+            )),
+            "the box must print the drawn leg's distance and say which axis it is: {}",
+            p.text
+        );
+    }
+
+    #[test]
     fn test_the_horizon_curve_meets_the_now_axis_where_the_horizon_box_says_it_does() {
         // The inconsistency this whole change was for. The box has always printed the ruler
         // distance to r+ - the arclength of the spacelike geodesic down the observer's own radial
@@ -6793,4 +7591,230 @@ mod rest_frame_tests {
             );
         }
     }
+
+    #[test]
+    fn test_the_distant_clock_grid_crosses_the_worldline_at_the_proper_time_it_really_does() {
+        // The defect: on the far branch of r- the grid marched straight past the horizon and drew
+        // the focus observer outliving t = infinity. Each slice used to be placed by
+        // `LocalFrame::surface_t_const`, whose intercept dt / u^t is the rate at the observer's own
+        // event carried out as though it never changed; along this worldline u^t grows like
+        // exp(kappa_- t), so the true intercepts saturate at the proper time Bob has left while the
+        // estimate keeps walking. Now every slice is drawn through the crossing the worldline
+        // really has, and a slice the worldline cannot be shown to reach is drawn nowhere.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let mut bob = Observer::new_with_phi(
+            &metric,
+            "Bob",
+            0.0,
+            4.5,
+            0.0,
+            0.0,
+            WorldlineParams::new(1.0, 2.2, false),
+        );
+        let mut alice = raindrop(&metric, "Alice", 4.45, 0.0);
+        while bob.four_velocity(&metric)[0] < 1e4 {
+            play(&metric, &mut bob, &mut alice, 1, 0.05);
+            assert!(!bob.is_frozen(), "the run must reach u^t = 1e4 well before the stall");
+        }
+        let u_t = bob.four_velocity(&metric)[0];
+        let geo = bob.geodesic.expect("a released free-faller carries a geodesic");
+        // The exact quadrature, in r and with no worldline in it, of the proper time Bob has left
+        // before r-. Every crossing the grid draws has to be below this number: the distant clock
+        // reads every finite t before he gets there, and he gets there on his own watch.
+        let left = proper_time_between(&metric, geo.energy, geo.l_ang, bob.r, metric.inner_horizon())
+            .expect("R stays positive between Bob and r-");
+
+        // A window a few times that, with the automatic framing off, so the pass draws at the scale
+        // this test names rather than at the one a lerp happens to have reached.
+        let mut canvas = fresh(4.0 * left);
+        let p =
+            pass_on_with_grid(&mut canvas, &metric, Some(&alice), Some(&bob), ReferenceFrame::Bob, true);
+        let drawn = p.grid_crossings();
+        let key = canvas.clock_crossings.key.expect("the pass walked the worldline");
+        // Half a screen point above his own now, which drops the k = 0 slice: that one crosses at
+        // tau = 0 by construction and the painted line carries it back as a rounding of a pixel.
+        let pixel = 1.0 / p.scale();
+        let ahead: Vec<f64> = drawn.iter().copied().filter(|tau| *tau > 0.5 * pixel).collect();
+        let above = ahead.iter().filter(|tau| **tau > left).count();
+        // What the first-order placement would have drawn the outermost slice at, for scale.
+        let linear = (key.k_max as f64) * key.step_m / u_t;
+        println!(
+            "at u^t = {u_t:.4e} Bob has {left:.4e} M of his own time left to r-; the grid asked for \
+             {} slices each way at {:.4e} M of t apart, drew {} of them ahead of him, the furthest \
+             at {:.4e} M, and the first-order placement would have put the furthest at {linear:.4e} M",
+            key.k_max,
+            key.step_m,
+            ahead.len(),
+            ahead.iter().copied().fold(0.0, f64::max),
+        );
+        assert!(ahead.len() >= 3, "the canvas has to be showing a grid ahead of him: {ahead:?}");
+        assert_eq!(above, 0, "no slice may be drawn past the time he has left ({left:.4e} M)");
+        assert!(
+            linear > left,
+            "the test is worthless unless the first-order placement really does overshoot: \
+             {linear:.4e} M against {left:.4e} M"
+        );
+
+        // The first slice, against the same quadrature. The march is re-run here only to learn the
+        // radius the first slice is met at - the integrator answers that and nothing else does -
+        // and the proper time between Bob's radius and that one is then taken in closed form, so
+        // the comparison is the integrator's accumulated tau against an integral in r that knows
+        // nothing of steps, of t, or of this chart.
+        let tau1 = canvas.clock_crossings.future[0];
+        let mut copy = geo;
+        copy.step_coord_time(&metric, key.step_m);
+        let quadrature = proper_time_between(&metric, geo.energy, geo.l_ang, geo.r, copy.r)
+            .expect("R stays positive over one slice gap");
+        println!(
+            "the first slice is crossed at tau = {tau1:.9e} M, the quadrature over the radii it \
+             spans gives {quadrature:.9e} M (relative {:.2e}), and the first-order estimate would \
+             have said {:.9e} M",
+            ((tau1 - quadrature) / quadrature).abs(),
+            key.step_m / u_t
+        );
+        assert!(
+            (tau1 - quadrature).abs() <= 1e-6 * quadrature,
+            "the drawn crossing and the quadrature must be the same number: {tau1} against {quadrature}"
+        );
+        // And the line on the canvas is that crossing, to the resolution a painted line has.
+        let painted = ahead.iter().copied().fold(f64::INFINITY, f64::min);
+        assert!(
+            (painted - tau1).abs() <= pixel,
+            "the painted line has to cross the worldline where the walk says: {painted} against {tau1}"
+        );
+    }
+
+    #[test]
+    fn test_a_rewind_draws_the_fresh_image_rather_than_one_from_the_observers_future() {
+        // The youngest-image rule holds the drawn image when a solve comes back older than it,
+        // because the past light cone only grows and an older answer means the solver has lost the
+        // young image for a frame. Stepping *back* breaks that premise: the cone shrinks, every
+        // solve is legitimately older, and the interval the hold is measured over never runs out -
+        // so the view went on redrawing an image whose emission event the rewind had carried into
+        // the observer's own future. The rule now reads the time direction first.
+        let metric = KerrSchild::new(1.0, 0.0);
+        let mut alice = hovering(&metric, "Alice", 8.0, 0.0);
+        let mut bob = raindrop(&metric, "Bob", 6.0, 0.0);
+        let mut canvas = fresh(16.0);
+        for _ in 0..60 {
+            play(&metric, &mut alice, &mut bob, 1, 0.05);
+            pass_on(&mut canvas, &metric, Some(&alice), Some(&bob), ReferenceFrame::Alice);
+        }
+        let key = (Who::Alice, Who::Bob);
+        let forward = canvas.seen_held[&key].0.emission.t;
+        assert!(forward < alice.t, "the image is on her past cone to begin with");
+
+        // Back down the clock, the way `Simulation::step_back` does it: both worldlines are given
+        // the target time rather than an interval, so they stay locked to one clock.
+        let mut emissions = Vec::new();
+        let mut t = alice.t;
+        for _ in 0..20 {
+            t -= 0.05;
+            alice.rewind_to(&metric, t);
+            bob.rewind_to(&metric, t);
+            let p = pass_on(&mut canvas, &metric, Some(&alice), Some(&bob), ReferenceFrame::Alice);
+            let drawn = canvas.seen_held[&key].0;
+            emissions.push(drawn.emission.t);
+            assert!(
+                drawn.emission.t <= alice.t,
+                "the drawn image left at t = {} and Alice's clock reads {}: the view is showing \
+                 her an event in her own future",
+                drawn.emission.t,
+                alice.t
+            );
+            assert!(
+                !p.text.contains("older image held"),
+                "nothing is being held on the way back, so the box must not say so: {}",
+                p.text
+            );
+        }
+        println!(
+            "rewound from t = {:.2} M to t = {:.2} M: the drawn image's emission time ran from \
+             {:.4} M to {:.4} M against the forward pass's {forward:.4} M, and the box never \
+             reported a held image",
+            t + 20.0 * 0.05,
+            alice.t,
+            emissions[0],
+            emissions[emissions.len() - 1]
+        );
+        // Every step back moves the image back with it, which is the whole of the fix: a held
+        // image would have sat still at the forward pass's answer.
+        for pair in emissions.windows(2) {
+            assert!(pair[1] < pair[0], "the image has to follow the clock back: {emissions:?}");
+        }
+    }
+
+    #[test]
+    fn test_the_surface_box_names_the_surfaces_character_and_not_the_drawn_traces() {
+        // The words used to be read off the slope of the surface's trace in the drawn plane. That
+        // plane is the plane of the line of sight, and turning it away from radial can only flatten
+        // a trace - the trace's norm is cos^2(theta) Delta / r^2 - sin^2(theta) (u^r)^2 against
+        // g^rr for the surface itself - so from r = 3 M a sight line well off radial flattened the
+        // r+ trace past 45 degrees and the box called the outer horizon null, and then spacelike,
+        // with the observer a ruler distance outside it. The words now come from Delta at the
+        // surface's own radius, which is a statement about the surface and about nothing else.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let bob = raindrop(&metric, "Bob", 3.0, 0.0);
+        // Alice stands at the same radius, round the hole, so the light reaching Bob from her
+        // arrives a long way off his radial axis and the canvas turns its plane with it.
+        let alice = hovering(&metric, "Alice", 3.0, 1.2);
+        let seen = as_seen(&metric, &bob, &alice, None).expect("Bob sees Alice across the hole");
+        // From whichever radial direction is nearer, which is the angle the header quotes and the
+        // angle the flattening of the trace turns on.
+        let degrees = seen.sight_angle().to_degrees().abs();
+        let off_radial = degrees.min(180.0 - degrees);
+        let p = pass(&metric, Some(&alice), Some(&bob), ReferenceFrame::Bob, 8.0);
+        let trace = LocalFrame::new(
+            &metric,
+            bob.r,
+            Tetrad::from_four_velocity_axial(&metric, bob.r, &bob.four_velocity(&metric))
+                .turned(seen.plane_leg()[0], seen.plane_leg()[1]),
+        )
+        .surface_r_const(metric.outer_horizon());
+        println!(
+            "from r = 3 M with the line of sight {off_radial:.0}° off the nearer radial direction \
+             ({}) the r+ trace has slope {:.3} in the drawn plane, which reads {:?}, while r+ \
+             itself is null and the box says so; the box's lines are:\n{}",
+            sight_angle_label(seen.sight_angle()).trim(),
+            trace.slope().abs(),
+            trace.character(2e-3),
+            p.text
+        );
+        assert!(
+            off_radial > 39.0,
+            "the sight line has to be far enough off radial to flatten the trace: {off_radial}°"
+        );
+        assert_ne!(
+            trace.character(2e-3),
+            SurfaceCharacter::Timelike,
+            "the trace really is flattened here, which is what the old words were read off"
+        );
+        assert!(
+            p.text.contains("Null Surface"),
+            "r+ is a null surface and the box has to say so: {}",
+            p.text
+        );
+        assert!(
+            !p.text.contains("Null Surface (crossing now)"),
+            "Bob stands a ruler distance outside r+, so nothing is crossing now: {}",
+            p.text
+        );
+        assert!(
+            p.text.contains("Timelike Surface (avoidable)"),
+            "the static limit has Delta = a^2 > 0 and is timelike whatever the plane does: {}",
+            p.text
+        );
+        assert!(
+            !p.text.contains("Spacelike Surface"),
+            "nothing on this canvas is a spacelike surface from r = 3 M: {}",
+            p.text
+        );
+        // The speed the box still quotes belongs to the trace, and says so.
+        assert!(
+            p.text.contains(" in this plane"),
+            "the closing speed has to be labelled as the drawn trace's: {}",
+            p.text
+        );
+    }
+
 }

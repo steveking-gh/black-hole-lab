@@ -504,6 +504,24 @@ pub fn sample_surface_in_plane(
     sweep(metric, r0, &tetrad, r_h, opts)
 }
 
+/// The same surface swept in the plane span(e0, e1) of a tetrad the caller has already built.
+///
+/// This is [`sample_surface_in_plane`] for a caller that holds the frame rather than a vector to
+/// turn it towards, and it exists because the turn is the one lossy step: `Tetrad::turned_towards`
+/// reads the leg's components back through the metric, which is a cancellation of terms of size
+/// (u^t)^2 and is noise for a frame boosted past u^t ~ 1e7 (see its doc). The rest-frame view
+/// holds the arrival direction of the other observer's light as a pair of components in the axial
+/// tetrad, turns the tetrad by them exactly with `Tetrad::turned`, and hands the result here.
+pub fn sample_surface_in_frame(
+    metric: &KerrSchild,
+    r0: f64,
+    tetrad: &Tetrad,
+    r_h: f64,
+    opts: &SurfaceSampling,
+) -> Vec<Vec<SurfacePoint>> {
+    sweep(metric, r0.max(R_MIN), tetrad, r_h, opts)
+}
+
 /// The sweep both entry points run: T = sin(psi) e0 + cos(psi) e1 of the tetrad handed in, round
 /// the full circle of psi, with the refinement and the windowing described on `sample_surface`.
 fn sweep(
