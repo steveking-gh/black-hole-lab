@@ -122,6 +122,21 @@ const YOUNGEST_CHECK_INTERVAL: f64 = 1.0;
 /// keeps the drawn plane from snapping to the radial one and back as the solve comes and goes.
 const HELD_PICTURE_TAU: f64 = 1e-3;
 
+/// The boost, as dt/dtau, past which the focus observer's tetrad is no longer built from the
+/// live 4-velocity but held from the last frame that was under it.
+///
+/// This is a limit of double precision and not of the physics. The tetrad is built from the
+/// coordinate components of u, and its orthonormality is a cancellation among terms of order
+/// (u^t)^2: with u^t = 1e6 those terms are 1e12 and the cancellation keeps ten digits; at 1e8
+/// they are 1e16 and it keeps none, and every frame then builds a different, meaningless frame.
+/// Measured with Bob freezing onto the far branch of r-, the drawn r- surface jumped between the
+/// outward side, flat ahead and the inward side from one frame to the next, and the distant
+/// clock's grid came out horizontal on some frames, which would put him at rest relative to a
+/// clock at infinity. Beyond this limit his own clock moves by 1e-8 M a frame or less, so the
+/// frame at his event is, to that order, the frame it was: holding the last trustworthy one is
+/// the exact statement, and the chart's coordinate blow-up on the far branch is the artefact.
+const FRAME_BOOST_LIMIT: f64 = 1e6;
+
 const FRAME_MAX_R_MIN: f64 = 1e-12;
 
 /// The rest-frame view's default window, and the widest that the automatic framing will open it to.
@@ -1464,6 +1479,10 @@ pub struct SpacetimeCanvas {
     /// The last solved picture of each pair and the focus observer's proper time it was solved
     /// at, held and redrawn until that clock has moved `HELD_PICTURE_TAU`. View state.
     seen_held: HashMap<(Who, Who), (AsSeen, f64)>,
+    /// The focus observer's last trustworthy event for building their frame - (r, u, tau) at the
+    /// last frame with u^t under `FRAME_BOOST_LIMIT` - held and used in place of the live one once
+    /// the boost has gone past that limit. View state.
+    frame_held: HashMap<Who, (f64, [f64; 3], f64)>,
     /// The drawn surface curves, and what they were sampled for. Sampling all four surfaces costs
     /// about 270 microseconds, which is worth paying once per change of the observer's event and
     /// not once per frame: with the run paused, every frame after the first reuses this.
@@ -1484,6 +1503,7 @@ impl Default for SpacetimeCanvas {
             seen_seeds: HashMap::new(),
             seen_checked: HashMap::new(),
             seen_held: HashMap::new(),
+            frame_held: HashMap::new(),
             surfaces: SurfaceCurves::default(),
         }
     }
@@ -2421,14 +2441,20 @@ Tick Enable Observer on Alice's or Bob's card",
     /// expression asks for a window of M early on and of femtometres of r on the approach to r-,
     /// where the observer's remaining proper time is femtoseconds and the gap is nine decades
     /// below anything the view has ever had to draw.
+    #[cfg(test)]
     pub(crate) fn framed_window(metric: &KerrSchild, obs: &Observer, rect: Rect) -> Option<f64> {
+        Self::framed_window_at(metric, obs.r, &obs.four_velocity(metric), rect)
+    }
+
+    /// `framed_window` for an event given directly, which is how the rest frame asks once it is
+    /// holding the observer's event rather than reading it live (see `FRAME_BOOST_LIMIT`).
+    fn framed_window_at(metric: &KerrSchild, r: f64, u: &[f64; 3], rect: Rect) -> Option<f64> {
         if rect.height() <= 1.0 || rect.width() <= 1.0 {
             return None;
         }
-        let u = obs.four_velocity(metric);
         let ahead = [metric.outer_horizon(), metric.inner_horizon(), 0.0]
             .into_iter()
-            .filter_map(|r_h| affine_length_to_surface(metric, obs.r, &u, r_h))
+            .filter_map(|r_h| affine_length_to_surface(metric, r, u, r_h))
             .filter(|tau| tau.is_finite() && *tau > 0.0)
             .fold(f64::INFINITY, f64::min);
         if !ahead.is_finite() {
@@ -2479,11 +2505,25 @@ Tick Enable Observer on Alice's or Bob's card",
         show_distant_clock_grid: bool,
         signals: SignalViews<'_>,
     ) {
+        // The event the frame is built at: the live one, or - once the boost is past what double
+        // precision can build a tetrad from - the last one that was not. See `FRAME_BOOST_LIMIT`.
+        // `frame_held_since` is how far the observer's own clock has moved since, for the box.
+        let focus_key = Who::of(focus_obs).unwrap_or(Who::Bob);
+        let u_live = focus_obs.four_velocity(metric);
+        let (focus_r, u_focus, frame_held_since) = match self.frame_held.get(&focus_key) {
+            Some(&(r, u, tau)) if u_live[0] > FRAME_BOOST_LIMIT => (r, u, Some(focus_obs.tau - tau)),
+            _ => {
+                if u_live[0] <= FRAME_BOOST_LIMIT {
+                    self.frame_held.insert(focus_key, (focus_obs.r, u_live, focus_obs.tau));
+                }
+                (focus_obs.r, u_live, None)
+            }
+        };
         // Keep the next surface the observer meets on the canvas, if the user has not taken the
         // wheel. The window follows from one number and the same rule serves the whole fall, so
         // there is no threshold anywhere in this and no special case for the last moments.
         if self.keep_surface_framed
-            && let Some(target) = Self::framed_window(metric, focus_obs, rect)
+            && let Some(target) = Self::framed_window_at(metric, focus_r, &u_focus, rect)
         {
             let current = self.frame_max_r.max(FRAME_MAX_R_MIN);
             self.frame_max_r = current * (target / current).powf(FRAME_ZOOM_LERP);
@@ -2543,8 +2583,7 @@ Tick Enable Observer on Alice's or Bob's card",
         let focus_who = Who::of(focus_obs).unwrap_or(Who::Bob);
         let obs_color =
             if focus_who == Who::Alice { Theme::ALICE_COLOR } else { Theme::BOB_COLOR };
-        let u_focus = focus_obs.four_velocity(metric);
-        let axial = Tetrad::from_four_velocity_axial(metric, focus_obs.r, &u_focus);
+        let axial = Tetrad::from_four_velocity_axial(metric, focus_r, &u_focus);
         let mut other_seen: Option<(Who, &Observer, Result<AsSeen, NoImage>)> = None;
         let mut seen_held_for: Option<f64> = None;
         if let Some(other) = other_obs.filter(|o| o.is_active) {
@@ -2604,7 +2643,7 @@ Tick Enable Observer on Alice's or Bob's card",
             }
             None => axial.e1,
         };
-        let frame = LocalFrame::for_observer_plane(metric, focus_obs.r, &u_focus, &s_leg);
+        let frame = LocalFrame::for_observer_plane(metric, focus_r, &u_focus, &s_leg);
 
         // 2. The distant clock's own slices: the surfaces t = const of the chart's Killing time,
         // which is proper time on a clock at rest at infinity. `surface_t_const` places each of
@@ -2738,10 +2777,18 @@ Tick Enable Observer on Alice's or Bob's card",
                 }
                 let x = rect.left() + 6.0;
                 let y = segment_y_at_x(end_a, end_b, x);
+                // Two lines through the observer's own event both say "now": their own, which is
+                // horizontal, and this clock's, which is tilted by how fast they move through its
+                // frame. Only the horizontal one is theirs, so the tilted one names its clock.
+                let label = if k == 0 {
+                    "now (distant clock)".to_string()
+                } else {
+                    distant_clock_offset_label(dt * seconds_per_m)
+                };
                 let drawn = painter.text(
                     Pos2::new(x, y - 2.0),
                     egui::Align2::LEFT_BOTTOM,
-                    distant_clock_offset_label(dt * seconds_per_m),
+                    label,
                     egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
                     label_colour,
                 );
@@ -2795,6 +2842,21 @@ Tick Enable Observer on Alice's or Bob's card",
                     );
                 }
             }
+        }
+
+        // 2c. The observer's own now, named on their own horizontal axis in their own colour, at
+        // the same size and weight as the distant clock's readings. Three quarters of the way
+        // across: clear of the proper-time ticks up the middle, and on the outward side, where
+        // the surface boxes - which gather beside their curves, inward - do not land on it.
+        {
+            let [r, g, b, _] = obs_color.to_array();
+            painter.text(
+                Pos2::new(rect.left() + 0.75 * rect.width(), center.y - 2.0),
+                egui::Align2::LEFT_BOTTOM,
+                format!("now ({})", focus_obs.name),
+                egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
+                Color32::from_rgba_unmultiplied(r, g, b, 180),
+            );
         }
 
         // 3. Surfaces r = const, every one of them the exact curve it is in this chart.
@@ -2858,7 +2920,7 @@ Tick Enable Observer on Alice's or Bob's card",
         let key = SurfaceKey {
             m: metric.m,
             a: metric.a,
-            r0: focus_obs.r,
+            r0: focus_r,
             u: u_focus,
             s: s_leg,
             window,
@@ -2868,7 +2930,7 @@ Tick Enable Observer on Alice's or Bob's card",
             self.surfaces.runs = surfaces
                 .iter()
                 .map(|&(r_h, ..)| {
-                    sample_surface_in_plane(metric, focus_obs.r, &u_focus, &s_leg, r_h, &opts)
+                    sample_surface_in_plane(metric, focus_r, &u_focus, &s_leg, r_h, &opts)
                         .into_iter()
                         .map(|run| DrawnRun {
                             // A run never mixes branches, so the first point that names one names
@@ -3153,6 +3215,20 @@ Tick Enable Observer on Alice's or Bob's card",
         let apex = center;
         let (focus_future_fill, focus_past_fill, focus_edge) = Theme::cone_colours(Some(focus_who));
         let mut focus_extra: Vec<TelemetryLine> = Vec::new();
+        if frame_held_since.is_some() {
+            focus_extra.push(TelemetryLine {
+                text: format!(
+                    "frame held: your boost dt/dτ = {} is past what the chart can build a frame \
+                     from, so this is your frame at dt/dτ = {}; your clock has moved under \
+                     {HELD_PICTURE_TAU} M since",
+                    loose_number(u_live[0]),
+                    loose_number(u_focus[0])
+                ),
+                color: Theme::TEXT_MUTED,
+                is_title: false,
+                bold: false,
+            });
+        }
 
         if focus_obs.r > 0.02 && focus_obs.is_active {
             let p_fut_out = apex + Vec2::new(cone_len, -cone_len);
@@ -4798,7 +4874,18 @@ mod canvas_tests {
             on_text.contains("on the distant clock"),
             "and what the same line is worth on a clock at rest at infinity: {on_text}"
         );
-        assert!(on_text.contains("now"), "the slice through the observer's own event is labelled");
+        assert!(
+            on_text.contains("now (distant clock)"),
+            "the distant clock's slice through the observer's own event names its clock: {on_text}"
+        );
+        assert!(
+            on_text.contains("now (Bob)") && off_text.contains("now (Bob)"),
+            "and the observer's own now is named in their own name, grid or no grid"
+        );
+        assert!(
+            !off_text.contains("now (distant clock)"),
+            "the distant clock's now goes with its grid"
+        );
         // Bob's own clock is ticked up his own worldline whether or not the distant grid is shown:
         // it is his clock, not the distant one's, and each tick names its own unit. Nothing else in
         // the view writes a signed number at the head of a line.
@@ -6198,6 +6285,10 @@ mod rest_frame_tests {
         let mut frames = 0;
         let mut angle: Option<String> = None;
         let mut angle_changes = 0;
+        // The drawn r- trace's slope nearest Bob, frame by frame past the boost limit. Before
+        // the frame was held it jumped between the outward side, flat ahead and the inward side.
+        let mut slopes: Vec<f64> = Vec::new();
+        let mut frame_held_frames = 0;
         while bob.four_velocity(&metric)[0] < 1e8 {
             play(&metric, &mut bob, &mut alice, 1, 0.05);
             assert!(!bob.is_frozen(), "the run must reach u^t = 1e8 before the stall");
@@ -6208,6 +6299,30 @@ mod rest_frame_tests {
             }
             if p.text.contains("picture held") {
                 held_frames += 1;
+            }
+            if bob.four_velocity(&metric)[0] > FRAME_BOOST_LIMIT {
+                assert!(
+                    p.text.contains("frame held"),
+                    "past the boost limit the box says the frame is held: {}",
+                    p.text
+                );
+                frame_held_frames += 1;
+                let mut nearest = f64::INFINITY;
+                let mut slope = None;
+                for run in p.curve(Theme::HORIZON_CAUCHY) {
+                    for pair in run.windows(2) {
+                        let mid = [(pair[0][0] + pair[1][0]) / 2.0, (pair[0][1] + pair[1][1]) / 2.0];
+                        let d = mid[0].hypot(mid[1]);
+                        let dx = pair[1][0] - pair[0][0];
+                        if d < nearest && dx.abs() > 1e-12 {
+                            nearest = d;
+                            slope = Some((pair[1][1] - pair[0][1]) / dx);
+                        }
+                    }
+                }
+                if let Some(slope) = slope {
+                    slopes.push(slope);
+                }
             }
             // The header's direction, as the plane's witness: it may not flip to the radial
             // fallback and back once the picture is deep.
@@ -6224,12 +6339,25 @@ mod rest_frame_tests {
             }
         }
         println!(
-            "{frames} frames to u^t = {:.2e}: {no_image_frames} with no image,              {held_frames} held, the header's direction changed {angle_changes} times past              u^t = 1e5",
+            "{frames} frames to u^t = {:.2e}: {no_image_frames} with no image, {held_frames} held, the header's direction changed {angle_changes} times past u^t = 1e5",
             bob.four_velocity(&metric)[0]
         );
         assert_eq!(no_image_frames, 0, "the picture never goes out");
         assert!(held_frames > 0, "and it is held once his clock has stopped");
         assert_eq!(angle_changes, 0, "and the plane does not snap");
+        let (lo, hi) = slopes.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), s| {
+            (lo.min(*s), hi.max(*s))
+        });
+        println!(
+            "{frame_held_frames} frames past the boost limit with the frame held; the r- trace's \
+             slope beside Bob ran from {lo:.4} to {hi:.4} over {} of them",
+            slopes.len()
+        );
+        assert!(frame_held_frames > 0 && slopes.len() > 10, "the run has to reach the held frames");
+        assert!(
+            hi - lo < 0.05,
+            "the r- trace does not jump about once the frame is held: {lo} to {hi}"
+        );
     }
 
     #[test]
