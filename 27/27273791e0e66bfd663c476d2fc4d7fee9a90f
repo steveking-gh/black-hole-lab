@@ -1,0 +1,29 @@
+src/gui/spacetime_canvas.rs
+  s_3ab46a80c84bd0::t_ea2b00e0beda96 2444
+  s_3ab46a80c84bd0::t_7243a4cd006a9b 6342,6358
+  s_3ab46a80c84bd0::t_37bfbf95006b01 125-139,1482-1485,1506,2446-2451,2457,2508-2521,2526,2586,2646,2860,2923,2933,3218-3231,4888,6288-6291,6303-6326,6348-6357,6359-6360
+  s_3ab46a80c84bd0::t_c11fe67dfbc025 2780-2787,2791,2847,2851-2853,2855-2859,4877-4887
+  s_3ab46a80c84bd0::t_7bf807a1cdf2b3 2848-2850,2854
+  s_3ab46a80c84bd0::t_cb5224f37fac68 2861
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "2727273791e0e66bfd663c476d2fc4d7fee9a90f",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_3ab46a80c84bd0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8d646f0a-c1d1-483c-9f98-594ec910f29b",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
