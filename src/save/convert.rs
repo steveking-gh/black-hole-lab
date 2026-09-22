@@ -621,10 +621,11 @@ pub fn view_to_v1(
 /// Put the saved view back on the three canvases, leaving every cache and every gesture alone.
 ///
 /// The canvases are written in place rather than replaced, which is the point: `past_cone`,
-/// `dragging` and `steep_boxes` are not in the file and must not be reset by a load either. The
-/// cone will be rebuilt against the event it now belongs to on the next frame, a drag in progress
-/// over a run that has just been replaced is ended by the caller, and one frame of box hysteresis
-/// settles itself.
+/// `dragging`, the rest-frame view's sampled surface curves and its as-seen seeds are not in the
+/// file and must not be reset by a load either. The cone will be rebuilt against the event it now
+/// belongs to on the next frame, a drag in progress over a run that has just been replaced is ended
+/// by the caller, the curves are re-sampled the moment their key no longer matches the restored
+/// observer, and a stale seed costs one failed Newton before the cold solve picks the image up.
 pub fn apply_view_v1(
     view: &v1::View,
     spacetime: &mut SpacetimeCanvas,

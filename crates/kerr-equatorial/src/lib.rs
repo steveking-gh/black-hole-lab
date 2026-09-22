@@ -13,6 +13,8 @@
 //!   stoppable on an exact reading of the worldline's own clock.
 //! - [`tetrad`]: the orthonormal frame carried by a 4-velocity.
 //! - [`local_frame`]: an observer's local inertial chart, and the coordinate surfaces drawn in it.
+//! - [`normal_coords`]: the same chart to all orders - Riemann normal coordinates about the
+//!   observer's event, so that a surface is drawn where the geodesics actually meet it.
 //!
 //! It is the physics core of Black Hole Lab and knows nothing of the app: no drawing, no UI, no
 //! simulation clock. Observers with modes and trails, and the signals they exchange, live in the
@@ -21,9 +23,14 @@
 pub mod geodesic;
 pub mod kerr_schild;
 pub mod local_frame;
+pub mod normal_coords;
 pub mod tetrad;
 
 pub use geodesic::GeodesicState;
 pub use kerr_schild::KerrSchild;
 pub use local_frame::{LocalFrame, LocalLine, SurfaceCharacter};
+pub use normal_coords::{
+    RadialConstants, SurfacePoint, SurfaceSampling, affine_length_between,
+    affine_length_to_surface, sample_surface, surface_point_in_frame,
+};
 pub use tetrad::Tetrad;

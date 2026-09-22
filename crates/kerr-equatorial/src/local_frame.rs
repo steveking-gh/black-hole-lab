@@ -70,9 +70,23 @@ impl LocalLine {
 ///
 /// It is a *first-order* chart. The tetrad is exact at the observer's own event, so orientations
 /// there - the tilt of the light cone, the causal character of a surface r = const, the direction
-/// of another worldline - are exact. Finite offsets (where the other observer is drawn, how far
-/// away a horizon is) are the linearised answer, accurate while the offset is small compared with
-/// the curvature radius. The header banner of the view says so.
+/// of another worldline - are exact. Finite offsets are the linearised answer, accurate while the
+/// offset is small compared with the curvature radius, and the offsets the rest-frame view deals in
+/// are of the order of the curvature radius itself: from the prograde ISCO of an a = 0.90 hole this
+/// map puts r+ at 1.647 M along the observer's now-axis where the geodesic distance is 3.020 M.
+///
+/// So this chart is no longer what places anything at a distance. [`crate::normal_coords`] is the
+/// exact construction - Riemann normal coordinates on the same tetrad - and the app draws its
+/// surfaces and the other observer from that. What is left here is what a first-order chart is
+/// genuinely for, and each of these is read *at* the observer's own event where the chart is exact:
+///
+/// * [`LocalFrame::surface_r_const`], for the slope of a surface r = const at the observer's own
+///   event, which is its causal character and the speed the box quotes.
+/// * [`LocalFrame::surface_t_const`], for the distant clock's grid, whose one number - where each
+///   slice cuts the observer's own worldline - is exact by [`LocalLine::xi0_at_axis`] whatever the
+///   drawn trace does further out.
+///
+/// The view's own hover text says which parts of the picture are which.
 #[derive(Debug, Clone, Copy)]
 pub struct LocalFrame {
     tetrad: Tetrad,

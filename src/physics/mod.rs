@@ -2,6 +2,11 @@
 // re-exported under their old names so that `crate::physics::kerr_schild::KerrSchild` and the rest
 // read exactly as they did when the files sat in this directory.
 pub use kerr_equatorial::{geodesic, kerr_schild, local_frame, tetrad};
+// The exact normal-coordinate chart, re-exported under the app's own path like the rest of the
+// geometry core. The rest-frame view draws its surfaces from it and `as_seen` takes the affine
+// length of an arriving ray from it.
+pub use kerr_equatorial::normal_coords;
+pub mod as_seen;
 pub mod observer;
 pub mod wavefront;
 pub mod simulation;

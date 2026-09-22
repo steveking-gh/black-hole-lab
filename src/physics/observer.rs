@@ -1377,6 +1377,59 @@ impl Observer {
         self.trail.push_back(self.current_point());
     }
 
+    /// The 4-velocity of the worldline this observer *holds* before their release: the closed-form
+    /// value `hover` and `rewind_into_hover` tick their clock at, stated at the event the hold is
+    /// anchored on rather than at wherever the observer has since got to.
+    ///
+    /// It is the same case split `hover_four_velocity` makes, read off `start` instead of off the
+    /// current state: a release at rest is joined without a jump, so the hold is the fixed-r
+    /// worldline the fall begins on, and `start.u` is that worldline's own 4-velocity at the drop
+    /// radius; a release that arrives already moving cannot be joined by any fixed-r worldline, so
+    /// the hold is the static observer there, as `hover_four_velocity` says. Reading it from
+    /// `start` is what makes it answerable after the release, when `self.r` is no longer the drop
+    /// radius and the geodesic is no longer sitting on it.
+    pub(crate) fn hold_four_velocity(&self, metric: &KerrSchild) -> [f64; 3] {
+        if self.start.u[1].abs() <= 1e-6 * (1.0 + self.start.u[0].abs()) {
+            return self.start.u;
+        }
+        Self::static_four_velocity(metric, self.start.r).unwrap_or(self.start.u)
+    }
+
+    /// The event the hold stands at when the chart's clock reads `t`, for any `t` at all -
+    /// including times before the run began.
+    ///
+    /// `hover` holds the observer at the drop radius and moves their azimuth and their watch at
+    /// the constant rates of `hold_four_velocity`, so the hold is an integral curve of a Killing
+    /// field and the closed form extends as far either way as it is asked to. That extension is
+    /// the point: at t = 0 no light from the other observer has arrived yet, so anything asking
+    /// what one observer *sees* of another has to read the other's worldline from before the run,
+    /// and a hovering worldline genuinely was hovering before the run - a platform under thrust
+    /// does not begin to exist when a simulation clock is started. `rewind_into_hover` clamps the
+    /// wait at `start.t` instead, because a rewind has a floor and this does not.
+    ///
+    /// A negative `tau` is the honest reading for an event before the start: the observer's watch
+    /// is zeroed at their own creation event, and this is how far short of it the event lies.
+    pub(crate) fn hold_event_at(&self, metric: &KerrSchild, t: f64) -> TrailPoint {
+        let u = self.hold_four_velocity(metric);
+        let waited = t - self.start.t;
+        let (phi, tau) = if u[0] > 0.0 {
+            (
+                self.start.phi + (u[2] / u[0]) * waited,
+                self.start.tau + waited / u[0],
+            )
+        } else {
+            (self.start.phi, self.start.tau)
+        };
+        TrailPoint {
+            t,
+            r: self.start.r,
+            phi,
+            tau,
+            u,
+            stalled: false,
+        }
+    }
+
     /// Generate polygon coordinates for the light cone at the observer's event on the (t, r)
     /// diagram. `time_height`: height in coordinate time units to extend the cone upward (future)
     /// and downward (past).

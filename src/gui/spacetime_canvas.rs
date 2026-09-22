@@ -1,14 +1,17 @@
 use crate::gui::axis::{self, SECONDS_PER_YEAR};
+use crate::gui::beacon_colour::{self, Beacon};
 use crate::gui::controls::{impossible_mode_note, ReferenceFrame, SignalViews};
 use crate::gui::polyline::{SCREEN_SPACING, thin_to_pixels};
 use crate::gui::theme::Theme;
+use crate::physics::as_seen::{as_seen, AsSeen, AsSeenSeed, NoImage, WorldlineSource};
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::geodesic::proper_time_between;
 use crate::physics::local_frame::{ruler_distance, LocalFrame, SurfaceCharacter};
 use crate::physics::observer::{LocalRestFrame, LocalSpeed, Observer, ObserverMode, Who};
 use crate::physics::wavefront::{NullRay, Reception, SignalField};
 use egui::{epaint::PathShape, Color32, Pos2, Rect, Stroke, Vec2};
-use std::collections::{HashMap, HashSet};
+use crate::physics::normal_coords::{SurfaceSampling, affine_length_to_surface, sample_surface};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Plain-language gloss on every number in a telemetry box, shown on hover.
 /// Hover tip for the observer info boxes. Written as a plain multi-line literal (lines start at
@@ -66,7 +69,13 @@ Region tag — where the observer stands relative to the surfaces: outside r₊,
 pub const CHART_BANNER: &str = "This is a chart, not a frame of reference.";
 
 pub const REST_FRAME_TIP: &str =
-"The focus observer's first-order local inertial frame, built from their orthonormal tetrad: c ≡ 1, so light cones stand at 45° and every worldline through the event stands steeper. The dual tetrad places the surfaces r = const - the horizons, the static limit, the ring singularity - exactly at the observer's own event, and linearised for offsets away from that event.";
+"The focus observer's own local chart, built from that observer's orthonormal tetrad: c ≡ 1, so light cones stand at 45° and every worldline through the event stands steeper.
+
+Two constructions share this canvas, and the canvas does not pretend otherwise.
+
+Exact, in Riemann normal coordinates. The view draws each surface r = const — the horizons, the static limit, the ring singularity — as the curve that surface really is: the point of a surface at chart angle ψ sits at the affine length of the geodesic that leaves the focus observer's event in the direction ψ and arrives on that surface. Where the curve meets the now-axis is the ruler distance the horizon box prints, and the two agree because the two are the same integral. The other observer's dot carries the same construction: the dot marks the event on the other worldline that the focus observer's past light cone passes through, and it stands at the affine length of the arriving light ray, in the direction the ray arrives from.
+
+First order, from the tetrad at the focus observer's own event. The distant clock's grid lines — the surfaces t = const — come through the linear map as straight lines, and so do the signal crests. Each of those lines is exact where it crosses the focus observer's worldline, which is the one place the view reads it, and linearised away from there.";
 
 /// Smallest on-screen gap, in points at `font_scale` = 1, that `distant_clock_grid_step` will
 /// leave between two neighbouring lines of the distant clock grid. Below this the lines stop being
@@ -109,7 +118,7 @@ pub(crate) const COARSE_ZOOM_STEPS: i32 = 20;
 pub const KEEP_SURFACE_FRAMED_TIP: &str =
 "Re-derive the rest-frame view's zoom every frame, so that the next surface the observer meets - the outer horizon, the Cauchy horizon, or the ring - stays on the canvas.
 
-A surface r = const crosses the observer's own time axis at xi^0 = (r - r_h) / |dr/dtau| exactly: the proper time the observer has left before reaching that surface. The framing follows that one number, which is why the framing needs no special case for the last moments. On the approach to the far branch of r-, where the gap closes like exp(-kappa_- t) while the observer's remaining proper time shrinks alongside, following that number is the only way to watch both at once.
+A surface r = const crosses the observer's own time axis at the affine length of the observer's own worldline from here to the crossing, which for a worldline is the proper time the observer has left before reaching that surface. The framing follows that one number - the same number the drawn curve crosses the axis at, so the framing and the picture agree - and that is why the framing needs no special case for the last moments. On the approach to the far branch of r-, where the gap closes like exp(-kappa_- t) while the observer's remaining proper time shrinks alongside, following that number is the only way to watch both at once.
 
 The zoom only ever tightens the view. Any turn of the wheel switches this setting off.";
 
@@ -720,6 +729,14 @@ impl PendingBox {
             tip: TELEMETRY_HOVER_TIP,
         }
     }
+
+    /// The same box under a different hover gloss. The rest-frame view's box for the *other*
+    /// observer carries the ordinary telemetry lines and a great deal that the ordinary tip says
+    /// nothing about, so that box answers with `AS_SEEN_BOX_TIP` instead.
+    pub(crate) fn with_tip(mut self, tip: &'static str) -> Self {
+        self.tip = tip;
+        self
+    }
 }
 
 /// One printed line of a telemetry box: the text, its colour and whether it is the title.
@@ -1009,9 +1026,36 @@ pub const SIGNAL_BOX_TIP: &str = "The other observer's transmission, read as a w
 An \"Incomplete\" line means the Wavefronts kept cap has evicted pulses that could still have arrived, so this box is reading a trimmed run: arrivals are missing, and a receive frequency measured across the gap they left is wrong rather than merely coarse. The count is how many went. Raise Wavefronts kept to stop losing them - the evicted ones do not come back, so a run that matters wants the cap raised before it starts. The count is exact for a receiver who stays outside r+ and a floor for one who crosses, since a crosser also meets the frozen arcs standing on r-, which this test treats as already past arriving.";
 
 pub const SURFACE_BOX_TIP: &str =
-"What the surface is, read straight off the slope of the surface's line in this frame. Steeper than 45 degrees means timelike - the world-tube of observers holding that radius, something a rocket can stay off. Exactly 45 degrees means null. Flatter than 45 degrees means spacelike: not a place at all but a moment of your history, which arrives whatever you do. Nothing about the tilt goes in by hand; the tilt follows from the sign of g^rr at your own radius through the dual tetrad, so the reading stays exact at the dot.
+"What the surface is, read straight off the slope the surface has where the surface passes your own event. Steeper than 45 degrees means timelike - the world-tube of observers holding that radius, something a rocket can stay off. Exactly 45 degrees means null. Flatter than 45 degrees means spacelike: not a place at all but a moment of your history, which arrives whatever you do. Nothing about the tilt goes in by hand; the tilt follows from the sign of g^rr at your own radius through the dual tetrad, so the reading stays exact at the dot.
+
+The box takes that reading at your own event and nowhere else. The drawn curve gives the exact position of the surface in your chart, and a curve bends: far from you the same surface tilts differently, and that far tilt says something about a distant event rather than about the event you are standing on.
 
 Moving at / closing at - for a timelike surface, the speed at which that world-tube crosses this frame; for a spacelike surface, your own speed relative to the observers whose simultaneity slice the surface is. The same slope gives both.";
+
+/// Hover gloss on the other observer's box in a rest-frame view, which reports the event that
+/// observer is *seen* at rather than the event that observer is at.
+pub const AS_SEEN_BOX_TIP: &str =
+"As seen - defined as the event on the other observer's worldline that lies on this observer's past light cone. Nobody sees anybody now; what arrives at an event is light, and this box reads the event that light left. The direct image only: a ray that has wound round the hole and come back would deliver a second, older picture, and this box ignores that second picture.
+
+Where the dot stands. The view follows the arriving ray back to the emission event and puts the dot where the exact normal-coordinate rule puts that event: at the affine length of that ray, in the direction the light arrives from. Normalise the ray so that this observer's own clock measures unit frequency on the ray, and the affine length λ becomes at once how far away the emission event lies and how long ago the emission event happened - which is exactly what puts the dot on the 45° past cone. The thin line from the dot to this observer's event is that ray: in normal coordinates a null geodesic runs as a straight 45° line, so the line is the light itself rather than an annotation over the top of the picture.
+
+The picture drops the azimuthal leg. This canvas draws the (ξ¹, ξ⁰) plane, so the box prints the third component ξ² instead of drawing it, and the dot sits inside the cone rather than on the cone by exactly the amount the light arrived out of the plane.
+
+That projection also shortens the dot's distance from the origin, so light arriving well out of the plane can put the dot past a drawn surface curve without the emission event lying on the far side of that surface. The curves sweep directions that lie in this plane; the light does not have to. Read the region tag in the title for which side of each horizon the emission event is really on, and ξ² for how much of the offset the picture is not showing.
+
+light left - λ, as a time ago on this observer's own clock and as a distance away on this observer's own ruler. One number, because in normal coordinates a null geodesic makes those the same number.
+
+Every ordinary telemetry line above reads the other observer at the emission event and not now: the radius, the rates, the speeds and the region tag in the title are all what was true where the light left.
+
+watch - the other observer's own clock at the emission event. Before the run began means the light left before the release, on the backward extension of the hold, and that extension is what makes anybody visible at all at t = 0.
+
+1 + z and g - g is ν_seen/ν_emitted, which the arriving ray carries exactly rather than a formula supplying it, and 1 + z is one over g. Below 1 in g means a redshift.
+
+beacon - each observer carries a beacon whose rest wavelength is the dominant wavelength of that observer's own marker colour. The view paints the dot the colour that beacon arrives in: the seen wavelength is the rest wavelength divided by g, the CIE 1931 colour matching functions give that wavelength its chromaticity, and the dot's brightness is the bolometric factor g⁴ times the eye's own response at the seen wavelength against the eye's response at the rest wavelength. Once the seen light leaves the visible band, or once what is left of the light falls below what a screen can show against this background, the dot becomes a dashed grey ring at the same exact position: the light still arrives, and the eye no longer has anything to see.
+
+brightness and watch rate - the flux factor g⁴, and the rate this observer sees the other observer's clock run at, which is g. Both numbers belong to what this observer receives rather than to anything the other observer does.
+
+The two cases worth watching. An observer who stays outside r₊ never sees the other cross it: the seen radius falls towards r₊ and the dot piles up where the inward half of the past cone meets the drawn r₊ curve, dimming without limit. An observer who falls in sees the crossing happen exactly as that observer crosses r₊, because r₊ is a null surface whose generators stand still in r, so light let go on the horizon waits there until the next worldline arrives.";
 
 /// The Cauchy box's border. Red rather than the magenta of the r₋ line itself: the line is the
 /// geometry, the box is the warning.
@@ -1169,6 +1213,23 @@ fn speed_row(s: &LocalSpeed) -> String {
     format!("{label:<8}= {v} (γ {}, γv {}c)", big(s.gamma), big(s.celerity()))
 }
 
+/// Which region of the geometry a radius lies in, as the title line of an observer's box names it.
+///
+/// Its own function because two titles carry it: the observer's box, which names the region the
+/// observer stands in now, and the *as seen* box, which names the region the other observer stood
+/// in when the light left - a different event, and often a different region.
+fn region_tag(metric: &KerrSchild, r: f64) -> &'static str {
+    if r > metric.ergosphere_equatorial() {
+        "Region I"
+    } else if r > metric.outer_horizon() {
+        "Ergo"
+    } else if r > metric.inner_horizon() {
+        "Region II (Trapped)"
+    } else {
+        "Region III (Core)"
+    }
+}
+
 /// The box's contents, one metric per line.
 fn telemetry_lines(
     name: &str,
@@ -1276,22 +1337,13 @@ fn telemetry_lines(
         format!("ν_in/ν_∞ = {:.2} ({})", nu_ratio, shift_tag)
     };
 
-    let rm = metric.inner_horizon();
-    let rp = metric.outer_horizon();
-    let re = metric.ergosphere_equatorial();
-
-    let region_tag = if obs.r > re {
-        "Region I"
-    } else if obs.r > rp {
-        "Ergo"
-    } else if obs.r > rm {
-        "Region II (Trapped)"
-    } else {
-        "Region III (Core)"
-    };
-
     let mut lines = vec![
-        TelemetryLine { text: format!("{} [{}]", name, region_tag), color, is_title: true, bold: false },
+        TelemetryLine {
+            text: format!("{} [{}]", name, region_tag(metric, obs.r)),
+            color,
+            is_title: true,
+            bold: false,
+        },
         TelemetryLine { text: v_coord_str, color: Theme::TEXT_BRIGHT, is_title: false, bold: false },
         TelemetryLine { text: v_proper_str, color: Theme::TEXT_BRIGHT, is_title: false, bold: false },
         TelemetryLine { text: omega_str, color: Theme::TEXT_BRIGHT, is_title: false, bold: false },
@@ -1356,14 +1408,17 @@ pub struct SpacetimeCanvas {
     pub keep_surface_framed: bool,
     /// Where the user has dragged each info box on this canvas, per diagram and per observer.
     pub telemetry: TelemetryBoxes,
-    /// Which surfaces' boxes are currently hung off the top margin as "steep" lines rather than
-    /// parked at the right margin as "flat" ones. This is hysteresis for the session in hand and
-    /// nothing a save file would ever hold; it carries a `BoxId` because the loop that draws the
-    /// surfaces has one to hand, not because the key travels anywhere. A line near 45 degrees - a
-    /// horizon on the approach, which is null - would otherwise flip between the two rules every
-    /// frame as the drawn slope crosses 1, and its box would jump between two corners of the
-    /// canvas. See `steep_with_hysteresis`.
-    steep_boxes: std::collections::HashSet<BoxId>,
+    /// The last frame's answer for where each observer is seen from each other observer's event,
+    /// kept so that `as_seen` can be warm-started. A warm solve is a Newton from a seed that is one
+    /// frame stale and costs about fourteen microseconds; a cold one has to fan two dozen rays
+    /// across the whole past cone first and costs nearly two milliseconds. It is view state and
+    /// nothing a save file would hold: a stale seed costs one failed Newton and the cold path picks
+    /// the answer up again.
+    seen_seeds: HashMap<(Who, Who), AsSeenSeed>,
+    /// The drawn surface curves, and what they were sampled for. Sampling all four surfaces costs
+    /// about 270 microseconds, which is worth paying once per change of the observer's event and
+    /// not once per frame: with the run paused, every frame after the first reuses this.
+    surfaces: SurfaceCurves,
 }
 
 impl Default for SpacetimeCanvas {
@@ -1377,21 +1432,58 @@ impl Default for SpacetimeCanvas {
             keep_surface_framed: true,
             telemetry: TelemetryBoxes::default()
                 .starting_shut(&[Canvas::Spacetime, Canvas::RestFrame]),
-            steep_boxes: std::collections::HashSet::new(),
+            seen_seeds: HashMap::new(),
+            surfaces: SurfaceCurves::default(),
         }
     }
 }
 
-/// Whether a surface's box is hung off the top margin (steep line) or parked at the right margin
-/// (flat line), given where it was last frame and the line's drawn |slope| now.
+/// Everything a sampled set of surface curves depends on. Two keys that compare equal name the same
+/// curves, so the sampler is skipped; anything else and the curves are taken again.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SurfaceKey {
+    /// The hole, which the observer cards can change under the view.
+    m: f64,
+    a: f64,
+    /// The chart's origin: the observer's radius and 4-velocity. Both move on every played frame,
+    /// which is why the cache pays for itself when the run is paused rather than when it is
+    /// running.
+    r0: f64,
+    u: [f64; 3],
+    /// The window the sampler was asked for, quantised by `sampling_window` so that the automatic
+    /// zoom's own per-frame creep does not invalidate the curves on its own.
+    window: f64,
+}
+
+/// The four surfaces as polylines in the observer's (xi^1, xi^0) plane, with the key they were
+/// sampled under.
+#[derive(Default)]
+struct SurfaceCurves {
+    key: Option<SurfaceKey>,
+    /// One entry per surface of the view's `surfaces` table, each a list of open runs of exact
+    /// points. A run is never closed into a loop: see `normal_coords::sample_surface`, where a run
+    /// ends at the direction past which the observer's own straight lines stop reaching the
+    /// surface at all, and that edge is a thing to see rather than a gap to bridge.
+    runs: Vec<Vec<Vec<[f64; 2]>>>,
+}
+
+/// The window the sampler is asked for, in M of xi: the half-diagonal of the canvas with a margin,
+/// rounded up onto a ladder of eighth-octaves.
 ///
-/// The rule is |slope| >= 1, with a band of hysteresis either side of it: a box that was steep
-/// stays steep down to 0.8, one that was flat stays flat up to 1.25. A null surface is exactly
-/// |slope| = 1, and an observer on the approach to a horizon draws one for frame after frame,
-/// wobbling about 1 by less than the band; without the hysteresis the box jumped between the two
-/// margins as the slope crossed 1 each way. Seen in the app on the Cauchy box.
-pub(crate) fn steep_with_hysteresis(was_steep: bool, slope_abs: f64) -> bool {
-    if was_steep { slope_abs >= 0.8 } else { slope_abs >= 1.25 }
+/// The rounding is what makes the cache worth having while the automatic framing is settling. That
+/// framing log-lerps the zoom towards its target every frame (`FRAME_ZOOM_LERP`), so the raw
+/// half-diagonal changes by a fraction of a per cent per frame for as long as the zoom is moving,
+/// and a key that carried the raw number would miss every time. Rounding *up* onto a coarse ladder
+/// means the sampled window always covers the canvas, and the key only changes when the zoom has
+/// moved by nine per cent.
+fn sampling_window(rect: Rect, px_per_m: f64) -> f64 {
+    let half_diagonal = 0.5 * (rect.width().hypot(rect.height()) as f64) / px_per_m.max(1e-300);
+    // A tenth of margin so that a curve leaving by a corner still has its exit point sampled.
+    let wanted = half_diagonal * 1.1;
+    if !wanted.is_finite() || wanted <= 0.0 {
+        return FRAME_MAX_R_DEFAULT;
+    }
+    2f64.powf((wanted.log2() * 8.0).ceil() / 8.0)
 }
 
 /// Width of a wavefront comet on the global chart, in screen points.
@@ -2383,25 +2475,37 @@ Tick Enable Observer on Alice's or Bob's card",
     /// The rest-frame window that puts the next surface the observer meets `FRAME_SURFACE_FRACTION`
     /// of the way up the canvas, or `None` when there is nothing ahead of them to frame.
     ///
-    /// A surface r = r_h crosses the observer's own time axis at xi^0 = (r_h - r) / u^r - set
-    /// xi^1 = 0 in the line `LocalFrame::surface_r_const` returns and everything else cancels - and
-    /// that is exactly the proper time they have left before they reach it. The smallest positive
-    /// one of those is the surface they are about to meet: the ring for a raindrop, r+ for anyone
-    /// still outside it, r- for a worldline with E - Omega_- L < 0 freezing onto the far branch.
+    /// A surface r = r_h crosses the observer's own time axis at the affine length of the geodesic
+    /// that leaves the observer's event along their own 4-velocity and arrives on that surface -
+    /// which for a timelike tangent is the proper time the observer has left before reaching it,
+    /// and is the same number the drawn curve crosses the axis at. The smallest of those is the
+    /// surface they are about to meet: the ring for a raindrop, r+ for anyone still outside it, r-
+    /// for a worldline with E - Omega_- L < 0 freezing onto the far branch.
+    ///
+    /// `affine_length_to_surface` answers `None` for a surface the observer's own worldline does
+    /// not set out towards, which is the whole of the test for "ahead": a static observer reaches
+    /// no surface r = const by waiting and is framed at the default, and a surface behind an
+    /// infaller is refused on the sign of their u^r before the quadrature is ever run.
+    ///
+    /// This used to be the first-order (r_h - r) / u^r, which is the same quantity linearised and
+    /// is wrong by most of a gravitational radius exactly where the framing matters: from the
+    /// prograde ISCO of an a = 0.90 hole the linear map puts r+ 1.647 M down the time axis where
+    /// the proper time to the crossing is 3.020 M. The framing and the drawn curve then disagreed
+    /// about where the surface was, on the one canvas whose job is to say where the surface is.
     ///
     /// Nothing in the rule knows about horizons or about how far down the fall is: the same
     /// expression asks for a window of M early on and of femtometres of r on the approach to r-,
     /// where the observer's remaining proper time is femtoseconds and the gap is nine decades
     /// below anything the view has ever had to draw.
     pub(crate) fn framed_window(metric: &KerrSchild, obs: &Observer, rect: Rect) -> Option<f64> {
-        let u_r = obs.four_velocity(metric)[1];
-        if !u_r.is_finite() || u_r == 0.0 || rect.height() <= 1.0 || rect.width() <= 1.0 {
+        if rect.height() <= 1.0 || rect.width() <= 1.0 {
             return None;
         }
+        let u = obs.four_velocity(metric);
         let ahead = [metric.outer_horizon(), metric.inner_horizon(), 0.0]
             .into_iter()
-            .map(|r_h| (r_h - obs.r) / u_r)
-            .filter(|xi0| xi0.is_finite() && *xi0 > 0.0)
+            .filter_map(|r_h| affine_length_to_surface(metric, obs.r, &u, r_h))
+            .filter(|tau| tau.is_finite() && *tau > 0.0)
             .fold(f64::INFINITY, f64::min);
         if !ahead.is_finite() {
             return None;
@@ -2413,21 +2517,30 @@ Tick Enable Observer on Alice's or Bob's card",
         Some(window.clamp(FRAME_MAX_R_MIN, FRAME_MAX_R_DEFAULT))
     }
 
-    /// Render the focus observer's rest frame: the *first-order local inertial chart* defined by
-    /// their orthonormal tetrad.
+    /// Render the focus observer's rest frame: the local chart of their orthonormal tetrad, with
+    /// the surfaces and the other observer placed *exactly* and the distant clock's grid placed to
+    /// first order.
     ///
-    /// Everything in the picture is placed by one linear map, the dual tetrad
-    /// xi^a = e^a_mu Delta x^mu (see `LocalFrame`): the surfaces r = const (the ring singularity,
-    /// both horizons and the static limit), the other observer's event, and the direction of their
-    /// worldline. Because the map is linear and the frame is orthonormal, light cones are at
-    /// exactly 45 degrees everywhere in the picture - the focus observer's and the other
-    /// observer's alike - and the tilt of every surface comes out of the geometry rather than out
-    /// of a drawing rule: a surface r = const is steeper than 45 degrees where g^rr > 0, at 45
-    /// degrees on a horizon, and flatter than 45 degrees between them.
+    /// Two constructions share the canvas and the view keeps them apart rather than blurring them.
     ///
-    /// The chart is exact at the focus observer's own event, where all of those orientations live,
-    /// and linearised for finite offsets (how far away a horizon is drawn, where the other
-    /// observer sits). The banner says so.
+    /// The exact half is Riemann normal coordinates about the focus observer's event
+    /// (`kerr_equatorial::normal_coords`): a point sits at xi^a = sigma T^a, where T is the initial
+    /// tangent of the geodesic that leaves the event towards it and sigma is the affine parameter
+    /// at which that geodesic arrives. The four surfaces r = const are drawn by sweeping T round
+    /// the circle and taking the affine length to each surface, so a surface is a curve and not a
+    /// line, and the curve crosses the now-axis at the ruler distance the horizon box prints. The
+    /// other observer is placed by the same rule applied to the light that actually arrives: see
+    /// `physics::as_seen`.
+    ///
+    /// The first-order half is the linear map of `LocalFrame`: the distant clock's slices
+    /// t = const and the signal crests, each of them exact where it crosses the focus observer's
+    /// own worldline - which is where each one is read - and linearised away from it.
+    ///
+    /// What both halves share is the tetrad at the observer's own event, which is exact. Light
+    /// cones therefore stand at exactly 45 degrees, and the causal character of a surface at the
+    /// observer's own event comes out of the geometry rather than out of a drawing rule: a surface
+    /// r = const is steeper than 45 degrees where g^rr > 0, at 45 degrees on a horizon, and
+    /// flatter than 45 degrees between them. `REST_FRAME_TIP` says all of this to the user.
     #[allow(clippy::too_many_arguments)]
     fn render_observer_frame(
         &mut self,
@@ -2645,7 +2758,7 @@ Tick Enable Observer on Alice's or Bob's card",
             }
         }
 
-        // 3. Surfaces r = const, every one of them placed by the dual tetrad.
+        // 3. Surfaces r = const, every one of them the exact curve it is in this chart.
         let ergo_faint = Color32::from_rgba_unmultiplied(
             Theme::ERGOSPHERE_LINE.r(),
             Theme::ERGOSPHERE_LINE.g(),
@@ -2695,38 +2808,70 @@ Tick Enable Observer on Alice's or Bob's card",
             ),
         ];
 
-        // Worked out here, where the line geometry is; painted at the end of the pass.
+        // Worked out here, where the geometry is; painted at the end of the pass.
         let mut pending_boxes: Vec<PendingBox> = Vec::new();
 
+        // The exact curves, taken once per change of the observer's event and of the zoom rather
+        // than once per frame. The sampler's window is the half-diagonal of the canvas, because a
+        // polar curve about the centre of the canvas can leave by a corner, and the margin and the
+        // quantisation are `sampling_window`'s.
+        let window = sampling_window(rect, scale as f64);
+        let u_focus = focus_obs.four_velocity(metric);
+        let key = SurfaceKey {
+            m: metric.m,
+            a: metric.a,
+            r0: focus_obs.r,
+            u: u_focus,
+            window,
+        };
+        if self.surfaces.key != Some(key) {
+            let opts = SurfaceSampling::for_window(window);
+            self.surfaces.runs = surfaces
+                .iter()
+                .map(|&(r_h, ..)| {
+                    sample_surface(metric, focus_obs.r, &u_focus, r_h, &opts)
+                        .into_iter()
+                        .map(|run| run.into_iter().map(|p| p.xi).collect())
+                        .collect()
+                })
+                .collect();
+            self.surfaces.key = Some(key);
+        }
+
+        // Everything drawn from a curve is clipped to the canvas rather than trimmed by hand. The
+        // clipping matters here and not only for tidiness: a run of the sampler ends with one exact
+        // point beyond the window, and near the direction where sigma runs away that point can be
+        // decades outside it, so the polyline has to be cut rather than drawn.
+        let clipped = painter.with_clip_rect(rect);
+
         for (idx, &(r_h, id, title, color, width, border, is_horizon)) in surfaces.iter().enumerate() {
-            let line = frame.surface_r_const(r_h);
-            let anchor = to_screen(line.point[0], line.point[1]);
-            let dir = Vec2::new(line.dir[0] as f32, -(line.dir[1] as f32));
-            let Some((end_a, end_b)) = clip_line_to_rect(anchor, dir, rect) else {
-                continue;
-            };
-            painter.line_segment([end_a, end_b], Stroke::new(width, color));
-
-            let steep = steep_with_hysteresis(self.steep_boxes.contains(&id), line.slope().abs());
-            if steep {
-                self.steep_boxes.insert(id);
-            } else {
-                self.steep_boxes.remove(&id);
+            // The curve in screen points, run by run, clipped to the canvas. Carried in f64 all the
+            // way to the clip because the far end of a run can be many decades outside the window
+            // and an f32 would have overflowed on the way.
+            let mut visible: Vec<Vec<Pos2>> = Vec::new();
+            for run in self.surfaces.runs.get(idx).into_iter().flatten() {
+                let screen: Vec<[f64; 2]> = run
+                    .iter()
+                    .map(|p| {
+                        [
+                            center.x as f64 + p[0] * scale as f64,
+                            center.y as f64 - p[1] * scale as f64,
+                        ]
+                    })
+                    .collect();
+                visible.extend(clip_polyline_to_rect(&screen, rect));
             }
-            let (label_pos, align) = if steep {
-                // Steep line: hang the label off it, stacked down the top margin.
-                let y = (head_bottom + 8.0 + 36.0 * font_scale * (idx as f32)).min(rect.bottom() - 40.0);
-                let x = segment_x_at_y(end_a, end_b, y)
-                    .clamp(rect.left() + 6.0, rect.right() - 150.0 * font_scale);
-                (Pos2::new(x + 5.0, y), egui::Align2::LEFT_TOP)
-            } else {
-                // Flat line: park the label on it at the right margin.
-                let y = segment_y_at_x(end_a, end_b, rect.right() - 10.0)
-                    .clamp(rect.top() + 24.0, rect.bottom() - 6.0);
-                (Pos2::new(rect.right() - 8.0, y - 3.0), egui::Align2::RIGHT_BOTTOM)
-            };
+            for piece in &visible {
+                clipped.add(egui::Shape::line(piece.clone(), Stroke::new(width, color)));
+            }
 
-            // The causal character is read straight off the drawn slope: |d xi^0 / d xi^1| > 1 is
+            // The line the *box* reads is still `surface_r_const`, and deliberately so. That line
+            // is the exact tangent of this surface at the observer's own event: its slope is the
+            // causal character and the closing speed there, which is what the box quotes. Reading
+            // either off the far curve would be reading a statement about a distant event.
+            let line = frame.surface_r_const(r_h);
+
+            // The causal character is read straight off that slope: |d xi^0 / d xi^1| > 1 is
             // a timelike surface, = 1 a null one, < 1 a spacelike one. The 2e-3 tolerance is a
             // display band on that comparison, not a physical fudge.
             let note = match line.character(2e-3) {
@@ -2759,6 +2904,13 @@ Tick Enable Observer on Alice's or Bob's card",
             // a place with a distance, or a moment on his own clock - and the other two report the
             // causal character of their line as drawn, which is the same question asked of a
             // surface whose answer never changes.
+            //
+            // A surface with no visible run gets no box. The box stands beside its own curve, and
+            // one with nothing to stand beside would be a reading about something the user cannot
+            // see and cannot scroll to.
+            let Some(label_pos) = curve_anchor(&visible, center.y, rect.center()) else {
+                continue;
+            };
             let box_lines = if is_horizon {
                 horizon_box_lines(metric, focus_obs, &focus_obs.name, title, None, r_h, border)
             } else {
@@ -2768,16 +2920,18 @@ Tick Enable Observer on Alice's or Bob's card",
                     TelemetryLine { text: detail, color: Theme::TEXT_BRIGHT, is_title: false, bold: false },
                 ]
             };
-            // `label_pos` is a corner of the text the box stands in for; make it the box's own.
             let size = telemetry_box_size(painter, &box_lines, font_scale);
-            let min = if align == egui::Align2::RIGHT_BOTTOM {
-                Pos2::new(label_pos.x - size.x, label_pos.y - size.y)
-            } else {
-                label_pos
-            };
+            // Clear of the head banner, which is painted last and would otherwise have a surface's
+            // box sitting on its text: a curve that leaves by the top of the canvas anchors its box
+            // at the top of the canvas, which is exactly where the banner is.
+            let anchor = default_badge_pos(rect, label_pos, size);
+            let anchor = Pos2::new(
+                anchor.x,
+                anchor.y.max(head_bottom + 6.0).min(rect.bottom() - size.y - 6.0),
+            );
             pending_boxes.push(PendingBox {
                 id,
-                anchor: min,
+                anchor,
                 lines: box_lines,
                 color: border,
                 tip: if is_horizon { HORIZON_BOX_TIP } else { SURFACE_BOX_TIP },
@@ -2973,75 +3127,131 @@ Tick Enable Observer on Alice's or Bob's card",
         // dot sits on the origin of the axes here, where an extra stroke is only clutter.
         painter.circle_filled(apex, 7.5, obs_color);
 
-        // 4. The other observer: their event, their worldline direction and their light cone, all
-        // from the same linear map. The azimuthal component xi^2 is dropped from the picture and
-        // printed instead, so the projection is on the record.
-        let mut other_box: Option<(&Observer, Who, Pos2, Color32, Vec<TelemetryLine>)> = None;
-        if let Some(other) = other_obs
-            && other.is_active
-    {
-            let two_pi = std::f64::consts::TAU;
-            let mut d_phi = (other.phi - focus_obs.phi).rem_euclid(two_pi);
-            if d_phi > std::f64::consts::PI {
-                d_phi -= two_pi;
-            }
-            let xi = frame.to_local(&[other.t - focus_obs.t, other.r - focus_obs.r, d_phi]);
-            let other_pos = to_screen(xi[1], xi[0]);
+        // 4. The other observer, as seen.
+        //
+        // Nobody sees anybody now. What arrives at the focus observer's event is light, so the
+        // event to draw is the one on the other worldline that the focus observer's past light cone
+        // passes through, and the place to draw it is where the exact normal-coordinate rule puts
+        // it: at the affine length of the arriving ray, along the direction the ray arrives from.
+        // `physics::as_seen` solves that two-point problem; everything here is drawing.
+        //
+        // Only a dot. The other observer's light cone, the stroke along their worldline and the
+        // singularity glyph have all gone, and each for the same reason: every one of them was a
+        // statement about the other observer *now*, drawn at a position that is a statement about
+        // the other observer *then*. A cone at the seen event would be the cone of an event whose
+        // future the focus observer has not received.
+        let mut other_box: Option<PendingBox> = None;
+        if let Some(other) = other_obs.filter(|o| o.is_active) {
+            let other_who = Who::of(other).unwrap_or(Who::Bob);
+            let other_color =
+                if other_who == Who::Alice { Theme::ALICE_COLOR } else { Theme::BOB_COLOR };
+            let seed = self.seen_seeds.get(&(focus_who, other_who)).copied();
+            match as_seen(metric, focus_obs, other, seed) {
+                Ok(seen) => {
+                    self.seen_seeds.insert((focus_who, other_who), seen.seed());
+                    let xi = seen.xi_plane();
+                    let other_pos = to_screen(xi[0], xi[1]);
 
-            if rect.contains(other_pos) {
-                let other_who = Who::of(other).unwrap_or(Who::Bob);
-                let other_color = if other_who == Who::Alice { Theme::ALICE_COLOR } else { Theme::BOB_COLOR };
-                // v^a = e^a_mu u_other^mu is their 4-velocity in this frame: the drawn tangent
-                // is (v^1, v^0) normalised, and |v^1 / v^0| is their radial speed relative to
-                // the focus observer.
-                let v = frame.vector_to_local(&other.four_velocity(metric));
-                let len = ((v[0] * v[0] + v[1] * v[1]) as f32).sqrt().max(1e-9);
-                let tangent = Vec2::new((v[1] as f32) / len, -(v[0] as f32) / len);
-                let wl_len = (cone_len * 0.5).max(16.0);
-                painter.line_segment(
-                    [other_pos - tangent * wl_len * 0.4, other_pos + tangent * wl_len],
-                    Stroke::new(1.6, other_color),
-                );
+                    // Each observer carries a beacon at the dominant wavelength of their own marker
+                    // colour, and the dot is painted the colour that beacon arrives in. See
+                    // `gui::beacon_colour` for the whole chain.
+                    let rest_nm = beacon_nm(other_who);
+                    let beacon = beacon_colour::seen_beacon(rest_nm, seen.g);
 
-                if other.r > 0.02 {
-                    // Light cones are frame-invariant: theirs is at 45 degrees too.
-                    let other_cone_len = (cone_len * 0.45).max(18.0);
-                    let o_fut_out = other_pos + Vec2::new(other_cone_len, -other_cone_len);
-                    let o_fut_in = other_pos + Vec2::new(-other_cone_len, -other_cone_len);
+                    // The straight line from the dot to the focus observer's own event *is* the
+                    // light. In Riemann normal coordinates a null geodesic through the origin is a
+                    // straight 45-degree line, and the emission event was placed on that geodesic
+                    // by its own affine length, so the segment between the two is the ray drawn to
+                    // scale rather than a pointer added to explain the picture.
+                    let ray_colour = match beacon {
+                        Beacon::Seen(colour) => colour.gamma_multiply(0.45),
+                        Beacon::Ring => Color32::from_white_alpha(60),
+                    };
+                    for piece in clip_polyline_to_rect(
+                        &[
+                            [center.x as f64, center.y as f64],
+                            [other_pos.x as f64, other_pos.y as f64],
+                        ],
+                        rect,
+                    ) {
+                        clipped.add(egui::Shape::line(piece, Stroke::new(1.2, ray_colour)));
+                    }
 
-                    let (other_future_fill, _, other_edge) = Theme::cone_colours(Some(other_who));
-                    painter.add(PathShape::convex_polygon(
-                        vec![other_pos, o_fut_in, o_fut_out],
-                        other_future_fill,
-                        egui::epaint::PathStroke::NONE,
-                    ));
-                    painter.line_segment([other_pos, o_fut_in], Stroke::new(1.2, other_edge));
-                    painter.line_segment([other_pos, o_fut_out], Stroke::new(1.2, other_edge));
-                } else {
-                    painter.circle_filled(other_pos, 8.0, Theme::SINGULARITY_FILL);
-                    painter.circle_stroke(other_pos, 10.0, Stroke::new(1.5, Theme::SINGULARITY_LINE));
+                    match beacon {
+                        // No white outline round the dot: the colour is the whole of what the dot
+                        // has to say, and a white ring would take a bite out of it.
+                        Beacon::Seen(colour) => {
+                            clipped.circle_filled(other_pos, 6.0, colour);
+                        }
+                        Beacon::Ring => {
+                            for dash in egui::Shape::dashed_line(
+                                &ring_polyline(other_pos, 6.5),
+                                Stroke::new(1.2, Theme::TEXT_MUTED),
+                                3.0,
+                                3.0,
+                            ) {
+                                clipped.add(dash);
+                            }
+                        }
+                    }
+
+                    // The box reads the emission event, so it is built on a snapshot of the other
+                    // observer standing there rather than on the observer standing here.
+                    let snapshot = seen_snapshot(other, &seen);
+                    let extra =
+                        as_seen_lines(metric, &seen, rest_nm, other, use_physical_units);
+                    other_box = Some(
+                        PendingBox::observer(
+                            painter,
+                            rect,
+                            other_who,
+                            other_pos,
+                            &format!("{} as seen", other.name),
+                            other_color,
+                            &snapshot,
+                            metric,
+                            use_physical_units,
+                            font_scale,
+                            extra,
+                        )
+                        .with_tip(AS_SEEN_BOX_TIP),
+                    );
                 }
-
-                painter.circle_filled(other_pos, 6.0, other_color);
-                painter.circle_stroke(other_pos, 7.5, Stroke::new(1.0, Color32::WHITE));
-                painter.line_segment([center, other_pos], Stroke::new(1.2, Color32::from_white_alpha(120)));
-
-                // The two numbers this frame alone has about them, under their telemetry in their
-                // own box on this canvas.
-                let v_rel = (v[1] / v[0].abs().max(1e-12)).abs();
-                let in_this_frame = [
-                    format!("In {}'s frame:", focus_obs.name),
-                    format!("azimuthal offset ξ² = {}", metric.format_r(xi[2], use_physical_units)),
-                    format!("radial speed = {:.3}c", v_rel.min(9.999)),
-                ]
-                .into_iter()
-                .map(|text| TelemetryLine { text, color: Theme::TEXT_BRIGHT, is_title: false, bold: false })
-                .collect();
-
-                other_box = Some((other, other_who, other_pos, other_color, in_this_frame));
+                Err(why) => {
+                    // The seed is *kept* on a failure rather than dropped. A failed solve costs one
+                    // Newton before `as_seen` falls back to the cold fan anyway, and the last seed
+                    // that worked is much the best guess there is for the next frame: the cold fan
+                    // is the path that gives up on a deeply redshifted image, so throwing the seed
+                    // away would turn one bad frame into a permanent one.
+                    //
+                    // Still a box, because "there is no image, and here is why" is a reading and
+                    // the user has nowhere else to read it. It stands where the focus observer's
+                    // own box would stand, since there is no dot to stand beside.
+                    let lines = vec![
+                        TelemetryLine {
+                            text: format!("{}: no image", other.name),
+                            color: other_color,
+                            is_title: true,
+                            bold: false,
+                        },
+                        TelemetryLine {
+                            text: no_image_reason(why, &focus_obs.name, &other.name),
+                            color: Theme::TEXT_BRIGHT,
+                            is_title: false,
+                            bold: false,
+                        },
+                    ];
+                    let size = telemetry_box_size(painter, &lines, font_scale);
+                    other_box = Some(PendingBox {
+                        id: BoxId::Observer(other_who),
+                        anchor: default_badge_pos(rect, apex, size),
+                        lines,
+                        color: other_color,
+                        tip: AS_SEEN_BOX_TIP,
+                    });
+                }
             }
         }
-
 
         // The comparison is centred, which keeps it clear of the grid's own line labels down the
         // left edge. Every row under it is left-aligned to where that line starts rather than
@@ -3069,11 +3279,8 @@ Tick Enable Observer on Alice's or Bob's card",
         // that the opaque fill of a box blocks out what is behind it and dragging one wins over
         // the canvas's own drag response. The surfaces first, the observers over them, which is
         // also the order in which a box gives way: a later one is nudged clear of the earlier ones.
-        if let Some((other, other_who, other_pos, other_color, in_this_frame)) = other_box {
-            pending_boxes.push(PendingBox::observer(
-                painter, rect, other_who, other_pos, &other.name, other_color, other, metric,
-                use_physical_units, font_scale, in_this_frame,
-            ));
+        if let Some(other_box) = other_box {
+            pending_boxes.push(other_box);
         }
         pending_boxes.push(PendingBox::observer(
             painter, rect, focus_who, apex, &focus_obs.name, obs_color, focus_obs, metric,
@@ -3315,6 +3522,342 @@ fn clip_line_to_rect(p: Pos2, d: Vec2, rect: Rect) -> Option<(Pos2, Pos2)> {
         return None;
     }
     Some((p + d * t_min, p + d * t_max))
+}
+
+/// The visible pieces of a screen-space polyline, clipped segment by segment to `rect`.
+///
+/// Carried in f64 rather than in `Pos2`. The caller is handing over an exact curve whose sampler
+/// keeps one point beyond the window at each end of a run, and near a direction where the affine
+/// length runs away that point can be many decades outside the canvas: converted to f32 first it
+/// would be an infinity, and every clip against it would come back as nothing.
+///
+/// Liang-Barsky on each segment, with the pieces stitched back together while consecutive segments
+/// leave the rectangle nowhere, so a curve that crosses the canvas once comes back as one polyline
+/// and not as a hundred two-point ones.
+fn clip_polyline_to_rect(points: &[[f64; 2]], rect: Rect) -> Vec<Vec<Pos2>> {
+    let (left, right) = (rect.left() as f64, rect.right() as f64);
+    let (top, bottom) = (rect.top() as f64, rect.bottom() as f64);
+    let mut pieces: Vec<Vec<Pos2>> = Vec::new();
+    let mut current: Vec<Pos2> = Vec::new();
+    let finite = |p: &[f64; 2]| p[0].is_finite() && p[1].is_finite();
+    /// End the piece being built, keeping it only if it is a curve rather than a single point.
+    macro_rules! flush {
+        () => {
+            if current.len() >= 2 {
+                pieces.push(std::mem::take(&mut current));
+            } else {
+                current.clear();
+            }
+        };
+    }
+
+    for pair in points.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        if !finite(&a) || !finite(&b) {
+            flush!();
+            continue;
+        }
+        let d = [b[0] - a[0], b[1] - a[1]];
+        let (mut t0, mut t1) = (0.0f64, 1.0f64);
+        let mut inside = true;
+        for &(num, den) in &[
+            (-d[0], a[0] - left),
+            (d[0], right - a[0]),
+            (-d[1], a[1] - top),
+            (d[1], bottom - a[1]),
+        ] {
+            if num == 0.0 {
+                if den < 0.0 {
+                    inside = false;
+                    break;
+                }
+            } else {
+                let t = den / num;
+                if num < 0.0 {
+                    t0 = t0.max(t);
+                } else {
+                    t1 = t1.min(t);
+                }
+            }
+        }
+        if !inside || t0 > t1 {
+            flush!();
+            continue;
+        }
+        let at = |t: f64| Pos2::new((a[0] + t * d[0]) as f32, (a[1] + t * d[1]) as f32);
+        // A piece carries on only when this segment starts exactly where the last one was cut off,
+        // which is t0 = 0: any clipped entry is a fresh arrival into the rectangle.
+        if t0 > 0.0 || current.is_empty() {
+            flush!();
+            current.push(at(t0));
+        }
+        current.push(at(t1));
+        if t1 < 1.0 {
+            flush!();
+        }
+    }
+    flush!();
+    pieces
+}
+
+/// Where a surface's info box stands: the point of the drawn curve the box is a reading about.
+///
+/// The now-axis crossing first. xi^0 = 0 is the observer's own rest space, so where the curve cuts
+/// it is where the surface is *at this moment* for this observer - and it is the point the box's
+/// own ruler distance names, so the box and the number in it stand at the same place. Failing that,
+/// the visible point nearest the middle of the canvas, which is the one a reader is most likely to
+/// be looking at.
+///
+/// `None` when the curve has no visible point at all.
+fn curve_anchor(pieces: &[Vec<Pos2>], axis_y: f32, centre: Pos2) -> Option<Pos2> {
+    let mut best_axis: Option<Pos2> = None;
+    let mut best_near: Option<(f32, Pos2)> = None;
+    for piece in pieces {
+        for pair in piece.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            if (a.y - axis_y).signum() != (b.y - axis_y).signum() || a.y == axis_y {
+                let x = segment_x_at_y(a, b, axis_y);
+                let here = Pos2::new(x, axis_y);
+                // The outermost crossing, so that a curve cutting the axis on both sides of the
+                // observer puts its box clear of the observer's own marker rather than on it.
+                if best_axis.is_none_or(|p| (p.x - centre.x).abs() < (x - centre.x).abs()) {
+                    best_axis = Some(here);
+                }
+            }
+        }
+        for p in piece {
+            let d = p.distance_sq(centre);
+            if best_near.is_none_or(|(best, _)| d < best) {
+                best_near = Some((d, *p));
+            }
+        }
+    }
+    best_axis.or(best_near.map(|(_, p)| p))
+}
+
+/// A circle of radius `radius` about `centre` as a closed polyline, which is what
+/// `Shape::dashed_line` takes: epaint dashes a path and has no dashed-circle of its own.
+fn ring_polyline(centre: Pos2, radius: f32) -> Vec<Pos2> {
+    // Thirty-two sides at six or seven points of radius is under half a point of sagitta, which is
+    // the same resolution `polyline::SCREEN_SPACING` calls indistinguishable.
+    const SIDES: usize = 32;
+    (0..=SIDES)
+        .map(|i| {
+            let a = std::f32::consts::TAU * (i as f32) / (SIDES as f32);
+            Pos2::new(centre.x + radius * a.cos(), centre.y + radius * a.sin())
+        })
+        .collect()
+}
+
+/// The rest wavelength of an observer's beacon: the dominant wavelength of that observer's own
+/// marker colour. See `gui::beacon_colour`.
+fn beacon_nm(who: Who) -> f64 {
+    match who {
+        Who::Alice => beacon_colour::ALICE_BEACON_NM,
+        Who::Bob => beacon_colour::BOB_BEACON_NM,
+    }
+}
+
+/// The other observer as they stood at the emission event, so that every ordinary telemetry line
+/// of their box reads the event the light left rather than the event they are at now.
+///
+/// Only the fields that describe an event are moved: the position, the clock, and the 4-velocity,
+/// which is carried by pushing the emission 4-velocity into the geodesic state so that
+/// `Observer::four_velocity` reports it. The mode, the boosts and the release are the worldline's
+/// own and do not belong to one event of it.
+///
+/// Three things are deliberate. The trail is left empty, because nothing a telemetry box reads
+/// touches the trail and cloning a ten-thousand-event deque every frame would cost more than the
+/// whole solve. `release_t` is pulled back to the emission time where the light left before the
+/// release, so that `four_velocity` recognises the geodesic as standing on the snapshot's own event
+/// instead of falling back to the closed form at that radius. And `stalled` is set from the watch:
+/// a worldline frozen on the far branch of r- holds its proper time at the value it froze with, so
+/// an emission event carrying that same reading is one from the frozen stretch and an earlier one
+/// is not.
+fn seen_snapshot(other: &Observer, seen: &AsSeen) -> Observer {
+    let event = seen.emission;
+    let frozen_now = other.is_frozen();
+    let geodesic = other.geodesic.map(|mut geo| {
+        geo.t = event.t;
+        geo.r = event.r;
+        geo.phi = event.phi;
+        geo.tau = event.tau;
+        geo.u = event.u;
+        geo.stalled =
+            frozen_now && (event.tau - other.tau).abs() <= 1e-9 * (1.0 + other.tau.abs());
+        geo
+    });
+    Observer {
+        name: other.name.clone(),
+        mode: other.mode,
+        t: event.t,
+        r: event.r,
+        phi: event.phi,
+        tau: event.tau,
+        beta_r: other.beta_r,
+        beta_phi: other.beta_phi,
+        geodesic,
+        trail: VecDeque::new(),
+        start: other.start,
+        release_t: other.release_t.min(event.t),
+        release: other.release,
+        is_active: true,
+    }
+}
+
+/// The lines the *as seen* box carries under the ordinary telemetry: what the light did on the way
+/// here, and what the eye makes of what arrived.
+fn as_seen_lines(
+    metric: &KerrSchild,
+    seen: &AsSeen,
+    rest_nm: f64,
+    other: &Observer,
+    use_physical_units: bool,
+) -> Vec<TelemetryLine> {
+    let seconds_per_m = metric.t_grav_seconds() / metric.m.max(1e-12);
+    let body = |text: String| TelemetryLine {
+        text,
+        color: Theme::TEXT_BRIGHT,
+        is_title: false,
+        bold: false,
+    };
+    let mut lines = Vec::new();
+
+    // lambda is at once how long ago the light left, on this observer's own clock, and how far away
+    // the emission event is, on this observer's own ruler: in normal coordinates a null geodesic
+    // makes those one number, which is exactly why the dot lands on the 45-degree past cone.
+    lines.push(body(format!(
+        "light left = {} ago ({} away)",
+        duration_label(seen.lambda * seconds_per_m),
+        ruler_distance_label(metric, seen.lambda)
+    )));
+
+    // The emitter's own watch at the emission event. A negative reading is not an error: the watch
+    // is zeroed at the observer's creation, and the backward extension of the hold is what makes
+    // anybody visible at all at t = 0.
+    lines.push(body(if seen.emission.tau < 0.0 {
+        format!("{}'s watch = before the run began", other.name)
+    } else {
+        format!(
+            "{}'s watch = {}",
+            other.name,
+            duration_label(seen.emission.tau * seconds_per_m)
+        )
+    }));
+
+    // g is taken from the ray itself rather than from a formula, so it stays finite and positive
+    // at and inside both horizons. 1 + z is its reciprocal, which is the number a spectroscopist
+    // quotes.
+    let one_plus_z = if seen.g > 0.0 { 1.0 / seen.g } else { f64::INFINITY };
+    lines.push(body(format!("shift = 1+z = {}", loose_number(one_plus_z))));
+    lines.push(body(format!("g = {} (ν_seen/ν_emitted)", loose_number(seen.g))));
+
+    let seen_nm = rest_nm / seen.g;
+    lines.push(body(format!(
+        "beacon {} seen at {} ({})",
+        beacon_colour::wavelength_label(rest_nm),
+        beacon_colour::wavelength_label(seen_nm),
+        beacon_colour::band_name(seen_nm)
+    )));
+    // The flux factor first, because it is the physics: g^4 is what a point source's bolometric
+    // flux is multiplied by. The second number is what the *eye* is left with, the flux factor
+    // times the eye's own response at the seen wavelength against the response at the rest one,
+    // and it is what decides whether the dot is painted at all.
+    lines.push(body(format!(
+        "brightness = ×g⁴ = {} (eye ×{})",
+        loose_number(seen.g.powi(4)),
+        loose_number(beacon_colour::brightness_factor(rest_nm, seen.g))
+    )));
+    lines.push(body(format!(
+        "watch rate as seen = ×g = {}",
+        loose_number(seen.g)
+    )));
+
+    // The leg of the offset this canvas cannot draw. The view is the (xi^1, xi^0) plane, so the
+    // azimuthal component of the emission event is printed instead of drawn - and it is the amount
+    // by which the dot sits inside the 45-degree cone rather than on it.
+    // Signed, and through the same distance ladder the line above uses: `KerrSchild::format_km`
+    // has no branch for a negative length and prints a raw eight-digit number for one, which is
+    // exactly the case here - a retrograde offset is as ordinary as a prograde one.
+    lines.push(body(format!(
+        "azimuthal offset ξ² = {}{}",
+        if seen.xi[2] < 0.0 { "-" } else { "" },
+        if use_physical_units {
+            ruler_distance_label(metric, seen.xi[2])
+        } else {
+            metric.format_r(seen.xi[2].abs(), false)
+        }
+    )));
+
+    // Where the solver read the emission event from, on the two occasions when that is a statement
+    // about the physics rather than about the bookkeeping.
+    match seen.source {
+        WorldlineSource::Hold | WorldlineSource::FixedRadius
+            if seen.emission.t < other.release_t =>
+        {
+            lines.push(body(format!(
+                "light left before the run began: {} was holding the worldline the release \
+                 begins on",
+                other.name
+            )));
+        }
+        WorldlineSource::Dragged => {
+            lines.push(body(format!(
+                "you are dragging {}, so the run holds that marker at this (r, ϕ) rather than \
+                 integrating a worldline through it",
+                other.name
+            )));
+        }
+        _ => {}
+    }
+    lines
+}
+
+/// A ratio printed at three decimals where three decimals say something, and in scientific notation
+/// at both ends of the scale. g runs from about 1e-10 on a hovering observer's last sight of an
+/// infaller to tens on the approach to r-, and a fixed number of decimals would print a column of
+/// zeroes at one end and a wall of digits at the other.
+fn loose_number(x: f64) -> String {
+    if !x.is_finite() {
+        return "∞".to_string();
+    }
+    if x != 0.0 && !(1e-3..1e4).contains(&x.abs()) {
+        format!("{x:.3e}")
+    } else {
+        format!("{x:.3}")
+    }
+}
+
+/// Why there is no image of the other observer, in the words the box prints. Every variant is a
+/// physical statement or an honest limit of the recorded data, and each one says which.
+fn no_image_reason(why: NoImage, focus_name: &str, other_name: &str) -> String {
+    match why {
+        NoImage::FocusFrozen => format!(
+            "{focus_name} has frozen on the far branch of r₋: aberration has closed every \
+             direction onto one point, and no picture of anything survives that"
+        ),
+        NoImage::FocusEnded => {
+            format!("{focus_name} has reached the ring, and has no more worldline to receive on")
+        }
+        NoImage::OtherEnded => format!(
+            "the light would have had to leave {other_name} after {other_name}'s worldline ended"
+        ),
+        NoImage::TrailEvicted => format!(
+            "the trail's cap has dropped the stretch of {other_name}'s worldline the light left \
+             from; raise the cap before a run rather than after"
+        ),
+        NoImage::RaysDied => format!(
+            "the ring swallowed every trial ray, or every trial ray climbed out of the search, \
+             before any of them reached {other_name}"
+        ),
+        NoImage::NoCrossing => format!(
+            "{focus_name}'s past light cone does not reach {other_name} inside the time the search \
+             looks back over"
+        ),
+        NoImage::NotConverged => {
+            "the search bracketed the crossing and the solve did not settle on it".to_string()
+        }
+    }
 }
 
 /// x on the segment a-b at screen height y, clamped to the segment.
@@ -4121,18 +4664,32 @@ mod canvas_tests {
         let rm = metric.inner_horizon();
 
         // What the rule is: with the window it returns, the framed surface lands
-        // FRAME_SURFACE_FRACTION of the way up the half-height. The surface r = r_h crosses the
-        // observer's own time axis at xi^0 = (r_h - r) / u^r, so that is the number checked here -
-        // the same expression `LocalFrame::surface_r_const` puts on the canvas.
+        // FRAME_SURFACE_FRACTION of the way up the half-height. Where the surface r = r_h crosses
+        // the observer's own time axis is the affine length of the observer's own worldline from
+        // here to the crossing, which is what the drawn curve crosses that axis at, so that is the
+        // number checked here.
+        //
+        // This test used to check the first-order (r_h - r) / u^r, because that is what the
+        // framing used to follow and what the straight lines of the old picture were drawn from.
+        // Both have been replaced by the exact quadrature, so the subject of the assertion has
+        // moved with them: the two numbers differ by most of a gravitational radius close in, and
+        // asking for the old one now would be asking the framing to disagree with the picture.
         let lands_at = |obs: &Observer, r_h: f64, window: f64| -> f32 {
             let scale = (rect.width() / window as f32) * 0.45;
-            let xi0 = (r_h - obs.r) / obs.four_velocity(&metric)[1];
+            let xi0 = affine_length_to_surface(
+                &metric,
+                obs.r,
+                &obs.four_velocity(&metric),
+                r_h,
+            )
+            .expect("the surface is ahead of this observer");
             xi0 as f32 * scale
         };
         let wanted_px = FRAME_SURFACE_FRACTION * rect.height() * 0.5;
 
         // 1. Just above the outer horizon, the next surface is r+ and not the two below it: a
-        //    raindrop at r = 1.5 M is 0.047 M of proper time from r+ and 0.7 M from r-.
+        //    raindrop at r = 1.5 M is a few hundredths of an M of proper time from r+ and most of
+        //    an M from r-.
         let mut near = Observer::new_with_phi(
             &metric, "Bob", 0.0, 1.5, 0.0, 0.0, WorldlineParams::default(),
         );
@@ -4177,7 +4734,8 @@ mod canvas_tests {
         assert!(falling.has_ended(), "the worldline must reach the freeze; r = {}", falling.r);
         let gap = falling.r - rm;
         let u = falling.four_velocity(&metric);
-        let tau_left = gap / u[1].abs();
+        let tau_left = affine_length_to_surface(&metric, falling.r, &u, rm)
+            .expect("r- is a finite proper time below the freeze");
         let window = SpacetimeCanvas::framed_window(&metric, &falling, rect)
             .expect("the frozen worldline still has r- ahead of it");
         let scale = (rect.width() / window as f32) * 0.45;
@@ -4283,21 +4841,6 @@ mod canvas_tests {
             crests.crests.iter().any(|c| !c.received),
             "and the pulses still on their way to him are drawn too"
         );
-    }
-
-    #[test]
-    fn test_a_surface_box_changes_margin_only_when_the_slope_is_well_past_one() {
-        // Seen in the app: on the approach to r- the Cauchy line is null, |slope| = 1 give or
-        // take a little each frame, and its box jumped between the top margin and the right one
-        // as the slope crossed 1. With the band it changes side only when the line has clearly
-        // become the other kind.
-        for slope in [0.81, 0.95, 1.0, 1.05, 1.24] {
-            assert!(steep_with_hysteresis(true, slope), "a steep box stays steep at {slope}");
-            assert!(!steep_with_hysteresis(false, slope), "a flat box stays flat at {slope}");
-        }
-        assert!(!steep_with_hysteresis(true, 0.79), "and lets go below the band");
-        assert!(steep_with_hysteresis(false, 1.26), "and takes hold above it");
-        assert!(steep_with_hysteresis(true, f64::INFINITY) && steep_with_hysteresis(false, f64::INFINITY));
     }
 
     #[test]
@@ -4579,7 +5122,7 @@ mod canvas_tests {
     /// radial track under the diagram carries the same fill, so the taller of the two is the one
     /// wanted. Read rather than recomputed, because the layout that decides it - the track's
     /// height, the gap, the panel's margins - is not what any of these tests is about.
-    fn canvas_rect(shapes: &[egui::Shape]) -> Rect {
+    pub(super) fn canvas_rect(shapes: &[egui::Shape]) -> Rect {
         shapes
             .iter()
             .filter_map(|s| match s {
@@ -4958,5 +5501,668 @@ mod canvas_tests {
             assert!(bright > 0, "a crest lit at its future end");
             assert_eq!(dark, 0, "and run out at its past end, {bright} against {dark}");
         }
+    }
+}
+
+/// The rest-frame view, driven through real frames of `SpacetimeCanvas::render`.
+///
+/// Everything here is measured off the shapes a painter was actually handed, and converted back
+/// into the chart's own (xi^1, xi^0) with the same two numbers the view uses: the canvas rectangle
+/// is read off the background it paints, and the pixel scale is `rect.width() / frame_max_r * 0.45`
+/// with `frame_max_r` taken from the canvas after the pass, which is the value that pass drew with.
+#[cfg(test)]
+mod rest_frame_tests {
+    use super::*;
+    use crate::physics::observer::{Release, WorldlineParams};
+
+    /// One painted frame of an observer's rest frame, with everything the assertions read.
+    struct Pass {
+        shapes: Vec<egui::Shape>,
+        text: String,
+        rect: Rect,
+        /// The window the pass was drawn at, so that a screen position can be turned back into the
+        /// chart position it came from.
+        frame_max_r: f64,
+    }
+
+    impl Pass {
+        fn scale(&self) -> f64 {
+            (self.rect.width() as f64 / self.frame_max_r.max(1e-300)) * 0.45
+        }
+
+        /// A painted point turned back into the chart coordinates (xi^1, xi^0) it was drawn from.
+        fn to_chart(&self, p: Pos2) -> [f64; 2] {
+            let c = self.rect.center();
+            [
+                (p.x - c.x) as f64 / self.scale(),
+                (c.y - p.y) as f64 / self.scale(),
+            ]
+        }
+
+        /// The as-seen dot: the one filled circle of the marker's size *on the chart*. Every other
+        /// circle the chart paints is a different size - the focus marker is 7.5, a received crest
+        /// 2.5, the singularity glyph 12 and 15 - so the radius is the identity there. The
+        /// rectangle matters as much as the radius, because the 1D radial track under the chart
+        /// draws its own markers at 6.0 and 6.5.
+        fn seen_dot(&self) -> Option<Pos2> {
+            self.shapes.iter().find_map(|s| match s {
+                egui::Shape::Circle(c)
+                    if (c.radius - 6.0).abs() < 1e-6 && self.rect.contains(c.center) =>
+                {
+                    Some(c.center)
+                }
+                _ => None,
+            })
+        }
+
+        /// The dashes of the ring the view draws in place of a dot when the eye has nothing left
+        /// to see: short neutral-grey segments, which is what `Shape::dashed_line` makes of the
+        /// ring's polyline and nothing else on this canvas paints.
+        fn ring_dashes(&self) -> Vec<[Pos2; 2]> {
+            self.shapes
+                .iter()
+                .filter_map(|s| match s {
+                    egui::Shape::LineSegment { points, stroke }
+                        if stroke.color == Theme::TEXT_MUTED
+                            && points[0].distance(points[1]) <= 4.0
+                            && self.rect.contains(points[0]) =>
+                    {
+                        Some(*points)
+                    }
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// The centre of that ring, read off the bounding box of its dash ends.
+        ///
+        /// `None` unless the whole ring is on the canvas. A ring the canvas edge has cut through
+        /// has a bounding box narrower than the ring is, and a centre taken from it would be a
+        /// number about the clipping rather than about where the light came from.
+        fn ring_centre(&self) -> Option<Pos2> {
+            let dashes = self.ring_dashes();
+            if dashes.is_empty() {
+                return None;
+            }
+            let mut bounds = Rect::NOTHING;
+            for end in dashes.iter().flatten() {
+                bounds.extend_with(*end);
+            }
+            let whole = |side: f32| (side - 13.0).abs() < 1.5;
+            (whole(bounds.width()) && whole(bounds.height())).then(|| bounds.center())
+        }
+
+        /// Every polyline stroked in `colour`, as chart points. The surface curves are the only
+        /// paths this canvas strokes in a surface's own colour.
+        fn curve(&self, colour: Color32) -> Vec<Vec<[f64; 2]>> {
+            self.shapes
+                .iter()
+                .filter_map(|s| match s {
+                    egui::Shape::Path(p) if path_stroke_colour(p) == Some(colour) => {
+                        Some(p.points.iter().map(|q| self.to_chart(*q)).collect::<Vec<_>>())
+                    }
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// How many wedges of `who`'s light cone were painted. A cone is two filled triangles in
+        /// that observer's own cone colours, and nothing else on this canvas is filled in them -
+        /// an info box's disclosure triangle is a filled triangle too, which is why the fill is
+        /// what this matches on rather than the shape.
+        fn cone_wedges(&self, who: Who) -> usize {
+            let (future, past, _) = Theme::cone_colours(Some(who));
+            self.shapes
+                .iter()
+                .filter(|s| match s {
+                    egui::Shape::Path(p) => {
+                        p.closed && p.points.len() == 3 && (p.fill == future || p.fill == past)
+                    }
+                    _ => false,
+                })
+                .count()
+        }
+    }
+
+    /// The solid colour a stroked path carries, or `None` for a graded one (a crest or a comet).
+    fn path_stroke_colour(p: &PathShape) -> Option<Color32> {
+        match &p.stroke.color {
+            egui::epaint::ColorMode::Solid(c) => Some(*c),
+            egui::epaint::ColorMode::UV(_) => None,
+        }
+    }
+
+    /// Render one frame of the named rest frame and collect what it painted.
+    ///
+    /// The boxes are opened first: `SpacetimeCanvas::default` starts every box on this canvas shut
+    /// down to its title line, which is right for the app and would leave these assertions reading
+    /// four titles and no numbers.
+    fn pass(
+        metric: &KerrSchild,
+        alice: Option<&Observer>,
+        bob: Option<&Observer>,
+        frame: ReferenceFrame,
+        window: f64,
+    ) -> Pass {
+        let mut canvas = fresh(window);
+        pass_on(&mut canvas, metric, alice, bob, frame)
+    }
+
+    /// A canvas opened on a window of `window` M of xi with the automatic framing off.
+    ///
+    /// The framing is off because these tests are about what is drawn rather than about the zoom,
+    /// and the window is named because the default 5.5 M is chosen for the app's own pair: a
+    /// hovering watcher a long way from an infaller sees that infaller several M down the past
+    /// cone, which is off the bottom of a 5.5 M canvas, and a test that drew it there would be
+    /// asserting things about the clipping.
+    fn fresh(window: f64) -> SpacetimeCanvas {
+        SpacetimeCanvas { frame_max_r: window, keep_surface_framed: false, ..Default::default() }
+    }
+
+    /// The same frame drawn on a canvas that is kept between calls, which is what the app has: the
+    /// view holds the last frame's as-seen answer and warm-starts the next solve from it. A test
+    /// that made a fresh canvas every frame would be asking for a cold solve every frame, which is
+    /// neither what the app does nor what the solver is tuned for.
+    fn pass_on(
+        canvas: &mut SpacetimeCanvas,
+        metric: &KerrSchild,
+        alice: Option<&Observer>,
+        bob: Option<&Observer>,
+        frame: ReferenceFrame,
+    ) -> Pass {
+        canvas.telemetry.collapsed.clear();
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
+            ..Default::default()
+        };
+        let silent = SignalField::default();
+        let now = alice.map_or(0.0, |a| a.t).max(bob.map_or(0.0, |b| b.t));
+        let output = ctx.run_ui(input, |ui| {
+            canvas.render(
+                ui,
+                metric,
+                bob,
+                alice,
+                now,
+                600.0,
+                false,
+                frame,
+                1.0,
+                SignalViews { alice: &silent, bob: &silent },
+                false,
+            );
+        });
+        let mut shapes = Vec::new();
+        let mut text = String::new();
+        for clipped in output.shapes.iter() {
+            flatten(&clipped.shape, &mut shapes);
+        }
+        for shape in &shapes {
+            if let egui::Shape::Text(t) = shape {
+                text.push_str(t.galley.text());
+                text.push('\n');
+            }
+        }
+        output.drop_without_applying_deltas();
+        let rect = super::canvas_tests::canvas_rect(&shapes);
+        Pass { shapes, text, rect, frame_max_r: canvas.frame_max_r }
+    }
+
+
+    /// An observer hovering at `r`, at rest and staying there.
+    fn hovering(metric: &KerrSchild, name: &str, r: f64, phi: f64) -> Observer {
+        let mut obs = Observer::new_with_phi(
+            metric,
+            name,
+            0.0,
+            r,
+            0.0,
+            phi,
+            WorldlineParams::released(metric, r, 0.0, Release::AtRest),
+        );
+        obs.mode = ObserverMode::Static;
+        obs.is_active = true;
+        obs
+    }
+
+    /// A raindrop: E = 1, L = 0, released at once.
+    fn raindrop(metric: &KerrSchild, name: &str, r: f64, phi: f64) -> Observer {
+        Observer::new_with_phi(metric, name, 0.0, r, 0.0, phi, WorldlineParams::new(1.0, 0.0, false))
+    }
+
+    /// Step both observers on the one simulation clock, exactly as `Simulation` does.
+    fn play(metric: &KerrSchild, a: &mut Observer, b: &mut Observer, steps: usize, dt: f64) {
+        let mut t = a.t.max(b.t);
+        for _ in 0..steps {
+            t += dt;
+            a.step(metric, t, dt);
+            b.step(metric, t, dt);
+        }
+    }
+
+    /// Where a polar curve about the origin crosses the ray at chart angle `psi`, as a radius.
+    ///
+    /// The surface curves are polar by construction - `normal_coords::sample_surface` sweeps the
+    /// direction angle and puts each point at that direction's own affine length - so one radius
+    /// per angle is the whole of a curve's shape, and this is the number a "which side of the
+    /// surface is the dot on" question turns on. `None` when the curve has no painted point at that
+    /// angle, which is what happens when the crossing lies off the canvas.
+    fn curve_radius_at(runs: &[Vec<[f64; 2]>], psi: f64) -> Option<f64> {
+        let (want_s, want_c) = psi.sin_cos();
+        let mut best: Option<f64> = None;
+        for run in runs {
+            for pair in run.windows(2) {
+                let (a, b) = (pair[0], pair[1]);
+                // The ray crosses the chord where the two ends lie on opposite sides of the line
+                // through the origin along (cos psi, sin psi).
+                let cross = |p: [f64; 2]| p[0] * want_s - p[1] * want_c;
+                let (ca, cb) = (cross(a), cross(b));
+                if ca == cb {
+                    continue;
+                }
+                if ca != 0.0 && cb != 0.0 && (ca > 0.0) == (cb > 0.0) {
+                    continue;
+                }
+                let t = ca / (ca - cb);
+                let x = a[0] + t * (b[0] - a[0]);
+                let y = a[1] + t * (b[1] - a[1]);
+                // The same half-line, not the opposite one.
+                if x * want_c + y * want_s <= 0.0 {
+                    continue;
+                }
+                let radius = x.hypot(y);
+                if best.is_none_or(|r| radius < r) {
+                    best = Some(radius);
+                }
+            }
+        }
+        best
+    }
+
+    #[test]
+    fn test_the_other_observer_is_drawn_on_the_past_cone_and_never_past_the_horizon() {
+        // The two statements the placement has to make, over a long run rather than at one moment.
+        //
+        // On or inside the past light cone, because the dot is at xi = lambda (-1, n^1, n^2) and
+        // the view drops n^2: |xi^1| <= lambda, with equality only for light that arrives with no
+        // azimuthal component at all. The first-order placement of the same-coordinate-time offset
+        // this replaced had no such bound and could put the other observer outside the cone, which
+        // no arriving light can do.
+        //
+        // And never on the far side of the drawn r+ curve, which is the other half of the picture
+        // being one picture: a hovering observer never sees an infaller cross, so the seen event
+        // has to pile up *outside* r+ and stay there, on the curve this same canvas draws.
+        let metric = KerrSchild::new(1.0, 0.0);
+        let mut alice = hovering(&metric, "Alice", 8.0, 0.0);
+        let mut bob = raindrop(&metric, "Bob", 6.0, 0.0);
+
+        let mut checked = 0;
+        let mut against_curve = 0;
+        let mut closest = f64::INFINITY;
+        // One canvas for the whole run, as the app has one: the view keeps the last answer and
+        // warm-starts the next solve from it.
+        let mut canvas = fresh(16.0);
+        for _ in 0..40 {
+            play(&metric, &mut alice, &mut bob, 10, 0.05);
+            let p = pass_on(&mut canvas, &metric, Some(&alice), Some(&bob), ReferenceFrame::Alice);
+            // In ring mode there is no dot, and the ring stands at the same exact place.
+            let Some(drawn) = p.seen_dot().or_else(|| p.ring_centre()) else {
+                continue;
+            };
+            let xi = p.to_chart(drawn);
+            checked += 1;
+            // A tolerance of half a screen point in chart units, which is the resolution the dot
+            // was painted at: `Pos2` is f32 and a ring's centre is an average of dash ends.
+            let tol = 0.5 / p.scale();
+            assert!(
+                xi[1] <= -xi[0].abs() + tol,
+                "the seen event must sit on or inside the past cone: xi = {xi:?}"
+            );
+            let psi = xi[1].atan2(xi[0]);
+            if let Some(surface) = curve_radius_at(&p.curve(Theme::HORIZON_OUTER), psi) {
+                against_curve += 1;
+                let radius = xi[0].hypot(xi[1]);
+                assert!(
+                    radius <= surface + tol,
+                    "the seen event is past the drawn r+ curve: {radius} against {surface} at \
+                     psi = {psi}"
+                );
+                closest = closest.min(surface - radius);
+            }
+        }
+        println!(
+            "{checked} frames of a hovering watcher: the seen event stayed on the past cone every \
+             time, and in {against_curve} of them the drawn r+ curve was in reach of its own \
+             direction - the closest the image came to that curve was {closest:.4} M"
+        );
+        assert!(checked >= 30, "only {checked} frames had anything drawn");
+        assert!(against_curve >= 10, "only {against_curve} frames could be checked against r+");
+        assert!(closest >= 0.0, "the image crossed the curve by {}", -closest);
+    }
+
+    #[test]
+    fn test_only_the_focus_observer_gets_a_light_cone() {
+        // The other observer's cone has gone, and for a reason rather than for tidiness: a cone
+        // drawn at the seen event would be the future of an event whose future this observer has
+        // not received. What is left is the focus observer's own two wedges.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let mut alice = hovering(&metric, "Alice", 8.0, 0.0);
+        let mut bob = raindrop(&metric, "Bob", 6.0, 0.4);
+        play(&metric, &mut alice, &mut bob, 40, 0.05);
+
+        let both = pass(&metric, Some(&alice), Some(&bob), ReferenceFrame::Alice, 16.0);
+        assert!(
+            both.seen_dot().is_some() || both.ring_centre().is_some(),
+            "Bob has to be drawn at all for this to mean anything"
+        );
+        assert_eq!(
+            both.cone_wedges(Who::Alice),
+            2,
+            "one cone, two wedges: the focus observer's own future and past"
+        );
+        assert_eq!(
+            both.cone_wedges(Who::Bob),
+            0,
+            "and not one wedge of a cone for the observer who is only being seen"
+        );
+        let alone = pass(&metric, Some(&alice), None, ReferenceFrame::Alice, 16.0);
+        assert_eq!(
+            alone.cone_wedges(Who::Alice),
+            2,
+            "and the focus observer's count does not depend on the other observer at all"
+        );
+    }
+
+    #[test]
+    fn test_the_other_observers_box_reports_the_emission_event() {
+        // What the box says, and what it no longer says. The title stands alone because the box
+        // starts shut, so the title has to carry both the name and the region the *seen* event is
+        // in; the lines under it are the ordinary telemetry read at that event, followed by what
+        // the light did on the way here. The three lines this replaced - "In Alice's frame:", an
+        // azimuthal offset under it and a first-order radial speed - are gone.
+        let metric = KerrSchild::new(1.0, 0.0);
+        let mut alice = hovering(&metric, "Alice", 8.0, 0.0);
+        let mut bob = raindrop(&metric, "Bob", 6.0, 0.0);
+        play(&metric, &mut alice, &mut bob, 60, 0.05);
+        let p = pass(&metric, Some(&alice), Some(&bob), ReferenceFrame::Alice, 16.0);
+        println!("Alice's view of Bob:\n{}", p.text);
+
+        assert!(p.text.contains("Bob as seen ["), "the title names the seen event: {}", p.text);
+        for wanted in [
+            "light left =",
+            "Bob's watch =",
+            "shift = 1+z =",
+            "beacon ",
+            "brightness = ×g⁴",
+            "watch rate as seen = ×g",
+            "azimuthal offset ξ²",
+        ] {
+            assert!(p.text.contains(wanted), "no {wanted:?} line in the box: {}", p.text);
+        }
+        assert!(p.text.contains("dr/dt"), "the box still carries the telemetry: {}", p.text);
+        for gone in ["In Alice's frame:", "radial speed"] {
+            assert!(!p.text.contains(gone), "{gone:?} is still being printed: {}", p.text);
+        }
+
+        // The telemetry really is read at the emission event and not at Bob's present one. Bob has
+        // fallen a long way in three M of coordinate time, and what Alice sees is where he was.
+        let seen = as_seen(&metric, &alice, &bob, None).expect("Alice sees Bob");
+        println!(
+            "Bob stands at r = {:.4} M and is seen at r = {:.4} M, {:.4} M of affine length away, \
+             at g = {:.4}",
+            bob.r, seen.emission.r, seen.lambda, seen.g
+        );
+        assert!(
+            seen.emission.r > bob.r + 0.2,
+            "the test wants a visible gap between the two events: {} against {}",
+            seen.emission.r,
+            bob.r
+        );
+        let snapshot = seen_snapshot(&bob, &seen);
+        let u = snapshot.four_velocity(&metric);
+        for (a, b) in u.iter().zip(seen.emission.u.iter()) {
+            assert!(
+                (a - b).abs() <= 1e-9 * (1.0 + b.abs()),
+                "the snapshot must carry the emission 4-velocity: {u:?} against {:?}",
+                seen.emission.u
+            );
+        }
+        let at_emission = telemetry_lines("Bob", Theme::BOB_COLOR, &snapshot, &metric, false);
+        let at_now = telemetry_lines("Bob", Theme::BOB_COLOR, &bob, &metric, false);
+        assert_ne!(
+            at_emission[1].text, at_now[1].text,
+            "the box would be reading the present event, not the emission event"
+        );
+        assert!(
+            p.text.contains(&at_emission[1].text),
+            "the emission event's own dr/dt must be the line in the box: {:?} in {}",
+            at_emission[1].text,
+            p.text
+        );
+    }
+
+    #[test]
+    fn test_a_beacon_too_far_shifted_to_see_is_drawn_as_a_dashed_ring() {
+        // The hovering watcher's endgame. The image of the infaller piles up on r+ with g running
+        // to nothing, so the beacon leaves the visible band and the view stops painting a colour
+        // it has not got: no filled dot, a dashed ring at the same exact position, and a box that
+        // says in words where the light has gone.
+        let metric = KerrSchild::new(1.0, 0.0);
+        let mut alice = hovering(&metric, "Alice", 8.0, 0.0);
+        let mut bob = raindrop(&metric, "Bob", 6.0, 0.0);
+        // Played frame by frame with the answer carried forward, exactly as the app plays it. The
+        // cold fan gives up on an image this far down the redshift - it has to bracket a crossing
+        // that has piled up within a millionth of an M of r+ - and the warm Newton does not, which
+        // is why `AsSeen::seed` exists and why the view keeps one.
+        let mut seed = None;
+        let mut seen = as_seen(&metric, &alice, &bob, seed).expect("the pair start out visible");
+        for _ in 0..120 {
+            play(&metric, &mut alice, &mut bob, 5, 0.05);
+            seen = as_seen(&metric, &alice, &bob, seed).expect("the image never goes out");
+            seed = Some(seen.seed());
+        }
+        println!(
+            "after 30 M Alice sees Bob at r = {:.5} M with g = {:.3e}, which puts his {} nm beacon \
+             at {}",
+            seen.emission.r,
+            seen.g,
+            beacon_colour::BOB_BEACON_NM,
+            beacon_colour::wavelength_label(beacon_colour::BOB_BEACON_NM / seen.g)
+        );
+        assert!(seen.g < 0.05, "the test wants a deep redshift, got g = {}", seen.g);
+
+        // The canvas is handed the same run, frame by frame, so that its own seed is the one the
+        // run built rather than a cold start on the last frame alone.
+        let mut canvas = fresh(16.0);
+        let mut alice_back = hovering(&metric, "Alice", 8.0, 0.0);
+        let mut bob_back = raindrop(&metric, "Bob", 6.0, 0.0);
+        let mut p = pass_on(
+            &mut canvas,
+            &metric,
+            Some(&alice_back),
+            Some(&bob_back),
+            ReferenceFrame::Alice,
+        );
+        for _ in 0..120 {
+            play(&metric, &mut alice_back, &mut bob_back, 5, 0.05);
+            p = pass_on(
+                &mut canvas,
+                &metric,
+                Some(&alice_back),
+                Some(&bob_back),
+                ReferenceFrame::Alice,
+            );
+        }
+        assert!(p.seen_dot().is_none(), "nothing may be painted in a colour the eye has not got");
+        let dashes = p.ring_dashes();
+        println!("the ring came back as {} dashes", dashes.len());
+        assert!(dashes.len() >= 6, "a dashed ring wants dashes, got {}", dashes.len());
+        // Every dash lies on one circle of the marker's size, which is what makes the ring a ring
+        // and not a scatter.
+        let centre = p.ring_centre().expect("the dashes have a centre");
+        for end in dashes.iter().flatten() {
+            let radius = end.distance(centre);
+            assert!(
+                (radius - 6.5).abs() < 1.0,
+                "a dash end stands {radius} from the ring's centre, not 6.5"
+            );
+        }
+        assert!(p.text.contains("infrared"), "the box has to say where the light went: {}", p.text);
+        // The ring stands where the exact solve put it, not at some fallback.
+        let xi = p.to_chart(centre);
+        let want = seen.xi_plane();
+        assert!(
+            (xi[0] - want[0]).abs() < 2.0 / p.scale() && (xi[1] - want[1]).abs() < 2.0 / p.scale(),
+            "the ring must stand on the seen event: {xi:?} against {want:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_image_still_answers_in_a_box_and_draws_no_dot() {
+        // The focus observer has reached the ring, so there is no more of that worldline for light
+        // to arrive on. That is a physical statement and the box makes it; what the view must not
+        // do is quietly draw the other observer somewhere anyway.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let mut alice = raindrop(&metric, "Alice", 6.0, 0.0);
+        let mut bob = raindrop(&metric, "Bob", 9.0, 0.5);
+        let mut guard = 0;
+        while alice.r > crate::physics::geodesic::R_STOP && guard < 20_000 {
+            guard += 1;
+            play(&metric, &mut alice, &mut bob, 1, 0.02);
+        }
+        assert!(alice.r <= crate::physics::geodesic::R_STOP, "Alice must reach the ring");
+        assert_eq!(
+            as_seen(&metric, &alice, &bob, None),
+            Err(NoImage::FocusEnded),
+            "the solver has to agree about why"
+        );
+
+        let p = pass(&metric, Some(&alice), Some(&bob), ReferenceFrame::Alice, 16.0);
+        println!("Alice's view once she has reached the ring:\n{}", p.text);
+        assert!(p.text.contains("Bob: no image"), "the box is still queued: {}", p.text);
+        assert!(
+            p.text.contains("no more worldline to receive on"),
+            "and says why in words: {}",
+            p.text
+        );
+        assert!(p.seen_dot().is_none(), "no dot for an image that does not exist");
+        assert!(p.ring_dashes().is_empty(), "and no ring either: a ring means light still arrives");
+    }
+
+    #[test]
+    fn test_the_surface_curves_are_sampled_once_per_event_and_not_once_per_frame() {
+        // The exact curves cost about a quarter of a millisecond for all four surfaces, which is
+        // worth paying when the observer has moved and is not worth paying sixty times a second
+        // while the run is paused. The cache key is the observer's event, the hole and the window,
+        // so a frame that changes none of them reuses the curves - and a frame that changes any of
+        // them must not.
+        //
+        // The perf suite's `paint/spacetime-canvas` row paints the (t, r) foliation chart and never
+        // this view, so the numbers printed here are the only measurement of the rest frame's own
+        // pass that the tree carries.
+        // A falling focus, because a hovering one never moves: a static observer's event, and so
+        // the key, is the same on every frame of the run, and a cache that looked clever on that
+        // observer would say nothing about the case that costs.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let mut alice = raindrop(&metric, "Alice", 8.0, 0.0);
+        let mut bob = raindrop(&metric, "Bob", 6.0, 0.3);
+        play(&metric, &mut alice, &mut bob, 20, 0.05);
+
+        let mut canvas = fresh(16.0);
+        let start = std::time::Instant::now();
+        pass_on(&mut canvas, &metric, Some(&alice), Some(&bob), ReferenceFrame::Alice);
+        let cold = start.elapsed();
+        let first = canvas.surfaces.key.expect("the first pass samples the curves");
+        let points: usize = canvas.surfaces.runs.iter().flatten().map(|r| r.len()).sum();
+
+        let start = std::time::Instant::now();
+        let repeats = 20;
+        for _ in 0..repeats {
+            pass_on(&mut canvas, &metric, Some(&alice), Some(&bob), ReferenceFrame::Alice);
+        }
+        let paused = start.elapsed() / repeats;
+        assert_eq!(
+            canvas.surfaces.key,
+            Some(first),
+            "a frame over the same event must not re-sample the curves"
+        );
+
+        // And the moment the observer moves, the curves are taken again: they are a statement about
+        // that observer's event and about nothing else. This is also the frame that costs, so it is
+        // the one worth timing - the app spends it once per played frame and never more.
+        let start = std::time::Instant::now();
+        for _ in 0..repeats {
+            play(&metric, &mut alice, &mut bob, 1, 0.05);
+            pass_on(&mut canvas, &metric, Some(&alice), Some(&bob), ReferenceFrame::Alice);
+        }
+        let playing = start.elapsed() / repeats;
+        assert_ne!(
+            canvas.surfaces.key,
+            Some(first),
+            "the curves must follow the observer's event"
+        );
+        println!(
+            "a rest-frame pass over {points} sampled points: {cold:?} on the first frame, with \
+             both the curves and the as-seen solve cold; {paused:?} a frame with the run paused, \
+             where neither is re-done; {playing:?} a frame while the run plays, which re-samples \
+             the curves and warm-starts the solve"
+        );
+    }
+
+    #[test]
+    fn test_the_horizon_curve_meets_the_now_axis_where_the_horizon_box_says_it_does() {
+        // The inconsistency this whole change was for. The box has always printed the ruler
+        // distance to r+ - the arclength of the spacelike geodesic down the observer's own radial
+        // axis - while the picture drew r+ at the first-order offset, and from the prograde ISCO of
+        // an a = 0.90 hole those are 3.020 M and 1.647 M. One canvas, two answers.
+        //
+        // Now the drawn curve *is* that geodesic's endpoint swept over every direction, so where
+        // the curve crosses the now-axis is the number in the box by construction. Checked on the
+        // ISCO observer, where the gap used to be widest.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let r_isco = metric.isco(true);
+        let alice = Observer::new_with_phi(
+            &metric,
+            "Alice",
+            0.0,
+            r_isco,
+            0.0,
+            0.0,
+            WorldlineParams::released(&metric, r_isco, 0.0, Release::CircularPrograde),
+        );
+        let u = alice.four_velocity(&metric);
+        let ruler = ruler_distance(&metric, alice.r, &u, metric.outer_horizon())
+            .expect("r+ is a place for an observer on the ISCO");
+        let first_order = (alice.r - metric.outer_horizon())
+            / (-metric.metric_components(alice.r)[1][1]).abs().sqrt().max(1e-12);
+
+        // The window the app itself opens on, because this is the number the app itself draws.
+        let p = pass(&metric, Some(&alice), None, ReferenceFrame::Alice, FRAME_MAX_R_DEFAULT);
+        // psi = pi is the observer's own inward now-direction: xi^0 = 0, xi^1 < 0.
+        let inward = curve_radius_at(&p.curve(Theme::HORIZON_OUTER), std::f64::consts::PI)
+            .expect("the r+ curve crosses the inward now-axis on this canvas");
+        println!(
+            "from the prograde ISCO at r = {r_isco:.4} M the drawn r+ curve cuts the now-axis at \
+             {inward:.4} M and the box prints {} ({ruler:.4} M); the first-order map drew about \
+             {first_order:.3} M",
+            ruler_distance_label(&metric, ruler)
+        );
+        // Half a screen point of tolerance: the curve is a polyline of exact points and the
+        // crossing is interpolated across one of its chords.
+        assert!(
+            (inward - ruler).abs() < (1.0 / p.scale()).max(1e-3 * ruler),
+            "the drawn curve says {inward} M and the box says {ruler} M"
+        );
+        assert!(
+            (ruler - 3.0203).abs() < 2e-3,
+            "and the number they agree on is the published one: {ruler}"
+        );
+        assert!(
+            p.text.contains(&ruler_distance_label(&metric, ruler)),
+            "the box must print that distance: {}",
+            p.text
+        );
     }
 }

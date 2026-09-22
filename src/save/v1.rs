@@ -553,9 +553,9 @@ pub enum Who {
 ///
 /// Caches and gestures are not here and never will be: the volume view's `past_cone` is an
 /// integration the next frame will redo, the equatorial view's `dragging` is a pointer that is not
-/// down any more, and the (t, r) diagram's `steep_boxes` is one frame of hysteresis. All three
-/// rebuild themselves, and a file that carried them would be a file that could restore a drag that
-/// nobody is performing.
+/// down any more, and the rest-frame view's sampled surface curves and as-seen seeds are answers
+/// about an event the file already carries. All of them rebuild themselves, and a file that carried
+/// them would be a file that could restore a drag that nobody is performing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct View {
     pub spacetime: SpacetimeView,

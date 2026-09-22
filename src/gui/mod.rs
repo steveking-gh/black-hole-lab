@@ -1,4 +1,5 @@
 pub mod axis;
+pub mod beacon_colour;
 pub mod theme;
 pub mod polyline;
 pub mod spacetime_canvas;
