@@ -37,34 +37,48 @@
 //! from the radial quadrature of `kerr_equatorial::normal_coords`, which is a closed form in r and
 //! needs no step history at all; the tests check it against the accumulated dt / K^t along the ray.
 
+use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::f64::consts::{PI, TAU};
 
 use kerr_equatorial::normal_coords::{RadialConstants, affine_length_between};
 
-use crate::physics::geodesic::{R_STOP, geodesic_accel};
+use crate::physics::geodesic::{GeodesicState, R_STOP, geodesic_accel};
 use crate::physics::kerr_schild::KerrSchild;
+use crate::physics::local_frame::LocalFrame;
 use crate::physics::observer::{Observer, ObserverMode, TrailPoint};
 use crate::physics::tetrad::Tetrad;
 use crate::physics::wavefront::{NullRay, RayStep};
-
-/// Absolute ceiling on the radius a trial ray is followed to, whatever the two worldlines are
-/// doing. `Solver::ceiling` is the one that usually binds and is read off those worldlines; this
-/// is the backstop.
-///
-/// `wavefront::R_ESCAPE` retires a *forward* ray at 32 M, which is the drawn field; a ray run
-/// backwards deliberately ignores that boundary, because it is retracing ground it has covered.
-/// The search still has to stop somewhere, and four times the escape radius is far outside the
-/// widest drop the app allows - so a trial direction that has climbed past it is one that was
-/// never going to meet the other observer, whatever it does next.
-const R_SEARCH_CEILING: f64 = 128.0;
 
 /// Directions in the cold-start fan. Twenty-four is fifteen degrees, which is fine enough that the
 /// nearest ray to the crossing is within a tenth of a radian of it - a seed, not an answer - and
 /// coarse enough that a cold solve is a fan of two dozen rays rather than a hundred.
 const SCAN_RAYS: usize = 24;
 
-/// First step, in coordinate time, of the cold-start sweep backwards.
+/// Longest first step, in coordinate time, of the cold-start sweep backwards. It is an upper
+/// bound rather than the step itself: `Solver::first_step` shortens it for a pair that is close
+/// together, because a crossing nearer than a couple of strides is never bracketed at all.
 const SCAN_FIRST_STEP: f64 = 0.25;
+
+/// Floor under that shortened first step.
+///
+/// Why the first step has to follow the pair. A dip is three consecutive samples of one generator
+/// with the middle one the smallest, and the sample at age zero is the first of them, so a crossing
+/// closer than about two strides cannot be bracketed however many sweeps follow. Measured on two
+/// observers holding station at r0 = 10 M of an a = 0.90 hole, with the fixed 0.25 M stride: a
+/// radial gap of 0.2 M solved correctly (age 0.200 M looking inward, where an ingoing ray of this
+/// chart has dr/dt = -1 exactly, and 0.299 M looking outward), while gaps of 0.1 M and below - a
+/// crossing inside the first stride - came back `NotConverged` in both directions. Further out the
+/// same fault was quieter and worse: at r0 = 25 and 30 M a radial gap of 0.1 M or an azimuthal gap
+/// of 0.03 rad returned `Ok` with the image whose light had gone once round the hole, lambda and
+/// age of 73 to 84 M and g = 1.3, in place of a direct image a tenth of an M old.
+///
+/// So the stride is a third of the separation the pair actually has, floored here. The floor is
+/// what keeps the sweep's reach: from 1e-3 M at `SCAN_GROWTH` = 1.2 the stride reaches the
+/// `SCAN_MAX_STEP` = 4 M cap after ln(4000)/ln(1.2) = 46 sweeps, having covered about 24 M of age,
+/// and the remaining 114 of the `SCAN_MAX_STEPS` = 160 sweeps carry 114 * 4 = 456 M more - so
+/// `MAX_AGE` = 400 M is still inside the budget from the finest start allowed.
+const SCAN_MIN_STEP: f64 = 1e-3;
 
 /// Growth of that step from one sweep to the next. The crossing is usually found in the first few
 /// M, and the growth is what lets the same bounded number of steps still reach a pair a hundred M
@@ -117,8 +131,16 @@ const MARCH_MIN_FRACTION: f64 = 1e-4;
 /// segment is at an end, and light bends towards the hole rather than away from it - so a
 /// generator that has gone well past everywhere either observer has ever been is not the one being
 /// looked for. Retiring it early is worth a great deal: `wavefront` caps a substep at 0.02 M of
-/// radius, so a ray followed out to the fixed `R_SEARCH_CEILING` from a focus at 8 M costs six
-/// thousand substeps, and two dozen of them are what made a cold solve take 25 ms.
+/// radius, so a ray followed out to 128 M from a focus at 8 M costs six thousand substeps, and two
+/// dozen of them are what made a cold solve take 25 ms.
+///
+/// This is the only ceiling there is. A fixed backstop of 128 M used to sit on top of it, and it
+/// was not a bound on the cost but a wall in the physics: a pair holding station at r0 >= 140 M
+/// starts *outside* it, so `shoot` killed every trial ray at birth and the solve answered
+/// `RaysDied` for a configuration whose direct image is as ordinary as any other. The cost argument
+/// never needed a constant. It needs the ceiling to sit a little way above wherever the two
+/// observers are, which is exactly what a multiple of their own reach says, and the work a ray may
+/// do is then set by how far apart the pair is rather than by a number written down here.
 const REACH_MARGIN: f64 = 1.6;
 const REACH_SLACK: f64 = 4.0;
 
@@ -145,8 +167,19 @@ pub enum WorldlineSource {
     /// Interpolated between two recorded events of the trail.
     Trail,
     /// Before the release: the hold, continued backwards in closed form, which is how anything is
-    /// seen at all at t = 0.
+    /// seen at all at t = 0. Only for a release the hold can join without a jump - a release from
+    /// rest, or a fixed-radius worldline - see [`WorldlineSource::Geodesic`] for the other case.
     Hold,
+    /// Before the release: the free-fall worldline itself, continued backwards through the release
+    /// event. A release that arrives already moving - from rest at infinity, or onto a circular
+    /// orbit - has no hold that joins it: the app's hold for such a release is the static
+    /// observer, and a static Bob one instant and a Bob falling at 0.6 c the next is a kick that
+    /// no light should report. Measured before this existed, at the user's own starting file:
+    /// two raindrops released together at 4.5 M and 0.00015 M apart, which must see each other
+    /// at g = 1, were seen at g = 1.39 one way and 1.12 the other, the Doppler shift between the
+    /// static hold and the fall - so Bob's beacon went into the ultraviolet and Alice's turned
+    /// green. Along the geodesic continued backwards both were always falling together.
+    Geodesic,
     /// A Static or ZAMO worldline, carried back analytically at its own constant 4-velocity.
     FixedRadius,
     /// A marker the user is dragging, which the app holds at fixed (r, phi) and does not integrate.
@@ -203,6 +236,11 @@ pub struct AsSeen {
     pub iterations: u32,
     /// Whether the cold-start fan had to be run, as against the caller's warm start being enough.
     pub cold: bool,
+    /// How many extra turns round the hole the ray made on its way here, signed, prograde
+    /// positive: the ray's own azimuthal excursion less the direct one, divided by a full turn.
+    /// Zero for the direct image and non-zero for a ray that has wound round the photon sphere,
+    /// which is what [`images`] enumerates.
+    pub windings: i32,
 }
 
 impl AsSeen {
@@ -212,6 +250,8 @@ impl AsSeen {
         AsSeenSeed {
             alpha: self.alpha,
             age: self.age,
+            emission_t: self.emission.t,
+            lambda: self.lambda,
         }
     }
 
@@ -224,12 +264,66 @@ impl AsSeen {
         self
     }
 
+    /// The spacelike leg of the plane the rest-frame view draws, in tetrad components (along e1,
+    /// along e2): the line of sight n with its sign fixed so that right is outward.
+    ///
+    /// The plane is span(e0, s) with s = +/- n, and either sign gives the same plane, so the sign
+    /// is a display convention and this is where it is written down. It is chosen so that the
+    /// outward component of s is positive, or, for a line of sight with no outward component at
+    /// all, so that s points prograde. Then the right-hand side of the canvas is outward in every
+    /// view, the two observers' views of each other share a horizontal direction and their
+    /// surface curves lean the same way, and the other observer's dot lands on the right-hand
+    /// past cone edge when they are outward of the focus observer and on the left-hand edge when
+    /// they are inward. The alternative - s = n always, the source always on the right - put r-
+    /// leaning one way in Alice's view and the other in Bob's when the pair fell in together,
+    /// which read as two different geometries.
+    ///
+    /// The flip when n^1 changes sign is a mirror of the whole picture, and it is abrupt by
+    /// nature: a line of sight that passes through the tangential direction has an outward
+    /// component that passes through zero, and there is nothing between the two orientations to
+    /// animate.
+    pub fn plane_leg(&self) -> [f64; 2] {
+        let sign = self.sight_sign();
+        [sign * self.n[0], sign * self.n[1]]
+    }
+
+    /// +1 when the line of sight has an outward component, or none and a prograde one; -1
+    /// otherwise. It is n . s for the leg of [`Self::plane_leg`], which is the side of the canvas
+    /// the source is drawn on.
+    pub fn sight_sign(&self) -> f64 {
+        if self.n[0] > 0.0 || (self.n[0] == 0.0 && self.n[1] >= 0.0) {
+            1.0
+        } else {
+            -1.0
+        }
+    }
+
     /// The drawn point in the (xi^1, xi^0) plane of the rest-frame view, in the same ordering
-    /// `LocalLine::point` uses: local outward distance first, local time second. It always lies on
-    /// the 45-degree past cone, |xi^1| <= lambda and xi^0 = -lambda, because that is what a null
-    /// geodesic is in normal coordinates.
+    /// `LocalLine::point` uses: distance along the drawn plane's spacelike leg first, local time
+    /// second.
+    ///
+    /// That plane is span(e0, s) with s = +/- (n^1 e1 + n^2 e2), the line of sight itself (see
+    /// [`Self::plane_leg`] for the sign), so the whole of the spatial offset lies along the
+    /// horizontal axis and none of it is dropped:
+    ///
+    ///     xi^1 = lambda n . s = +/- lambda (n^1 n^1 + n^2 n^2) = +/- lambda,      xi^0 = -lambda,
+    ///
+    /// n being a unit vector. The point is therefore *on* the 45-degree past cone, on the side the
+    /// source lies, rather than inside it - which is the whole reason the view turns its plane.
+    /// The old radial plane kept xi^1 = lambda n^1 and dropped lambda n^2, so the dot moved in
+    /// towards the axis by however far out of that plane the light had arrived, and from an ISCO
+    /// observer of a fast hole - where aberration makes |n^2| large - that shortening could carry
+    /// the dot past the drawn r+ curve while the emission event sat in Region I.
     pub fn xi_plane(&self) -> [f64; 2] {
-        [self.xi[1], self.xi[0]]
+        [self.sight_sign() * self.lambda, -self.lambda]
+    }
+
+    /// The signed angle of the line of sight from the observer's own outward radial leg, in
+    /// radians on (-pi, pi]: positive towards the observer's local +phi direction, which is
+    /// prograde. It is the angle the drawn plane has been turned through, and the header prints it
+    /// so that a reader knows which way the horizontal axis points.
+    pub fn sight_angle(&self) -> f64 {
+        wrap(self.n[1].atan2(self.n[0]))
     }
 }
 
@@ -240,6 +334,12 @@ pub struct AsSeenSeed {
     pub alpha: f64,
     /// How far back in coordinate time the emission event was.
     pub age: f64,
+    /// Coordinate time of the emission event the seed came from. The warm path checks the answer
+    /// it gets against this, so that a Newton which has landed on a different image is thrown away
+    /// rather than drawn. See `continues`.
+    pub emission_t: f64,
+    /// Affine length of the ray the seed came from, checked the same way and for the same reason.
+    pub lambda: f64,
 }
 
 /// Why there is nothing to draw. Every one of these is a physical statement or an honest limit of
@@ -290,10 +390,200 @@ pub fn as_seen(
     if let Some(seed) = seed
         && let Ok(found) =
             Solver::new(metric, focus, other).refine(seed.alpha, seed.age.max(1e-6), false)
+        && continues(&found, seed.emission_t, seed.lambda, focus.t)
     {
         return Ok(found);
     }
     march_from_the_start(metric, focus, other)
+}
+
+/// How much later than the current image's emission a candidate's has to be before it counts as
+/// a younger image rather than as the same one refined from a different dip, in M of coordinate
+/// time. Two dips of one crossing refine to the same event to far better than this.
+const YOUNGER_MARGIN: f64 = 1e-3;
+
+/// How far past the current image's age the sweep is still asked for dips when looking for a
+/// younger image. The dips come in order of increasing age, but a dip is only registered one
+/// sweep after the separation turned up and its age is a parabola's vertex through three coarse
+/// samples, so the dip that refines to a younger image can sit a sweep or two past that image's
+/// true age. Two of the widest sweep steps is the margin that measured as enough: with one M,
+/// the youngest image at t = 90 M of the ISCO run was found from the threaded chain's seed and
+/// missed from the cold march's answer, and with this it is found from both.
+const YOUNGER_SLACK: f64 = 2.0 * SCAN_MAX_STEP;
+
+/// A younger image of the other observer than `than`, if the fan can find one: an image whose
+/// emission event is *later* on the other's worldline, which is the same as saying whose light
+/// took less of the chart's time to arrive.
+///
+/// Why this exists. `as_seen` follows one image continuously, and continuity is the wrong rule
+/// for an observer who goes round the hole. Alice on the prograde ISCO of an a = 0.90 hole
+/// orbits once every 28 M, and the null connection that continuity hands her from one frame to
+/// the next winds once more round the photon sphere with every orbit she makes: nothing about it
+/// jumps, its emission time rises steadily and its affine length moves by a per cent a step, and
+/// it is the image of Bob as he was a hundred M ago. Meanwhile a new image is born - at about
+/// t = 43 M in that run - carrying Bob as he was a moment ago, and no local guard can tell the
+/// chain so, because the chain has done nothing wrong. Which image is "Bob as seen" is therefore
+/// a rule and not a computation, and the rule the view draws by is **the youngest image**: the
+/// one whose emission event is latest. It is the picture with the least delay, the one whose ray
+/// has wound the least, and - lensing magnification aside, which the brightness model does not
+/// carry - the brightest.
+///
+/// How. One pass of `Solver::sweep` hands back its dips in order of increasing age, so the
+/// first few dips are where any younger image is, and each is refined and kept if it converges
+/// on an emission later than `than`'s. The sweep is stopped at `than`'s age plus a little slack,
+/// since nothing after that can be younger. It asks for twice `MAX_COLD_SEEDS` dips because a
+/// near miss makes a dip too: from the prograde ISCO the sweep at t = 60 M and at t = 65 M had
+/// the young image behind four near misses, and four dips found nothing where eight found it. Late in an infall the sweep is
+/// unreliable - see `march_from_the_start` - but unreliable here only costs a check that finds
+/// nothing, and the caller keeps the image it had.
+///
+/// The fan is not the only candidate offered. `Solver::geometric_seed` is refined alongside the
+/// dips and judged by exactly the same two tests, and it is what decides the case the fan cannot
+/// see: two observers a hundredth of an M apart have a direct image at an age of a hundredth of an
+/// M, inside the sweep's first sample, and the only crossing the fan brackets is the one whose
+/// light went round the hole, which arrives some eighty M old. Without this candidate that wound
+/// image is the only thing on offer and a pair standing next to each other watch each other's
+/// distant past; with it the direct image is found, is the younger of the two, and wins on the
+/// emission-time test the same way any other candidate would.
+///
+/// It costs a fan sweep and a few refinements, some milliseconds, so it is not for every frame:
+/// the view runs it once per M of the focus observer's coordinate time and after any cold solve.
+pub fn younger_image(
+    metric: &KerrSchild,
+    focus: &Observer,
+    other: &Observer,
+    than: &AsSeen,
+) -> Option<AsSeen> {
+    if focus.is_frozen() || focus.r <= R_STOP {
+        return None;
+    }
+    let solver = Solver::new(metric, focus, other);
+    let mut best: Option<AsSeen> = None;
+    // A sweep that refuses outright is not a reason to give up here: the geometric candidate needs
+    // no fan, and it is the one that answers for a close pair.
+    let dips = solver
+        .sweep(2 * MAX_COLD_SEEDS, than.age + YOUNGER_SLACK)
+        .map_or_else(|_| Vec::new(), |sweep| sweep.dips);
+    for (alpha, age) in solver.geometric_seed().into_iter().chain(dips) {
+        // Nothing older than the current image can be younger than it. The dips arrive in order of
+        // increasing age so this ends the useful part of the list, and the geometric candidate,
+        // which does not come from the sweep and so is not in that order, is skipped by the same
+        // test rather than ending it.
+        if age > than.age + YOUNGER_SLACK {
+            continue;
+        }
+        let Ok(image) = solver.refine(alpha, age, true) else {
+            continue;
+        };
+        if image.emission.t < focus.t
+            && image.emission.t > than.emission.t + YOUNGER_MARGIN
+            && best.is_none_or(|kept| image.emission.t > kept.emission.t)
+        {
+            best = Some(image);
+        }
+    }
+    best
+}
+
+/// The youngest image: `as_seen`, and then `younger_image` on top of it. This is the rule the
+/// view draws by; `as_seen` alone is the cheap per-frame step of it.
+pub fn as_seen_youngest(
+    metric: &KerrSchild,
+    focus: &Observer,
+    other: &Observer,
+    seed: Option<AsSeenSeed>,
+) -> Result<AsSeen, NoImage> {
+    let seen = as_seen(metric, focus, other, seed)?;
+    Ok(younger_image(metric, focus, other, &seen).unwrap_or(seen))
+}
+
+/// Whether an answer continues the one the seed came from, or has landed on a different image.
+///
+/// The two guards are the cold march's, applied to the warm path for the same reason: a Newton
+/// started from last frame's answer is only an initial guess, and deep in the strong field there
+/// is a whole family of images to land on. Without them a chain threaded frame by frame follows
+/// whichever image it happens to fall onto and stays there - from the prograde ISCO of an a = 0.90
+/// hole, watching the app's own raindrop dropped from 27 M, an unguarded chain reports an emission
+/// 96.81 M old at t = 120 M where the direct image is 47.49 M old, and everything about that
+/// answer is self-consistent except which picture it is of.
+///
+/// * **The emission time is non-decreasing in the focus time.** The focus observer's past light
+///   cone only grows as that observer's clock advances, so the latest event of the other's
+///   worldline inside it only moves forward. An emission that has gone backwards, or one that has
+///   overtaken the focus observer's own clock, is a different image.
+/// * **The affine length is continuous.** Near a caustic two images agree in emission time to four
+///   decimals while their lambdas differ by a factor of seven, so the first guard cannot tell them
+///   apart and this one can. Lambda on a single image is a slow curve - it grew by a sixth per
+///   step over the whole of the measured Kerr march - so a factor of four is slack by an order of
+///   magnitude and still catches the jump.
+///
+/// A refusal costs the cold path, which is what the caller would have paid with no seed at all.
+fn continues(next: &AsSeen, emission_t: f64, lambda: f64, now: f64) -> bool {
+    next.emission.t >= emission_t - 1e-6
+        && next.emission.t < now
+        && next.lambda <= 4.0 * lambda + 1.0
+        && next.lambda + 1.0 >= 0.25 * lambda
+}
+
+/// Every image of the other observer the cold fan can find from the focus observer's event, the
+/// direct one first and at most `max_images` in all.
+///
+/// A source deep in the strong field is seen more than once. Besides the direct image there is a
+/// sequence of ever-fainter ones whose rays wind round the photon sphere before arriving, each of
+/// them a real null connection between the same two worldlines and each carrying its own delay,
+/// shift and arrival direction. `as_seen_youngest` reports the youngest image alone, because
+/// that is the picture the view draws; this enumerates the rest.
+///
+/// How. `Solver::cold_seed` already hands back the dips of the past-cone sweep in the order it
+/// finds them, which is the order of increasing age, so asking it for the first, second, third
+/// dip and refining each is the whole of the method. Two answers count as the same image when
+/// their emission events and their affine lengths both agree, which is what keeps two dips on
+/// neighbouring generators of one crossing from being reported twice.
+///
+/// It is not cheap - every extra image costs another sweep of the fan, a couple of milliseconds -
+/// so nothing that runs per frame should call it. Nothing in the app does yet; it is here because
+/// the higher-order images are worth showing and the fan already knows where they are.
+// No caller outside the tests until the view draws the fainter images too, which is why the
+// enumeration is written down now rather than rediscovered then.
+#[allow(dead_code)]
+pub fn images(
+    metric: &KerrSchild,
+    focus: &Observer,
+    other: &Observer,
+    max_images: usize,
+) -> Vec<AsSeen> {
+    let mut found: Vec<AsSeen> = Vec::new();
+    if max_images == 0 {
+        return found;
+    }
+    // The direct image is the marched one rather than the fan's first dip: the march is what makes
+    // the direct image reliable late in a run, and a caller comparing this list against `as_seen`
+    // should find the same answer at the head of it.
+    if let Ok(direct) = as_seen(metric, focus, other, None) {
+        found.push(direct);
+    }
+    let solver = Solver::new(metric, focus, other);
+    let distinct = |found: &[AsSeen], candidate: &AsSeen| {
+        found.iter().all(|seen| {
+            (seen.emission.t - candidate.emission.t).abs() > 1e-3
+                || (seen.lambda - candidate.lambda).abs() > 1e-3 * seen.lambda.max(1.0)
+        })
+    };
+    for skip in 0..(2 * max_images) {
+        if found.len() >= max_images {
+            break;
+        }
+        let Ok((alpha, age)) = solver.cold_seed(skip) else {
+            break;
+        };
+        if let Ok(image) = solver.refine(alpha, age, true)
+            && distinct(&found, &image)
+        {
+            found.push(image);
+        }
+    }
+    found.sort_by(|a, b| a.age.total_cmp(&b.age));
+    found
 }
 
 /// The cold path: solve at the earliest event of the run and walk the answer forward to now.
@@ -343,28 +633,12 @@ fn march_from_the_start(
         budget -= 1;
         let target = (t + step).min(now);
         let attempt = solve_at_from(metric, focus, other, target, answer.seed());
-        // Two guards, and between them they are what makes the march follow one image rather than
-        // wander through the family of them.
-        //
-        // The first is the monotonicity of the direct image: the focus observer's past light cone
-        // only grows as their clock advances, so the latest event of the other's worldline inside
-        // it only moves forward. An emission event that has gone backwards - or one that has
-        // overtaken the focus observer's own clock - is a different image.
-        //
-        // The second is the continuity of the affine distance. Deep in the strong field a source
-        // has many images: the direct one, and a sequence whose rays wind round the photon sphere,
-        // arriving from the same event at very nearly the same coordinate time but along a far
-        // longer path. Near a caustic the emission times of two of them agree to four decimals
-        // while their lambdas differ by a factor of seven, so the first guard cannot tell them
-        // apart and this one can. Lambda on a single image is a slow curve - it grew by a sixth
-        // per step over the whole of the measured Kerr march - so a factor of four is slack by an
-        // order of magnitude and still catches the jump.
-        let good = attempt.as_ref().is_ok_and(|next| {
-            next.emission.t >= answer.emission.t - 1e-6
-                && next.emission.t < target
-                && next.lambda <= 4.0 * answer.lambda + 1.0
-                && next.lambda + 1.0 >= 0.25 * answer.lambda
-        });
+        // The two guards of `continues`, which is where they are written down: between them they
+        // are what makes the march follow one image rather than wander through the family of them,
+        // and they are the same two the warm path applies to a caller's seed.
+        let good = attempt
+            .as_ref()
+            .is_ok_and(|next| continues(next, answer.emission.t, answer.lambda, target));
         if good {
             answer = attempt.expect("checked just above");
             t = target;
@@ -416,6 +690,16 @@ fn solve_at(
     t: f64,
 ) -> Result<AsSeen, NoImage> {
     let solver = Solver::at(metric, focus_frame_at(metric, focus, t)?, other);
+    // The geometric guess, before the fan. When the pair is close this *is* the direct image - the
+    // flat-space offset is the whole answer to first order - and it is the one case the fan cannot
+    // reach, because the crossing happens inside its first stride. When the pair is not close the
+    // guess is only a seed like any other, and a seed that does not converge costs one refinement
+    // and falls through to the sweep below.
+    if let Some((alpha, age)) = solver.geometric_seed()
+        && let Ok(found) = solver.refine(alpha, age, true)
+    {
+        return Ok(found);
+    }
     let mut refusal = NoImage::NoCrossing;
     for skip in 0..MAX_COLD_SEEDS {
         match solver.cold_seed(skip) {
@@ -453,11 +737,7 @@ fn solve_at_from(
 /// The focus observer's frame at an earlier event of their own worldline, read the same way the
 /// other observer's is.
 fn focus_frame_at(metric: &KerrSchild, focus: &Observer, t: f64) -> Result<FocusFrame, NoImage> {
-    let line = OtherWorldline {
-        metric,
-        obs: focus,
-        mode: focus.effective_mode(metric),
-    };
+    let line = OtherWorldline::new(metric, focus);
     let (point, _) = line.point_at(t.min(focus.t))?;
     if point.r <= R_STOP {
         return Err(NoImage::FocusEnded);
@@ -497,6 +777,11 @@ struct OtherWorldline<'a> {
     metric: &'a KerrSchild,
     obs: &'a Observer,
     mode: ObserverMode,
+    /// The worldline before the release, integrated backwards from the release event on demand
+    /// and kept for the rest of this solve; oldest event at the front, the release event at the
+    /// back. Empty until the first pre-run event is asked for, and never filled for a worldline
+    /// whose pre-run stretch is a hold. See `pre_run_at`.
+    pre_run: RefCell<VecDeque<TrailPoint>>,
 }
 
 struct Solver<'a> {
@@ -510,6 +795,17 @@ struct Solver<'a> {
 
 /// One evaluation of the two-point problem: the ray at the trial age, the other's event there, and
 /// the mismatch between them.
+/// What one pass of the past-cone fan found: see `Solver::sweep`.
+struct Sweep {
+    /// (arrival angle, age) of each dip, in the order found, which is the order of increasing age.
+    dips: Vec<(f64, f64)>,
+    /// The closest approach of any generator, when the sweep ran out before finding as many dips
+    /// as it wanted; `None` when it found them all.
+    closest: Option<(f64, f64)>,
+    /// Why the last empty pass of the sweep was empty, for a caller with nothing else to report.
+    refusal: NoImage,
+}
+
 struct Probe {
     ray: NullRay,
     event: SeenEvent,
@@ -557,12 +853,8 @@ impl<'a> Solver<'a> {
         Self {
             metric,
             focus,
-            other: OtherWorldline {
-                metric,
-                obs: other,
-                mode: other.effective_mode(metric),
-            },
-            ceiling: (REACH_MARGIN * reach + REACH_SLACK).min(R_SEARCH_CEILING),
+            other: OtherWorldline::new(metric, other),
+            ceiling: REACH_MARGIN * reach + REACH_SLACK,
         }
     }
 
@@ -610,6 +902,66 @@ impl<'a> Solver<'a> {
         })
     }
 
+    /// The flat-space first guess at where the other observer is seen, before any fan is swept.
+    ///
+    /// Take the other observer's event at the focus observer's *own* coordinate time - not at the
+    /// emission time, which is the unknown - and carry the coordinate displacement (0, Delta r,
+    /// Delta phi) into the focus tetrad with the first-order chart of `LocalFrame`. That gives a
+    /// purely spatial local offset (xi^1, xi^2), and the flat-space picture of it is the whole
+    /// guess: light arrives from the direction the source lies in,
+    ///
+    ///     alpha = atan2(xi^2, xi^1),
+    ///
+    /// measured from e1 towards e2 exactly as `Solver::launch` and `Tetrad::null_direction` measure
+    /// it, and it took the time the distance is,
+    ///
+    ///     age = hypot(xi^1, xi^2),
+    ///
+    /// which is the first-order proper distance between the two events. Both statements are exact
+    /// in the limit of a close pair and wrong by the curvature and by whatever the other observer
+    /// did while the light was in flight otherwise - which is all a Newton seed has to be.
+    ///
+    /// Why it is worth having at all, when there is a fan. The fan samples the past cone on a grid
+    /// and reads a crossing off a dip in one generator's separation, so it cannot see a crossing
+    /// that happens before its first stride, and a pair a hundredth of an M apart is exactly that
+    /// case. The guess has no grid: it is better the closer the pair is, which is precisely where
+    /// the sweep is worst, so the two cover each other.
+    fn geometric_seed(&self) -> Option<(f64, f64)> {
+        let (event, _) = self.other.at(self.focus.t, self.focus.phi).ok()?;
+        let frame = LocalFrame::new(self.metric, self.focus.r, self.focus.tetrad);
+        let xi = frame.to_local(&[0.0, event.r - self.focus.r, event.phi - self.focus.phi]);
+        let alpha = xi[2].atan2(xi[1]);
+        let age = xi[1].hypot(xi[2]);
+        // A guess that is not a number is no guess; and a pair at the same event has no direction
+        // to offer, so the age is clamped the way `refine` clamps its own.
+        (alpha.is_finite() && age.is_finite()).then_some((alpha, age.max(1e-6)))
+    }
+
+    /// The Kerr-Schild Cartesian separation of the two observers at the focus observer's own
+    /// coordinate time: the age-zero sample of the sweep, which every generator of the fan shares
+    /// because at age zero they are all still sitting on the focus event.
+    fn separation_at_zero_age(&self) -> Option<f64> {
+        self.probe(0.0, 0.0)
+            .ok()
+            .map(|probe| probe.separation(self.metric))
+            .filter(|separation| separation.is_finite())
+    }
+
+    /// The first stride of the sweep, taken from the pair rather than from a constant: a third of
+    /// the separation they actually have, capped at `SCAN_FIRST_STEP` and floored at
+    /// `SCAN_MIN_STEP`, which is where the reasoning and the measurements are written down.
+    ///
+    /// A third is what a dip needs. The crossing of a close pair sits at an age of about their
+    /// separation, and three samples have to fall on it with the middle one smallest, so the grid
+    /// has to be finer than the crossing is near - a third puts samples at 0, s/3, (1 + 1.2) s / 3
+    /// and so on, which brackets it.
+    fn first_step(&self) -> f64 {
+        match self.separation_at_zero_age() {
+            Some(separation) => SCAN_FIRST_STEP.min(separation / 3.0).max(SCAN_MIN_STEP),
+            None => SCAN_FIRST_STEP,
+        }
+    }
+
     /// The cold start: sweep the whole past cone backwards and hand back the `skip`-th coordinate
     /// time at which one of its generators came closest to the other's worldline.
     ///
@@ -641,7 +993,22 @@ impl<'a> Solver<'a> {
     /// and the ceiling is what stops the grid from growing past the width of the dip it is looking
     /// for.
     fn cold_seed(&self, skip: usize) -> Result<(f64, f64), NoImage> {
+        let sweep = self.sweep(skip + 1, MAX_AGE)?;
+        if let Some(dip) = sweep.dips.get(skip).copied() {
+            return Ok(dip);
+        }
+        match sweep.closest {
+            Some(closest) if skip == 0 && sweep.dips.is_empty() => Ok(closest),
+            _ => Err(sweep.refusal),
+        }
+    }
+
+    /// The sweep itself: the first `want` dips no older than `until_age`, in the order found,
+    /// which is the order of increasing age. One pass of the fan serves every dip it finds, so a
+    /// caller wanting the first few - `younger_image` - pays one sweep and not one per dip.
+    fn sweep(&self, want: usize, until_age: f64) -> Result<Sweep, NoImage> {
         let alpha_of = |i: usize| TAU * (i as f64) / (SCAN_RAYS as f64);
+        let mut dips: Vec<(f64, f64)> = Vec::new();
         let mut rays: Vec<Option<NullRay>> = (0..SCAN_RAYS)
             .map(|i| Some(self.launch(alpha_of(i))))
             .collect();
@@ -651,8 +1018,7 @@ impl<'a> Solver<'a> {
         let mut recent: Vec<[Option<(f64, f64)>; 2]> = vec![[None; 2]; SCAN_RAYS];
 
         let mut age = 0.0f64;
-        let mut step = SCAN_FIRST_STEP;
-        let mut found = 0usize;
+        let mut step = self.first_step();
         // The closest approach seen anywhere in the sweep, as the last resort when no generator
         // ever turns round.
         let mut closest: Option<(f64, f64, usize)> = None;
@@ -683,18 +1049,18 @@ impl<'a> Solver<'a> {
                     && middle.1 < older.1
                     && middle.1 < separation
                 {
-                    if found == skip {
-                        return Ok((
-                            alpha_of(i),
-                            parabolic_vertex(older, middle, (age, separation)),
-                        ));
+                    dips.push((alpha_of(i), parabolic_vertex(older, middle, (age, separation))));
+                    if dips.len() >= want {
+                        return Ok(Sweep { dips, closest: None, refusal: NoImage::NoCrossing });
                     }
-                    found += 1;
                 }
                 recent[i] = [recent[i][1], Some((age, separation))];
             }
             if alive == 0 {
-                return Err(NoImage::RaysDied);
+                if dips.is_empty() {
+                    return Err(NoImage::RaysDied);
+                }
+                break;
             }
             if probed {
                 refusal = None;
@@ -707,7 +1073,7 @@ impl<'a> Solver<'a> {
             // other's worldline is *early* rather than hopeless: the age only grows from here, so
             // the search carries on until it reaches events the worldline has.
 
-            if age >= MAX_AGE {
+            if age >= MAX_AGE || age >= until_age {
                 break;
             }
             let dt = step.min(MAX_AGE - age);
@@ -725,17 +1091,19 @@ impl<'a> Solver<'a> {
             step = (step * SCAN_GROWTH).min(SCAN_MAX_STEP);
         }
 
-        // No generator ever turned round. If the sweep still found a closest approach, hand that
-        // over - a refinement that fails from there costs one solve and says so - and otherwise
-        // there is nothing to refine. Only the first candidate may be answered this way: the
-        // fallback is one point and not a list, so asking for a later one is asking for something
-        // that was never there.
-        match closest {
-            Some((_, found_age, found_ray)) if skip == 0 && found_age > 0.0 => {
-                Ok((alpha_of(found_ray), found_age))
-            }
-            _ => Err(refusal.unwrap_or(NoImage::NoCrossing)),
+        // Fewer dips than were asked for. If the sweep still found a closest approach, hand that
+        // over too - a refinement that fails from there costs one solve and says so - and
+        // otherwise there is nothing more to refine. Only the first candidate may be answered
+        // this way: the fallback is one point and not a list, so asking for a later one is asking
+        // for something that was never there, which `cold_seed` enforces.
+        let closest = closest
+            .filter(|(_, found_age, _)| *found_age > 0.0)
+            .map(|(_, found_age, found_ray)| (alpha_of(found_ray), found_age));
+        let refusal = refusal.unwrap_or(NoImage::NoCrossing);
+        if dips.is_empty() && closest.is_none() {
+            return Err(refusal);
         }
+        Ok(Sweep { dips, closest, refusal })
     }
 
     /// Newton on the two unknowns (arrival angle, age), from a seed.
@@ -873,6 +1241,9 @@ impl<'a> Solver<'a> {
             return Err(NoImage::NotConverged);
         };
 
+        // The solve drives wrap(ray.phi - event.phi) to nothing, so what is left between the two
+        // is a whole number of turns: the ray's own azimuthal excursion against the direct one.
+        let windings = ((probe.ray.phi - probe.event.phi) / TAU).round();
         let (sin_a, cos_a) = alpha.sin_cos();
         Ok(AsSeen {
             age: self.focus.t - probe.event.t,
@@ -886,6 +1257,7 @@ impl<'a> Solver<'a> {
             residual,
             iterations,
             cold,
+            windings: windings as i32,
         })
     }
 
@@ -1042,7 +1414,16 @@ fn wrap(angle: f64) -> f64 {
     if turned > PI { turned - TAU } else { turned }
 }
 
-impl OtherWorldline<'_> {
+impl<'a> OtherWorldline<'a> {
+    fn new(metric: &'a KerrSchild, obs: &'a Observer) -> Self {
+        Self {
+            metric,
+            obs,
+            mode: obs.effective_mode(metric),
+            pre_run: RefCell::new(VecDeque::new()),
+        }
+    }
+
     /// The other observer's event at coordinate time `t`, with the azimuth unwrapped so that it is
     /// within half a turn of `phi_reference`.
     ///
@@ -1077,6 +1458,9 @@ impl OtherWorldline<'_> {
 
     fn point_at(&self, t: f64) -> Result<(TrailPoint, WorldlineSource), NoImage> {
         if t < self.obs.release_t {
+            if let Some(point) = self.pre_run_at(t) {
+                return Ok((point, WorldlineSource::Geodesic));
+            }
             return Ok((self.obs.hold_event_at(self.metric, t), WorldlineSource::Hold));
         }
         // Nothing is known about the other's worldline past the clock they have been stepped to,
@@ -1129,6 +1513,82 @@ impl OtherWorldline<'_> {
                 Ok((self.between(&a, &b, t), WorldlineSource::Trail))
             }
         }
+    }
+
+    /// The event at `t` on the free-fall worldline continued backwards through the release event,
+    /// or `None` when the stretch before the release is a hold rather than this geodesic.
+    ///
+    /// It is this geodesic exactly when the observer was released the moment they were created
+    /// and the release arrives already moving. A release from rest is joined by the hold without
+    /// a jump, so the hold is the honest history there; a fixed-radius worldline is its own
+    /// history; and an observer who held station for a while before release really did hold, in
+    /// the run as drawn, so the hold is read for that stretch too. What is left is the case the
+    /// user's starting files are built on - "from rest at infinity", released at once - and for
+    /// that the only worldline through the release event with the release's own 4-velocity is
+    /// the geodesic, so it is integrated backwards, in proper time, with the same RK4 the forward
+    /// run uses, from the release event. The integration is done once per solve and lazily: as
+    /// far back as the solve asks, one step further each time, and the events are kept so that
+    /// the next question about an earlier time starts from where the last one stopped.
+    ///
+    /// The step is a twentieth of a M of proper time near the hole, and grows with the radius
+    /// because the field does not: a raindrop asked about 400 M of coordinate time ago has
+    /// climbed to tens of M and needs no finer sampling there than the forward run gives it.
+    fn pre_run_at(&self, t: f64) -> Option<TrailPoint> {
+        if self.mode != ObserverMode::FreeFall {
+            return None;
+        }
+        let start = self.obs.start;
+        if self.obs.release_t > start.t + 1e-12 {
+            return None;
+        }
+        let moving = start.u[1].abs() > 1e-6 * (1.0 + start.u[0].abs());
+        if !moving {
+            return None;
+        }
+        let geodesic = self.obs.geodesic.as_ref()?;
+        let mut pre_run = self.pre_run.borrow_mut();
+        if pre_run.is_empty() {
+            pre_run.push_back(start);
+        }
+        let mut state = {
+            let oldest = pre_run.front().expect("seeded just above");
+            GeodesicState {
+                t: oldest.t,
+                r: oldest.r,
+                phi: oldest.phi,
+                tau: oldest.tau,
+                energy: geodesic.energy,
+                l_ang: geodesic.l_ang,
+                u: oldest.u,
+                stalled: false,
+            }
+        };
+        // A worldline traced into the past cannot stall on r- - that is in its future - but it
+        // can come *out of* the ring for a run that began inside r-, and there is nothing to read
+        // before that.
+        while state.t > t {
+            if state.r <= R_STOP || !state.r.is_finite() {
+                return None;
+            }
+            let dtau = -0.05 * (1.0 + state.r / 10.0);
+            state.step(self.metric, dtau);
+            pre_run.push_front(TrailPoint {
+                t: state.t,
+                r: state.r,
+                phi: state.phi,
+                tau: state.tau,
+                u: state.u,
+                stalled: false,
+            });
+        }
+        // The pair of recorded events that bracket t, oldest first, interpolated the way the trail
+        // itself is.
+        let after = pre_run.partition_point(|p| p.t <= t);
+        let a = pre_run.get(after.checked_sub(1)?)?;
+        let Some(b) = pre_run.get(after) else {
+            return Some(*a);
+        };
+        Some(self.between(a, b, t))
     }
 
     /// The event at `t` between two recorded ones, by cubic Hermite interpolation on the stored
@@ -1734,11 +2194,7 @@ mod tests {
             WorldlineParams::new(1.0, 1.8, false),
         );
         play(&metric, &mut focus, &mut other, 400, 0.05);
-        let line = OtherWorldline {
-            metric: &metric,
-            obs: &other,
-            mode: other.effective_mode(&metric),
-        };
+        let line = OtherWorldline::new(&metric, &other);
 
         let mut worst_r = 0.0f64;
         let mut worst_phi = 0.0f64;
@@ -2063,6 +2519,386 @@ mod tests {
     }
 
     #[test]
+    fn test_the_warm_path_throws_away_a_solve_that_has_left_the_seeds_own_image() {
+        // What the guards on the warm path do, and - measured, at the end - what they do not.
+        //
+        // Alice on the prograde ISCO of an a = 0.90 hole sits barely above the prograde photon
+        // orbit, so Bob - the app's own raindrop, dropped from 27 M - has many images: the direct
+        // one, and a sequence whose rays wind round the photon sphere. A Newton started from last
+        // frame's answer is an initial guess and nothing more, so it can land on any of them.
+        // `continues` is the test that decides whether the answer it landed on is the one the
+        // seed was about, and a refusal costs the cold march, which is what a caller with no seed
+        // would have paid anyway.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let r_isco = metric.isco(true);
+        let mut focus = Observer::new_with_phi(
+            &metric,
+            "Alice",
+            0.0,
+            r_isco,
+            0.0,
+            0.0,
+            WorldlineParams::released(&metric, r_isco, 0.0, Release::CircularPrograde),
+        );
+        let mut other = raindrop(&metric, "Bob", 27.0, 0.0);
+
+        // Thread a chain frame by frame at the pace the view plays at, keeping the answers at the
+        // epochs the sibling test measures. Every one of these solves must succeed: a guard that
+        // fired on an honest step would turn a warm frame into a cold one for nothing.
+        let mut seed = None;
+        let mut chain: Vec<(f64, AsSeen)> = Vec::new();
+        let mut epochs = vec![120.0, 150.0, 180.0];
+        let mut cold_frames = 0;
+        // The pair as they stood at the first epoch, kept so that the guard can be put to work
+        // on the event where the chain and the direct image disagree most.
+        let mut deep: Option<(Observer, Observer)> = None;
+        let start = std::time::Instant::now();
+        for _ in 0..1800 {
+            play(&metric, &mut focus, &mut other, 1, 0.1);
+            let threaded = as_seen(&metric, &focus, &other, seed)
+                .expect("the threaded solve must never drop out");
+            if threaded.cold {
+                cold_frames += 1;
+            }
+            seed = Some(threaded.seed());
+            if epochs.first().is_some_and(|due| focus.t >= *due) {
+                epochs.remove(0);
+                if deep.is_none() {
+                    deep = Some((focus.clone(), other.clone()));
+                }
+                chain.push((focus.t, threaded));
+            }
+        }
+        let elapsed = start.elapsed();
+        println!(
+            "1800 guarded frames of the ISCO run took {elapsed:?}, {:?} a frame, of which \
+             {cold_frames} fell through to the cold path",
+            elapsed / 1800
+        );
+        assert_eq!(chain.len(), 3, "every epoch must have been reached");
+        // The cost of the guards is the frames they refuse, and on an honest run that is a
+        // handful: the first frame, which has no seed to be guarded, and the odd epoch where the
+        // Newton itself does not converge and would have fallen through with or without them.
+        // Counting rather than timing, so the assertion says the same thing on every machine.
+        // (The 3 ms a frame the print reports is not the guards: the same loop with the test
+        // taken out measures 3.16 ms against 3.19 ms. The cost is tracing a ray fifty to a
+        // hundred M back through the strong field, which is what this configuration asks for
+        // however the answer is seeded, and it is an order of magnitude above the 14 us a warm
+        // solve costs for a pair a few M apart.)
+        assert!(
+            cold_frames <= 4,
+            "the guards must not turn honest warm frames into cold ones: {cold_frames} of 1800"
+        );
+
+        // The guard itself, at the deepest epoch. The chain has drifted onto an image whose ray
+        // winds round the hole, and a seed taken from the *direct* image at that same event
+        // describes a different picture entirely. Hand the solver the wound image's starting
+        // angle under the direct image's emission time and affine length - which is exactly the
+        // shape of a Newton that has wandered off its own branch - and the answer has to be
+        // thrown away rather than drawn.
+        let (t_deep, wound) = chain[0];
+        let (focus, other) = deep.expect("the chain reached the first epoch");
+        let direct = as_seen(&metric, &focus, &other, None).expect("the cold march finds it");
+        println!(
+            "at t = {t_deep:.1} M the threaded chain is on an image of age {:.4} M (lambda \
+             {:.4} M, emission t = {:.4}) while the direct image has age {:.4} M (lambda \
+             {:.4} M, emission t = {:.4})",
+            wound.age,
+            wound.lambda,
+            wound.emission.t,
+            direct.age,
+            direct.lambda,
+            direct.emission.t
+        );
+        assert!(
+            !continues(&wound, direct.emission.t, direct.lambda, t_deep),
+            "an answer this far from the seed's own image must be refused"
+        );
+        let crossed = AsSeenSeed {
+            alpha: wound.alpha,
+            age: wound.age,
+            emission_t: direct.emission.t,
+            lambda: direct.lambda,
+        };
+        let recovered = as_seen(&metric, &focus, &other, Some(crossed))
+            .expect("and the cold path picks the answer up again");
+        assert_same_solve("recovered after a refused seed", &recovered, &direct);
+        // Without the guard the same seed would have handed the wound image straight back.
+        let unguarded = Solver::new(&metric, &focus, &other)
+            .refine(crossed.alpha, crossed.age, false)
+            .expect("the Newton converges on it perfectly well");
+        assert!(
+            (unguarded.age - wound.age).abs() < 1e-3,
+            "the refused answer is the wound image: age {} against {}",
+            unguarded.age,
+            wound.age
+        );
+        println!(
+            "the guard refused an age of {:.4} M and the cold path answered {:.4} M",
+            unguarded.age, recovered.age
+        );
+
+        // And the limit of the two guards, recorded rather than papered over. Both of them are
+        // *local*: they ask whether this answer continues the last one. The ISCO chain does not
+        // fail either of them - its emission time rises steadily and its lambda moves by a per
+        // cent a step - and it is still on the wrong image, because a new and more direct image
+        // comes into existence at about t = 43 M and nothing local can tell the chain that. The
+        // measured numbers: the chain and a cold solve agree exactly up to t = 40 M, at t = 45 M
+        // the cold solve reports an emission at t = 12.17 where the chain is at t = -9.89, and by
+        // t = 120 M the chain reports an age of 96.81 M against the direct image's 47.49 M. A
+        // winding count does not separate the two either, because the direct image's own ray is
+        // dragged several times round the hole once the source has frozen on r+. Deciding which
+        // image is the direct one takes a sweep of the whole past cone, which is the cold path;
+        // what the guards buy is that a chain which *jumps* is caught, not that a chain which
+        // drifts is.
+        assert!(
+            wound.age > direct.age + 1.0,
+            "this test is about a chain that has drifted; it has not: {} against {}",
+            wound.age,
+            direct.age
+        );
+    }
+
+    #[test]
+    fn test_the_youngest_image_replaces_a_chain_that_has_wound_round_the_hole() {
+        // The rule the view draws by, at the configuration that needs it. The sibling test above
+        // records that a chain threaded frame by frame from the prograde ISCO of an a = 0.90 hole
+        // drifts, without ever jumping, onto an image whose ray has wound round the hole: by
+        // t = 120 M it reports Bob as he was 96.81 M ago while a younger image carries him as he
+        // was 47.49 M ago. Nothing local catches that. `younger_image` is the non-local check: a
+        // sweep of the past cone for an image with a later emission event.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let r_isco = metric.isco(true);
+        let mut focus = Observer::new_with_phi(
+            &metric,
+            "Alice",
+            0.0,
+            r_isco,
+            0.0,
+            0.0,
+            WorldlineParams::released(&metric, r_isco, 0.0, Release::CircularPrograde),
+        );
+        let mut other = raindrop(&metric, "Bob", 27.0, 0.0);
+        let mut seed = None;
+        let mut chain = None;
+        for _ in 0..1200 {
+            play(&metric, &mut focus, &mut other, 1, 0.1);
+            let threaded = as_seen(&metric, &focus, &other, seed).expect("the chain holds");
+            seed = Some(threaded.seed());
+            chain = Some(threaded);
+        }
+        let wound = chain.expect("1200 frames were threaded");
+
+        let start = std::time::Instant::now();
+        let younger = younger_image(&metric, &focus, &other, &wound)
+            .expect("the sweep finds the image that was born at about t = 43 M");
+        let elapsed = start.elapsed();
+        println!(
+            "at t = {:.1} M the chain is on an image {:.4} M old and the sweep found one {:.4} M \
+             old in {elapsed:?}: emission t = {:.4} against {:.4}, lambda {:.4} M against \
+             {:.4} M, g = {:.4} against {:.4}",
+            focus.t,
+            wound.age,
+            younger.age,
+            younger.emission.t,
+            wound.emission.t,
+            younger.lambda,
+            wound.lambda,
+            younger.g,
+            wound.g
+        );
+        assert!(
+            younger.emission.t > wound.emission.t + 10.0,
+            "a younger image by a wide margin: {} against {}",
+            younger.emission.t,
+            wound.emission.t
+        );
+        assert!(younger.emission.t < focus.t, "and it is still in the past");
+        assert!(
+            younger.residual < 1e-6,
+            "and it is a real crossing: residual {}",
+            younger.residual
+        );
+        // It is at least as young as anything the cold march reaches, and there is nothing
+        // younger still: the rule has a fixed point.
+        let marched = as_seen(&metric, &focus, &other, None).expect("the march finds an image");
+        assert!(
+            younger.emission.t >= marched.emission.t - YOUNGER_MARGIN,
+            "the youngest image is not older than the march's: {} against {}",
+            younger.emission.t,
+            marched.emission.t
+        );
+        assert!(
+            younger_image(&metric, &focus, &other, &younger).is_none(),
+            "nothing younger than the youngest"
+        );
+        // And the combined rule, warm-started from the wound chain's own seed, gives the same
+        // answer the view will draw.
+        let drawn = as_seen_youngest(&metric, &focus, &other, Some(wound.seed()))
+            .expect("the combined rule answers");
+        assert_same_solve("the youngest image from the chain's seed", &drawn, &younger);
+    }
+
+
+
+
+    #[test]
+    fn test_a_release_that_arrives_moving_is_seen_along_its_own_geodesic_before_the_run() {
+        // The user's own starting file: two raindrops released together at 4.5 M of an a = 0.90
+        // hole, 0.00015 M apart. Two observers at the same place with the same velocity see each
+        // other at g = 1, whatever the field. Read off the static hold the app keeps for a moving
+        // release, they were seen at g = 1.39 one way and 1.12 the other - the Doppler shift
+        // between a hovering emitter and a receiver already falling at 0.6 c - so Bob's beacon
+        // came out in the ultraviolet as a dashed ring and Alice's came out green. Along the
+        // geodesic continued backwards through the release event, they were always falling
+        // together, and the shift is one.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let alice = raindrop(&metric, "Alice", 4.5, 0.0);
+        let bob = raindrop(&metric, "Bob", 4.5002, 0.0);
+        for (focus, other) in [(&alice, &bob), (&bob, &alice)] {
+            let seen = as_seen_youngest(&metric, focus, other, None)
+                .expect("a pair this close see each other");
+            println!(
+                "{} sees {}: g = {:.6}, lambda = {:.6} M, emission {:?} at t = {:.6}, r = {:.6}",
+                focus.name, other.name, seen.g, seen.lambda, seen.source, seen.emission.t,
+                seen.emission.r
+            );
+            assert_eq!(seen.source, WorldlineSource::Geodesic);
+            assert!(seen.emission.t < 0.0, "the light left before the run began");
+            assert!(
+                (seen.g - 1.0).abs() < 2e-3,
+                "the same velocity at the same place is no shift at all: g = {}",
+                seen.g
+            );
+            assert!(seen.age < 0.01, "and the delay is the gap: {}", seen.age);
+        }
+
+        // The pre-run worldline is the geodesic and not a look-alike: take the event it reports
+        // 5 M of coordinate time before the release, integrate the forward run's own stepper
+        // from there, and it has to arrive back on the release event.
+        let line = OtherWorldline::new(&metric, &bob);
+        let (before, source) = line.point_at(-5.0).expect("the pre-run worldline reaches back");
+        assert_eq!(source, WorldlineSource::Geodesic);
+        assert!(
+            before.r > bob.start.r + 0.5,
+            "a raindrop was higher up 5 M ago: r = {} against {}",
+            before.r,
+            bob.start.r
+        );
+        assert!(before.tau < 0.0, "and its watch had not yet reached zero: {}", before.tau);
+        let geodesic = bob.geodesic.as_ref().expect("a free-fall observer carries one");
+        let mut state = GeodesicState {
+            t: before.t,
+            r: before.r,
+            phi: before.phi,
+            tau: before.tau,
+            energy: geodesic.energy,
+            l_ang: geodesic.l_ang,
+            u: before.u,
+            stalled: false,
+        };
+        let mut steps = 0;
+        while state.t < bob.start.t - 1e-12 && steps < 100_000 {
+            let dt = (bob.start.t - state.t).min(1e-3);
+            state.step_coord_time(&metric, dt);
+            steps += 1;
+        }
+        println!(
+            "integrated forward from t = -5 in {steps} steps: r = {:.9} against the release at \
+             {:.9}, tau = {:.9} against {:.9}",
+            state.r, bob.start.r, state.tau, bob.start.tau
+        );
+        assert!(
+            (state.r - bob.start.r).abs() < 1e-5,
+            "the backward integration has to be the forward one run in reverse: r = {} against {}",
+            state.r,
+            bob.start.r
+        );
+        assert!(
+            (state.tau - bob.start.tau).abs() < 1e-5,
+            "and on the same watch: tau = {} against {}",
+            state.tau,
+            bob.start.tau
+        );
+
+        // A hovering pair keep the hold: a platform under thrust genuinely was hovering.
+        let hover_a = hovering(&metric, "Alice", 4.5, 0.0);
+        let hover_b = hovering(&metric, "Bob", 4.5002, 0.0);
+        let seen = as_seen(&metric, &hover_a, &hover_b, None).expect("hovering pair");
+        assert_eq!(seen.source, WorldlineSource::Hold);
+    }
+
+    #[test]
+    fn test_the_fan_enumerates_the_higher_order_images_as_well_as_the_direct_one() {
+        // A source this deep in the field is seen more than once, and the cold fan already knows
+        // where the extra images are: it finds the dips of the past-cone sweep one after another
+        // and the refinement turns each into a crossing. `images` is that enumeration, and this
+        // is the check that the answers are real and distinct - each one a genuine null
+        // connection with its own delay, its own affine length and its own arrival direction.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let r_isco = metric.isco(true);
+        let mut focus = Observer::new_with_phi(
+            &metric,
+            "Alice",
+            0.0,
+            r_isco,
+            0.0,
+            0.0,
+            WorldlineParams::released(&metric, r_isco, 0.0, Release::CircularPrograde),
+        );
+        let mut other = raindrop(&metric, "Bob", 27.0, 0.0);
+        play(&metric, &mut focus, &mut other, 600, 0.1);
+
+        let start = std::time::Instant::now();
+        let found = images(&metric, &focus, &other, 4);
+        let elapsed = start.elapsed();
+        for image in &found {
+            println!(
+                "image at age {:8.4} M: r = {:9.5} M, lambda = {:8.4} M, g = {:.4e}, \
+                 n = ({:+.4}, {:+.4}), {} extra turn(s), residual {:.2e}",
+                image.age,
+                image.emission.r,
+                image.lambda,
+                image.g,
+                image.n[0],
+                image.n[1],
+                image.windings,
+                image.residual
+            );
+        }
+        println!("{} image(s) found in {elapsed:?}", found.len());
+        assert!(
+            found.len() >= 2,
+            "the ISCO observer sees this source more than once: {} image(s)",
+            found.len()
+        );
+        // The list is ordered by age, most direct first, and the answer `as_seen` reports is one
+        // of its entries. It is not always the first, and that is the same finding the warm-guard
+        // test records: at this event the fan finds a crossing of age 12.69 M while the cold
+        // march, walking the answer forward from t = 0, is on the one of age 64.58 M. Both are
+        // real null connections between the two worldlines; which of them is the picture Alice
+        // mostly sees is a question the march answers by continuity and the fan answers by
+        // sweeping, and the two do not always agree this deep in the field.
+        let drawn = as_seen(&metric, &focus, &other, None).expect("the marched answer");
+        assert!(
+            found.windows(2).all(|pair| pair[0].age <= pair[1].age),
+            "the images come back most direct first"
+        );
+        assert!(
+            found
+                .iter()
+                .any(|image| (image.age - drawn.age).abs() < 1e-6),
+            "the marched answer must be one of the enumerated images: age {} against {:?}",
+            drawn.age,
+            found.iter().map(|i| i.age).collect::<Vec<_>>()
+        );
+        for image in &found {
+            assert!(image.residual < 1e-6, "every image is a solve: {}", image.residual);
+            assert!(image.age > 0.0 && image.g > 0.0, "and a real one: {image:?}");
+        }
+    }
+
+    #[test]
     fn test_a_cold_solve_reaches_the_deep_image_that_a_warm_one_does() {
         // The failure this pins. A view opened late in a run, or a run loaded off a file, has no
         // seed to warm from, and the cold sweep used to hand the refinement a seed that was not
@@ -2304,5 +3140,172 @@ mod tests {
             checked += 1;
         }
         assert_eq!(checked, 3, "every Kerr epoch must have been checked");
+    }
+
+    /// The Kerr-Schild Cartesian separation between two observers' present events - the same
+    /// length `Probe::separation` drives to nothing, and the one the close-pair test measures its
+    /// answers against, because for a close pair the light travel time is that distance.
+    fn cartesian_gap(metric: &KerrSchild, a: &Observer, b: &Observer) -> f64 {
+        let (xa, ya) = metric.cartesian_position(a.r, a.phi);
+        let (xb, yb) = metric.cartesian_position(b.r, b.phi);
+        (xa - xb).hypot(ya - yb)
+    }
+
+    #[test]
+    fn test_two_observers_standing_together_see_each_other_directly_and_not_round_the_hole() {
+        // The case a grid-based search cannot do on its own. A dip in the sweep needs three
+        // consecutive samples of one generator with the middle one the smallest, and the first
+        // sample is taken at age zero, so a crossing nearer than a couple of strides is invisible
+        // to it. With the old fixed first stride of 0.25 M that lost every pair closer than about
+        // a tenth of an M, and it lost them in two different ways, both measured on an a = 0.90
+        // hole with both observers holding station:
+        //
+        // * at r0 = 10 M, radial gaps of 0.0 to 0.1 M gave `NotConverged` in both directions,
+        //   while a gap of 0.2 M solved correctly (0.200 M of age looking inward, 0.299 M looking
+        //   outward);
+        // * at r0 = 25 and 30 M the same close pairs - radial gaps up to 0.1 M, azimuthal gaps of
+        //   0.025 to 0.03 rad - returned `Ok` with the wrong picture: the image whose ray had gone
+        //   once round the hole, lambda and age of 73 to 84 M and g = 1.3, where the direct image
+        //   is a tenth of an M old and unshifted. Two people standing next to each other watching
+        //   each other's distant past is not an accuracy problem.
+        //
+        // What fixes it is `Solver::geometric_seed`, which is exact in the limit the fan fails in:
+        // the local offset (xi^1, xi^2) of the other observer in the focus tetrad gives the
+        // arrival direction as atan2(xi^2, xi^1) and the age as its length. The adaptive first
+        // stride of `Solver::first_step` then lets the fan bracket the same crossing as a
+        // fallback rather than stepping over it.
+        //
+        // The bound the age is held to is the pair's own Cartesian separation. Light from a source
+        // further out arrives ingoing, and an ingoing radial ray of this chart has dr/dt = -1
+        // exactly, so the age is then the gap itself; light from a source further in arrives
+        // outgoing, at dt/dr = (r + 2M) / (r - 2M), so the age is that factor times the gap - 1.50
+        // at r0 = 10 M and 1.14 at r0 = 30 M. Twice the separation is therefore above every direct
+        // answer and a factor of eight hundred below the wound one.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let offsets: [(&str, f64, f64); 5] = [
+            ("radial 0.01 M", 0.01, 0.0),
+            ("radial 0.05 M", 0.05, 0.0),
+            ("radial 0.10 M", 0.10, 0.0),
+            ("azimuthal 0.001 rad", 0.0, 0.001),
+            ("azimuthal 0.005 rad", 0.0, 0.005),
+        ];
+        let mut checked = 0usize;
+        let mut worst_ratio = 0.0f64;
+        for &r0 in &[10.0f64, 30.0] {
+            for &(what, dr, dphi) in offsets.iter() {
+                let alice = held(&metric, "Alice", r0, 0.0);
+                let bob = held(&metric, "Bob", r0 + dr, dphi);
+                let gap = cartesian_gap(&metric, &alice, &bob);
+                for (who, focus, other) in [
+                    ("Alice sees Bob", &alice, &bob),
+                    ("Bob sees Alice", &bob, &alice),
+                ] {
+                    let seen = as_seen(&metric, focus, other, None).unwrap_or_else(|why| {
+                        panic!("r0 = {r0} M, {what}, {who}: no image at all ({why:?})")
+                    });
+                    println!(
+                        "r0 = {r0:>4} M, {what:<19}, {who}: gap {gap:.6} M, age {:.6} M \
+                         (age/gap {:.4}), lambda {:.6} M, g = {:.6}, windings {}, \
+                         residual {:.2e}, emission r = {:.9} M against {:.9} M",
+                        seen.age,
+                        seen.age / gap,
+                        seen.lambda,
+                        seen.g,
+                        seen.windings,
+                        seen.residual,
+                        seen.emission.r,
+                        other.r
+                    );
+                    assert_eq!(
+                        seen.source,
+                        WorldlineSource::Hold,
+                        "{who} at r0 = {r0} M, {what}: the light left before the run began"
+                    );
+                    assert!(
+                        (seen.emission.r - other.r).abs() < 1e-6,
+                        "{who} at r0 = {r0} M, {what}: a held observer never leaves their radius, \
+                         so the emission event is at {} M and not {}",
+                        other.r,
+                        seen.emission.r
+                    );
+                    assert!(
+                        seen.age < 2.0 * gap,
+                        "{who} at r0 = {r0} M, {what}: age {} M against a separation of {gap} M",
+                        seen.age
+                    );
+                    assert!(
+                        seen.age < 1.0,
+                        "{who} at r0 = {r0} M, {what}: the wound image is eighty M old and this \
+                         one is {} M",
+                        seen.age
+                    );
+                    assert!(
+                        seen.residual < 1e-6,
+                        "{who} at r0 = {r0} M, {what}: residual {}",
+                        seen.residual
+                    );
+                    // The rule the view draws by has to reach the same place: nothing is younger
+                    // than the direct image, so the extra sweep must leave it alone.
+                    let youngest = as_seen_youngest(&metric, focus, other, None)
+                        .expect("the youngest-image rule answers wherever `as_seen` does");
+                    assert_same_solve(&format!("r0 = {r0} M, {what}, {who}"), &seen, &youngest);
+                    worst_ratio = worst_ratio.max(seen.age / gap);
+                    checked += 1;
+                }
+            }
+        }
+        println!(
+            "{checked} close pairs, all direct: the largest age was {worst_ratio:.4} times the \
+             pair's own separation"
+        );
+        assert_eq!(checked, 20, "two radii, five offsets, both directions");
+    }
+
+    #[test]
+    fn test_a_pair_held_far_from_the_hole_is_not_walled_off_by_a_fixed_search_ceiling() {
+        // The search used to carry an absolute backstop at 128 M on top of the ceiling it reads off
+        // the two worldlines, and a pair holding station at r0 >= 140 M starts outside it: `shoot`
+        // killed every trial ray the moment it was launched and the solve answered `RaysDied` for a
+        // configuration with nothing unusual about it at all. The ceiling is now the pair's own
+        // reach alone, so the cost still scales with how far apart the two observers are and the
+        // wall is gone.
+        //
+        // Far from the hole the answer is nearly flat and can be written down. The light Alice
+        // receives from Bob, who is further out, is ingoing, and an ingoing radial ray has
+        // dr/dt = -1 exactly in this chart, so her age is the gap itself: 1 M. The light Bob
+        // receives from Alice is outgoing, at dt/dr = (r + 2M) / (r - 2M) = 302/298, so his age is
+        // 1.0134 M.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let alice = held(&metric, "Alice", 300.0, 0.0);
+        let bob = held(&metric, "Bob", 301.0, 0.0);
+        for (who, focus, other, want) in [
+            ("Alice at 300 M sees Bob at 301 M (ingoing light)", &alice, &bob, 1.0),
+            ("Bob at 301 M sees Alice at 300 M (outgoing light)", &bob, &alice, 302.0 / 298.0),
+        ] {
+            let seen = as_seen(&metric, focus, other, None)
+                .unwrap_or_else(|why| panic!("{who}: no image ({why:?})"));
+            println!(
+                "{who}: age {:.6} M against the flat-space {want:.6} M, lambda {:.6} M, \
+                 g = {:.9}, windings {}, residual {:.2e}, emission r = {:.6} M",
+                seen.age, seen.lambda, seen.g, seen.windings, seen.residual, seen.emission.r
+            );
+            assert_eq!(seen.source, WorldlineSource::Hold);
+            assert!(
+                (seen.emission.r - other.r).abs() < 1e-6,
+                "{who}: emission at {} M and not {} M",
+                seen.emission.r,
+                other.r
+            );
+            assert!(
+                (seen.age - want).abs() < 1e-3,
+                "{who}: age {} M against {want} M",
+                seen.age
+            );
+            assert_eq!(seen.windings, 0, "{who}: the direct image winds round nothing");
+            assert!(seen.residual < 1e-6, "{who}: residual {}", seen.residual);
+            let youngest = as_seen_youngest(&metric, focus, other, None)
+                .expect("the youngest-image rule answers here too");
+            assert_same_solve(who, &seen, &youngest);
+        }
     }
 }

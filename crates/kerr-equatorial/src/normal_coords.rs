@@ -184,12 +184,42 @@ impl RadialConstants {
     }
 }
 
+/// Which branch of a horizon a direction arrived on.
+///
+/// A horizon r = r_H is two surfaces rather than one, and the ingoing Kerr-Schild chart has both:
+/// [`RadialConstants::crosses_in_chart`] separates them by the sign test
+/// sign(dr/dsigma) = -sign(P(r_H)), and a sweep of directions about one event meets whichever of
+/// them its own straight lines run into. The two meet where P(r_H) = 0, which is the bifurcation
+/// direction - there R(r_H) = P(r_H)^2 vanishes, the geodesic arrives tangent to the horizon, and
+/// the drawn curve has a corner rather than a break.
+///
+/// The distinction is not a nicety of the chart. From Region III a worldline that has fallen
+/// through r- and is climbing back towards it sees *both* branches at once: the one it came
+/// through, in its past, and the far one it is approaching, lying along the null line beside it.
+/// Drawing the union of the two as one curve is what puts the elbow in the picture, and naming
+/// them is what makes the elbow legible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HorizonBranch {
+    /// The branch this chart lets a curve go through, at a finite reading of the ingoing time t.
+    /// It is the future horizon of r+ for anything falling in, and the branch of r- that an
+    /// infaller with E - Omega_- L > 0 crosses.
+    Crossing,
+    /// The branch a curve only ever settles onto, as the chart's time runs away: the geodesic
+    /// arrives at a finite affine length while dt/dsigma diverges, so there is no crossing event
+    /// in this chart at all. It is the past horizon of r+, which an outside observer's past light
+    /// cone runs down onto as t -> -infinity, and the far branch of r-, which a worldline with
+    /// E - Omega_- L < 0 freezes on as t -> +infinity.
+    Asymptotic,
+}
+
 /// One point of a surface curve, as the sampler hands it to a caller that is going to draw it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SurfacePoint {
-    /// The direction angle it was found along: T = sin(psi) e0 + cos(psi) e1 in the observer's
-    /// axial tetrad, so psi = 0 is the observer's outward now-direction, psi = pi/2 their own
-    /// future and psi = 5 pi/4 the inward half of their past light cone.
+    /// The direction angle it was found along: T = sin(psi) e0 + cos(psi) s, with s the spacelike
+    /// leg of the drawn plane - the observer's outward radial leg e1 for [`sample_surface`], the
+    /// line of sight for [`sample_surface_in_plane`]. So psi = 0 is the observer's now-direction
+    /// along s, psi = pi/2 their own future and psi = 5 pi/4 the half of their past light cone
+    /// that leans away from s.
     pub psi: f64,
     /// Affine length from the observer's event to the surface along that direction, for the
     /// Euclidean-unit tangent above.
@@ -201,6 +231,12 @@ pub struct SurfacePoint {
     /// any other; it is flagged so that the sampler can stop refining beyond the canvas and so
     /// that a run can be cut where it leaves.
     pub outside: bool,
+    /// Which branch of the target horizon this direction arrived on, for a target that is a
+    /// horizon at all. `None` for every point of an ordinary surface r = const, and `None` for the
+    /// one direction of a horizon sweep on which P(r_H) vanishes: that direction is the
+    /// bifurcation of the two branches and lies on both, so the sampler ends one run and starts
+    /// the next on it and the two drawn curves meet there.
+    pub branch: Option<HorizonBranch>,
 }
 
 /// What the sampler is allowed to spend, and what the caller can see.
@@ -414,7 +450,9 @@ pub fn surface_point_in_frame(
 ///
 /// The sweep is over T = sin(psi) e0 + cos(psi) e1 for psi round the full circle, so the curve is
 /// polar in the drawn plane - the point at angle psi sits at radius sigma(psi) - and the sampling
-/// is a sampling of psi. Directions that return `None` break the sweep into runs, and the ends of
+/// is a sampling of psi. This is the radial special case of [`sample_surface_in_plane`], which
+/// sweeps the same circle in span(e0, s) for any unit spacelike leg s orthogonal to u.
+/// Directions that return `None` break the sweep into runs, and the ends of
 /// the runs are hunted down by bisection because they are the visible ends of the drawn curve: on
 /// the past side of an outside observer's cone the run stops exactly where the geodesic stops
 /// being able to reach the horizon in this chart, and that edge is a thing to see rather than an
@@ -437,8 +475,60 @@ pub fn sample_surface(
 ) -> Vec<Vec<SurfacePoint>> {
     let r0 = r0.max(R_MIN);
     let tetrad = Tetrad::from_four_velocity_axial(metric, r0, u);
+    sweep(metric, r0, &tetrad, r_h, opts)
+}
+
+/// The same surface swept in the plane span(e0, s) rather than in the radial plane span(e0, e1).
+///
+/// [`affine_length_to_surface`] takes any tangent at all, so nothing in the construction was ever
+/// radial: the sweep T = sin(psi) e0 + cos(psi) s is as exact for one unit spacelike leg s as for
+/// another, and the curve that comes back is the slice of the same surface by the plane the caller
+/// named. The rest-frame view uses it to draw the plane that contains the light arriving from the
+/// other observer, where the drawn point of that observer lies on the same ray as the surface
+/// curve's point in that direction and so can never be drawn through it.
+///
+/// `s` is read for its spatial part alone, through [`Tetrad::turned_towards`]: the component along
+/// the observer's own 4-velocity drops out, the length drops out with the normalisation, and a
+/// caller handing over an exactly unit vector orthogonal to u gets the plane whose horizontal axis
+/// is that vector. Handing over the observer's own e1 gives [`sample_surface`] back exactly.
+pub fn sample_surface_in_plane(
+    metric: &KerrSchild,
+    r0: f64,
+    u: &[f64; 3],
+    s: &[f64; 3],
+    r_h: f64,
+    opts: &SurfaceSampling,
+) -> Vec<Vec<SurfacePoint>> {
+    let r0 = r0.max(R_MIN);
+    let tetrad = Tetrad::from_four_velocity_axial(metric, r0, u).turned_towards(metric, r0, s);
+    sweep(metric, r0, &tetrad, r_h, opts)
+}
+
+/// The sweep both entry points run: T = sin(psi) e0 + cos(psi) e1 of the tetrad handed in, round
+/// the full circle of psi, with the refinement and the windowing described on `sample_surface`.
+fn sweep(
+    metric: &KerrSchild,
+    r0: f64,
+    tetrad: &Tetrad,
+    r_h: f64,
+    opts: &SurfaceSampling,
+) -> Vec<Vec<SurfacePoint>> {
     let directions = opts.directions.max(8);
-    let mut budget = opts.max_evaluations.max(directions + 1);
+    let mut budget = opts.max_evaluations.max(directions + 2);
+    // The branch test only means anything for a horizon, and only for one away from the ring: at
+    // a = 0 the inner horizon and the ring are the same radius and P(0) = 0 for every tangent, so
+    // there are no two branches to tell apart there.
+    let horizon_target =
+        r_h > R_MIN && metric.delta(r_h).abs() <= 1e-9 * (1.0 + r_h * r_h);
+    // P(r_h) of the two legs of the drawn plane. E and L are linear in the tangent, so
+    // P(r_h) = E (r_h^2 + a^2) - a L is linear in it too, and along the sweep
+    //
+    //     P(psi) = sin(psi) p_time + cos(psi) p_space,
+    //
+    // which is what lets the bifurcation direction be solved for rather than hunted for.
+    let p_of = |t: &[f64; 3]| RadialConstants::of_tangent(metric, r0, t).p_at(metric, r_h);
+    let (p_time, p_space) = (p_of(&tetrad.e0), p_of(&tetrad.e1));
+    let p_scale = p_time.abs() + p_space.abs();
 
     let evaluate = |psi: f64, budget: &mut usize| -> Option<SurfacePoint> {
         if *budget == 0 {
@@ -452,20 +542,44 @@ pub fn sample_surface(
             s * tetrad.e0[2] + c * tetrad.e1[2],
         ];
         let sigma = affine_length_to_surface(metric, r0, &tangent, r_h)?;
+        // The sweep runs monotonically in r from r0 to r_h, so every direction that arrives does
+        // so with the same sign of dr/dsigma and the branch is decided by the sign of P alone.
+        let p = s * p_time + c * p_space;
+        let branch = if !horizon_target || p.abs() <= 1e-12 * p_scale {
+            None
+        } else if (r_h - r0) * p < 0.0 {
+            Some(HorizonBranch::Crossing)
+        } else {
+            Some(HorizonBranch::Asymptotic)
+        };
         Some(SurfacePoint {
             psi,
             sigma,
             xi: [sigma * c, sigma * s],
             outside: sigma > opts.max_xi,
+            branch,
         })
     };
 
     let step = std::f64::consts::TAU / directions as f64;
-    let mut samples: Vec<(f64, Option<SurfacePoint>)> = Vec::with_capacity(2 * directions);
-    let first = evaluate(0.0, &mut budget);
-    samples.push((0.0, first));
-    for j in 1..=directions {
-        let psi_b = step * j as f64;
+    let mut grid: Vec<f64> = (0..=directions).map(|j| step * j as f64).collect();
+    // The two bifurcation directions, sampled exactly rather than stepped over. sin psi p_time +
+    // cos psi p_space = 0 at psi = atan2(-p_space, p_time) and half a turn from it, and putting a
+    // sample on each is what gives the two branches a shared point to meet at.
+    if horizon_target && p_scale > 0.0 {
+        let first = (-p_space).atan2(p_time).rem_euclid(std::f64::consts::TAU);
+        for corner in [first, (first + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)] {
+            if grid.iter().all(|psi| (psi - corner).abs() > 1e-9) {
+                grid.push(corner);
+            }
+        }
+        grid.sort_by(f64::total_cmp);
+    }
+
+    let mut samples: Vec<(f64, Option<SurfacePoint>)> = Vec::with_capacity(2 * grid.len());
+    let first = evaluate(grid[0], &mut budget);
+    samples.push((grid[0], first));
+    for &psi_b in grid.iter().skip(1) {
         let a = samples[samples.len() - 1];
         let b = (psi_b, evaluate(psi_b, &mut budget));
         refine(
@@ -531,10 +645,17 @@ fn wants_split(
 
 /// Cut the ordered sweep into drawable runs.
 ///
-/// A run is a maximal stretch of directions that reach the surface, trimmed to the window: the
-/// interior of a stretch that has left the canvas is dropped, but the first point beyond the edge
-/// is kept at each end of it, so the polyline leaves and re-enters along the true curve and the
-/// caller's clipping has something honest to clip.
+/// A run is a maximal stretch of directions that reach the surface *on one branch of the target*,
+/// trimmed to the window: the interior of a stretch that has left the canvas is dropped, but the
+/// first point beyond the edge is kept at each end of it, so the polyline leaves and re-enters
+/// along the true curve and the caller's clipping has something honest to clip.
+///
+/// Splitting at the change of branch is what keeps the two halves of a horizon separate curves. A
+/// sweep that meets both branches of r- - which is what a worldline in Region III climbing back
+/// towards r- does - would otherwise hand back one polyline whose two halves have nothing to do
+/// with each other, joined by a corner at the bifurcation direction that no caller could tell from
+/// an artefact of the sampling. The bifurcation point itself, the one with `branch: None`, is put
+/// on both runs, so the two drawn curves still meet exactly where the geometry says they do.
 fn runs_from(samples: &[(f64, Option<SurfacePoint>)]) -> Vec<Vec<SurfacePoint>> {
     let mut runs: Vec<Vec<SurfacePoint>> = Vec::new();
     let mut current: Vec<SurfacePoint> = Vec::new();
@@ -550,7 +671,33 @@ fn runs_from(samples: &[(f64, Option<SurfacePoint>)]) -> Vec<Vec<SurfacePoint>> 
         }
     };
 
+    // The branch of the run being built, once one of its points has named one.
+    let mut branch: Option<HorizonBranch> = None;
     for (_, sample) in samples {
+        // A point on a branch the current run is not on ends that run and starts the next. The
+        // joint is the last point the two have in common: the bifurcation sample where the sweep
+        // has one, and otherwise the last point of the run that is ending, carried over with its
+        // branch dropped, since as a joint it belongs to neither run alone.
+        if let Some(point) = sample
+            && let (Some(here), Some(running)) = (point.branch, branch)
+            && here != running
+        {
+            let joint = current.last().map(|last| SurfacePoint { branch: None, ..*last });
+            close(&mut current, &mut runs);
+            pending = None;
+            if let Some(joint) = joint {
+                current.push(joint);
+            }
+            branch = None;
+        }
+        if let Some(point) = sample
+            && let Some(here) = point.branch
+        {
+            branch = Some(here);
+        }
+        if sample.is_none() {
+            branch = None;
+        }
         match sample {
             None => {
                 close(&mut current, &mut runs);
@@ -1261,45 +1408,67 @@ mod tests {
 
         // A static observer holds their radius, so the direction that sets out towards r+ is
         // exactly the one with a negative e1 component: T^r = cos(psi) e1^r, and the sweep arrives
-        // for psi in (pi/2, 3 pi/2) and for nothing else. The curve is therefore one run, open at
-        // both ends, with sigma running away like 1 / |cos psi| as the direction turns onto the
-        // observer's own worldline - which is the exact statement that a hovering observer never
-        // reaches any other surface r = const by waiting. Its middle, psi = pi, is the now-axis,
-        // and there the affine length is the ruler distance again.
+        // for psi in (pi/2, 3 pi/2) and for nothing else, with sigma running away like
+        // 1 / |cos psi| as the direction turns onto the observer's own worldline - which is the
+        // exact statement that a hovering observer never reaches any other surface r = const by
+        // waiting.
+        //
+        // That arc comes back as *two* runs, and the split is geometry rather than sampling. The
+        // axial tetrad's e1 is orthogonal to the horizon's own generator for any observer holding
+        // a radius - e0 and e2 span the Killing 2-plane there, and the generator lies in it - so
+        // P(r+) vanishes on the now-axis exactly, which is the bifurcation of the two branches of
+        // r+. Above the now-axis the sweep reaches the branch the observer would cross; below it,
+        // the past horizon, which is the one an outside observer's past light cone runs down onto
+        // and which no worldline ever crosses. The two runs meet on the now-axis, at the ruler
+        // distance, which is the number the horizon box prints.
         let r_static = 6.0;
         let s_u = static_obs(&metric, r_static);
         let runs = sample_surface(&metric, r_static, &s_u, metric.outer_horizon(), &opts);
-        assert_eq!(runs.len(), 1, "the hovering observer's r+ curve is one run");
-        let run = &runs[0];
-        assert!(
-            run[0].outside && run[run.len() - 1].outside,
-            "and it leaves the window at both ends: {:?} .. {:?}",
-            run[0],
-            run[run.len() - 1]
-        );
-        assert!(
-            run[0].psi > PI * 0.5 && run[run.len() - 1].psi < PI * 1.5,
-            "the run must lie inside the inward half-circle: {} .. {}",
-            run[0].psi,
-            run[run.len() - 1].psi
-        );
+        assert_eq!(runs.len(), 2, "the hovering observer's r+ curve is its two branches");
+        let ends = [runs[0][0], *runs[1].last().unwrap()];
+        let joins = [*runs[0].last().unwrap(), runs[1][0]];
         let ruler = ruler_distance(&metric, r_static, &s_u, metric.outer_horizon()).unwrap();
-        let on_axis = run
-            .iter()
-            .min_by(|p, q| (p.psi - PI).abs().partial_cmp(&(q.psi - PI).abs()).unwrap())
-            .expect("the sweep crosses the now-axis");
         println!(
-            "the hovering observer at {r_static} M has one r+ run of {} points, from psi = \
-             {:.4} to {:.4}, passing the now-axis at sigma = {:.5} M against a ruler distance of \
-             {ruler:.5} M",
-            run.len(),
-            run[0].psi,
-            run[run.len() - 1].psi,
-            on_axis.sigma
+            "the hovering observer at {r_static} M has two r+ runs of {} and {} points, spanning \
+             psi = {:.4} to {:.4}, meeting at psi = {:.6} with sigma = {:.5} M against a ruler \
+             distance of {ruler:.5} M; the branches are {:?} and {:?}",
+            runs[0].len(),
+            runs[1].len(),
+            ends[0].psi,
+            ends[1].psi,
+            joins[0].psi,
+            joins[0].sigma,
+            runs[0][1].branch,
+            runs[1][1].branch,
         );
         assert!(
-            (on_axis.psi - PI).abs() < 1e-9 && (on_axis.sigma - ruler).abs() < 1e-6 * ruler,
-            "the now-axis sample must be the ruler distance: {on_axis:?} vs {ruler}"
+            ends[0].outside && ends[1].outside,
+            "the union leaves the window at both ends: {:?} .. {:?}",
+            ends[0],
+            ends[1]
+        );
+        assert!(
+            ends[0].psi > PI * 0.5 && ends[1].psi < PI * 1.5,
+            "the arc must lie inside the inward half-circle: {} .. {}",
+            ends[0].psi,
+            ends[1].psi
+        );
+        assert_eq!(
+            (runs[0][1].branch, runs[1][1].branch),
+            (Some(HorizonBranch::Crossing), Some(HorizonBranch::Asymptotic)),
+            "the future half of the arc is the branch this observer could cross and the past half \
+             is the past horizon"
+        );
+        assert!(
+            joins[0].xi == joins[1].xi && joins[0].branch.is_none(),
+            "the two runs must meet at one bifurcation point: {:?} and {:?}",
+            joins[0],
+            joins[1]
+        );
+        assert!(
+            (joins[0].psi - PI).abs() < 1e-9 && (joins[0].sigma - ruler).abs() < 1e-6 * ruler,
+            "and that point is the now-axis at the ruler distance: {:?} vs {ruler}",
+            joins[0]
         );
     }
 
@@ -1307,6 +1476,193 @@ mod tests {
     fn leg_at(metric: &KerrSchild, r: f64, u: &[f64; 3], psi: f64) -> [f64; 3] {
         let (s, c) = psi.sin_cos();
         leg(metric, r, u, s, c)
+    }
+
+    #[test]
+    fn test_a_sweep_in_the_line_of_sight_plane_is_tangent_to_the_first_order_trace() {
+        // The rest-frame view draws the plane span(e0, s) with s the line of sight, and it reads
+        // two things off that plane: the exact curve, from this module, and the slope of the
+        // surface's trace at the observer's own event, from `LocalFrame::surface_r_const` built on
+        // the same turned tetrad. Those two constructions have to agree where they overlap, which
+        // is at the observer's event, or the box would be quoting a tilt the picture does not
+        // have.
+        //
+        // The statement, and it is exact rather than a fit. Along T = sin(psi) e0 + cos(psi) s the
+        // radial rate at sigma = 0 is T^r = n_0 sin(psi) + n_1 cos(psi) with n_0 = e0^r and
+        // n_1 = s^r, which are precisely the two components `surface_r_const` builds its line
+        // from. So for a surface a small Delta r away the affine length is
+        // sigma = Delta r / T^r + O(Delta r^2), and the drawn point sigma (cos psi, sin psi)
+        // satisfies n_1 xi^1 + n_0 xi^0 = Delta r to the same order: the exact curve lies on the
+        // first-order line, and the residual is second order in the gap. Measured as a fraction
+        // of the gap that is first order, so halving the gap has to halve it - which is what is
+        // checked, because a slope that was merely close would leave a fraction that stopped
+        // falling at all.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let (r0, u) = isco_observer(&metric);
+        let tetrad = Tetrad::from_four_velocity_axial(&metric, r0, &u);
+        // A line of sight well away from radial: 40 degrees round towards the observer's own
+        // direction of travel, which is the sort of aberrated arrival the ISCO produces.
+        let (s_sin, s_cos) = 0.7f64.sin_cos();
+        let sight: [f64; 3] =
+            core::array::from_fn(|mu| s_cos * tetrad.e1[mu] + s_sin * tetrad.e2[mu]);
+        let frame = crate::local_frame::LocalFrame::for_observer_plane(&metric, r0, &u, &sight);
+
+        // The two components the line is built from, read off the same turned tetrad.
+        let n0 = frame.tetrad().e0[1];
+        let n1 = frame.tetrad().e1[1];
+        // The drawn line's direction annihilates (n_1, n_0), which is the whole of "the slope is
+        // -n_1 / n_0" and says it without dividing: this observer holds a radius, so n_0 = e0^r
+        // is nought and the slope itself is infinite.
+        let dir = frame.surface_r_const(r0 - 0.01).dir;
+        assert!(
+            (n1 * dir[0] + n0 * dir[1]).abs() < 1e-9,
+            "the drawn line must lie in the plane n_a xi^a = const with n_1 = s^r: \
+             n = ({n1}, {n0}), dir = {dir:?}"
+        );
+
+        let mut worst = Vec::new();
+        for &gap in &[-1e-2, -5e-3, -2.5e-3] {
+            let r_h = r0 + gap;
+            let runs = sample_surface_in_plane(
+                &metric,
+                r0,
+                &u,
+                &sight,
+                r_h,
+                &SurfaceSampling::for_window(1.0),
+            );
+            let mut biggest = 0.0f64;
+            for point in runs.iter().flatten() {
+                // Only the part of the curve that is near the observer: the first-order line is a
+                // statement about small |xi| and nothing else, and the far arms of the curve -
+                // where the direction has turned onto the observer's own worldline and sigma runs
+                // away - are exactly where it has nothing to say.
+                if point.sigma > 20.0 * gap.abs() {
+                    continue;
+                }
+                let residual = n1 * point.xi[0] + n0 * point.xi[1] - gap;
+                biggest = biggest.max(residual.abs() / gap.abs());
+            }
+            worst.push((gap, biggest));
+        }
+        println!(
+            "the exact curve against the first-order trace in the line-of-sight plane, as a \
+             fraction of the gap: {:?}",
+            worst
+                .iter()
+                .map(|(gap, r)| format!("Delta r = {gap:.1e} -> {r:.3e}"))
+                .collect::<Vec<_>>()
+        );
+        for (gap, residual) in &worst {
+            assert!(
+                *residual < 0.08,
+                "the curve must lie on the first-order line near the event: {residual} at a gap \
+                 of {gap}"
+            );
+        }
+        // A factor of 1.8 is asked for rather than the 2 the exponent gives, which leaves room
+        // for the sampler landing its directions in slightly different places at each gap.
+        for pair in worst.windows(2) {
+            assert!(
+                pair[0].1 > 1.8 * pair[1].1,
+                "the residual must fall like Delta r^2: {:?} then {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+    }
+
+    #[test]
+    fn test_a_horizon_sweep_separates_its_two_branches_and_joins_them_at_the_bifurcation() {
+        // A horizon is two surfaces, and from the right event a single sweep meets both. The case
+        // is an observer in Region III, below r-, climbing back towards it: E = 1, L = 1.0 at
+        // a = 0.90 has a turning point below r-, so on the outgoing branch of that worldline r-
+        // lies ahead. Such an observer sees the branch already fallen through, in the past and
+        // drawn at a shallow tilt, and the far branch being approached, drawn along the null line
+        // beside the observer. The union of the two is one curve with a corner in it, and the
+        // corner is the bifurcation direction rather than a failure of the sampling.
+        //
+        // What the sampler has to do with that: tag every point with the branch it reached, never
+        // put both branches in one run, and put a point at the bifurcation itself on both runs so
+        // the two drawn curves meet exactly where the geometry says they meet.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let rm = metric.inner_horizon();
+        let r0 = rm - 0.02;
+        let geo = GeodesicState::new_infall(&metric, 0.0, r0, 1.0, 1.0);
+        let u = geo.branch_four_velocity_at(&metric, r0, true);
+        let runs = sample_surface(&metric, r0, &u, rm, &SurfaceSampling::for_window(5.5));
+
+        let mut seen: Vec<HorizonBranch> = Vec::new();
+        let mut joints: Vec<[f64; 2]> = Vec::new();
+        for run in &runs {
+            let mut branches = run.iter().filter_map(|p| p.branch);
+            let first = branches.next().expect("every run of a horizon names a branch");
+            assert!(
+                branches.all(|b| b == first),
+                "a run must not mix the two branches of r-: {:?}",
+                run.iter().map(|p| (p.psi.to_degrees(), p.branch)).collect::<Vec<_>>()
+            );
+            if !seen.contains(&first) {
+                seen.push(first);
+            }
+            for point in run.iter().filter(|p| p.branch.is_none()) {
+                joints.push(point.xi);
+            }
+        }
+        println!(
+            "from r = r- - 0.02 M on the outgoing branch of an E = 1, L = 1.0 worldline, the r- \
+             sweep came back as {} run(s) carrying {:?}, with {} bifurcation point(s)",
+            runs.len(),
+            seen,
+            joints.len()
+        );
+        assert!(
+            seen.contains(&HorizonBranch::Crossing) && seen.contains(&HorizonBranch::Asymptotic),
+            "this observer must see both branches of r-: {seen:?}"
+        );
+
+        // The two runs that meet do so at one point, held by both.
+        let crossing = runs
+            .iter()
+            .find(|run| run.iter().any(|p| p.branch == Some(HorizonBranch::Crossing)))
+            .expect("the branch already fallen through is drawn");
+        let corner = crossing
+            .iter()
+            .find(|p| p.branch.is_none())
+            .expect("and it ends on the bifurcation");
+        let shared = runs
+            .iter()
+            .filter(|run| run.iter().any(|p| p.xi == corner.xi))
+            .count();
+        println!(
+            "the bifurcation sits at xi = ({:.5}, {:.5}), sigma = {:.5} M, psi = {:.3} deg, and \
+             {shared} runs hold it",
+            corner.xi[0],
+            corner.xi[1],
+            corner.sigma,
+            corner.psi.to_degrees()
+        );
+        assert_eq!(shared, 2, "the two branches must meet at a point both of them carry");
+
+        // And it really is the direction where P(r-) changes sign, which is the whole of the
+        // definition: R(r-) = P(r-)^2 vanishes there, so the geodesic arrives tangent to the
+        // horizon rather than through it.
+        let (s, c) = corner.psi.sin_cos();
+        let tetrad = Tetrad::from_four_velocity_axial(&metric, r0, &u);
+        let tangent: [f64; 3] =
+            core::array::from_fn(|mu| s * tetrad.e0[mu] + c * tetrad.e1[mu]);
+        let p = RadialConstants::of_tangent(&metric, r0, &tangent).p_at(&metric, rm);
+        assert!(
+            p.abs() < 1e-9,
+            "the bifurcation direction must have P(r-) = 0, got {p}"
+        );
+
+        // A surface that is not a horizon has no branches at all, and says so.
+        let plain = sample_surface(&metric, r0, &u, 0.3, &SurfaceSampling::for_window(5.5));
+        assert!(
+            plain.iter().flatten().all(|p| p.branch.is_none()),
+            "r = 0.3 M is not a horizon and has no branch to name"
+        );
     }
 
     #[test]

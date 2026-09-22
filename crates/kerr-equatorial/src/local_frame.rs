@@ -126,6 +126,27 @@ impl LocalFrame {
         Self::new(metric, r, tetrad)
     }
 
+    /// The same observer's chart drawn in the plane span(e0, s) rather than in the radial plane:
+    /// the axial tetrad with its spatial legs turned so that e1 points along s.
+    ///
+    /// `s` is the spacelike leg the caller wants on the horizontal axis - for the rest-frame view,
+    /// the line of sight to the other observer - and it is read for its spatial part alone, so
+    /// neither its length nor any component along u matters (see [`Tetrad::turned_towards`]).
+    ///
+    /// One thing changes with the gauge and the caller has to say so to the reader. The axial
+    /// gauge is the one that makes e2^r vanish, so in it the drawn trace of a surface r = const
+    /// carries that surface's own causal character exactly. Turn the legs and the third one picks
+    /// up a radial component, n_2 = e2^r is no longer zero, and
+    /// -n_0^2 + n_1^2 = g^rr - n_2^2 rather than g^rr: the *trace* of the surface in the drawn
+    /// plane can then be timelike where the surface itself is null or spacelike. That is not an
+    /// error in either reading - a plane cut through a null surface at an angle really is a
+    /// timelike line - and it is why the view's tip says the character it prints is the character
+    /// of the drawn trace.
+    pub fn for_observer_plane(metric: &KerrSchild, r: f64, u: &[f64; 3], s: &[f64; 3]) -> Self {
+        let tetrad = Tetrad::from_four_velocity_axial(metric, r, u).turned_towards(metric, r, s);
+        Self::new(metric, r, tetrad)
+    }
+
     #[allow(dead_code)] // the tests build null directions from the frame's own tetrad
     pub fn tetrad(&self) -> &Tetrad {
         &self.tetrad
@@ -164,6 +185,13 @@ impl LocalFrame {
     /// drawn line is steeper than 45 degrees exactly where the surface is timelike (g^rr > 0), at
     /// 45 degrees on either horizon (Delta = 0), and flatter where it is spacelike. Nothing about
     /// the tilt is put in by hand.
+    ///
+    /// With the `for_observer_plane` gauge n_2 = e2^r is not zero, and the identity becomes
+    /// -n_0^2 + n_1^2 = g^rr - n_2^2. The line the function returns is then the trace of the
+    /// surface in the plane the caller asked for - the slice of one plane by another, so still a
+    /// line - and its character is the character of *that trace*, which can be timelike where the
+    /// surface itself is null. Both readings are exact; they answer different questions, and the
+    /// caller owns saying which one is on the screen.
     pub fn surface_r_const(&self, r_h: f64) -> LocalLine {
         let n0 = self.tetrad.e0[1];
         let n1 = self.tetrad.e1[1];
@@ -228,6 +256,11 @@ impl LocalFrame {
     /// exactly when u^t runs away - which is what happens on the way to the far branch of r-,
     /// where u^t grows like exp(kappa_- t), so infinitely many of the distant clock's slices are
     /// crossed in a finite amount of the observer's own time.
+    ///
+    /// Both arguments survive the turn to the `for_observer_plane` gauge untouched, because
+    /// neither one uses e2 for anything: the crossing cancels n_2 whatever n_2 is, and the bound
+    /// on the slope only ever throws n_2^2 away. So the distant clock's grid reads the same way in
+    /// the line-of-sight plane as it does in the radial one.
     ///
     /// This is a simultaneity convention and not what the observer sees. What is seen is the light,
     /// and the ingoing blueshift in the telemetry box diverges at the same rate on that approach.

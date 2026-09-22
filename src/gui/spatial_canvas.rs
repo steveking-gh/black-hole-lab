@@ -1,6 +1,6 @@
-use crate::gui::axis;
 use crate::gui::controls::{ReferenceFrame, SignalViews};
 use crate::gui::polyline::{SCREEN_SPACING, thin_to_pixels};
+use crate::gui::ruler;
 use crate::gui::spacetime_canvas::{BoxId, Canvas, PendingBox, TelemetryBoxes};
 use crate::gui::theme::Theme;
 use crate::physics::geodesic::GeodesicState;
@@ -796,51 +796,15 @@ impl SpatialCanvas {
             )
         };
 
-        // The distance marker: a ruler along the bottom edge, from nought, ticked at a round step
-        // of the units in force and drawn at the view's own scale. It measures the plane the way
-        // the plane is drawn, which is Cartesian distance in the Kerr-Schild embedding - the
-        // Details block says how that differs from r. It belongs to the canvas rather than to the
-        // hole, so it stays put under any pan and is never off the view. Pixels per km has no
-        // floor under it, because it has no natural one: a heavy hole at the widest zoom is
-        // 1e-10 px/km, and a floor above that spaces the ticks for one scale and places them by
-        // another. The zoom is clamped above zero and r_g is positive, so the division needs no
-        // guard either.
-        let extent_px = f64::from(rect.width().max(rect.height()));
-        let (px_per_unit, marker_step) = if use_physical_units {
-            let px_per_km = zoom_px / metric.r_grav_km();
-            (px_per_km, axis::round_step((extent_px * 0.7 / px_per_km / 5.0).max(1e-4)))
-        } else {
-            (zoom_px, axis::round_step((extent_px * 0.7 / zoom_px / 8.0).max(1e-6)))
-        };
-        let marker_step_px = (marker_step * px_per_unit) as f32;
-        let marker_font = egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale);
-        let marker_stroke = Stroke::new(1.0, Theme::TEXT_BRIGHT);
-        let marker_left = rect.left() + 24.0;
-        let marker_y = rect.bottom() - 10.0 - Theme::MIN_FONT_PT * font_scale;
-        // As many steps as fit in the left half of the canvas, and one at the least.
-        let marker_steps = ((rect.width() * 0.5 / marker_step_px).floor() as usize).clamp(1, 4);
-        let marker_right = marker_left + marker_step_px * marker_steps as f32;
-        painter.line_segment(
-            [Pos2::new(marker_left, marker_y), Pos2::new(marker_right, marker_y)],
-            marker_stroke,
+        // The distance marker: a ruler along the bottom edge, in the units in force and at this
+        // view's own scale. It measures the plane the way the plane is drawn, which is Cartesian
+        // distance in the Kerr-Schild embedding - the Details block says how that differs from r -
+        // so it needs no caption to say what it measures. It belongs to the canvas rather than to
+        // the hole, so it stays put under any pan and is never off the view. The drawing itself is
+        // `gui::ruler`, shared with both modes of the (t, r) canvas.
+        ruler::draw_distance_ruler(
+            &painter, rect, zoom_px, use_physical_units, metric, font_scale, None,
         );
-        for k in 0..=marker_steps {
-            let x = marker_left + marker_step_px * k as f32;
-            painter.line_segment([Pos2::new(x, marker_y - 4.0), Pos2::new(x, marker_y)], marker_stroke);
-            let value = marker_step * k as f64;
-            let label = if use_physical_units {
-                metric.format_grid_km(value, marker_step)
-            } else {
-                metric.format_grid_m(value, marker_step)
-            };
-            painter.text(
-                Pos2::new(x, marker_y + 3.0),
-                egui::Align2::CENTER_TOP,
-                label,
-                marker_font.clone(),
-                Theme::TEXT_BRIGHT,
-            );
-        }
 
         // The legend is an info box like any other on this canvas, shut to its title until the
         // triangle opens it. Whether it stands open is the panel's `show_details`, which is what a

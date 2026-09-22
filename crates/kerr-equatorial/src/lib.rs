@@ -30,7 +30,7 @@ pub use geodesic::GeodesicState;
 pub use kerr_schild::KerrSchild;
 pub use local_frame::{LocalFrame, LocalLine, SurfaceCharacter};
 pub use normal_coords::{
-    RadialConstants, SurfacePoint, SurfaceSampling, affine_length_between,
-    affine_length_to_surface, sample_surface, surface_point_in_frame,
+    HorizonBranch, RadialConstants, SurfacePoint, SurfaceSampling, affine_length_between,
+    affine_length_to_surface, sample_surface, sample_surface_in_plane, surface_point_in_frame,
 };
 pub use tetrad::Tetrad;

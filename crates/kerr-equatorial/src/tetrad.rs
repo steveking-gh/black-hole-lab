@@ -290,6 +290,38 @@ impl Tetrad {
         Self { e0, e1, e2 }
     }
 
+    /// The same observer's frame with the two spatial legs turned in their own plane, so that e1
+    /// points along the spatial direction of `s`.
+    ///
+    /// The observer, the time leg and the rest space are all untouched: this is a rotation of an
+    /// orthonormal pair by the angle of s in that pair, so g(e_a, e_b) = diag(-1, 1, 1) survives
+    /// exactly rather than to a normalisation. What changes is which spatial direction the drawn
+    /// plane span(e0, e1) contains - and that is the whole of what the rest-frame view needs when
+    /// the plane it draws is the one containing the line of sight rather than the radial one.
+    ///
+    /// `s` is read for its spatial part alone. The components taken are c1 = g(s, e1) and
+    /// c2 = g(s, e2), so any component of s along e0 drops out and any length of s drops out with
+    /// the normalisation; a caller handing over an exactly unit vector orthogonal to u gets back
+    /// the frame whose e1 *is* that vector. A vector with no spatial part at all leaves the frame
+    /// as it was, which is the only answer a direction with no direction in it admits.
+    pub fn turned_towards(&self, metric: &KerrSchild, r: f64, s: &[f64; 3]) -> Self {
+        let c1 = inner(metric, r, s, &self.e1);
+        let c2 = inner(metric, r, s, &self.e2);
+        let length = c1.hypot(c2);
+        // The negation is the point rather than a way of writing <=: a length that has come out
+        // NaN has to take this branch too, and `length <= 0.0` would let it through.
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
+        if !(length > 0.0) || !length.is_finite() {
+            return *self;
+        }
+        let (cos, sin) = (c1 / length, c2 / length);
+        Self {
+            e0: self.e0,
+            e1: core::array::from_fn(|mu| cos * self.e1[mu] + sin * self.e2[mu]),
+            e2: core::array::from_fn(|mu| -sin * self.e1[mu] + cos * self.e2[mu]),
+        }
+    }
+
     /// Future-directed null vector k^mu = e0 + cos(alpha) e1 + sin(alpha) e2 emitted by this
     /// observer at local angle alpha: alpha = 0 is the local outward radial direction, alpha = pi
     /// the local inward one, alpha = pi/2 the local +phi direction. It is null by construction,
