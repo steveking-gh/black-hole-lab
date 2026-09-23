@@ -1,0 +1,41 @@
+src/gui/spacetime_canvas.rs
+  s_e3dc24b22cfd01::t_15a62e724a327f 948-951,953-957,963-967
+  s_30eb1105c7e824::t_fa16a4fa32234a 952,958,961-962,968,1015,1023,1026
+  s_e3dc24b22cfd01::t_d32ee03181e67c 796-798
+  s_30eb1105c7e824::t_3e9f10c660dcdd 1263-1264,1268,1273,1276-1279
+  s_e3dc24b22cfd01::t_e9260357e020cd 5003,5005
+  s_e3dc24b22cfd01::t_b2e5c6c38ba35b 1016-1022,1024-1025,1200-1201,1252-1262,1265-1267,1269-1272,1274-1275,1384-1396
+  s_e3dc24b22cfd01::t_3ce5e22e8d4da0 4964-4974
+  s_30eb1105c7e824::t_78565ac3e32736 1202,1212,1311
+  s_e3dc24b22cfd01::t_2dd36293a2844e 5080-5125
+  s_e3dc24b22cfd01::t_4d573ddbd94167 1397
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c246e719377a549fef103bb573d2e2870f6d83ac",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_30eb1105c7e824": {
+      "agent_id": {
+        "tool": "github-copilot",
+        "id": "afc885cc-c22c-4eb1-aa29-1fc2ee5f819e",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    },
+    "s_e3dc24b22cfd01": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fcca3dc2-e727-46cf-bf88-a27e341dbfe8",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
