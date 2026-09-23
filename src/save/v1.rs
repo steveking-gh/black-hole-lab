@@ -499,6 +499,10 @@ pub struct Controls {
     /// carried.
     #[serde(default)]
     pub step_grain: Option<String>,
+    /// The "Decimal is comma" box. Additive: a file from before the box carries no such field and
+    /// loads in point style, which is what every build before the box wrote in.
+    #[serde(default)]
+    pub decimal_is_comma: bool,
 }
 
 /// `gui::controls::ObserverSettings`: one OBSERVER card.

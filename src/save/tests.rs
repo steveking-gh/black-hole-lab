@@ -176,6 +176,7 @@ fn test_a_save_round_trips_through_its_own_bytes() {
     // test by carrying the same default through twice.
     app.controls.font_scale = 1.35;
     app.controls.use_physical_units = false;
+    app.controls.decimal_is_comma = true;
     app.controls.show_distant_clock_grid = false;
     app.controls.step_mode = StepMode::Watch;
     app.controls.play_speed = 3.25;
@@ -514,6 +515,25 @@ fn test_the_step_grain_comes_back_from_a_file_and_an_older_file_opens_at_the_def
     // A slug from some later version falls back the same way rather than refusing the file.
     let unknown = v1::Controls { step_grain: Some("half-a-frame".to_string()), ..written };
     assert_eq!(convert::controls_from_v1(&unknown).step_grain, default_grain);
+}
+
+#[test]
+fn test_the_decimal_mark_travels_with_the_run_and_an_older_file_opens_in_point_style() {
+    // "Decimal is comma" is saved with the run, and like the Step Size dropdown it is an additive
+    // field: a file from before the box existed has no such field and opens with the box unticked,
+    // which is the style every build before it wrote in.
+    let metric = default_app().sim.metric;
+    for comma in [false, true] {
+        let controls = AppControls { decimal_is_comma: comma, ..AppControls::default() };
+        let written = convert::controls_to_v1(&controls, &metric);
+        let text = serde_json::to_string(&written).expect("writable");
+        let read: v1::Controls = serde_json::from_str(&text).expect("readable");
+        assert_eq!(convert::controls_from_v1(&read).decimal_is_comma, comma);
+    }
+
+    let golden = read_document(include_str!("golden/v1.json").as_bytes()).expect("the golden loads");
+    assert!(!golden.controls.decimal_is_comma, "the golden file predates the box");
+    assert!(!convert::controls_from_v1(&golden.controls).decimal_is_comma);
 }
 
 #[test]

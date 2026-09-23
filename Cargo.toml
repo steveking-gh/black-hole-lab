@@ -8,11 +8,12 @@ license = "GPL-3.0-or-later"
 # it cannot reach into the app, and `cargo doc` renders it as the library it is. Both are default
 # members so that a bare `cargo test` still runs every test there is.
 [workspace]
-members = [".", "crates/kerr-equatorial"]
-default-members = [".", "crates/kerr-equatorial"]
+members = [".", "crates/kerr-equatorial", "crates/readout"]
+default-members = [".", "crates/kerr-equatorial", "crates/readout"]
 
 [dependencies]
 kerr-equatorial = { path = "crates/kerr-equatorial" }
+readout = { path = "crates/readout" }
 eframe = "0.36.2"
 egui = "0.36.2"
 # gzip for the save format. Already in the tree behind eframe's image decoders, so naming it here

@@ -1,3 +1,4 @@
+use crate::gui::units::UnitLabels;
 use crate::gui::numbers;
 use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
@@ -23,7 +24,7 @@ fn fmt_shift(ratio: f64) -> String {
     if !ratio.is_finite() {
         "∞".to_string()
     } else if ratio.abs() < 100.0 {
-        format!("{:.3}", ratio)
+        numbers::fixed(ratio, 3)
     } else {
         numbers::fixed(ratio, 0)
     }
@@ -69,7 +70,7 @@ impl CauchyEffects {
                             let sep_str = if use_physical_units {
                                 metric.format_km(metric.r_to_km(diff))
                             } else {
-                                format!("{:.3}M", diff)
+                                format!("{}M", numbers::fixed(diff, 3))
                             };
                             ui.label(format!("Radial Separation: Δr = {}", sep_str));
                         }
@@ -81,7 +82,7 @@ impl CauchyEffects {
                         let al_r_str = if use_physical_units {
                             metric.format_km(metric.r_to_km(al.r))
                         } else {
-                            format!("{:.2}M", al.r)
+                            format!("{}M", numbers::fixed(al.r, 2))
                         };
                         ui.label(egui::RichText::new(format!("Alice r = {}", al_r_str)).color(Theme::ALICE_COLOR));
                         ui.label(
@@ -95,7 +96,7 @@ impl CauchyEffects {
                         let bob_r_str = if use_physical_units {
                             metric.format_km(metric.r_to_km(bob.r))
                         } else {
-                            format!("{:.2}M", bob.r)
+                            format!("{}M", numbers::fixed(bob.r, 2))
                         };
                         ui.label(egui::RichText::new(format!("Bob r = {}", bob_r_str)).color(Theme::BOB_COLOR));
                         ui.label(
@@ -108,14 +109,14 @@ impl CauchyEffects {
                     let ext_t_str = if use_physical_units {
                         metric.format_physical_time(current_time)
                     } else {
-                        format!("{:.2}M ({})", current_time, metric.format_physical_time(current_time))
+                        format!("{}M ({})", numbers::fixed(current_time, 2), metric.format_physical_time(current_time))
                     };
                     ui.label(format!("Coordinate Time t: {}", ext_t_str));
                     if let Some(bob) = bob.as_ref().filter(|b| b.release_t > 0.0) {
                         let delay_str = if use_physical_units {
                             metric.format_physical_time(bob.release_t)
                         } else {
-                            format!("{:.1}M", bob.release_t)
+                            format!("{}M", numbers::fixed(bob.release_t, 1))
                         };
                         let status = if bob.is_active { "released" } else { "hovering" };
                         ui.label(format!("(Bob release t = {} • {})", delay_str, status));
@@ -196,17 +197,10 @@ impl CauchyEffects {
                                     let r_str = if use_physical_units {
                                         metric.format_km(metric.r_to_km(pulse.emitted_r))
                                     } else {
-                                        format!("{:.3}M", pulse.emitted_r)
+                                        format!("{}M", numbers::fixed(pulse.emitted_r, 3))
                                     };
                                     ui.label(
-                                        egui::RichText::new(format!(
-                                            "· last pulse to reach her: #{} sent at t = {:.2}M, r = {} (Bob's τ = {:.2}M); {} later pulses never arrive",
-                                            pulse.pulse_index,
-                                            pulse.emitted_t,
-                                            r_str,
-                                            pulse.emitted_tau,
-                                            never
-                                        ))
+                                        egui::RichText::new(format!("· last pulse to reach her: #{} sent at t = {}M, r = {} (Bob's τ = {}M); {} later pulses never arrive", pulse.pulse_index, numbers::fixed(pulse.emitted_t, 2), r_str, numbers::fixed(pulse.emitted_tau, 2), never))
                                         .color(Theme::BOB_COLOR),
                                     );
                                 }

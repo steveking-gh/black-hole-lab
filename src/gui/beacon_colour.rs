@@ -44,6 +44,7 @@
 //! parts in a thousand across the whole band - far inside anything a coloured dot on a screen can
 //! show - and needs no interpolation table.
 
+use crate::gui::numbers;
 use egui::Color32;
 
 /// Shortest wavelength the eye responds to at all, in nm. Below it the beacon is ultraviolet.
@@ -424,13 +425,8 @@ pub fn wavelength_label(nm: f64) -> String {
     } else {
         (metres * 1e-3, "km")
     };
-    if value >= 100.0 {
-        format!("{value:.0} {unit}")
-    } else if value >= 10.0 {
-        format!("{value:.1} {unit}")
-    } else {
-        format!("{value:.2} {unit}")
-    }
+    let decimals = if value >= 100.0 { 0 } else if value >= 10.0 { 1 } else { 2 };
+    format!("{} {unit}", numbers::fixed(value, decimals))
 }
 
 #[cfg(test)]

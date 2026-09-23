@@ -1,3 +1,4 @@
+use crate::gui::units::UnitLabels;
 use crate::gui::axis::{self, SECONDS_PER_YEAR};
 use crate::gui::beacon_colour::{self, Beacon};
 use crate::gui::controls::{impossible_mode_note, ReferenceFrame, SignalViews};
@@ -215,7 +216,7 @@ fn distant_clock_ladder() -> Vec<(f64, String)> {
         .into_iter()
         .map(|rung| {
             let name = if rung.multiple < 1e4 {
-                format!("{:.0} {}", rung.multiple, rung.unit)
+                format!("{} {}", numbers::fixed(rung.multiple, 0), rung.unit)
             } else {
                 format!("{:.0e} {}", rung.multiple, rung.unit)
             };
@@ -597,9 +598,9 @@ fn duration_label(seconds: f64) -> String {
     let number = if value >= 1e4 {
         format!("{value:.0e}")
     } else if (value - value.round()).abs() < 1e-6 * value.max(1.0) {
-        format!("{:.0}", value.round())
+        numbers::fixed(value.round(), 0)
     } else {
-        format!("{value:.1}")
+        numbers::exact(value, 1)
     };
     format!("{number} {unit}")
 }
@@ -618,15 +619,15 @@ fn ruler_distance_label(metric: &KerrSchild, r_in_m: f64) -> String {
     }
     let metres = km * 1e3;
     if metres >= 1.0 {
-        format!("{metres:.2} m")
+        format!("{} m", numbers::fixed(metres, 2))
     } else if metres >= 1e-3 {
-        format!("{:.2} mm", metres * 1e3)
+        format!("{} mm", numbers::fixed(metres * 1e3, 2))
     } else if metres >= 1e-6 {
-        format!("{:.2} µm", metres * 1e6)
+        format!("{} µm", numbers::fixed(metres * 1e6, 2))
     } else if metres >= 1e-9 {
-        format!("{:.2} nm", metres * 1e9)
+        format!("{} nm", numbers::fixed(metres * 1e9, 2))
     } else {
-        format!("{metres:.2e} m")
+        format!("{} m", numbers::exponent(metres, 2))
     }
 }
 
@@ -984,17 +985,17 @@ impl TelemetryBoxes {
         // out on the way there - `drawn_box_size` asked the title alone for the size.
         let drawn = if collapsed { &lines[..lines.len().min(1)] } else { lines };
         paint_telemetry_box(painter, badge_rect, color, drawn, font_scale, collapsed);
-        let _ = toggle.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(if collapsed {
+        let _ = toggle.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(numbers::text(if collapsed {
             "Expand this box"
         } else {
             "Collapse this box to its title line"
-        });
+        }));
         // The box's own tip belongs to the rest of the box: two tooltips over one triangle would
         // ask the reader which of the two answers the triangle.
         if over_triangle {
             response
         } else {
-            response.on_hover_text(tip)
+            response.on_hover_text(numbers::text(tip))
         }
     }
 }
@@ -1561,7 +1562,11 @@ fn rate_per_second(per_s: f64) -> String {
 /// three decimals of v would print a flat "1.000c" and say that something reached the speed of
 /// light. Past four nines it prints the bound instead and leaves gamma to carry the magnitude.
 fn speed_row(s: &LocalSpeed) -> String {
-    let v = if s.v >= 0.9999 { ">0.9999c".to_string() } else { format!("{:.3}c", s.v) };
+    let v = if s.v >= 0.9999 {
+        format!(">{}c", numbers::fixed(0.9999, 4))
+    } else {
+        format!("{}c", numbers::fixed(s.v, 3))
+    };
     let big = |x: f64| numbers::fixed(x, 2);
     // Six characters and a pad to eight, so the = lands in the same column as the rates above.
     // The names are abbreviated to hold that column; the hover tip spells all three out, and
@@ -1571,7 +1576,10 @@ fn speed_row(s: &LocalSpeed) -> String {
         LocalRestFrame::Zamo => "v_ZAMO",
         LocalRestFrame::Raindrop => "v_rain",
     };
-    format!("{label:<8}= {v} (γ {}, γv {}c)", big(s.gamma), big(s.celerity()))
+    // The two figures in the bracket are a list, and where the comma is the decimal mark a
+    // comma between them would read as part of a number: `numbers::list_separator`.
+    let sep = numbers::list_separator();
+    format!("{label:<8}= {v} (γ {}{sep}γv {}c)", big(s.gamma), big(s.celerity()))
 }
 
 /// Which region of the geometry a radius lies in, as the title line of an observer's box names it.
@@ -1655,9 +1663,9 @@ fn telemetry_lines(
     let a_str = if let Some(note) = impossible_mode_note(obs, metric) {
         note.to_string()
     } else if is_geodesic || a_prop < 0.05 {
-        "a_prop = 0.00g (Free Fall)".to_string()
+        format!("a_prop = {}g (Free Fall)", numbers::fixed(0.0, 2))
     } else {
-        format!("a_thrust = {:.1}g", a_prop)
+        format!("a_thrust = {}g", numbers::fixed(a_prop, 1))
     };
 
     // "bg" for background: this is the vacuum field of the hole alone, and the perturbation it
@@ -1667,7 +1675,7 @@ fn telemetry_lines(
     let tidal_str = if a_tidal_grad >= 100.0 {
         format!("Tidal (bg) = {} g/m", numbers::fixed(a_tidal_grad, 0))
     } else if a_tidal_grad >= 0.01 {
-        format!("Tidal (bg) = {:.2} g/m", a_tidal_grad)
+        format!("Tidal (bg) = {} g/m", numbers::fixed(a_tidal_grad, 2))
     } else {
         format!("Tidal (bg) = {} g/m", numbers::small(a_tidal_grad))
     };
@@ -1675,7 +1683,7 @@ fn telemetry_lines(
     // The conserved constants of the worldline actually being integrated, for free-fallers.
     let constants_str = match obs.geodesic {
         Some(geo) if obs.mode == ObserverMode::FreeFall => {
-            Some(format!("E = {:.3}  L = {:.3} M", geo.energy, geo.l_ang))
+            Some(format!("E = {}  L = {} M", numbers::fixed(geo.energy, 3), numbers::fixed(geo.l_ang, 3)))
         }
         _ => None,
     };
@@ -2252,7 +2260,7 @@ Tick Enable Observer on Alice's or Bob's card",
         let t_now = if use_physical_units {
             format!("t = {}", metric.format_physical_time(current_time))
         } else {
-            format!("t = {current_time:+.2}M")
+            format!("t = {}M", numbers::fixed_signed(current_time, 2))
         };
         let label_font = egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale);
         let label_height = Theme::MIN_FONT_PT * font_scale * 1.4;
@@ -2434,9 +2442,9 @@ Tick Enable Observer on Alice's or Bob's card",
         if x_rm_actual >= rect.left() && x_rm_actual <= rect.right() {
             painter.line_segment([Pos2::new(x_rm_actual, rect.top()), Pos2::new(x_rm_actual, rect.bottom())], Stroke::new(2.5, Theme::HORIZON_CAUCHY));
             let rm_radius = if use_physical_units {
-                format!("r₋ = {} ({:.2}M)", metric.format_km(metric.r_to_km(rm)), rm)
+                format!("r₋ = {} ({}M)", metric.format_km(metric.r_to_km(rm)), numbers::fixed(rm, 2))
             } else {
-                format!("r₋ = {:.2}M ({})", rm, metric.format_physical_distance(rm))
+                format!("r₋ = {}M ({})", numbers::fixed(rm, 2), metric.format_physical_distance(rm))
             };
             pending_boxes.push(PendingBox {
                 id: BoxId::CauchyHorizon,
@@ -2464,9 +2472,9 @@ Tick Enable Observer on Alice's or Bob's card",
         if x_rp_actual >= rect.left() && x_rp_actual <= rect.right() {
             painter.line_segment([Pos2::new(x_rp_actual, rect.top()), Pos2::new(x_rp_actual, rect.bottom())], Stroke::new(2.5, Theme::HORIZON_OUTER));
             let rp_radius = if use_physical_units {
-                format!("r₊ = {} ({:.2}M)", metric.format_km(metric.r_to_km(rp)), rp)
+                format!("r₊ = {} ({}M)", metric.format_km(metric.r_to_km(rp)), numbers::fixed(rp, 2))
             } else {
-                format!("r₊ = {:.2}M ({})", rp, metric.format_physical_distance(rp))
+                format!("r₊ = {}M ({})", numbers::fixed(rp, 2), metric.format_physical_distance(rp))
             };
             pending_boxes.push(PendingBox {
                 id: BoxId::OuterHorizon,
@@ -2494,9 +2502,9 @@ Tick Enable Observer on Alice's or Bob's card",
         if x_re_actual >= rect.left() && x_re_actual <= rect.right() {
             painter.line_segment([Pos2::new(x_re_actual, rect.top()), Pos2::new(x_re_actual, rect.bottom())], Stroke::new(1.5, Theme::ERGOSPHERE_LINE));
             let re_radius = if use_physical_units {
-                format!("r_E = {} ({:.2}M)", metric.format_km(metric.r_to_km(re)), re)
+                format!("r_E = {} ({}M)", metric.format_km(metric.r_to_km(re)), numbers::fixed(re, 2))
             } else {
-                format!("r_E = {:.2}M ({})", re, metric.format_physical_distance(re))
+                format!("r_E = {}M ({})", numbers::fixed(re, 2), metric.format_physical_distance(re))
             };
             pending_boxes.push(PendingBox {
                 id: BoxId::Ergosphere,
@@ -3433,11 +3441,11 @@ Tick Enable Observer on Alice's or Bob's card",
             let detail = match trace {
                 SurfaceCharacter::Timelike => {
                     let speed = if slope_abs.is_finite() { 1.0 / slope_abs.max(1e-9) } else { 0.0 };
-                    format!("trace moves at {speed:.2}c in this plane")
+                    format!("trace moves at {}c in this plane", numbers::fixed(speed, 2))
                 }
-                SurfaceCharacter::Null => "trace moves at 1.00c in this plane".to_string(),
+                SurfaceCharacter::Null => format!("trace moves at {}c in this plane", numbers::fixed(1.0, 2)),
                 SurfaceCharacter::Spacelike => {
-                    format!("trace closes at {slope_abs:.2}c in this plane")
+                    format!("trace closes at {}c in this plane", numbers::fixed(slope_abs, 2))
                 }
             };
 
@@ -3622,9 +3630,9 @@ Tick Enable Observer on Alice's or Bob's card",
                 (Some(rx), Some(tx), Some(ratio)) => {
                     lines.push(line(format!("{} Receive Frequency: {}", focus_obs.name, hz(rx))));
                     lines.push(line(format!("{sender_name} Transmit Frequency: {}", hz(tx))));
-                    lines.push(line(format!("Blueshift: {ratio:.3}")));
+                    lines.push(line(format!("Blueshift: {}", numbers::fixed(ratio, 3))));
                 }
-                _ => lines.push(line(format!("Blueshift: {ray:.3} (last ray)"))),
+                _ => lines.push(line(format!("Blueshift: {} (last ray)", numbers::fixed(ray, 3)))),
             }
             // What the wavefront cap has cost this reading, on the runs where it has cost it
             // anything. Every number above is measured off the pulses the field still holds, so a
@@ -4167,34 +4175,7 @@ pub(crate) fn format_frequency(hz: f64) -> String {
     if !hz.is_finite() || hz <= 0.0 {
         return "n/a".to_string();
     }
-    // Rounded to four significant digits first, so that a value which rounds up to the next
-    // power of a thousand takes the next prefix rather than printing as 1000.0.
-    let magnitude = hz.log10().floor() - 3.0;
-    let quantum = 10f64.powf(magnitude);
-    let hz = (hz / quantum).round() * quantum;
-    const PREFIXES: [(&str, f64); 9] = [
-        ("pHz", 1e-12),
-        ("nHz", 1e-9),
-        ("µHz", 1e-6),
-        ("mHz", 1e-3),
-        ("Hz", 1.0),
-        ("kHz", 1e3),
-        ("MHz", 1e6),
-        ("GHz", 1e9),
-        ("THz", 1e12),
-    ];
-    // The largest prefix the value is at least one of, so the mantissa lies in [1, 1000).
-    let Some(&(unit, scale)) = PREFIXES.iter().rev().find(|(_, scale)| hz >= *scale) else {
-        return format!("{hz:.3e} Hz");
-    };
-    let mantissa = hz / scale;
-    if mantissa >= 1000.0 {
-        return format!("{hz:.3e} Hz");
-    }
-    // Four significant digits: three decimals for a mantissa below ten, two below a hundred,
-    // one below a thousand.
-    let decimals = if mantissa < 10.0 { 3 } else if mantissa < 100.0 { 2 } else { 1 };
-    format!("{mantissa:.decimals$} {unit}")
+    numbers::hertz(hz)
 }
 
 fn clip_line_to_rect(p: Pos2, d: Vec2, rect: Rect) -> Option<(Pos2, Pos2)> {

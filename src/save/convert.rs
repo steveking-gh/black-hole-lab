@@ -489,6 +489,7 @@ pub fn controls_to_v1(controls: &AppControls, metric: &KerrSchild) -> v1::Contro
         bob: card_to_v1(&controls.bob),
         show_theory_modal: controls.show_theory_modal,
         use_physical_units: controls.use_physical_units,
+        decimal_is_comma: controls.decimal_is_comma,
         frame_of_ref: match controls.frame_of_ref {
             ReferenceFrame::DistantObserver => v1::ReferenceFrame::DistantObserver,
             ReferenceFrame::Bob => v1::ReferenceFrame::Bob,
@@ -534,6 +535,7 @@ pub fn controls_from_v1(controls: &v1::Controls) -> AppControls {
         bob: card_from_v1(&controls.bob),
         show_theory_modal: controls.show_theory_modal,
         use_physical_units: controls.use_physical_units,
+        decimal_is_comma: controls.decimal_is_comma,
         frame_of_ref: match controls.frame_of_ref {
             v1::ReferenceFrame::DistantObserver => ReferenceFrame::DistantObserver,
             v1::ReferenceFrame::Bob => ReferenceFrame::Bob,

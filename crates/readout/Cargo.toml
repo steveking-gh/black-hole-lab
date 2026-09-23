@@ -1,0 +1,10 @@
+[package]
+name = "readout"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "Numbers as a person reads them off a display: digit grouping, a point or comma decimal mark, SI prefixes, and an exponent only where plain notation cannot fit"
+# Not for crates.io yet, for the reason kerr-equatorial gives: the API is what Black Hole Lab needs.
+publish = false
+
+[dependencies]

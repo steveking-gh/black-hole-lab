@@ -29,6 +29,7 @@
 //! reading is not lost: the chart prints it once, under the now line, which does not move, so that
 //! a fast-moving number is a clock rather than a blur.
 
+use crate::gui::numbers;
 use std::ops::RangeInclusive;
 
 use crate::physics::kerr_schild::KerrSchild;
@@ -95,7 +96,7 @@ const MAX_TIME_DECIMALS: usize = 9;
 pub(crate) fn time_label_m(t: f64, step: f64) -> String {
     let decimals = decimals_for_step(step, MAX_TIME_DECIMALS);
     let t = if t.abs() < step.abs() * 1e-9 { 0.0 } else { t };
-    format!("{t:+.decimals$}M")
+    format!("{}M", numbers::exact_signed(t, decimals))
 }
 
 /// A time grid line labelled in physical units, carrying the digits its own step needs.
@@ -133,7 +134,7 @@ pub(crate) fn time_label_physical(metric: &KerrSchild, t_in_m: f64, step_in_m: f
     };
 
     let decimals = decimals_for_step(step_secs / unit, MAX_TIME_DECIMALS).max(2);
-    format!("{sign}{:.decimals$} {name}", secs / unit)
+    format!("{sign}{} {name}", numbers::exact(secs / unit, decimals))
 }
 
 /// Seconds in a Julian year, the unit the top of the clock ladder is counted in.
@@ -410,7 +411,7 @@ fn offset_label_physical(secs: f64, step_secs: f64, unit_seconds: f64) -> String
     let number = if value.abs() >= 1e4 {
         format!("{value:+.0e}")
     } else {
-        format!("{value:+.decimals$}")
+        numbers::exact_signed(value, decimals)
     };
     format!("{number} {unit}")
 }

@@ -1,3 +1,5 @@
+use crate::gui::units::UnitLabels;
+use crate::gui::numbers::{self, Styled};
 use crate::gui::theme::Theme;
 use crate::physics::geodesic::GeodesicState;
 use crate::physics::kerr_schild::KerrSchild;
@@ -421,6 +423,10 @@ pub struct AppControls {
     /// and the GR convention is there for whoever wants it. Speeds are quoted in c in both modes,
     /// because c is the one natural unit that needs no introduction.
     pub use_physical_units: bool,
+    /// Whether every number on the screen is written with a comma for its decimal mark and a
+    /// point between groups of digits - 1.234,5 - rather than the other way round. Off by
+    /// default. `gui::numbers` carries it to every formatter; see `DECIMAL_COMMA_TIP`.
+    pub decimal_is_comma: bool,
     pub frame_of_ref: ReferenceFrame,
     /// Whether the view in the foliation column draws the distant clock's own moments: the surfaces
     /// t = const of the chart's Killing time, one line per round unit of the distant clock,
@@ -497,6 +503,7 @@ impl Default for AppControls {
             // Kilometres and seconds. See the field's own note: the checkbox offers M rather
             // than offering a way out of it.
             use_physical_units: true,
+            decimal_is_comma: false,
             frame_of_ref: ReferenceFrame::DistantObserver,
             show_distant_clock_grid: true,
             font_scale: 1.0,
@@ -610,6 +617,9 @@ Two things to know before moving this slider. Lowering the count takes effect at
 No cap can erase what the transmission measured. An arrival is an event that happened, and the field keeps the receptions list and the last delivery outside the pulses, so even at a cap of one front the HUD's arrival lines and measured shifts match what a cap of 128 gives. The setting survives Reset, as every control on this panel does.";
 
 /// The hover tip on the units checkbox.
+/// The hover tip on the "Decimal is comma" checkbox.
+const DECIMAL_COMMA_TIP: &str = "Whether every number in the app writes a comma for its decimal mark and a point between groups of three digits: 1.234,5 rather than 1,234.5. Unticked, the default, the app writes 1,234.5. Ticked, every number on the screen switches: the boxes, the axes, the sliders and these tips. A slider then reads a typed number in the same style. Where a list of numbers needs a separator, a semicolon replaces the comma. A saved run keeps the setting.";
+
 const M_CHECKBOX_TIP: &str = "Whether every distance and time in the app reads in M, the geometric unit that the Kerr metric actually uses, instead of in kilometres and seconds. Unticked — the default — radii read in km, AU or light-years, times read in µs, seconds, days or years, each scale chosen to suit the hole the mass slider names, and angular rates read in radians per second. Ticked, all of them read in M.
 
 One M is two units at once, and that doubling is the whole reason the convention exists: as a length, M is GM/c², and as a time, M is GM/c³ — the two lines printed under this box for the hole you have dialled up. Setting both to 1 makes the equations readable. The outer horizon sits at r₊ = M + √(M² − a²) whatever the mass, the ISCO of a non-spinning hole sits at 6M, and light covers 1 M of distance in 1 M of time, so a 45° line on the (t, r) diagram is a light ray. Kilometres and seconds hide all of that, because every one of those numbers scales with the mass; in M, a stellar-mass hole and a supermassive one draw the same picture. Hence an offer rather than an imposition: M is the right unit for reading the geometry and the wrong unit for knowing how far away anything lies.
@@ -731,10 +741,10 @@ fn same_to_a_millionth(x: f64, y: f64) -> bool {
 /// where a press lands at the smallest grain and the slowest play rate.
 fn format_in_m(amount: f64) -> String {
     match amount.abs() {
-        size if size >= 100.0 => format!("{amount:.1} M"),
-        size if size >= 1.0 => format!("{amount:.3} M"),
-        size if size >= 1e-3 => format!("{amount:.5} M"),
-        _ => format!("{amount:.2e} M"),
+        size if size >= 100.0 => format!("{} M", numbers::fixed(amount, 1)),
+        size if size >= 1.0 => format!("{} M", numbers::fixed(amount, 3)),
+        size if size >= 1e-3 => format!("{} M", numbers::fixed(amount, 5)),
+        _ => format!("{} M", numbers::exponent(amount, 2)),
     }
 }
 
@@ -791,7 +801,7 @@ impl ObserverCard {
             );
 
             ui.checkbox(&mut settings.enabled, "Enable Observer")
-                .on_hover_text(ENABLE_TIP);
+                .on_hover_text(numbers::text(ENABLE_TIP));
             if !settings.enabled {
                 // Out of the simulation entirely: no worldline to step or draw, and the light they
                 // had in flight goes with them, since it was emitted by a worldline that is no
@@ -814,7 +824,7 @@ impl ObserverCard {
             });
 
             ui.checkbox(&mut settings.transmit, "Transmit Signal")
-                .on_hover_text(self.transmit_tip);
+                .on_hover_text(numbers::text(self.transmit_tip));
             if !settings.transmit {
                 field.silence();
             }
@@ -826,7 +836,7 @@ impl ObserverCard {
                     (ObserverMode::Static, "Static", STATIC_TIP),
                     (ObserverMode::Zamo, "ZAMO", ZAMO_TIP),
                 ] {
-                    if chip(ui, obs.mode == mode, label).on_hover_text(tip).clicked() {
+                    if chip(ui, obs.mode == mode, label).on_hover_text(numbers::text(tip)).clicked() {
                         obs.mode = mode;
                     }
                 }
@@ -845,11 +855,10 @@ impl ObserverCard {
 
             ui.add(
                 egui::Slider::new(&mut settings.delta_t_delay, 0.0..=30.0)
+                    .styled()
                     .text("Release Delay Δt"),
             )
-            .on_hover_text(
-                "How long after the drop this observer is let go. Until then they hold the drop radius on the worldline they are about to fall on — a real worldline, under thrust, with a clock of its own and a frame to transmit from — and the release is the moment that thrust stops. The wait is what puts one observer behind the other on the same infall. Released at rest, nothing in their motion changes at the release except the thrust: the hover and the fall are the same four-velocity. Released from rest at infinity there is nothing to hold, since that worldline is already moving in r, so they wait as a static observer and the release is a jump. It takes effect at the next Reset, or at once while the clock reads zero, since a release time is part of a worldline rather than something that can be changed under one.",
-            );
+            .on_hover_text(numbers::text("How long after the drop this observer is let go. Until then they hold the drop radius on the worldline they are about to fall on — a real worldline, under thrust, with a clock of its own and a frame to transmit from — and the release is the moment that thrust stops. The wait is what puts one observer behind the other on the same infall. Released at rest, nothing in their motion changes at the release except the thrust: the hover and the fall are the same four-velocity. Released from rest at infinity there is nothing to hold, since that worldline is already moving in r, so they wait as a static observer and the release is a jump. It takes effect at the next Reset, or at once while the clock reads zero, since a release time is part of a worldline rather than something that can be changed under one."));
             // Where they are dropped from. The same number a drag at t = 0 sets, and the same
             // number Reset builds them at, so the slider and the marker are two ways to say one
             // thing. It is a standing request like the rest of the card: it takes effect at the
@@ -861,10 +870,11 @@ impl ObserverCard {
                 if ui
                     .add(
                         egui::Slider::new(&mut r_km, min_km..=max_km)
+                            .styled()
                             .logarithmic(true)
                             .text("Drop radius r (km)"),
                     )
-                    .on_hover_text(DROP_RADIUS_TIP)
+                    .on_hover_text(numbers::text(DROP_RADIUS_TIP))
                     .changed()
                 {
                     settings.drop_r = metric.km_to_r(r_km);
@@ -872,10 +882,11 @@ impl ObserverCard {
             } else {
                 ui.add(
                     egui::Slider::new(&mut settings.drop_r, 0.05..=WIDEST_DROP_R)
+                        .styled()
                         .logarithmic(true)
                         .text("Drop radius r (M)"),
                 )
-                .on_hover_text(DROP_RADIUS_TIP);
+                .on_hover_text(numbers::text(DROP_RADIUS_TIP));
             }
 
             // And at what azimuth. In degrees, because nobody thinks in radians, and free to run
@@ -884,10 +895,11 @@ impl ObserverCard {
             if ui
                 .add(
                     egui::Slider::new(&mut degrees, -180.0..=180.0)
+                        .styled()
                         .suffix("°")
                         .text("Drop azimuth ϕ"),
                 )
-                .on_hover_text(DROP_AZIMUTH_TIP)
+                .on_hover_text(numbers::text(DROP_AZIMUTH_TIP))
                 .changed()
             {
                 settings.drop_phi = degrees.to_radians();
@@ -900,7 +912,7 @@ impl ObserverCard {
                     (Release::AtRest, "At rest here", AT_REST_TIP),
                     (Release::FromInfinity, "From rest at ∞", FROM_INFINITY_TIP),
                 ] {
-                    if chip(ui, settings.release == release, label).on_hover_text(tip).clicked() {
+                    if chip(ui, settings.release == release, label).on_hover_text(numbers::text(tip)).clicked() {
                         settings.release = release;
                     }
                 }
@@ -928,7 +940,7 @@ impl ObserverCard {
                     let on_isco = (settings.drop_r - metric.isco(prograde)).abs() < 1e-9;
                     let selected = settings.release == release && on_isco == at_isco;
                     let tip = if at_isco { ISCO_TIP } else { CIRCULAR_ORBIT_TIP };
-                    if chip(ui, selected, label).on_hover_text(tip).clicked() {
+                    if chip(ui, selected, label).on_hover_text(numbers::text(tip)).clicked() {
                         if at_isco {
                             settings.drop_r = metric.isco(prograde);
                         }
@@ -949,9 +961,10 @@ impl ObserverCard {
             ui.add_enabled(
                 circular.is_none(),
                 egui::Slider::new(&mut shown, -4.0..=4.0)
+                    .styled()
                     .text("Angular momentum L (per unit mass, M)"),
             )
-            .on_hover_text(ANGULAR_MOMENTUM_TIP);
+            .on_hover_text(numbers::text(ANGULAR_MOMENTUM_TIP));
             if circular.is_none() {
                 settings.l_ang = shown;
             }
@@ -971,12 +984,9 @@ impl ObserverCard {
             let bound = if params.energy < 1.0 { "bound" } else { "unbound" };
             ui.label(
                 egui::RichText::new(if speed.is_finite() {
-                    format!(
-                        "E = {:.4} ({bound}), starting at {:.3}c past a static observer there",
-                        params.energy, speed
-                    )
+                    format!("E = {} ({bound}), starting at {}c past a static observer there", numbers::fixed(params.energy, 4), numbers::fixed(speed, 3))
                 } else {
-                    format!("E = {:.4} ({bound})", params.energy)
+                    format!("E = {} ({bound})", numbers::fixed(params.energy, 4))
                 })
                 .small()
                 .color(Theme::TEXT_MUTED),
@@ -995,28 +1005,18 @@ impl ObserverCard {
                     (Some((_, l_ang)), Some(omega), Some(dilation)) => {
                         let period = std::f64::consts::TAU / omega.abs();
                         let fmt = |m: f64| {
-                            if use_physical_units { metric.format_physical_time(m) } else { format!("{m:.2} M") }
+                            if use_physical_units { metric.format_physical_time(m) } else { format!("{} M", numbers::fixed(m, 2)) }
                         };
                         let stability = if r >= isco {
-                            format!("stable (ISCO at {:.3} M)", isco)
+                            format!("stable (ISCO at {} M)", numbers::fixed(isco, 3))
                         } else {
-                            format!(
-                                "UNSTABLE: between the photon orbit ({:.3} M) and the ISCO ({:.3} M)",
-                                photon, isco
-                            )
+                            format!("UNSTABLE: between the photon orbit ({} M) and the ISCO ({} M)", numbers::fixed(photon, 3), numbers::fixed(isco, 3))
                         };
-                        format!(
-                            "L = {l_ang:.4} M — one orbit takes {} on the distant clock, {} on their \
-                             own — {stability}",
-                            fmt(period),
-                            fmt(period / dilation),
-                        )
+                        format!("L = {} M — one orbit takes {} on the distant clock, {} on their \
+                             own — {stability}", numbers::fixed(l_ang, 4), fmt(period), fmt(period / dilation))
                     }
-                    _ => format!(
-                        "No circular orbit inside the photon orbit ({:.3} M): released as a \
-                         raindrop (E = 1, L = 0)",
-                        photon
-                    ),
+                    _ => format!("No circular orbit inside the photon orbit ({} M): released as a \
+                         raindrop (E = 1, L = 0)", numbers::fixed(photon, 3)),
                 };
                 ui.label(egui::RichText::new(text).small().color(Theme::TEXT_MUTED));
             }
@@ -1033,10 +1033,8 @@ impl ObserverCard {
                         metric.format_km(metric.r_to_km(y))
                     )
                 } else {
-                    format!(
-                        "Drawn at x = {x:.2}M, y = {y:.2}M — drag the marker on the equatorial \
-                         view to move it"
-                    )
+                    format!("Drawn at x = {}M, y = {}M — drag the marker on the equatorial \
+                         view to move it", numbers::fixed(x, 2), numbers::fixed(y, 2))
                 })
                 .small()
                 .color(Theme::TEXT_MUTED),
@@ -1252,7 +1250,7 @@ fn transport_button(
         if engaged {
             button = button.fill(Theme::TRANSPORT_ENGAGED);
         }
-        let clicked = ui.add_sized(TRANSPORT_BUTTON, button).on_hover_text(tip).clicked();
+        let clicked = ui.add_sized(TRANSPORT_BUTTON, button).on_hover_text(numbers::text(tip)).clicked();
         ui.vertical_centered(|ui| {
             ui.label(egui::RichText::new(caption).size(11.0).color(Theme::TEXT_MUTED));
         });
@@ -1653,11 +1651,9 @@ impl AppControls {
                      names (Left Arrow key)"
                         .to_string()
                 } else if floor > 0.0 {
-                    format!(
-                        "The recorded worldlines reach back only to t = {floor:.2} M. Earlier \
+                    format!("The recorded worldlines reach back only to t = {} M. Earlier \
                          events have been evicted from the history, so there is nothing to put \
-                         the observers back on: use Reset to run again from t = 0."
-                    )
+                         the observers back on: use Reset to run again from t = 0.", numbers::fixed(floor, 2))
                 } else {
                     "Already at t = 0, the start of the run.".to_string()
                 };
@@ -1738,7 +1734,7 @@ impl AppControls {
             // The chips come first because they say what both sliders under them are measured in:
             // the mode is the clock or the ruler the run is advanced by, played or stepped alike.
             ui.horizontal(|ui| {
-                ui.label("Advance by:").on_hover_text(ADVANCE_BY_TIP);
+                ui.label("Advance by:").on_hover_text(numbers::text(ADVANCE_BY_TIP));
                 if chip(ui, self.step_mode == StepMode::Time, "Time (Δt)").clicked() {
                     self.step_mode = StepMode::Time;
                 }
@@ -1775,10 +1771,11 @@ impl AppControls {
             };
             ui.add(
                 egui::Slider::new(&mut self.play_speed, 0.05..=20.0)
+                    .styled()
                     .logarithmic(true)
                     .text(play_label),
             )
-            .on_hover_text(PLAY_SPEED_TIP);
+            .on_hover_text(numbers::text(PLAY_SPEED_TIP));
 
             // What the last played frame actually managed on that watch. Nothing is printed while
             // the run is paused or in another step mode, because there is then no rate to report:
@@ -1786,7 +1783,7 @@ impl AppControls {
             if let Some(rate) = self.achieved_watch_rate {
                 let capped = rate < 1.0;
                 let figure =
-                    if rate >= 0.01 { format!("{rate:.2}") } else { format!("{rate:.1e}") };
+                    if rate >= 0.01 { numbers::fixed(rate, 2) } else { numbers::exponent(rate, 1) };
                 let text = if capped {
                     format!(
                         "{}: {figure} s/s  (Δt capped at {WATCH_DT_CAP:.0} M per frame: \
@@ -1844,39 +1841,42 @@ impl AppControls {
                         }
                     })
                     .response
-                    .on_hover_text(STEP_SIZE_TIP);
-                ui.label(label).on_hover_text(STEP_SIZE_TIP);
+                    .on_hover_text(numbers::text(STEP_SIZE_TIP));
+                ui.label(label).on_hover_text(numbers::text(STEP_SIZE_TIP));
             });
             ui.add(
                 egui::Slider::new(&mut self.rays_per_pulse, 64..=1024)
+                    .styled()
                     .integer()
                     .text("Wavefront points"),
             )
-            .on_hover_text(WAVEFRONT_POINTS_TIP);
+            .on_hover_text(numbers::text(WAVEFRONT_POINTS_TIP));
             ui.add(
                 egui::Slider::new(&mut self.max_pulses, 1..=128)
+                    .styled()
                     .integer()
                     .text("Wavefronts kept"),
             )
-            .on_hover_text(WAVEFRONTS_KEPT_TIP);
+            .on_hover_text(numbers::text(WAVEFRONTS_KEPT_TIP));
             ui.checkbox(&mut self.draw_front_arcs, "Arcs between wavefront points")
-                .on_hover_text(FRONT_ARCS_TIP);
+                .on_hover_text(numbers::text(FRONT_ARCS_TIP));
             ui.checkbox(&mut self.hide_wound_segments, "Hide segments wound past a full turn")
-                .on_hover_text(HIDE_WOUND_TIP);
+                .on_hover_text(numbers::text(HIDE_WOUND_TIP));
 
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 ui.label("Font Size:");
-                if ui.button("−").on_hover_text("Decrease Font Size").clicked() {
+                if ui.button("−").on_hover_text(numbers::text("Decrease Font Size")).clicked() {
                     self.font_scale = (self.font_scale - 0.1).clamp(0.7, 1.8);
                 }
                 let pct_label = format!("{:.0}%", self.font_scale * 100.0);
                 ui.add(
                     egui::Slider::new(&mut self.font_scale, 0.7..=1.8)
+                        .styled()
                         .show_value(false)
                         .text(pct_label),
                 );
-                if ui.button("+").on_hover_text("Increase Font Size").clicked() {
+                if ui.button("+").on_hover_text(numbers::text("Increase Font Size")).clicked() {
                     self.font_scale = (self.font_scale + 0.1).clamp(0.7, 1.8);
                 }
             });
@@ -1890,10 +1890,19 @@ impl AppControls {
             let mut use_m = !self.use_physical_units;
             if ui
                 .checkbox(&mut use_m, "Show distances and times in M (GR convention)")
-                .on_hover_text(M_CHECKBOX_TIP)
+                .on_hover_text(numbers::text(M_CHECKBOX_TIP))
                 .changed()
             {
                 self.use_physical_units = !use_m;
+            }
+            if ui
+                .checkbox(&mut self.decimal_is_comma, "Decimal is comma")
+                .on_hover_text(DECIMAL_COMMA_TIP)
+                .changed()
+            {
+                // The panel itself is drawn in this frame's style, so it follows the box from the
+                // next line on rather than a frame late.
+                numbers::set_style(numbers::style_for(self.decimal_is_comma));
             }
             // One pair of lines whichever unit the charts are labelled in. The two branches this
             // replaces printed the same two numbers under different captions, and only one of them
@@ -1901,9 +1910,9 @@ impl AppControls {
             // are the same brightness as every other control: this is the key to every number on
             // the screen, not a footnote to them.
             ui.label(egui::RichText::new(format!("• 1M [Distance] = GM/c² = {}", metric.format_physical_distance(1.0))).small())
-                .on_hover_text(M_UNITS_TIP);
+                .on_hover_text(numbers::text(M_UNITS_TIP));
             ui.label(egui::RichText::new(format!("• 1M [Time]     = GM/c³ = {}", metric.format_physical_time(1.0))).small())
-                .on_hover_text(M_UNITS_TIP);
+                .on_hover_text(numbers::text(M_UNITS_TIP));
         });
 
         ui.add_space(4.0);
@@ -1927,23 +1936,23 @@ impl AppControls {
             if ui
                 .add_enabled(
                     may_change_geometry,
-                    egui::Slider::new(&mut log_mass, 0.0..=11.0).text("Mass log₁₀(M☉)"),
+                    egui::Slider::new(&mut log_mass, 0.0..=11.0).styled().text("Mass log₁₀(M☉)"),
                 )
-                .on_disabled_hover_text(MASS_LOCKED_TIP)
+                .on_disabled_hover_text(numbers::text(MASS_LOCKED_TIP))
                 .changed()
             {
                 let m_solar = 10.0_f64.powf(log_mass);
                 sim.metric = KerrSchild::with_solar_mass(sim.metric.m, sim.metric.a, m_solar);
             }
-            ui.label(format!("Mass: {:.2e} M☉", sim.metric.m_solar));
+            ui.label(format!("Mass: {} M☉", numbers::significant(sim.metric.m_solar, 3)));
 
             let mut spin_ratio = sim.metric.a_star();
             if ui
                 .add_enabled(
                     may_change_geometry,
-                    egui::Slider::new(&mut spin_ratio, 0.0..=0.999).text("Spin a/M"),
+                    egui::Slider::new(&mut spin_ratio, 0.0..=0.999).styled().text("Spin a/M"),
                 )
-                .on_disabled_hover_text(SPIN_LOCKED_TIP)
+                .on_disabled_hover_text(numbers::text(SPIN_LOCKED_TIP))
                 .changed()
             {
                 // Reached only at t = 0, where the run can be started again for nothing - and it is
@@ -1967,8 +1976,8 @@ impl AppControls {
                         if PRESET_SECOND_ROW.contains(&label) != second_row {
                             continue;
                         }
-                        let pick = chip(ui, highlighted == Some(label), label);
-                        let pick = if note.is_empty() { pick } else { pick.on_hover_text(note) };
+                        let pick = chip(ui, highlighted == Some(label), &numbers::text(label));
+                        let pick = if note.is_empty() { pick } else { pick.on_hover_text(numbers::text(note)) };
                         if pick.clicked() {
                             sim.metric = KerrSchild::with_solar_mass(m, a_star * m, m_solar);
                             preset_changed = true;
@@ -1985,13 +1994,13 @@ impl AppControls {
             let rm = sim.metric.inner_horizon();
             let re = sim.metric.ergosphere_equatorial();
             if self.use_physical_units {
-                ui.label(format!("• Outer Horizon r₊: {} ({:.3} M)", sim.metric.format_km(sim.metric.r_to_km(rp)), rp));
-                ui.label(format!("• Cauchy Horizon r₋: {} ({:.3} M)", sim.metric.format_km(sim.metric.r_to_km(rm)), rm));
-                ui.label(format!("• Ergosphere r_E:   {} ({:.3} M)", sim.metric.format_km(sim.metric.r_to_km(re)), re));
+                ui.label(format!("• Outer Horizon r₊: {} ({} M)", sim.metric.format_km(sim.metric.r_to_km(rp)), numbers::fixed(rp, 3)));
+                ui.label(format!("• Cauchy Horizon r₋: {} ({} M)", sim.metric.format_km(sim.metric.r_to_km(rm)), numbers::fixed(rm, 3)));
+                ui.label(format!("• Ergosphere r_E:   {} ({} M)", sim.metric.format_km(sim.metric.r_to_km(re)), numbers::fixed(re, 3)));
             } else {
-                ui.label(format!("• Outer Horizon r₊: {:.3} M ({})", rp, sim.metric.format_physical_distance(rp)));
-                ui.label(format!("• Cauchy Horizon r₋: {:.3} M ({})", rm, sim.metric.format_physical_distance(rm)));
-                ui.label(format!("• Ergosphere r_E:   {:.3} M ({})", re, sim.metric.format_physical_distance(re)));
+                ui.label(format!("• Outer Horizon r₊: {} M ({})", numbers::fixed(rp, 3), sim.metric.format_physical_distance(rp)));
+                ui.label(format!("• Cauchy Horizon r₋: {} M ({})", numbers::fixed(rm, 3), sim.metric.format_physical_distance(rm)));
+                ui.label(format!("• Ergosphere r_E:   {} M ({})", numbers::fixed(re, 3), sim.metric.format_physical_distance(re)));
             }
         });
 

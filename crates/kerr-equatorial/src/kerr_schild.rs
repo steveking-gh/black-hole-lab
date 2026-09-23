@@ -81,48 +81,9 @@ impl KerrSchild {
         self.m_solar * 4.927038e-6
     }
 
-    /// Format a radial coordinate r (in units of M) into physical distance units (km, AU, or light-years).
-    pub fn format_physical_distance(&self, r: f64) -> String {
-        let km = (r / self.m) * self.r_grav_km();
-        let au = km / 1.496e8;
-        let ly = km / 9.461e12;
-
-        if ly >= 0.01 {
-            format!("{:.2} ly ({:.0} AU)", ly, au)
-        } else if au >= 0.05 {
-            format!("{:.1} AU ({} km)", au, plain_km(km))
-        } else if km >= 1e6 {
-            format!("{:.2} M km", km / 1e6)
-        } else {
-            format!("{:.1} km", km)
-        }
-    }
-
-    /// Format a coordinate time interval t (in units of M/c) into human-readable physical time units.
-    pub fn format_physical_time(&self, t_in_m: f64) -> String {
-        let secs = (t_in_m / self.m).abs() * self.t_grav_seconds();
-        let sign = if t_in_m < 0.0 { "-" } else { "" };
-
-        if secs >= 86400.0 * 365.25 {
-            format!("{}{:.2} yr", sign, secs / (86400.0 * 365.25))
-        } else if secs >= 86400.0 {
-            format!("{}{:.2} days", sign, secs / 86400.0)
-        } else if secs >= 3600.0 {
-            format!("{}{:.2} hrs", sign, secs / 3600.0)
-        } else if secs >= 60.0 {
-            format!("{}{:.2} min", sign, secs / 60.0)
-        } else if secs >= 1.0 {
-            format!("{}{:.2} s", sign, secs)
-        } else if secs >= 1e-3 {
-            format!("{}{:.2} ms", sign, secs * 1e3)
-        } else {
-            format!("{}{:.2} µs", sign, secs * 1e6)
-        }
-    }
-
     /// A rate quoted per unit of the chart's time, in inverse seconds.
     ///
-    /// The inverse of the conversion `format_physical_time` makes: one M of coordinate time is
+    /// The inverse of converting M of time to seconds: one M of coordinate time is
     /// t_g/m seconds, so a rate per M is that many times m/t_g per second. Angular velocities are
     /// the ones this is for - the observer's own dphi/dt and the local frame-dragging rate - which
     /// come out of the metric per M and have to be readable by somebody who does not think in M.
@@ -138,69 +99,6 @@ impl KerrSchild {
     /// Convert kilometers to coordinate radius r (in units of M).
     pub fn km_to_r(&self, km: f64) -> f64 {
         (km / self.r_grav_km()) * self.m
-    }
-
-    /// Format a distance value in kilometers nicely.
-    pub fn format_km(&self, km: f64) -> String {
-        if km > 1e9 {
-            format!("{:.2e} km", km)
-        } else if km >= 1e6 {
-            format!("{:.2}M km", km / 1e6)
-        } else if km >= 1e3 {
-            format!("{:.1}k km", km / 1e3)
-        } else if km >= 10.0 {
-            format!("{:.1} km", km)
-        } else {
-            format!("{:.2} km", km)
-        }
-    }
-
-    /// Format km for grid lines ensuring at least the least significant digit changes between consecutive steps.
-    pub fn format_grid_km(&self, km: f64, km_step: f64) -> String {
-        let km = if km.abs() < 1e-12 { 0.0 } else { km };
-        let km_step = km_step.max(1e-9);
-
-        let (unit, suffix) = if km >= 1e9 && km_step >= 1e6 {
-            (1e9, "B km")
-        } else if km >= 1e6 && km_step >= 1e3 {
-            (1e6, "M km")
-        } else if km >= 1e3 && km_step >= 1.0 {
-            (1e3, "k km")
-        } else {
-            (1.0, " km")
-        };
-
-        let step_in_unit = km_step / unit;
-        let decimals = if step_in_unit >= 0.999 {
-            0
-        } else {
-            ((-step_in_unit.log10()).ceil().max(1.0)) as usize
-        };
-
-        format!("{:.prec$}{}", km / unit, suffix, prec = decimals)
-    }
-
-    /// Format r in units of M for grid lines ensuring at least the least significant digit changes between consecutive steps.
-    pub fn format_grid_m(&self, r: f64, r_step: f64) -> String {
-        let r = if r.abs() < 1e-12 { 0.0 } else { r };
-        let r_step = r_step.max(1e-9);
-
-        let decimals = if r_step >= 0.999 {
-            0
-        } else {
-            ((-r_step.log10()).ceil().max(1.0)) as usize
-        };
-
-        format!("{:.prec$}M", r, prec = decimals)
-    }
-
-    /// Format a radius either in km or M based on use_physical_units flag.
-    pub fn format_r(&self, r: f64, use_physical_units: bool) -> String {
-        if use_physical_units {
-            self.format_km(self.r_to_km(r))
-        } else {
-            format!("{:.2}M", r)
-        }
     }
 
     /// Differential tidal acceleration stretching force across height_m in units of Earth g's
@@ -732,26 +630,6 @@ impl KerrSchild {
     }
 }
 
-/// A kilometre count as a reader takes it in: whole kilometres grouped in threes by commas up to a
-/// billion - 149,600,000 - and an exponent only past that, where no box has room for the digits.
-fn plain_km(km: f64) -> String {
-    if km.abs() > 1e9 {
-        return format!("{km:.2e}");
-    }
-    let digits = format!("{:.0}", km.abs());
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3 + 1);
-    if km < 0.0 {
-        out.push('-');
-    }
-    for (i, ch) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(ch);
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -1010,22 +888,6 @@ mod tests {
     }
 
     #[test]
-    fn test_physical_units_conversion() {
-        // Solar mass: 1M_sun => Rg ~ 1.477 km, tg ~ 4.93 µs
-        let ks_sun = KerrSchild::with_solar_mass(1.0, 0.0, 1.0);
-        let dist = ks_sun.format_physical_distance(1.0);
-        assert!(dist.contains("1.5 km") || dist.contains("1.48 km") || dist.contains("km"));
-
-        let time = ks_sun.format_physical_time(1.0);
-        assert!(time.contains("µs"));
-
-        // Sagittarius A*: 4.15e6 M_sun => tg ~ 20.4 s
-        let ks_sgr = KerrSchild::with_solar_mass(1.0, 0.9, 4.15e6);
-        let sgr_time = ks_sgr.format_physical_time(1.0);
-        assert!(sgr_time.contains("s"));
-    }
-
-    #[test]
     fn test_tidal_acceleration_and_observer_telemetry() {
         // Stellar mass black hole (10 M_sun): tidal forces at r = 2M are lethal (> 10^5 g)
         let ks_stellar = KerrSchild::with_solar_mass(1.0, 0.7, 10.0);
@@ -1042,35 +904,6 @@ mod tests {
         assert!(grad_stellar > 5e3, "Stellar BH tidal gradient should be > 5000 g/m: {}", grad_stellar);
         let grad_ton = ks_ton.tidal_gradient_g_per_m(2.0);
         assert!(grad_ton < 1e-4, "Ton 618 tidal gradient should be < 1e-4 g/m: {}", grad_ton);
-    }
-
-    #[test]
-    fn test_grid_labels_consecutive_digits_change() {
-        let ks_sgr = KerrSchild::with_solar_mass(1.0, 0.9, 4.15e6);
-        // Test Sgr A* with 1000 km step around 6.13M km
-        let step_km = 1000.0;
-        let base_km = 6_130_000.0;
-        let l1 = ks_sgr.format_grid_km(base_km, step_km);
-        let l2 = ks_sgr.format_grid_km(base_km + step_km, step_km);
-        assert_ne!(l1, l2, "Labels must differ for consecutive km grid lines: {} vs {}", l1, l2);
-
-        // Test with 100 km step
-        let l3 = ks_sgr.format_grid_km(base_km, 100.0);
-        let l4 = ks_sgr.format_grid_km(base_km + 100.0, 100.0);
-        assert_ne!(l3, l4, "Labels must differ for 100 km grid lines: {} vs {}", l3, l4);
-
-        // Test M units with fine step near Cauchy horizon
-        let r_step = 0.0001;
-        let r_base = 0.4358;
-        let m1 = ks_sgr.format_grid_m(r_base, r_step);
-        let m2 = ks_sgr.format_grid_m(r_base + r_step, r_step);
-        assert_ne!(m1, m2, "Labels must differ for consecutive M grid lines: {} vs {}", m1, m2);
-
-        // Test extreme zoom 0.00002 M step
-        let r_step_micro = 0.00002;
-        let u1 = ks_sgr.format_grid_m(r_base, r_step_micro);
-        let u2 = ks_sgr.format_grid_m(r_base + r_step_micro, r_step_micro);
-        assert_ne!(u1, u2, "Labels must differ for microscopic M grid lines: {} vs {}", u1, u2);
     }
 
     /// Radii spanning every region: exterior, r+, between the horizons, r-, and inside r-.

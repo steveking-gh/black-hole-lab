@@ -1,3 +1,4 @@
+use crate::gui::numbers;
 use crate::gui::cauchy_effects::CauchyEffects;
 use crate::gui::controls::{
     AppControls, DISTANT_CLOCK_GRID_TIP, FileRequest, FileStatus, GLOBAL_VOLUME_TIP, OPENING_SPIN,
@@ -359,6 +360,10 @@ impl eframe::App for SpacetimeApp {
         // the wall clock, which is what lets a measurement replay the same run every time: see
         // `fixed_frame_dt`. The clock is still read and stored either way, so that the first real
         // frame after one of those is an ordinary frame.
+        // Every number this frame prints is written in the style the panel asks for. Set before
+        // anything is drawn, so that one frame never mixes two styles.
+        numbers::set_style(numbers::style_for(self.controls.decimal_is_comma));
+
         let now = Instant::now();
         let measured = (now - self.last_update).as_secs_f64().clamp(1.0 / 240.0, 0.1);
         let dt = self.fixed_frame_dt.unwrap_or(measured);
@@ -601,7 +606,7 @@ impl eframe::App for SpacetimeApp {
                         // and not a frame of reference at all.
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("View:").small().color(Theme::TEXT_MUTED))
-                                .on_hover_text(VIEW_TIP);
+                                .on_hover_text(numbers::text(VIEW_TIP));
                             egui::ComboBox::from_id_salt("frame_of_ref_foliation_combo")
                                 .selected_text(self.controls.frame_of_ref.label())
                                 // Wide enough for the longest label, "Global Foliation Chart 1D+1
@@ -621,17 +626,17 @@ impl eframe::App for SpacetimeApp {
                                         );
                                         match frame {
                                             ReferenceFrame::GlobalVolume => {
-                                                item.on_hover_text(GLOBAL_VOLUME_TIP);
+                                                item.on_hover_text(numbers::text(GLOBAL_VOLUME_TIP));
                                             }
                                             ReferenceFrame::Bob | ReferenceFrame::Alice => {
-                                                item.on_hover_text(REST_FRAME_TIP);
+                                                item.on_hover_text(numbers::text(REST_FRAME_TIP));
                                             }
                                             ReferenceFrame::DistantObserver => {}
                                         }
                                     }
                                 });
                             ui.checkbox(&mut self.controls.show_distant_clock_grid, "Distant clock grid")
-                                .on_hover_text(DISTANT_CLOCK_GRID_TIP);
+                                .on_hover_text(numbers::text(DISTANT_CLOCK_GRID_TIP));
                             // Only the rest frames have a window of their own to keep: the surface
                             // the observer is about to reach, kept on the canvas. Either global
                             // chart's zoom is a window the user pans - on r in the (t, r) diagram,
@@ -646,7 +651,7 @@ impl eframe::App for SpacetimeApp {
                                     &mut self.spacetime_canvas.keep_surface_framed,
                                     "Auto-zoom",
                                 )
-                                .on_hover_text(KEEP_SURFACE_FRAMED_TIP);
+                                .on_hover_text(numbers::text(KEEP_SURFACE_FRAMED_TIP));
                             }
                         });
                         // One picture at a time: the volume replaces the flat diagram rather than
@@ -731,42 +736,36 @@ impl eframe::App for SpacetimeApp {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         ui.heading("Ingoing Kerr-Schild Coordinates & Horizon Dynamics");
                         ui.add_space(6.0);
-                        ui.label(
-                            "In standard Boyer-Lindquist coordinates, the coordinate time blows up at both the outer event horizon (r₊) and the inner Cauchy horizon (r₋) due to 1/Δ factors. \
-                            By transforming to Ingoing Kerr-Schild coordinates, the metric tensor remains completely smooth, finite, and well-behaved across both horizons."
-                        );
+                        ui.label(numbers::text("In standard Boyer-Lindquist coordinates, the coordinate time blows up at both the outer event horizon (r₊) and the inner Cauchy horizon (r₋) due to 1/Δ factors. \
+                            By transforming to Ingoing Kerr-Schild coordinates, the metric tensor remains completely smooth, finite, and well-behaved across both horizons."));
                         ui.add_space(8.0);
                         ui.heading("The Three Spacetime Regions");
                         ui.label(egui::RichText::new("1. Region I (r > r₊): Asymptotically Flat External Universe").strong().color(Theme::HORIZON_OUTER));
-                        ui.label("The radial coordinate r is spacelike (g^rr > 0). Light cones are upright and observers can maneuver freely in both +r and -r directions.");
+                        ui.label(numbers::text("The radial coordinate r is spacelike (g^rr > 0). Light cones are upright and observers can maneuver freely in both +r and -r directions."));
                         ui.add_space(4.0);
 
                         ui.label(egui::RichText::new("2. Crossing r₊: The Event Horizon (Δ = 0)").strong().color(Theme::HORIZON_OUTER));
-                        ui.label("The outgoing boundary of Bob's light cone tilts to coordinate slope dr/dt ≤ 0. Outgoing light is frozen at the boundary.");
+                        ui.label(numbers::text("The outgoing boundary of Bob's light cone tilts to coordinate slope dr/dt ≤ 0. Outgoing light is frozen at the boundary."));
                         ui.add_space(4.0);
 
                         ui.label(egui::RichText::new("3. Region II (r₋ < r < r₊): The Inward-Trapped Interior").strong().color(Theme::WARNING_RED));
-                        ui.label("Curvature tilts all light cones past the vertical (dr/dt < 0). The radial coordinate r is timelike (g^rr < 0). Any particle or photon MUST propagate toward smaller r.");
+                        ui.label(numbers::text("Curvature tilts all light cones past the vertical (dr/dt < 0). The radial coordinate r is timelike (g^rr < 0). Any particle or photon MUST propagate toward smaller r."));
                         ui.add_space(4.0);
 
                         ui.label(egui::RichText::new("4. Crossing r₋: The Inner Cauchy Horizon (Δ = 0)").strong().color(Theme::HORIZON_CAUCHY));
-                        ui.label("The light cone reaches maximum tilt and UN-TIPS! Outside this boundary, Δ > 0 again.");
+                        ui.label(numbers::text("The light cone reaches maximum tilt and UN-TIPS! Outside this boundary, Δ > 0 again."));
                         ui.add_space(4.0);
 
                         ui.label(egui::RichText::new("5. Region III (0 < r < r₋): Inner Maneuverable Core").strong().color(Theme::BOB_COLOR));
-                        ui.label("The radial coordinate r reverts to being spacelike again (g^rr > 0). Bob's light cone un-tips, allowing dr/dt ≥ 0, so in classical Kerr geometry thrusters can stop his descent. The ring singularity at r = 0 is timelike rather than spacelike, so it can be steered around; but the equatorial L = 0 infall drawn here is aimed straight at it, and this worldline still ends on it.");
+                        ui.label(numbers::text("The radial coordinate r reverts to being spacelike again (g^rr > 0). Bob's light cone un-tips, allowing dr/dt ≥ 0, so in classical Kerr geometry thrusters can stop his descent. The ring singularity at r = 0 is timelike rather than spacelike, so it can be steered around; but the equatorial L = 0 infall drawn here is aimed straight at it, and this worldline still ends on it."));
                         ui.add_space(8.0);
 
                         ui.heading("Alice's signal and the two branches of r₋");
-                        ui.label(
-                            "Alice's pulses are exact null geodesics, and she broadcasts each one into the whole of her light cone, every direction at once. Which rays of a pulse cross r₋ and which never do is decided by the sign of E − Ω₋L, the ray's energy relative to the null generator of the inner horizon, with Ω₋ = a/(r₋² + a²). Rays with positive relative energy fall straight through; rays with negative relative energy take infinite coordinate time and accumulate on r₋, so in this chart the inner horizon is the stack of all the outgoing light of the interior. In her own frame the accumulating rays are the prograde ones, the arc dragged forward in ϕ around α = 90°: it runs from about α = 45° to α = 135° well inside r₊, is wider than that just below r₊, and narrows as she approaches r₋, its edges being exactly where E − Ω₋L changes sign. Bob meets each pulse twice: first its crossing sheet sweeps over him on the way down with an ordinary shift, then he cuts through its frozen arc, standing on r₋, in the last twentieth of an M above the horizon. Alice sends a pulse every 0.1 M of her proper time, so consecutive arcs overlap and he crosses several sheets in a row, each blueshifted on the scale exp(κ₋Δt) with κ₋ = (r₊ − r₋)/(2(r₋² + a²)): about 560 for Δt = 4M and 3×10⁵ for Δt = 8M at a = 0.65, and a far gentler 4.7 and 22 at the app's default a = 0.90, where κ₋ is 0.386/M rather than 1.58/M. The light she sends as she crosses is shifted by exactly that factor; a pulse sent earlier by some lead time is shifted by exp(κ₋ × lead) more, having had that long to freeze as well. Each arc co-rotates at Ω₋ while it waits, so one emitter's transmission illuminates a band of r₋ rather than all of it, and how much of the stack Bob meets depends on where he crosses; the surface that covers every azimuth is built from the whole history of the interior. The ratio is finite because both observers cross the same smooth surface of exact Kerr. It diverges only as Δt → ∞, which is the Marolf and Ori (2012) statement that a hole which lives forever meets every late infaller with an outgoing null shock on this branch of r₋. The other branch, reached only as v → ∞, suffers Poisson and Israel mass inflation instead. Both make the exact continuation past r₋ physically untrustworthy, which is the content of strong cosmic censorship."
-                        );
+                        ui.label(numbers::text("Alice's pulses are exact null geodesics, and she broadcasts each one into the whole of her light cone, every direction at once. Which rays of a pulse cross r₋ and which never do is decided by the sign of E − Ω₋L, the ray's energy relative to the null generator of the inner horizon, with Ω₋ = a/(r₋² + a²). Rays with positive relative energy fall straight through; rays with negative relative energy take infinite coordinate time and accumulate on r₋, so in this chart the inner horizon is the stack of all the outgoing light of the interior. In her own frame the accumulating rays are the prograde ones, the arc dragged forward in ϕ around α = 90°: it runs from about α = 45° to α = 135° well inside r₊, is wider than that just below r₊, and narrows as she approaches r₋, its edges being exactly where E − Ω₋L changes sign. Bob meets each pulse twice: first its crossing sheet sweeps over him on the way down with an ordinary shift, then he cuts through its frozen arc, standing on r₋, in the last twentieth of an M above the horizon. Alice sends a pulse every 0.1 M of her proper time, so consecutive arcs overlap and he crosses several sheets in a row, each blueshifted on the scale exp(κ₋Δt) with κ₋ = (r₊ − r₋)/(2(r₋² + a²)): about 560 for Δt = 4M and 3×10⁵ for Δt = 8M at a = 0.65, and a far gentler 4.7 and 22 at the app's default a = 0.90, where κ₋ is 0.386/M rather than 1.58/M. The light she sends as she crosses is shifted by exactly that factor; a pulse sent earlier by some lead time is shifted by exp(κ₋ × lead) more, having had that long to freeze as well. Each arc co-rotates at Ω₋ while it waits, so one emitter's transmission illuminates a band of r₋ rather than all of it, and how much of the stack Bob meets depends on where he crosses; the surface that covers every azimuth is built from the whole history of the interior. The ratio is finite because both observers cross the same smooth surface of exact Kerr. It diverges only as Δt → ∞, which is the Marolf and Ori (2012) statement that a hole which lives forever meets every late infaller with an outgoing null shock on this branch of r₋. The other branch, reached only as v → ∞, suffers Poisson and Israel mass inflation instead. Both make the exact continuation past r₋ physically untrustworthy, which is the content of strong cosmic censorship."));
                         ui.add_space(8.0);
 
                         ui.heading("What an infaller sees near the Cauchy horizon");
-                        ui.label(
-                            "Ingoing light follows the principal null rays, lines of constant advanced time v = t + r, running at dr/dt = -1 everywhere in this chart. The ingoing Kerr-Schild chart is regular on the branch of r₋ that an infalling observer actually crosses, so Alice and Bob cross it at finite t and finite v: no signal stacks up there, and the exterior universe's whole future does not arrive as one flash. The shift they measure for that ingoing light is ν_obs/ν_∞ = -k·u = uᵗ + uʳ - a u^φ, finite and positive everywhere shown; for a Schwarzschild raindrop it is 1/(1 + √(2M/r)), exactly 1/2 at the horizon, a redshift, because running away from the light beats the gravitational blueshift. The infinite blueshift of Penrose and of Poisson-Israel lives on the OTHER branch of r₋, reached only as v → ∞, which this chart does not cover and which an infalling geodesic of finite v never reaches. In a real collapse that instability (mass inflation) is expected to turn r₋ into a singular surface, but that is a statement about the full spacetime, not about the worldlines drawn here."
-                        );
+                        ui.label(numbers::text("Ingoing light follows the principal null rays, lines of constant advanced time v = t + r, running at dr/dt = -1 everywhere in this chart. The ingoing Kerr-Schild chart is regular on the branch of r₋ that an infalling observer actually crosses, so Alice and Bob cross it at finite t and finite v: no signal stacks up there, and the exterior universe's whole future does not arrive as one flash. The shift they measure for that ingoing light is ν_obs/ν_∞ = -k·u = uᵗ + uʳ - a u^φ, finite and positive everywhere shown; for a Schwarzschild raindrop it is 1/(1 + √(2M/r)), exactly 1/2 at the horizon, a redshift, because running away from the light beats the gravitational blueshift. The infinite blueshift of Penrose and of Poisson-Israel lives on the OTHER branch of r₋, reached only as v → ∞, which this chart does not cover and which an infalling geodesic of finite v never reaches. In a real collapse that instability (mass inflation) is expected to turn r₋ into a singular surface, but that is a statement about the full spacetime, not about the worldlines drawn here."));
                     });
                 });
         }
@@ -987,6 +986,86 @@ mod tests {
         assert_eq!(app.spacetime_canvas.time_offset, 1.0, "a consumed request does not fire twice");
     }
 
+    /// Every line of `text` that still writes a number with a point for its decimal mark: a
+    /// digit, a point and a digit. What a frame in comma style must not paint.
+    ///
+    /// A point followed by exactly three digits is a group separator, which is what comma style
+    /// puts between thousands, and is allowed. The version in the title bar is the one dotted
+    /// string of digits on the screen that is not a number, and it keeps its points either way.
+    fn point_decimals(text: &str) -> Vec<String> {
+        text.lines()
+            .filter(|line| !line.contains(" Version "))
+            .filter(|line| {
+                let chars: Vec<char> = line.chars().collect();
+                (1..chars.len().saturating_sub(1)).any(|i| {
+                    let run = chars[i + 1..].iter().take_while(|c| c.is_ascii_digit()).count();
+                    chars[i] == '.' && chars[i - 1].is_ascii_digit() && run > 0 && run != 3
+                })
+            })
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn test_decimal_is_comma_reaches_every_number_on_the_screen() {
+        // The whole UI, with every info box open and the theory window up, in every view and both
+        // unit systems, at several points of a run long enough for the signals to arrive and the
+        // observers to cross the horizons. Not one painted number may keep its point, and no list
+        // of numbers may be separated by the comma that is now their decimal mark.
+        let mut app = SpacetimeApp::default();
+        app.controls.decimal_is_comma = true;
+        app.controls.show_theory_modal = true;
+        app.fixed_frame_dt = Some(1.0 / 30.0);
+
+        let mut offenders: Vec<String> = Vec::new();
+        for checkpoint in 0..4 {
+            app.controls.is_playing = true;
+            for _ in 0..240 {
+                painted_text(&mut app);
+            }
+            app.controls.is_playing = false;
+            app.spacetime_canvas.telemetry.collapsed.clear();
+            app.spatial_canvas.telemetry.collapsed.clear();
+            app.volume_canvas.telemetry.collapsed.clear();
+            for physical in [true, false] {
+                app.controls.use_physical_units = physical;
+                for view in [
+                    ReferenceFrame::DistantObserver,
+                    ReferenceFrame::GlobalVolume,
+                    ReferenceFrame::Bob,
+                    ReferenceFrame::Alice,
+                ] {
+                    app.controls.frame_of_ref = view;
+                    let text = painted_text(&mut app);
+                    // A comma between two numbers of a list reads as a decimal mark in this
+                    // style: `(γ 1,00, γv 0,00c)` does not say how many numbers it holds.
+                    let lists = text.lines().filter(|line| {
+                        let chars: Vec<char> = line.chars().collect();
+                        chars.windows(4).any(|w| {
+                            w[0].is_ascii_digit() && w[1] == ',' && w[2] == ' ' && w[3].is_ascii_digit()
+                        })
+                    });
+                    for line in point_decimals(&text).into_iter().chain(lists.map(str::to_string)) {
+                        let line = format!("t = {}, {view:?}, physical {physical}: {line}", app.sim.clock);
+                        if !offenders.iter().any(|o| o.ends_with(&line[line.find(": ").unwrap()..])) {
+                            offenders.push(line);
+                        }
+                    }
+                }
+            }
+            app.controls.use_physical_units = true;
+            println!("checkpoint {checkpoint}: t = {:.2} M", app.sim.clock);
+        }
+        assert!(
+            offenders.is_empty(),
+            "{} lines kept a point or separate a list with a comma:
+{}",
+            offenders.len(),
+            offenders.join("
+")
+        );
+    }
+
     #[test]
     fn test_choosing_the_2d_plus_1_chart_swaps_the_left_canvas() {
         // The two charts of the foliation are alternatives rather than neighbours: the column is
@@ -1116,7 +1195,7 @@ mod tests {
         assert!((ton618.m_solar - 6.6e10).abs() < 1e5);
         assert!((ton618.a_star() - 0.88).abs() < 1e-4);
         let rp = ton618.outer_horizon();
-        let formatted = ton618.format_physical_distance(rp);
+        let formatted = crate::gui::units::UnitLabels::format_physical_distance(&ton618, rp);
         println!("TON 618 Event Horizon radius: {}", formatted);
         assert!(formatted.contains("AU") || formatted.contains("ly"));
     }

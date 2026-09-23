@@ -462,6 +462,7 @@ dependencies = [
  "flate2",
  "kerr-equatorial",
  "nalgebra",
+ "readout",
  "rfd",
  "serde",
  "serde_json",
@@ -2686,6 +2687,10 @@ dependencies = [
  "font-types",
  "once_cell",
 ]
+
+[[package]]
+name = "readout"
+version = "0.1.0"
 
 [[package]]
 name = "redox_syscall"

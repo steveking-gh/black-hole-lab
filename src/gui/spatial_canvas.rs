@@ -1,3 +1,4 @@
+use crate::gui::units::UnitLabels;
 use crate::gui::controls::{ReferenceFrame, SignalViews};
 use crate::gui::polyline::{SCREEN_SPACING, thin_to_pixels};
 use crate::gui::numbers;
@@ -720,16 +721,15 @@ impl SpatialCanvas {
             }
         };
         let legend_text = if use_physical_units {
-            format!(
-                "θ = π/2, x + iy = (r + ia) e^{{iϕ}}\n\
+            format!("θ = π/2, x + iy = (r + ia) e^{{iϕ}}\n\
                  Cartesian radius ρ = √(r²+a²); ring singularity at ρ = a\n\
                  Units: Kilometers (km) & Seconds (s)\n\
                  Scale: 1M = {}\n\
                  Mass: {} M☉\n\
-                 Outer Horizon r₊: {} ({:.2}M, ρ = {:.2}M)\n\
-                 Cauchy Horizon r₋: {} ({:.2}M, ρ = {:.2}M)\n\
-                 Spin a/M: {:.3}\n\
-                 Drag: Ω_H = {:.3}/M = {}\n\
+                 Outer Horizon r₊: {} ({}M, ρ = {}M)\n\
+                 Cauchy Horizon r₋: {} ({}M, ρ = {}M)\n\
+                 Spin a/M: {}\n\
+                 Drag: Ω_H = {}/M = {}\n\
                  Front colour: ν an infaller here measures ÷ ν the infaller passing the emitter\n\
                  measured as it left: red ×1 (every front is born red), orange ×3, yellow ×10,\n\
                  green ×30, blue ×1000, violet ×100000, grey below ×1. One lightness throughout,\n\
@@ -740,34 +740,18 @@ impl SpatialCanvas {
                  Receptions: triangle on the receiver's trail in the sender's colour\n\
                  (amber = Alice → Bob, mint = Bob → Alice)\n\
                  {}\
-                 Zoom: {:.0} px/M (scroll to zoom, drag the background to pan,\n\
-                 drag either observer's marker to put them anywhere in the plane)",
-                metric.format_physical_distance(1.0),
-                numbers::fixed(metric.m_solar, 2),
-                metric.format_km(metric.r_to_km(rp)),
-                rp,
-                rho_p,
-                metric.format_km(metric.r_to_km(rm)),
-                rm,
-                rho_m,
-                metric.a_star(),
-                omega_h,
-                numbers::rad_per_second(omega_h / metric.t_grav_seconds()),
-                wound_line,
-                centred_line,
-                self.zoom,
-            )
+                 Zoom: {} px/M (scroll to zoom, drag the background to pan,\n\
+                 drag either observer's marker to put them anywhere in the plane)", metric.format_physical_distance(1.0), numbers::fixed(metric.m_solar, 2), metric.format_km(metric.r_to_km(rp)), numbers::fixed(rp, 2), numbers::fixed(rho_p, 2), metric.format_km(metric.r_to_km(rm)), numbers::fixed(rm, 2), numbers::fixed(rho_m, 2), numbers::fixed(metric.a_star(), 3), numbers::fixed(omega_h, 3), numbers::rad_per_second(omega_h / metric.t_grav_seconds()), wound_line, centred_line, numbers::fixed(self.zoom, 0))
         } else {
-            format!(
-                "θ = π/2, x + iy = (r + ia) e^{{iϕ}}\n\
+            format!("θ = π/2, x + iy = (r + ia) e^{{iϕ}}\n\
                  Cartesian radius ρ = √(r²+a²); ring singularity at ρ = a\n\
                  Physical Scale: 1M = GM/c² = {}\n\
                  Time Scale:     1M/c = GM/c³ = {}\n\
                  Mass: {} M☉\n\
-                 Outer Horizon r₊: {:.2}M ({}), ρ = {:.2}M\n\
-                 Cauchy Horizon r₋: {:.2}M ({}), ρ = {:.2}M\n\
-                 Spin a/M: {:.3}\n\
-                 Drag: Ω_H = {:.3}/M\n\
+                 Outer Horizon r₊: {}M ({}), ρ = {}M\n\
+                 Cauchy Horizon r₋: {}M ({}), ρ = {}M\n\
+                 Spin a/M: {}\n\
+                 Drag: Ω_H = {}/M\n\
                  Front colour: ν an infaller here measures ÷ ν the infaller passing the emitter\n\
                  measured as it left: red ×1 (every front is born red), orange ×3, yellow ×10,\n\
                  green ×30, blue ×1000, violet ×100000, grey below ×1. One lightness throughout,\n\
@@ -778,23 +762,8 @@ impl SpatialCanvas {
                  Receptions: triangle on the receiver's trail in the sender's colour\n\
                  (amber = Alice → Bob, mint = Bob → Alice)\n\
                  {}\
-                 Zoom: {:.0} px/M (scroll to zoom, drag the background to pan,\n\
-                 drag either observer's marker to put them anywhere in the plane)",
-                metric.format_physical_distance(1.0),
-                metric.format_physical_time(1.0),
-                numbers::fixed(metric.m_solar, 2),
-                rp,
-                metric.format_physical_distance(rp),
-                rho_p,
-                rm,
-                metric.format_physical_distance(rm),
-                rho_m,
-                metric.a_star(),
-                omega_h,
-                wound_line,
-                centred_line,
-                self.zoom,
-            )
+                 Zoom: {} px/M (scroll to zoom, drag the background to pan,\n\
+                 drag either observer's marker to put them anywhere in the plane)", metric.format_physical_distance(1.0), metric.format_physical_time(1.0), numbers::fixed(metric.m_solar, 2), numbers::fixed(rp, 2), metric.format_physical_distance(rp), numbers::fixed(rho_p, 2), numbers::fixed(rm, 2), metric.format_physical_distance(rm), numbers::fixed(rho_m, 2), numbers::fixed(metric.a_star(), 3), numbers::fixed(omega_h, 3), wound_line, centred_line, numbers::fixed(self.zoom, 0))
         };
 
         // The distance marker: a ruler along the bottom edge, in the units in force and at this

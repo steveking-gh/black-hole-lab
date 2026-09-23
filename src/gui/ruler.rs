@@ -12,6 +12,7 @@
 //! The ruler is deliberately not an info box. It is a scale, like the axis ticks: it never moves,
 //! never shuts and carries no reading of its own, so it has nothing the box framework is for.
 
+use crate::gui::units::UnitLabels;
 use crate::gui::axis;
 use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;

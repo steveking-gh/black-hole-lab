@@ -1,3 +1,4 @@
+use crate::gui::numbers;
 use std::collections::VecDeque;
 use std::ops::Range;
 
@@ -2007,32 +2008,23 @@ impl VolumeCanvas {
             egui::FontId::proportional(Theme::MIN_FONT_PT * font_scale),
             Color32::WHITE,
         );
-        let legend_body = format!(
-            "yaw {:.0}°  pitch {:.0}°  {:.0} px/M  t×{:.2}\n\
-             window {:.1} … {:.1} M  (floor = now)\n\
+        // The two optional lines are terse, on the end of the line that says what the other
+        // shapes are.
+        let legend_body = format!("yaw {}°  pitch {}°  {} px/M  t×{}\n\
+             window {} … {} M  (floor = now)\n\
              drag: pan  shift-drag: orbit  wheel: zoom\n\
              ctrl-wheel: coarse zoom  shift-wheel: time scale\n\
              right-click: menu\n\
              below the floor: the past · above: the future\n\
-             pipes: r = const · cones: exact null generators{}{}",
-            camera.yaw.to_degrees(),
-            camera.pitch.to_degrees(),
-            camera.scale,
-            t_scale,
-            t_min,
-            t_max,
-            // Terse, on the end of the line that says what the other shapes are.
-            if self.show_past_cone {
+             pipes: r = const · cones: exact null generators{}{}", numbers::fixed(camera.yaw.to_degrees(), 0), numbers::fixed(camera.pitch.to_degrees(), 0), numbers::fixed(camera.scale, 0), numbers::fixed(t_scale, 2), numbers::fixed(t_min, 1), numbers::fixed(t_max, 1), if self.show_past_cone {
                 "\npast cone: the event's null geodesics run backwards"
             } else {
                 ""
-            },
-            if self.show_pulse_surfaces {
+            }, if self.show_pulse_surfaces {
                 "\npulse surfaces: every 8th pulse's light cone,\ncoloured by gain"
             } else {
                 ""
-            },
-        );
+            });
 
         buf.paint_labels(&painter, legend_font);
 
