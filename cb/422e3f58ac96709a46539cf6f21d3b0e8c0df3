@@ -1,0 +1,15 @@
+README.md
+  h_5b3f31968f5853 4,17,19-23,55-105,107-136,193-200,202-205
+  h_5b3f31968f5853 106,137,188
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "cb422e3f58ac96709a46539cf6f21d3b0e8c0df3",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
