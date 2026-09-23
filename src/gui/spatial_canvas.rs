@@ -67,6 +67,15 @@ struct MarkerDrag {
     /// picking a marker up anywhere but dead centre teleports it under the cursor by as much as
     /// three marker radii before the drag has moved at all.
     grab: Vec2,
+    /// The point of the plane the view was anchored to when the pointer took hold - Cartesian, in
+    /// M, as `Observer::cartesian_position` gives it, or None for the hole - held as the anchor
+    /// until the pointer lets go. The picture has to stand still under the pointer for the drag to
+    /// mean what it says. A view following the observer being moved - their rest frame from the
+    /// View selector, or Keep Centered - would re-centre on them every frame, the pointer would
+    /// then stand off the marker by whatever it had moved, and the next frame would move them by
+    /// that much again: a nudge of a few pixels carried them across the plane for as long as the
+    /// button was down. Held in M rather than in pixels, so a wheel zoom during the drag scales it.
+    anchor: Option<(f64, f64)>,
 }
 
 pub struct SpatialCanvas {
@@ -151,6 +160,7 @@ impl SpatialCanvas {
         alice: Option<&mut Observer>,
         bob: Option<&mut Observer>,
         current_time: f64,
+        anchor: Option<(f64, f64)>,
         to_screen: impl Fn(&Observer) -> Pos2,
         to_chart: impl Fn(Pos2) -> (f64, f64),
     ) {
@@ -171,7 +181,7 @@ impl SpatialCanvas {
                 let at = to_screen(obs);
                 let distance = at.distance(pointer);
                 if distance < reach && nearest.is_none_or(|(_, best)| distance < best) {
-                    let drag = MarkerDrag { who: *who, mode_before: obs.mode, grab: at - pointer };
+                    let drag = MarkerDrag { who: *who, mode_before: obs.mode, grab: at - pointer, anchor };
                     nearest = Some((drag, distance));
                 }
             }
@@ -211,22 +221,33 @@ impl SpatialCanvas {
         alice: &'a Option<Observer>,
         frame_of_ref: ReferenceFrame,
     ) -> Option<&'a Observer> {
-        // A drag of the observer the view is holding on to suspends the hold: otherwise the pan
-        // compensates for every pixel the pointer moves them, the marker sits pinned to the middle
-        // of the canvas, and the drag looks like it is doing nothing at all. It resumes the moment
-        // the pointer lets go, with the view re-centring on wherever they were put. That clause is
-        // this canvas's alone - it is about the marker drag, which only this canvas offers - so it
-        // is applied here and the rest of the rule is `frame_focus`, shared with the volume view.
-        let held = self.dragging.map(|drag| drag.who);
         if self.keep_hole_centred {
             return None;
         }
-        frame_focus(
-            self.centred_on.filter(|who| held != Some(*who)),
-            frame_of_ref,
-            bob.as_ref(),
-            alice.as_ref(),
-        )
+        frame_focus(self.centred_on, frame_of_ref, bob.as_ref(), alice.as_ref())
+    }
+
+    /// The point of the plane the view is anchored to this frame, Cartesian in M, or None for the
+    /// hole.
+    ///
+    /// While a marker is held it is the anchor there was when the pointer took hold, and nothing
+    /// that happens during the drag moves it; see `MarkerDrag::anchor`. It resumes the moment the
+    /// pointer lets go, so a view following the observer who was moved re-centres on wherever they
+    /// were put. That clause is this canvas's alone - it is about the marker drag, which only this
+    /// canvas offers - and the rest of the rule is `frame_focus`, shared with the volume view.
+    fn anchor(
+        &self,
+        metric: &KerrSchild,
+        bob: &Option<Observer>,
+        alice: &Option<Observer>,
+        frame_of_ref: ReferenceFrame,
+    ) -> Option<(f64, f64)> {
+        match self.dragging {
+            Some(drag) => drag.anchor,
+            None => self
+                .followed(bob, alice, frame_of_ref)
+                .map(|obs| obs.cartesian_position(metric)),
+        }
     }
 
     /// Where the view's anchor sits in the drawn plane, in screen pixels.
@@ -242,10 +263,8 @@ impl SpatialCanvas {
         frame_of_ref: ReferenceFrame,
     ) -> Vec2 {
         let zoom = self.zoom;
-        self.followed(bob, alice, frame_of_ref).map_or(Vec2::ZERO, |obs| {
-            let (x, y) = obs.cartesian_position(metric);
-            Vec2::new(x as f32 * zoom, -(y as f32) * zoom)
-        })
+        self.anchor(metric, bob, alice, frame_of_ref)
+            .map_or(Vec2::ZERO, |(x, y)| Vec2::new(x as f32 * zoom, -(y as f32) * zoom))
     }
 
     /// Pan the view so that the point `target` of the equatorial plane - Cartesian, in M, as
@@ -407,9 +426,8 @@ impl SpatialCanvas {
         // keep one of them centred is answered first, and the View selector's own
         // tracking is what is left when there is no such request or the observer it names has
         // gone.
-        let followed = self.followed(bob, alice, frame_of_ref);
-        let frame_tracking_offset =
-            followed.map_or((0.0, 0.0), |obs| to_offset(obs.cartesian_position(metric)));
+        let anchor = self.anchor(metric, bob, alice, frame_of_ref);
+        let frame_tracking_offset = anchor.map_or((0.0, 0.0), to_offset);
         // The centre of the geometry is carried in f64, because the zone fills and the boundary
         // lines below are built about it and this view zooms to half a million pixels per M. Out
         // there the centre of the hole stands a hundred million pixels off the canvas, where the
@@ -633,6 +651,7 @@ impl SpatialCanvas {
             alice.as_mut(),
             bob.as_mut(),
             current_time,
+            anchor,
             |obs| to_screen(obs.cartesian_position(metric)),
             |at| {
                 let x = f64::from(at.x - center.x) / f64::from(zoom);
@@ -2343,6 +2362,19 @@ mod tests {
         bob: &mut Option<Observer>,
         events: Vec<egui::Event>,
     ) -> (Vec<(Color32, f32, Pos2)>, egui::Id) {
+        spatial_frame_in(ReferenceFrame::DistantObserver, canvas, ctx, metric, alice, bob, events)
+    }
+
+    /// `spatial_frame`, drawn with the View selector at `frame`.
+    fn spatial_frame_in(
+        frame: ReferenceFrame,
+        canvas: &mut SpatialCanvas,
+        ctx: &egui::Context,
+        metric: &KerrSchild,
+        alice: &mut Option<Observer>,
+        bob: &mut Option<Observer>,
+        events: Vec<egui::Event>,
+    ) -> (Vec<(Color32, f32, Pos2)>, egui::Id) {
         use crate::physics::wavefront::SignalField;
         let signal = SignalField::default();
         let mut details = true;
@@ -2366,7 +2398,7 @@ mod tests {
                 SignalViews { alice: &signal, bob: &signal },
                 600.0,
                 false,
-                ReferenceFrame::DistantObserver,
+                frame,
                 1.0,
                 FrontStyle { arcs: true, hide_wound: true },
                 &mut details,
@@ -2912,6 +2944,60 @@ mod tests {
         assert!(
             (recentred - hole_of(&painted)).length() < 2.0 || (recentred - at).length() < 2.0,
             "and he is back in the middle of the view: {recentred:?}"
+        );
+    }
+
+    #[test]
+    fn test_a_drag_in_the_dragged_observers_own_rest_frame_does_not_run_away() {
+        // The View selector's rest frame follows its observer the way Keep Centered does, and a
+        // drag of that observer used to be followed too: every frame the view re-centred on where
+        // they had been put, the pointer was left standing off the marker by what it had moved,
+        // and the next frame moved them by that much again. A nudge held still carried them on
+        // across the plane for as long as the button was down. The picture now stands still under
+        // the pointer for the length of the drag, so holding the pointer still holds them still.
+        let metric = KerrSchild::new(1.0, 0.90);
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let mut canvas = SpatialCanvas::default();
+        let params = crate::physics::observer::WorldlineParams::default();
+        let mut alice: Option<Observer> = None;
+        let mut bob = Some(Observer::new_with_phi(&metric, "Bob", 0.0, 6.0, 0.0, 0.0, params));
+        let frame = ReferenceFrame::Bob;
+
+        let (painted, _) =
+            spatial_frame_in(frame, &mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
+        let at = marker_of(&painted, Who::Bob);
+        let hole = hole_of(&painted);
+        let nudge = at + Vec2::new(12.0, 0.0);
+        let travel = Vec2::new(-40.0, 25.0);
+        let mut events = vec![(at, Some(true)), (nudge, None), (nudge + travel, None)];
+        // Held there, still pressed, for a good many frames.
+        events.extend(std::iter::repeat_n((nudge + travel, None), 20));
+        let mut held = Vec::new();
+        for (pos, pressed) in events {
+            held = spatial_frame_in(
+                frame, &mut canvas, &ctx, &metric, &mut alice, &mut bob, pointer(pos, pressed),
+            )
+            .0;
+        }
+        let moved = marker_of(&held, Who::Bob);
+        println!("Bob's own frame, dragged {travel:?} and held: {at:?} -> {moved:?}");
+        assert!(
+            (moved - (at + travel)).length() < 2.0,
+            "the marker is where the pointer put it, and stays there: {moved:?}"
+        );
+        assert!((hole_of(&held) - hole).length() < 1.0, "and the picture did not move under it");
+
+        // Released, the rest frame takes hold of him again where he was put.
+        spatial_frame_in(
+            frame, &mut canvas, &ctx, &metric, &mut alice, &mut bob,
+            pointer(nudge + travel, Some(false)),
+        );
+        let (released, _) =
+            spatial_frame_in(frame, &mut canvas, &ctx, &metric, &mut alice, &mut bob, vec![]);
+        assert!(
+            (marker_of(&released, Who::Bob) - at).length() < 2.0,
+            "and he is back in the middle of his own frame"
         );
     }
 
