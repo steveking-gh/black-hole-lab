@@ -1,0 +1,25 @@
+src/gui/spatial_canvas.rs
+  s_e3dc24b22cfd01::t_1a3dff30fd8663 2365-2376,2401,2950-3000
+  s_e3dc24b22cfd01::t_55c8aecdb1d633 70-78,163,184,227-250,266-267,429-430,654,2364,3001-3003
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f7fa7db33c29debcc7cb5f7e82be310c6b40a3c8",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_e3dc24b22cfd01": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fcca3dc2-e727-46cf-bf88-a27e341dbfe8",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
