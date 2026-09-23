@@ -1,0 +1,98 @@
+src/save/v1.rs
+  s_d61dd82cbbe3eb::t_52e36ac1d05c4e 502-505
+src/save/tests.rs
+  s_d61dd82cbbe3eb::t_53e52e9db43e56 179,520-536
+  s_d61dd82cbbe3eb::t_f4ee84212a0f52 537-538
+Cargo.toml
+  s_d61dd82cbbe3eb::t_87154a1a0b8168 11-12,16
+src/gui/cauchy_effects.rs
+  s_d61dd82cbbe3eb::t_d8222e9c52ae06 1
+  s_d61dd82cbbe3eb::t_ad940faffb1b81 27,73,85,99,112,119,200
+  s_d61dd82cbbe3eb::t_a58cdc18935b48 203
+src/gui/units.rs
+  s_d61dd82cbbe3eb::t_14de0d894b4ceb 1-159
+src/gui/ruler.rs
+  s_d61dd82cbbe3eb::t_165bd8cb4ca193 15
+src/gui/spacetime_canvas.rs
+  s_d61dd82cbbe3eb::t_ad940faffb1b81 603,622,624,626,628,630,1565-1569,1579-1582,1666,1668,1678,1686,2263,2445,2447,2475,2477,2505,2507,3444,3446,3448,3633,3635,4178
+  s_d61dd82cbbe3eb::t_d8222e9c52ae06 1
+  s_d61dd82cbbe3eb::t_1e6d0ff7dec944 219,601
+  s_d61dd82cbbe3eb::t_dc191e7262c464 988,992,998
+src/app.rs
+  s_d61dd82cbbe3eb::t_0bce455cda09f0 1
+  s_d61dd82cbbe3eb::t_b802976d71c7f6 992-994,1000-1003
+  s_d61dd82cbbe3eb::t_a74fcd4079d027 991,997
+  s_d61dd82cbbe3eb::t_48377f8287fd5b 1012-1014,1021-1052,1056-1057,1059-1066
+  s_d61dd82cbbe3eb::t_dc191e7262c464 609,629,632,639,654,739-740,744,748,752,756,760,764,768
+  s_d61dd82cbbe3eb::t_ea2d958c8581cf 1198
+  s_d61dd82cbbe3eb::t_52e36ac1d05c4e 363-366
+  s_d61dd82cbbe3eb::t_3d4fdc14b36a79 989-990,995-996,998-999,1004-1011,1015-1020,1053-1055,1058,1067-1068
+src/gui/beacon_colour.rs
+  s_d61dd82cbbe3eb::t_ad940faffb1b81 428-429
+  s_d61dd82cbbe3eb::t_4d7488cb6c0fe0 47
+src/save/convert.rs
+  s_d61dd82cbbe3eb::t_52e36ac1d05c4e 492,538
+crates/kerr-equatorial/src/kerr_schild.rs
+  s_d61dd82cbbe3eb::t_fc68e7b1d4536d 86
+crates/readout/Cargo.toml
+  s_d61dd82cbbe3eb::t_3ee60c6ca14e12 1-10
+src/gui/controls.rs
+  s_d61dd82cbbe3eb::t_a58cdc18935b48 987,989,1011,1013,1015-1016,1018-1019,1036-1037,1654,1656,1997-1999,2001-2003
+  s_d61dd82cbbe3eb::t_9186e1a2bb9aeb 621,1939,1953
+  s_d61dd82cbbe3eb::t_f0a4d31b555e4c 873,885,898,1875
+  s_d61dd82cbbe3eb::t_52e36ac1d05c4e 426-429,506,620,622,1898-1905
+  s_d61dd82cbbe3eb::t_987d26177071e2 2
+  s_d61dd82cbbe3eb::t_d8222e9c52ae06 1
+  s_d61dd82cbbe3eb::t_ad940faffb1b81 744-747,1008,1786,1947
+  s_d61dd82cbbe3eb::t_dc191e7262c464 804,827,839,858,861,877,889,902,915,943,964,967,1253,1737,1774,1778,1844-1845,1849,1853,1856,1860,1862,1864,1869,1879,1893,1913,1915,1941,1955,1979-1980
+  s_d61dd82cbbe3eb::t_7d3ded3e01d1ab 1906
+src/gui/mod.rs
+  s_d61dd82cbbe3eb::t_fc68e7b1d4536d 3
+crates/readout/src/lib.rs
+  s_d61dd82cbbe3eb::t_245eb253426d56 1-86,90-91,95-148,163,165-223,226-294,299-362,368-410,422-439,444-484,489-512,523-531,539-548
+  s_d61dd82cbbe3eb::t_b3bda32bcec141 149-159,411-419
+  s_d61dd82cbbe3eb::t_f0a4d31b555e4c 87-89,92-94,224-225,295-298,363-367,440-443,485-488,513-522,532-538
+  s_d61dd82cbbe3eb::t_08a09f6d1dea87 160-162,164,420-421
+src/gui/numbers.rs
+  s_d61dd82cbbe3eb::t_c2a8d32d879f77 41-42,47-48,52-53,57-58
+  s_d61dd82cbbe3eb::t_9c55a390655d70 1,3-12,14-15,18-19,21-40,61,63,68-78,81,84,86-93,95,101-112,141-148,162,166-167
+  s_d61dd82cbbe3eb::t_b3bda32bcec141 45-46,49-50
+  s_d61dd82cbbe3eb::t_987d26177071e2 16,43,113,115-125,127-133,152-158
+  s_d61dd82cbbe3eb::t_b802976d71c7f6 94,96-100
+  s_d61dd82cbbe3eb::t_7f3a94a28384f7 44,51,114
+src/gui/spatial_canvas.rs
+  s_d61dd82cbbe3eb::t_a58cdc18935b48 724,729-732,746,751-754
+  s_d61dd82cbbe3eb::t_d8222e9c52ae06 1
+  s_d61dd82cbbe3eb::t_c2a8d32d879f77 744,766
+  s_d61dd82cbbe3eb::t_ad940faffb1b81 743,765
+src/gui/axis.rs
+  s_d61dd82cbbe3eb::t_ad940faffb1b81 99,137,414
+  s_d61dd82cbbe3eb::t_4d7488cb6c0fe0 32
+src/gui/volume_canvas.rs
+  s_d61dd82cbbe3eb::t_334ad668e5fc68 2011-2012
+  s_d61dd82cbbe3eb::t_a58cdc18935b48 2013-2014,2019,2023,2027
+  s_d61dd82cbbe3eb::t_4d7488cb6c0fe0 1
+Cargo.lock
+  s_d61dd82cbbe3eb::t_8894e4186da22f 465,2691-2694
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "5d126a8c8b54f6a8fa2ed429dd67b7b47ee0d522",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_d61dd82cbbe3eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "67e2b484-2871-4c5e-babe-290375a44f9b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
