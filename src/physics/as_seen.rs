@@ -17,12 +17,30 @@
 //! the observer's own clock measures unit frequency on it. Then the affine parameter lambda at the
 //! emission event is at once the normal-coordinate *time* ago and the normal-coordinate *distance*
 //! away, which is exactly the statement that the emission event lies on the 45-degree past cone of
-//! the drawn chart:
+//! the three-dimensional normal-coordinate chart:
 //!
 //!     xi = lambda (-1, n^1, n^2),
 //!
 //! with n the unit spatial direction, in the focus observer's tetrad, that the light arrives
 //! *from* - it points from the observer towards the source, which is the way a telescope points.
+//!
+//! *Which plane the rest-frame view draws.* That view has room for one spatial direction and it
+//! gives that room to the focus observer's own radial leg e1, whatever the other observer does:
+//! the plane is span(e0, e1) of `Tetrad::from_four_velocity_axial`, and the frame, the surfaces,
+//! the grid, the cone and the ruler are the ones that observer has when nobody else is on the
+//! canvas. The emission event is then painted into that plane, at the orthogonal projection
+//! [`AsSeen::xi_projected`] of xi onto it,
+//!
+//!     (xi^1, xi^0) = (lambda n^1, -lambda),
+//!
+//! which lies inside the 45-degree past cone by exactly the part of the offset that points round
+//! the hole, lambda |n^2|, and on the cone when the light arrives in the plane. The view says as
+//! much: it marks the cone at the light-travel distance lambda, ties that mark to the dot, and
+//! prints lambda |n^2| in the other observer's box. The plane used to follow the line of sight
+//! instead, which put the dot on the cone by construction and made the whole picture - every
+//! surface curve, every grid line - depend on a solve that goes ill-conditioned at a large boost.
+//! See `spacetime_canvas::PICTURE_BOOST_LIMIT`.
+//!
 //! The same ray carries the exact frequency ratio
 //!
 //!     g = nu_seen / nu_emitted = (K . u_focus) / (K . u_other at emission),
@@ -303,32 +321,17 @@ impl AsSeen {
         self
     }
 
-    /// The spacelike leg of the plane the rest-frame view draws, in tetrad components (along e1,
-    /// along e2): the line of sight n with its sign fixed so that right is outward.
-    ///
-    /// The plane is span(e0, s) with s = +/- n, and either sign gives the same plane, so the sign
-    /// is a display convention and this is where it is written down. It is chosen so that the
-    /// outward component of s is positive, or, for a line of sight with no outward component at
-    /// all, so that s points prograde. Then the right-hand side of the canvas is outward in every
-    /// view, the two observers' views of each other share a horizontal direction and their
-    /// surface curves lean the same way, and the other observer's dot lands on the right-hand
-    /// past cone edge when they are outward of the focus observer and on the left-hand edge when
-    /// they are inward. The alternative - s = n always, the source always on the right - put r-
-    /// leaning one way in Alice's view and the other in Bob's when the pair fell in together,
-    /// which read as two different geometries.
-    ///
-    /// The flip when n^1 changes sign is a mirror of the whole picture, and it is abrupt by
-    /// nature: a line of sight that passes through the tangential direction has an outward
-    /// component that passes through zero, and there is nothing between the two orientations to
-    /// animate.
-    pub fn plane_leg(&self) -> [f64; 2] {
-        let sign = self.sight_sign();
-        [sign * self.n[0], sign * self.n[1]]
-    }
-
     /// +1 when the line of sight has an outward component, or none and a prograde one; -1
-    /// otherwise. It is n . s for the leg of [`Self::plane_leg`], which is the side of the canvas
-    /// the source is drawn on.
+    /// otherwise: which half of the rest-frame view's horizontal axis the light comes from.
+    ///
+    /// The view marks the past cone at (sign * lambda, -lambda), the point the emission event
+    /// would occupy if the light arrived in the drawn plane, and ties that mark to the projected
+    /// dot at (lambda n^1, -lambda). This sign is what puts the mark on the same side of the
+    /// canvas as the dot - the outward side whenever the light has any outward component at all,
+    /// and the inward side otherwise - so the tie runs horizontally and its length is the
+    /// shortening the projection costs. A line of sight with no outward component at all takes
+    /// the prograde side by convention; both halves of the cone stand at the same 45 degrees and
+    /// the dot sits at xi^1 = 0 there, so that choice moves nothing the eye can read.
     pub fn sight_sign(&self) -> f64 {
         if self.n[0] > 0.0 || (self.n[0] == 0.0 && self.n[1] >= 0.0) {
             1.0
@@ -337,24 +340,29 @@ impl AsSeen {
         }
     }
 
-    /// The drawn point in the (xi^1, xi^0) plane of the rest-frame view, in the same ordering
-    /// `LocalLine::point` uses: distance along the drawn plane's spacelike leg first, local time
-    /// second.
+    /// The orthogonal projection of `xi` onto the plane the rest-frame view draws, in the same
+    /// ordering `LocalLine::point` uses: distance along the plane's spacelike leg first, local
+    /// time second.
     ///
-    /// That plane is span(e0, s) with s = +/- (n^1 e1 + n^2 e2), the line of sight itself (see
-    /// [`Self::plane_leg`] for the sign), so the whole of the spatial offset lies along the
-    /// horizontal axis and none of it is dropped:
+    /// That plane is span(e0, e1) of the focus observer's axial tetrad - the observer's own radial
+    /// plane, which is what the view draws whether or not anybody else stands on the canvas - so
+    /// the projection keeps the component of the offset along e1 and drops the component along e2:
     ///
-    ///     xi^1 = lambda n . s = +/- lambda (n^1 n^1 + n^2 n^2) = +/- lambda,      xi^0 = -lambda,
+    ///     xi^1 = lambda n^1,      xi^0 = -lambda,      dropped: xi^2 = lambda n^2.
     ///
-    /// n being a unit vector. The point is therefore *on* the 45-degree past cone, on the side the
-    /// source lies, rather than inside it - which is the whole reason the view turns its plane.
-    /// The old radial plane kept xi^1 = lambda n^1 and dropped lambda n^2, so the dot moved in
-    /// towards the axis by however far out of that plane the light had arrived, and from an ISCO
-    /// observer of a fast hole - where aberration makes |n^2| large - that shortening could carry
-    /// the dot past the drawn r+ curve while the emission event sat in Region I.
-    pub fn xi_plane(&self) -> [f64; 2] {
-        [self.sight_sign() * self.lambda, -self.lambda]
+    /// n is a unit vector, so |xi^1| <= lambda and the point lies *inside* the 45-degree past
+    /// cone, reaching the cone exactly when the light arrives in the plane. The shortfall is the
+    /// whole of what the projection costs: lambda (1 - |n^1|) along the axis, against an offset of
+    /// lambda |n^2| out of the plane. The view draws both rather than hiding either - a faint mark
+    /// on the cone at the light-travel distance, a dashed tie from the dot to that mark, and the
+    /// out-of-plane offset itself in the other observer's box.
+    ///
+    /// So a dot inside a drawn horizon curve is by itself no statement about the emission event,
+    /// because the curve is that surface's slice through this plane and the event stands off the
+    /// plane. The region tag in the box's title reads the emission event's own radius and is the
+    /// exact answer to that question.
+    pub fn xi_projected(&self) -> [f64; 2] {
+        [self.lambda * self.n[0], -self.lambda]
     }
 
     /// The signed angle of the line of sight from the observer's own outward radial leg, in
@@ -1883,9 +1891,11 @@ mod tests {
             "the source is straight outward: n = {:?}",
             seen.n
         );
-        // The drawn point is on the 45-degree past cone, which is what normal coordinates make of
-        // a null geodesic and is the whole reason lambda is both a time and a distance.
-        let xi = seen.xi_plane();
+        // The drawn point reaches the 45-degree past cone, because this light arrives along the
+        // radial leg the view draws and the projection onto that plane therefore drops nothing.
+        // That lambda is at once the time and the distance is what normal coordinates make of a
+        // null geodesic.
+        let xi = seen.xi_projected();
         assert!(
             (xi[1] + seen.lambda).abs() < 1e-12 && (xi[0] - seen.lambda).abs() < 1e-6,
             "xi = {xi:?} against lambda = {}",

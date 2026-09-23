@@ -296,8 +296,8 @@ impl Tetrad {
     /// The observer, the time leg and the rest space are all untouched: this is a rotation of an
     /// orthonormal pair by the angle of s in that pair, so g(e_a, e_b) = diag(-1, 1, 1) survives
     /// exactly rather than to a normalisation. What changes is which spatial direction the drawn
-    /// plane span(e0, e1) contains - and that is the whole of what the rest-frame view needs when
-    /// the plane it draws is the one containing the line of sight rather than the radial one.
+    /// plane span(e0, e1) contains - which is all a view that draws a plane other than the radial
+    /// one needs.
     ///
     /// `s` is read for its spatial part alone. The components taken are c1 = g(s, e1) and
     /// c2 = g(s, e2), so any component of s along e0 drops out and any length of s drops out with

@@ -129,8 +129,8 @@ impl LocalFrame {
     /// The same observer's chart drawn in the plane span(e0, s) rather than in the radial plane:
     /// the axial tetrad with its spatial legs turned so that e1 points along s.
     ///
-    /// `s` is the spacelike leg the caller wants on the horizontal axis - for the rest-frame view,
-    /// the line of sight to the other observer - and it is read for its spatial part alone, so
+    /// `s` is the spacelike leg the caller wants on the horizontal axis, and it is read for its
+    /// spatial part alone, so
     /// neither its length nor any component along u matters (see [`Tetrad::turned_towards`]).
     ///
     /// One thing changes with the gauge and the caller has to say so to the reader. The axial
@@ -341,15 +341,17 @@ pub fn ruler_distance(metric: &KerrSchild, r0: f64, u: &[f64; 3], r_target: f64)
 /// geodesic sets off in, and everything after that - the RK4 in arclength, the geometric grading
 /// of the mesh into the surface, the refusals - is the same.
 ///
-/// It exists because the rest-frame view no longer draws the radial plane. That view draws
-/// span(e0, s) with s the line of sight to the other observer, its horizontal axis is s, and the
-/// drawn surface curve crosses that axis at the affine length along s. Quoting the *radial*
-/// integral beside that picture put two different numbers on one canvas again: measured from a
-/// static observer at r = 3 M of an a = 0.90 hole whose sight line runs 51 degrees off radial, the
-/// radial leg reaches r+ after 4.156 M of arclength and the drawn leg after 3.606 M, 13 per cent
-/// less. The turned leg sets off across the surface rather than square at it, and this close to
-/// the photon sphere the curvature bends that leg inwards faster than the radial one travels. So
-/// the view hands in the leg it draws, and the box's number is the crossing the eye can see.
+/// It exists so that a picture drawn in a plane other than the radial one can quote the distance
+/// along the axis it draws. A drawn surface curve crosses the horizontal axis at the affine length
+/// along that axis's leg, and quoting the *radial* integral beside such a picture puts two
+/// different numbers on one canvas: measured from a static observer at r = 3 M of an a = 0.90 hole
+/// with a leg 51 degrees off radial, the radial leg reaches r+ after 4.156 M of arclength and the
+/// turned leg after 3.606 M, 13 per cent less. The turned leg sets off across the surface rather
+/// than square at it, and this close to the photon sphere the curvature bends that leg inwards
+/// faster than the radial one travels. The app's rest-frame view draws the radial plane and hands
+/// in the radial leg (it drew the plane of the line of sight for a while, and this is what it
+/// quoted then); the function stays general so that a view which turns its plane cannot carry two
+/// answers.
 ///
 /// `leg` is read in coordinate components (v^t, v^r, v^phi), as a tetrad leg comes. Its
 /// orientation does not matter: the function takes whichever of the two senses moves r towards the

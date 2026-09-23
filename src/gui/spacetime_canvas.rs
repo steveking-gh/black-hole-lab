@@ -78,13 +78,17 @@ pub const CHART_BANNER: &str = "This is a chart, not a frame of reference.";
 pub const REST_FRAME_TIP: &str =
 "The focus observer's own local chart, built from that observer's orthonormal tetrad: c ≡ 1, so light cones stand at 45° and every worldline through the event stands steeper.
 
-The horizontal axis is the line of sight, and right is outward. A rest frame has three spatial directions and this canvas has room for one, so the view draws the plane spanned by the focus observer's time axis and the direction the other observer's light arrives from, turned so that its outward component points right. The other observer's dot then lies on the right-hand edge of the past cone when they are outward of the focus observer and on the left-hand edge when they are inward, and the header states the angle between the line of sight and the nearer radial direction, prograde or retrograde. With no other observer on the canvas, or with no image of one, the horizontal axis falls back to the outward radial direction and the header says so.
+The horizontal axis is the focus observer's own outward radial direction, and right is outward. A rest frame has three spatial directions and this canvas has room for one, so the view draws the plane spanned by that observer's time axis and that observer's radial leg — span(e₀, e₁) of the axial tetrad — and it draws that plane whoever else is on the canvas. Nothing in the frame, the surfaces, the grid, the light cone, the ruler, the automatic zoom or the boxes depends on the other observer. Switch the other observer off and this picture does not move.
 
-Why the line of sight rather than the radial axis. Light from an observer on a fast orbit arrives strongly aberrated, so most of the offset to the emission event points round the hole rather than outward. The radial plane dropped that part: the dot sat inside the 45° past cone instead of on it, and the shortening could carry the dot past a drawn horizon curve while the emission event lay outside that horizon. In the plane of the line of sight nothing is dropped.
+Why the observer's own plane rather than the line of sight. The view used to swing its horizontal axis onto the direction the other observer's light arrives from, which put that observer's dot on the 45° past cone by construction. The price was that every curve on the canvas hung on a solve for somebody else's arrival angle, and that solve goes ill-conditioned at a large boost: for two raindrops 1.5×10⁻⁴ M apart the whole picture tilted from frame to frame past dt/dτ ≈ 200, while the same picture with the other observer switched off stayed smooth. A rest frame belongs to the observer standing in it, so the canvas draws that observer's own plane first and paints the other observer onto the finished picture afterwards.
+
+The other observer, as three drawn things. The dot is the emission event projected straight down onto this plane: horizontal λ·n¹, vertical −λ, where λ is the light-travel distance and n is the unit direction the light arrives from. The thin line from the dot to your own event is the light itself; a null ray projected onto a plane it does not lie in comes out steeper than 45°, and that steepness is the part of the ray pointing out of the picture rather than a fault in the drawing. The faint mark on the past cone is where the emission event would have landed had the light arrived in this plane, and the dashed tie between the mark and the dot is how much shorter the projection made the offset along the axis.
+
+What the picture no longer claims. Whether the dot falls inside or outside a drawn horizon curve says nothing about the other observer's event. The curves are this plane's slice through each surface, and that event stands off the plane by the offset the box quotes, “round the hole, out of this plane”. The region tag in the other observer's box title reads that observer's own radius and is exact: read the tag for that question, and read the dot for where the light came from.
 
 Two constructions share this canvas, and the canvas does not pretend otherwise.
 
-Exact, in Riemann normal coordinates. The view draws each surface r = const — the horizons, the static limit, the ring singularity — as the curve that surface really is: the point of a surface at chart angle ψ sits at the affine length of the geodesic that leaves the focus observer's event in the direction ψ, inside the drawn plane, and arrives on that surface. Where the curve meets the now-axis is the ruler distance the horizon box prints, and the two agree because the two are the same integral — both of them taken along the drawn axis, which is the line of sight rather than the radial direction whenever the view has turned its plane. The box says “along this axis” for that reason: hold r = 3 M of an a = 0.90 hole with the line of sight 51° off radial, and the drawn leg reaches r₊ after 3.606 M of ruler distance where the radial leg takes 4.156 M. The two legs leave the same event in different directions and arrive on the same surface, so they measure different lengths, and the one this canvas can show you is the one it prints. The other observer's dot carries the same construction: the dot marks the event on the other worldline that the focus observer's past light cone passes through, and stands at the affine length of the arriving light ray, in the direction the ray arrives from — which in this plane is the horizontal axis itself, so the dot lands exactly on the 45° past cone. The dot and the surface curves then measure along the very same directions, so the dot stands beyond a curve exactly when the light really did come from beyond that surface along that ray.
+Exact, in Riemann normal coordinates. The view draws each surface r = const — the horizons, the static limit, the ring singularity — as the curve that surface really is: the point of a surface at chart angle ψ sits at the affine length of the geodesic that leaves the focus observer's event in the direction ψ, inside the drawn plane, and arrives on that surface. Where the curve meets the now-axis is the ruler distance the horizon box prints, and the two agree because the two are the same integral, both of them taken along the radial leg this canvas draws. The other observer's dot is exact in the same coordinates and then projected: the emission event sits at ξ = λ(−1, n¹, n²), the canvas holds the first two of those three numbers, and so the dot lies inside the 45° past cone by exactly the part of the offset that points round the hole. The dot reaches the cone when the light arrives in this plane, and the faint mark on the cone beside it is where the dot would have landed if it had.
 
 A horizon is two surfaces, and the curve says which. The heavy stroke is the branch the focus observer's own future turns on, and the light stroke of the same colour is the other branch. For r₊ that heavy branch is the future horizon, the same one for everybody, and the light stroke is the past horizon that nothing crosses. For r₋ the two swap according to who is standing here: a geodesic with E − Ω₋L < 0, where Ω₋ = a/(r₋² + a²) is the dragging rate on r₋, freezes onto the far branch and the view draws that far branch heavy; a geodesic with E − Ω₋L > 0 goes through the other branch instead, and the view draws the branch it crosses heavy. Read E and L off your own box and check the sign. An observer on no geodesic at all — a hovering observer, a marker under the mouse — reaches neither branch while the engine burns, and the view keeps the far branch heavy for them by convention; the horizon's own box says as much. The two branches meet at a corner, and that corner is the bifurcation, where the arriving geodesic runs tangent to the horizon rather than through it. Each horizon's box names the branches on the canvas.
 
@@ -112,32 +116,53 @@ pub const MIN_GRID_PX: f32 = 28.0;
 const YOUNGEST_CHECK_INTERVAL: f64 = 1.0;
 
 
-/// The boost, as dt/dtau, past which the picture of the other observer - the image, its line of
-/// sight and the plane drawn through it - is held from the last frame under the limit rather
-/// than solved again.
+/// The boost, as dt/dtau, past which the picture of the other observer - her dot, her mark on the
+/// past cone and the numbers in her box - is held from the last frame under the limit rather than
+/// solved again.
 ///
-/// This is a limit of the solve and not of the frame. The tetrad itself is good at any boost:
+/// This is a limit of the solve and not of the frame, and since the canvas draws the focus
+/// observer's own radial plane (section 1b of `render_observer_frame`) the limit reaches the other
+/// observer's image and nothing else. The tetrad is good at any boost:
 /// `Tetrad::from_four_velocity_axial` is built in closed forms with no cancellation in them, and
 /// measured with Bob freezing onto the far branch of r- with the frame built live, the drawn r-
 /// trace crossed his own worldline at exactly the proper time the horizon box quotes at every
-/// decade of u^t out to 1e9, and its slope beside him held steady (0.64 in the plane of Alice's
-/// raindrop) for as long as the image was being found. What fails is the line of sight. Aberration
-/// at a boost of u^t crowds the whole sky into a cone about the direction of motion, so the
-/// arrival angle the solver has to resolve shrinks like 1/u^t while the solver's own step floor
-/// does not: past u^t ~ 1e7 it reported no image on a third of the frames from Alice's raindrop,
-/// and with Alice freezing beside Bob it found an image every frame but at a wandering angle, and
-/// the drawn plane wandered with it - r- swung from the outward side to flat ahead to the inward
-/// side, and the distant clock's grid came out horizontal on the frames where the plane had turned
-/// tangent to the horizon. Every one of those swings was the plane, not the frame.
+/// decade of u^t out to 1e9, and its slope beside him held steady for as long as the run lasted.
+/// What fails is the line of sight. Aberration at a boost of u^t crowds the whole sky into a cone
+/// about the direction of motion, so the arrival angle the solver has to resolve shrinks like
+/// 1/u^t while the solver's own step floor does not: past u^t ~ 1e7 it reported no image on a
+/// third of the frames from Alice's raindrop, and with Alice freezing beside Bob it found an image
+/// every frame but at a wandering angle.
 ///
-/// So the hold is on the picture alone: the image and its arrival angle are kept, the angle is
-/// re-read in the live tetrad, and the frame, the surfaces, the grid and the auto-zoom are built
-/// at the observer's live event. Holding the frame as well, as the view once did, drew the
-/// surfaces from an event the observer had left: with the file's four-million-sun hole, Bob at
-/// the stall had 5 ns left to r- and the picture showed it 52 us ahead, which was the time left
-/// at the held event. The held picture is stale by the same amount, but against the light-travel
-/// distance of the image rather than against the window, and the box quotes both.
+/// A wandering angle now moves the dot, the mark and the line-of-sight reading, and nothing else.
+/// The view used to draw the plane spanned by the time axis and that same line of sight, and then
+/// the whole picture wandered with the angle: r- swung from the outward side to flat ahead to the
+/// inward side, and the distant clock's grid came out horizontal on the frames where the plane had
+/// turned tangent to the horizon. Drawing the radial plane always is what ended that; this hold is
+/// what protects the image and the numbers that go with it.
+///
+/// So the hold is on the picture of the other observer alone: the image and its arrival angle are
+/// kept, the angle is re-read in the live tetrad, and the frame, the surfaces, the grid and the
+/// auto-zoom are built at the observer's live event. Holding the frame as well, as the view once
+/// did, drew the surfaces from an event the observer had left: with the file's four-million-sun
+/// hole, Bob at the stall had 5 ns left to r- and the picture showed it 52 us ahead, which was the
+/// time left at the held event. The held picture is stale by the same amount, but against the
+/// light-travel distance of the image rather than against the window, and the box quotes both.
 const PICTURE_BOOST_LIMIT: f64 = 1e6;
+
+/// How faint the mark on the past cone and the tie to it are drawn, as a multiplier on the other
+/// observer's own colour. The mark is where her emission event would stand if her light had
+/// arrived in the drawn plane, so it is a construction line and not the event: it has to be
+/// findable beside the dot and it must never be mistaken for the dot.
+const SEEN_MARK_ALPHA: f32 = 0.45;
+
+/// The radius of that mark, in points. Well under the dot's 6.0 and off every other radius this
+/// canvas paints, so a reader tells the two apart by size alone at a glance.
+const SEEN_MARK_RADIUS: f32 = 3.5;
+
+/// How far apart, in points, the dot and the mark have to stand before the view draws the mark and
+/// the tie at all. Below one point the two coincide on the screen, the tie has no length a reader
+/// could read, and the picture is the in-plane one: the dot on the cone, and nothing beside it.
+const SEEN_TIE_MIN_PX: f32 = 1.0;
 
 const FRAME_MAX_R_MIN: f64 = 1e-12;
 
@@ -1328,7 +1353,7 @@ An \"Incomplete\" line means the Wavefronts kept cap has evicted pulses that cou
 pub const SURFACE_BOX_TIP: &str =
 "What the surface is, taken from the surface and not from the line the canvas draws of it. A surface r = const is timelike wherever Δ = r² − 2Mr + a² stays positive — the world-tube of the observers who hold that radius, something a rocket can stay off — spacelike wherever Δ is negative, which is a moment of your history rather than a place and arrives whatever you do, and null at a horizon, where Δ vanishes and the surface is built out of light. The static limit r_E sits at Δ = a², outside r₊, so r_E reads timelike at every spin; everything strictly between the horizons has Δ < 0 and reads spacelike; r₊ and r₋ read null wherever you stand. A spacelike surface lies in your future when it sits below you and in your past when it sits above you, because everything in Region II falls inward. The box adds “(crossing now)” only when your own radius sits on the surface to the last bit a double carries, which is the same test the horizon boxes print “On it” from.
 
-Why the words no longer come off the drawn line. This canvas draws one plane through your event — the plane of your time axis and your line of sight to the other observer — and what you see of a surface is where that plane cuts it. The cut of a plane by a plane is a line, so there is always a slope to read, and where your line of sight runs along the outward radial direction that line is the surface's own and the two readings agree. Where the line of sight has swung round, the plane cuts the surface at an angle, and such a cut can only flatten a trace, never steepen it: the trace's own norm is cos²θ·Δ/r² − sin²θ·(u^r)², against g^rr for the surface itself. From r = 3 M a sight line more than about 39° off radial flattens the r₊ trace past 45°, and words read off that slope called the outer horizon null, and then spacelike, while you stood a ruler distance outside it. The canvas draws the trace honestly; the words were never the trace's to give.
+Why the words come off the surface and not off the drawn line. This canvas draws one plane through your event — the plane of your time axis and your own radial direction — and what you see of a surface is where that plane cuts it. In this plane the cut carries the surface's own character, so the words and the slope agree and a reader can check one against the other. That agreement is a property of this plane rather than a licence. The view once swung the plane onto the line of sight to the other observer, and a plane meeting a surface at an angle can only flatten the trace, never steepen it: the trace's own norm is cos²θ·Δ/r² − sin²θ·(u^r)², against g^rr for the surface itself. From r = 3 M a sight line more than about 39° off radial flattened the r₊ trace past 45°, and words read off that slope called the outer horizon null, and then spacelike, while the observer stood a ruler distance outside it. Δ at the surface's own radius answers the question in every plane, so Δ is what the box reads.
 
 trace moves at / trace closes at — the one number in the box that does belong to the drawn line, taken where that line passes your own event. For a timelike trace it is the speed at which that world-tube crosses this frame; for a spacelike one it is your own speed against the observers whose simultaneity slice the surface is; for a null one it is c. One slope gives all three, and that slope follows from the metric at your own radius through the dual tetrad, so nothing about the tilt goes in by hand.
 
@@ -1341,13 +1366,17 @@ pub const AS_SEEN_BOX_TIP: &str =
 
 The youngest image - defined as the one whose light left latest. A real observer sees every image at once: the direct ray, and rays that have wound round the hole once, twice, and on without end, each of them a genuine null path between the same two worldlines. Those wound rays take longer to arrive, so each wound image shows an earlier moment of the other observer's life, and each one is fainter than the last. The view draws the youngest image alone, and this box reads that one image. Where the youngest image the solver finds is itself a wound one - which happens when the direct ray misses, or when the solver has not yet swept it up - a line in the box says how many turns that ray made.
 
-Where the dot stands. The view follows the arriving ray back to the emission event and puts the dot where the exact normal-coordinate rule puts that event: at the affine length of that ray, in the direction the light arrives from. Normalise the ray so that this observer's own clock measures unit frequency on the ray, and the affine length λ becomes at once how far away the emission event lies and how long ago the emission event happened - which is exactly what puts the dot on the 45° past cone. The thin line from the dot to this observer's event is that ray: in normal coordinates a null geodesic runs as a straight 45° line, so the line is the light itself rather than an annotation over the top of the picture.
+Where the dot stands. The view follows the arriving ray back to the emission event and puts that event where the exact normal-coordinate rule puts it: at the affine length of that ray, in the direction the light arrives from. Normalise the ray so that this observer's own clock measures unit frequency on it, and the affine length λ becomes at once how far away the emission event lies and how long ago the emission event happened - which is what puts the event on the 45° past cone of the full three-dimensional chart, ξ = λ(−1, n¹, n²).
 
-The picture drops nothing. This canvas draws the plane spanned by the focus observer's time axis and this very line of sight, so the whole of the offset to the emission event lies in the picture: the dot stands at (±λ, −λ), on the 45° past cone, on the right-hand side when the other observer is outward of you and on the left-hand side when they are inward. The surface curves sweep the same plane, so the dot and each curve are affine lengths along the same directions, and the dot stands beyond a curve exactly when the light really did come from beyond that surface.
+The canvas has room for two of those three numbers, so the dot is that event projected onto the plane this canvas draws — the focus observer's time axis and radial leg: horizontal λ·n¹, vertical −λ. The dot therefore lies inside the past cone by exactly the part of the offset that points round the hole, and reaches the cone when the light arrives in the plane. The view says as much rather than leaving it to be inferred: the faint mark on the cone is where the event would sit if it lay in the plane, at the light-travel distance λ, and the dashed tie from the dot to that mark measures λ(1 − |n¹|), the shortening the projection costs along the axis. The offset out of the plane is a different number, λ·|n²|, and the box prints that one as “round the hole, out of this plane”.
+
+The thin line from the dot to this observer's event is the ray itself: in normal coordinates a null geodesic runs as a straight line, and a projection carries straight lines to straight lines. It comes out steeper than 45° because the projection drops part of the ray's motion, and the steeper it stands the further out of the picture the light came from. The view draws that slope as it falls and never tilts the ray back onto the cone.
+
+What the dot does not tell you. Whether the dot falls inside or outside a drawn horizon curve is no statement about the emission event: the curves are this plane's slice through each surface, and the event stands off the plane by the offset above. Read the region tag in this box's title for that question - the tag reads the emission event's own radius and is exact.
 
 line of sight
 
-The angle between the arriving light and the focus observer's own outward radial direction, prograde positive. It is the direction the horizontal axis of this canvas points in, and on a fast orbit aberration swings it a long way round: an observer on the prograde ISCO of an a = 0.9 hole looks back over one shoulder to see a companion that a chart would place straight below.
+The angle between the arriving light and the focus observer's own outward radial direction, prograde positive. On a fast orbit aberration swings it a long way round: an observer on the prograde ISCO of an a = 0.9 hole looks back over one shoulder to see a companion that a chart would place straight below. The canvas no longer turns to face that direction, so this angle and the offset under it are how a reader recovers where the light really came from.
 
 light left - λ, as a time ago on this observer's own clock and as a distance away on this observer's own ruler. One number, because in normal coordinates a null geodesic makes those the same number.
 
@@ -1373,7 +1402,7 @@ pub const HORIZON_BOX_TIP: &str =
 
 Outside r₊ and inside r₋ the metric function Δ = r² − 2Mr + a² stays positive, r is an ordinary radial direction, and a surface r = const is a timelike world-tube — something that persists, that you can hold station beside, and that has a distance. Between the horizons Δ < 0, r turns timelike, and that same surface becomes a moment of your history instead: the surface arrives, no rocket hovers beside the surface, and asking how far away the surface lies has no answer. The read-out flips at each horizon because the geometry flips there.
 
-Ruler Distance — defined as the arclength of the spacelike geodesic that leaves your event along the axis the canvas draws and runs until meeting the surface: a coordinate of Fermi normal coordinates built on your tetrad. That construction performs the length contraction exactly. Which axis that is depends on the picture, and the box says so: on the (t, r) chart it is your own radial direction, and on the rest-frame view it is the horizontal axis of that view, the line of sight to the other observer. Two legs that leave one event in different directions reach the same surface at different lengths, so the two readings differ once the rest-frame view turns its plane — from r = 3 M of an a = 0.90 hole a sight line 51° off radial reaches r₊ in 3.606 M against the radial leg's 4.156 M — and the rest-frame reading is the one its drawn curve crosses the now-axis at. Do not read the figure as the static observers' chain of rulers divided by your Lorentz factor, which rescales somebody else's ruler and answers a different question; unlike that chain, this geodesic survives inside the ergosphere, where nothing can hold station to lay rulers out. The figure does assume a simultaneity — your own — because the question “how far away is that surface right now” carries no meaning without one.
+Ruler Distance — defined as the arclength of the spacelike geodesic that leaves your event along your own radial direction and runs until meeting the surface: a coordinate of Fermi normal coordinates built on your tetrad. That construction performs the length contraction exactly. Both pictures measure along that same radial leg — the (t, r) chart draws r itself, and the rest-frame view draws the plane of your time axis and your radial leg — so the two boxes print one number, and on the rest-frame view it is the number its drawn curve crosses the now-axis at. The rest-frame view once swung its horizontal axis onto the line of sight to the other observer, and then the two readings parted company: from r = 3 M of an a = 0.90 hole a sight line 51° off radial reaches r₊ in 3.606 M against the radial leg's 4.156 M. Do not read the figure as the static observers' chain of rulers divided by your Lorentz factor, which rescales somebody else's ruler and answers a different question; unlike that chain, this geodesic survives inside the ergosphere, where nothing can hold station to lay rulers out. The figure does assume a simultaneity — your own — because the question “how far away is that surface right now” carries no meaning without one.
 
 Time — the proper time on your own watch between here and the crossing, ∫ r² dr / √R with R = r⁴(dr/dτ)², integrated along the worldline your E and L put you on. R is a square and never changes sign, which is why a horizon has a time even where that horizon has no distance, while the distance integral carries a √Δ that goes imaginary throughout Region II.
 
@@ -1404,12 +1433,13 @@ fn surface_radius_lines(title: &str, radius: &str, color: Color32) -> Vec<Teleme
 /// from where this observer stands, and the one number that reading admits.
 ///
 /// `leg` is the spacelike direction the distance is measured along, in coordinate components, and
-/// the caller owns it because the two callers draw different axes. The (t, r) chart hands in the
-/// observer's own radial leg, which is the direction its horizontal axis runs in. The rest-frame
-/// view hands in the leg it draws - the line of sight to the other observer - so that the number
-/// printed here is the crossing a reader can see the drawn curve make on the now-axis. Handing in
-/// the radial leg from both was the defect: once the drawn plane turns away from radial the two
-/// integrals part company, and one canvas carried two answers again.
+/// the caller owns it because the axis belongs to the caller. Both callers hand in the observer's
+/// own radial leg: the (t, r) chart draws r itself, and the rest-frame view draws the plane
+/// span(e0, e1) of the axial tetrad. So both boxes print the same number and neither has to name
+/// an axis. The parameter stays a parameter because the number here has to be the crossing a
+/// reader can watch the drawn curve make on the now-axis - a view that drew some other leg would
+/// have to hand that leg in, and one canvas carrying two answers to one question is the defect
+/// this argument exists to prevent.
 ///
 /// The place-or-moment test is region adjacency, not the local causal character the drawn line
 /// carries. `LocalLine::character` reads the tilt of r = const at the *observer's* radius and so
@@ -1446,19 +1476,16 @@ fn horizon_box_lines(
         match ruler_distance_along(metric, r, leg, r_h) {
             Some(d) => (
                 "Place".to_string(),
-                format!(
-                    "{} from {obs_name} along this axis",
-                    ruler_distance_label(metric, d)
-                ),
+                format!("{} from {obs_name}", ruler_distance_label(metric, d)),
             ),
-            // A place it is, and the integral along *this* axis is what has no answer: the leg
-            // reaches a turning point in r, or curls away, before it arrives. Saying "no spacelike
-            // path reaches it from here" contradicted the line above it, since a place is defined
-            // by a spacelike path existing, and a reader who turned the drawn plane until the leg
-            // curled read that the horizon had stopped being a place.
+            // A place it is, and the integral along this leg is what has no answer: the leg
+            // reaches a turning point in r before it arrives. Saying "no spacelike path reaches it
+            // from here" contradicted the line above it, since a place is defined by a spacelike
+            // path existing, and a reader met the claim that the horizon had stopped being a
+            // place.
             None => (
                 "Place".to_string(),
-                "no distance along this axis (leg turns back)".to_string(),
+                "no distance (the leg turns back)".to_string(),
             ),
         }
     } else if r > rp {
@@ -1809,9 +1836,11 @@ struct SurfaceKey {
     /// running.
     r0: f64,
     u: [f64; 3],
-    /// The spacelike leg of the drawn plane, in coordinate components: the line of sight to the
-    /// other observer, or the radial leg when there is no image to look along. The curves are a
-    /// slice of each surface by that plane, so a change of plane is a change of curve.
+    /// The spacelike leg of the drawn plane, in coordinate components: the observer's own radial
+    /// leg, which is the only leg this view draws. It follows from `r0` and `u` above and so never
+    /// varies the key on its own; it is here because the curves are that leg's plane cut through
+    /// each surface, and a key that names what the curves depend on is one a later change of plane
+    /// cannot slip past.
     s: [f64; 3],
     /// The window the sampler was asked for, quantised by `sampling_window` so that the automatic
     /// zoom's own per-frame creep does not invalidate the curves on its own.
@@ -2770,8 +2799,8 @@ Tick Enable Observer on Alice's or Bob's card",
     /// at which that geodesic arrives. The four surfaces r = const are drawn by sweeping T round
     /// the circle and taking the affine length to each surface, so a surface is a curve and not a
     /// line, and the curve crosses the now-axis at the ruler distance the horizon box prints. The
-    /// other observer is placed by the same rule applied to the light that actually arrives: see
-    /// `physics::as_seen`.
+    /// other observer is placed by the same rule applied to the light that actually arrives, and
+    /// then projected onto the drawn plane: see `physics::as_seen`.
     ///
     /// The first-order half is the linear map of `LocalFrame`: the distant clock's slices
     /// t = const and the signal crests, each of them exact where it crosses the focus observer's
@@ -2831,41 +2860,33 @@ Tick Enable Observer on Alice's or Bob's card",
             grid_stroke,
         );
 
-        // 1b. Which plane this canvas draws.
+        // 1b. Which plane this canvas draws: the focus observer's own radial plane, span(e0, e1)
+        // of `Tetrad::from_four_velocity_axial`, in every frame and every configuration.
         //
-        // A rest-frame view has three spatial directions to show and room for one, so it draws the
-        // plane spanned by the focus observer's time axis e0 and one spacelike leg s. The leg used
-        // to be the radial one, e1, and that choice put the other observer in the wrong place: the
-        // light arrives from a direction n = (n^1, n^2) that is not radial - from the prograde
-        // ISCO of a fast hole the orbital speed is about half of c, aberration swings the image
-        // well round, and |n^2| is large - so projecting the emission event onto the radial plane
-        // shortened its distance from the origin by however much of the offset lay along e2. The
-        // dot then sat inside the 45-degree past cone rather than on it, and could be drawn beyond
-        // the r+ curve while the emission event was plainly in Region I.
+        // A rest-frame view has three spatial directions to show and room for one. The leg that
+        // room went to used to be the line of sight to the other observer, s = +/- (n^1 e1 +
+        // n^2 e2), which put her dot on the 45-degree past cone by construction. The price was
+        // that everything else on the canvas - the surface curves, the distant clock's grid, the
+        // cone's own labels, the ruler, the auto-zoom and the horizon boxes' distances - hung on a
+        // solve for somebody else's arrival angle. That solve goes ill-conditioned at a large
+        // boost (see `PICTURE_BOOST_LIMIT`), and on the user's own pair - two raindrops 1.5e-4 M
+        // apart at E = 1, L = 2, a = 0.90 - the whole picture tilted from frame to frame past
+        // u^t ~ 200, while the same picture with the other observer switched off was smooth. The
+        // axial tetrad is a closed form in r and u and has nothing in it to wander.
         //
-        // So the leg is the line of sight itself: s = +/- (n^1 e1 + n^2 e2), the unit spacelike
-        // direction the light comes from, with the sign fixed by `AsSeen::plane_leg` so that
-        // right is outward in every view. Three things follow, and none of them is a choice.
-        //
-        // * The emission event is at xi = lambda (-1, n^1, n^2), so its coordinates in this plane
-        //   are (xi^1, xi^0) = (lambda n . s, -lambda) = (+/- lambda, -lambda): on the past cone,
-        //   on the source's side, exactly - the right-hand edge for a source outward of the
-        //   observer and the left-hand edge for one inward.
-        // * The surfaces are swept in the same plane, T = sin(psi) e0 + cos(psi) s, so the curve's
-        //   own point in the direction of the source lies on the *same ray from the origin* as the
-        //   dot. Both are affine lengths along the same geodesic direction, one to the surface and
-        //   one to the emission event, so the dot is drawn past the curve exactly when the light
-        //   really did come from beyond that surface along that ray, and never otherwise.
-        // * With no other observer, or with no image of one, s falls back to e1 and the view is
-        //   the radial plane it has always been.
-        //
-        // The plane turns smoothly while an image lasts, because n does; it switches without any
-        // animation when an image appears or goes out, because there is nothing in between to
-        // animate. The head banner says which plane is on the screen either way.
+        // So the frame is the frame this observer has when nobody else stands on the canvas: time
+        // up, outward right, and a reader who switches the other observer off watches the picture
+        // hold still. The other observer is then painted into that frame as a second step - the
+        // orthogonal projection of her emission event, the cone mark the projection shortens
+        // against, and the light between - in section 4, which changes nothing above it.
         let focus_who = Who::of(focus_obs).unwrap_or(Who::Bob);
         let obs_color =
             if focus_who == Who::Alice { Theme::ALICE_COLOR } else { Theme::BOB_COLOR };
-        let axial = Tetrad::from_four_velocity_axial(metric, focus_r, &u_focus);
+        let plane = Tetrad::from_four_velocity_axial(metric, focus_r, &u_focus);
+        // The leg the horizontal axis runs along, in coordinate components, for the surface cache
+        // and for the horizon boxes' ruler distance.
+        let s_leg = plane.e1;
+        let frame = LocalFrame::new(metric, focus_r, plane);
         let mut other_seen: Option<(Who, &Observer, Result<AsSeen, NoImage>)> = None;
         // How far the focus observer's clock has moved since the held picture was solved, and the
         // boost it was solved at, for the box. `None` while the picture is live.
@@ -2966,51 +2987,6 @@ Tick Enable Observer on Alice's or Bob's card",
             other_seen = Some((other_who, other, answer));
             seen_held_for = held.map(|(_, tau, boost)| (focus_obs.tau - tau, boost));
         }
-        let sight = other_seen
-            .as_ref()
-            .and_then(|(_, _, answer)| answer.as_ref().ok())
-            .map(|seen| seen.plane_leg());
-        // The tetrad is turned by the leg's components directly rather than towards the vector
-        // they name: reading a vector's components back through the metric is a cancellation of
-        // terms of size (u^t)^2, and past u^t ~ 1e7 it turned a steady plane into a wandering
-        // one (see `Tetrad::turned_towards`). The leg itself is kept as the surface cache's key.
-        let plane = match sight {
-            Some(leg) => axial.turned(leg[0], leg[1]),
-            None => axial,
-        };
-        let s_leg = plane.e1;
-        let frame = LocalFrame::new(metric, focus_r, plane);
-
-        // What the two 45-degree legs of the focus observer's own light cone are called, worked
-        // out here where the line of sight is and painted with the cone further down.
-        //
-        // They used to read "+45 Outward" and "-45 Inward" whatever the picture held, and once the
-        // canvas turned its plane to the line of sight that was simply untrue: light from an
-        // observer on a fast orbit arrives nearly tangentially, the horizontal axis then points
-        // almost round the hole, and a leg labelled "Outward" carried the reader off by most of a
-        // right angle. The radial words are kept where they are still the best ones - a line of
-        // sight within ten degrees of radial, where the drawn axis and the radial axis are the
-        // same direction to the eye - and elsewhere the legs are named after the one thing the
-        // axis certainly does point at, which is the other observer. `AsSeen::sight_sign` says
-        // which side of the canvas they are drawn on, and the near leg is the one on that side.
-        // (the right-hand leg, the left-hand leg). The signs belong to the sides and never move:
-        // the right leg is the +45-degree one in every picture.
-        let cone_leg_labels: (String, String) = match other_seen
-            .as_ref()
-            .and_then(|(_, other, answer)| answer.as_ref().ok().map(|seen| (other, seen)))
-        {
-            Some((other, seen)) if off_radial_degrees(seen.sight_angle()) > 10.0 => {
-                let toward = format!("toward {}", other.name);
-                let away = format!("away from {}", other.name);
-                let (right, left) = if seen.sight_sign() > 0.0 {
-                    (toward, away)
-                } else {
-                    (away, toward)
-                };
-                (format!("+45° {right}"), format!("-45° {left}"))
-            }
-            _ => ("+45° Outward".to_string(), "-45° Inward".to_string()),
-        };
 
         // 2. The distant clock's own slices: the surfaces t = const of the chart's Killing time,
         // which is proper time on a clock at rest at infinity. A line labelled "+5 min" is the set
@@ -3052,35 +3028,16 @@ Tick Enable Observer on Alice's or Bob's card",
         // in the same size as the pair it stands for, and its two sides carry their colours, so the
         // eye pairs "1" with the observer's reading and the ratio with the distant one.
         let font = egui::FontId::proportional(16.0 * font_scale);
-        // The first row names the horizontal axis. Right is always outward, or the nearest
-        // direction to outward in the drawn plane, but the plane itself is the plane of the line
-        // of sight (section 1b), so the row says where that line of sight points: a reader shown
-        // "43° retrograde of inward" knows the other observer lies inward and round behind, and
-        // that the horizontal axis is the outward-leaning half of that direction.
-        let mut head_lines = vec![match &other_seen {
-            Some((other_who, other, Ok(seen))) => {
-                let other_color =
-                    if *other_who == Who::Alice { Theme::ALICE_COLOR } else { Theme::BOB_COLOR };
-                vec![
-                    painter.layout_no_wrap(
-                        "→ outward · line of sight to ".to_string(),
-                        font.clone(),
-                        Theme::TEXT_MUTED,
-                    ),
-                    painter.layout_no_wrap(other.name.clone(), font.clone(), other_color),
-                    painter.layout_no_wrap(
-                        sight_angle_label(seen.sight_angle()),
-                        font.clone(),
-                        Theme::TEXT_BRIGHT,
-                    ),
-                ]
-            }
-            _ => vec![painter.layout_no_wrap(
-                "→ outward, along the radial axis".to_string(),
-                font.clone(),
-                Theme::TEXT_MUTED,
-            )],
-        }];
+        // The first row names the horizontal axis, and one row does for every picture: this canvas
+        // draws the observer's own radial plane whoever else is on it (section 1b). The row said
+        // "line of sight to Alice" and quoted the arrival angle while the plane followed that line
+        // of sight; the angle is a reading about Alice rather than about the axis, so it went into
+        // Alice's own box when the axis stopped depending on her.
+        let mut head_lines = vec![vec![painter.layout_no_wrap(
+            "→ outward, along the radial axis".to_string(),
+            font.clone(),
+            Theme::TEXT_MUTED,
+        )]];
         if show_distant_clock_grid && clock_proper_step.is_finite() && clock_proper_step > 0.0 {
             let distant = distant_clock_offset_label(clock_grid.step_m * seconds_per_m);
             let ratio = if !u_t.is_finite() {
@@ -3429,9 +3386,12 @@ Tick Enable Observer on Alice's or Bob's card",
             // g^rr - so from r = 3 M a sight line more than about 39 degrees off radial flattened
             // the r+ trace to 45 degrees and past it, and the box printed "Null Surface (crossing
             // now)" and then "Spacelike Surface (in your future)" for a horizon the observer stood
-            // a ruler distance away from. The flattening is real and the trace is drawn honestly;
-            // it is the *words* that were never about the trace. `SURFACE_BOX_TIP` says which is
-            // which, and the speed below still comes off the trace and is labelled as the trace's.
+            // a ruler distance away from. The canvas draws the radial plane again, where theta is
+            // zero and a trace carries its own surface's character, so the two readings agree
+            // wherever both can be taken. The words still come from Delta, because Delta is what
+            // they are about: the agreement is a property of this plane rather than a licence to
+            // read geometry off a drawing. `SURFACE_BOX_TIP` says which is which, and the speed
+            // below still comes off the trace and is labelled as the trace's.
             //
             // "crossing now" uses the same 1e-12 test `horizon_box_lines` uses for "On it", so the
             // two lines of one box cannot disagree about whether the observer is on the surface.
@@ -3491,10 +3451,10 @@ Tick Enable Observer on Alice's or Bob's card",
                     title,
                     None,
                     r_h,
-                    // The leg this canvas draws, which is the line of sight where there is an
-                    // image and the radial leg where there is not (section 1b). It is what puts
-                    // the box's distance and the drawn curve's now-axis crossing back on the same
-                    // number once the plane has turned.
+                    // The leg this canvas draws: the observer's own radial one, always
+                    // (section 1b). The box's distance and the drawn curve's now-axis crossing
+                    // are then the same integral, which is what lets a reader check one against
+                    // the other.
                     &s_leg,
                     border,
                 );
@@ -3560,11 +3520,12 @@ Tick Enable Observer on Alice's or Bob's card",
         // 3b. The other observer's transmission as a wave: every pulse is a crest, and a crest is
         // a null surface, so through this plane it is a line at 45 degrees when the light travels
         // wholly along the drawn leg and steeper when part of its motion leaves the plane - only
-        // the component along that leg is in the picture. The leg is the line of sight to this
-        // very sender (section 1b), so the crest arriving *now* stands at 45 degrees by
-        // construction; one that arrived while the sender lay in some other direction, which an
-        // orbit sweeps through in a few M, carries the rest of its motion out of the plane and
-        // leans steeper for it. A received crest passes through its arrival on the observer's
+        // the component along that leg is in the picture. The leg is the observer's own radial one
+        // (section 1b), so light arriving radially draws the 45-degree stroke and light that
+        // arrives round the hole leans steeper, by exactly the aberration that carries its motion
+        // out of the plane. The dot in section 4 is projected onto the same plane and shortened by
+        // the same amount, so the crest through an arrival and the dot it came from agree.
+        // A received crest passes through its arrival on the observer's
         // own worldline, which is exact; one still in flight is placed by its nearest ray's
         // current event, to first order. The spacing of the arrivals up the axis *is* the
         // received period on the observer's own clock, and against the emitter's spacing it is
@@ -3710,17 +3671,21 @@ Tick Enable Observer on Alice's or Bob's card",
             painter.line_segment([apex, p_fut_out], Stroke::new(2.2, focus_edge));
             painter.line_segment([p_past_in, apex], Stroke::new(1.2, focus_edge));
 
+            // The legs carry the radial words in every picture, because the horizontal axis is
+            // the radial one in every picture (section 1b). They read after the other observer
+            // for a while, "toward Alice" and "away from Alice", which was the honest thing to say
+            // while the axis followed the line of sight to her and no longer says anything true.
             painter.text(
                 p_fut_out + Vec2::new(4.0, -2.0),
                 egui::Align2::LEFT_BOTTOM,
-                cone_leg_labels.0.clone(),
+                "+45° Outward",
                 egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
                 focus_edge,
             );
             painter.text(
                 p_fut_in + Vec2::new(-4.0, -2.0),
                 egui::Align2::RIGHT_BOTTOM,
-                cone_leg_labels.1.clone(),
+                "-45° Inward",
                 egui::FontId::monospace(Theme::MIN_FONT_PT * font_scale),
                 focus_edge,
             );
@@ -3740,16 +3705,22 @@ Tick Enable Observer on Alice's or Bob's card",
         // dot sits on the origin of the axes here, where an extra stroke is only clutter.
         painter.circle_filled(apex, 7.5, obs_color);
 
-        // 4. The other observer, as seen. The solve happened in section 1b, because its answer is
-        // what chose the plane this canvas draws; what is left here is the drawing.
+        // 4. The other observer, painted into the finished picture. The solve happened in section
+        // 1b, where the held-picture bookkeeping is; nothing above this point read its answer.
         //
         // Nobody sees anybody now. What arrives at the focus observer's event is light, so the
-        // event to draw is the one on the other worldline that the focus observer's past light cone
-        // passes through, and the place to draw it is where the exact normal-coordinate rule puts
-        // it: at the affine length of the arriving ray, along the direction the ray arrives from.
-        // In this plane that direction *is* the horizontal axis, so the dot lands at
-        // (xi^1, xi^0) = (+/- lambda, -lambda), on the 45-degree past cone and on the source's
-        // side: right for a source outward of the observer, left for one inward.
+        // event to draw is the one on the other worldline that the focus observer's past light
+        // cone passes through, and the exact normal-coordinate rule puts that event at
+        // xi = lambda (-1, n^1, n^2): the affine length of the arriving ray, along the direction
+        // the ray arrives from. The canvas holds two of those three components, so the view paints
+        // the orthogonal projection onto the plane it draws and says what the projection costs -
+        // the dot at (lambda n^1, -lambda), a faint mark on the cone at the light-travel distance
+        // lambda, a dashed tie between them, and the out-of-plane offset lambda |n^2| in the box.
+        //
+        // What the picture therefore does not claim: whether the dot falls inside or outside a
+        // drawn horizon curve is no statement about her event, because the curve is that surface's
+        // slice through this plane and her event stands off the plane. The region tag in her box's
+        // title reads her own radius and answers that question exactly.
         //
         // Only a dot. The other observer's light cone, the stroke along their worldline and the
         // singularity glyph have all gone, and each for the same reason: every one of them was a
@@ -3762,7 +3733,7 @@ Tick Enable Observer on Alice's or Bob's card",
                 if other_who == Who::Alice { Theme::ALICE_COLOR } else { Theme::BOB_COLOR };
             match answer {
                 Ok(seen) => {
-                    let xi = seen.xi_plane();
+                    let xi = seen.xi_projected();
                     let other_pos = to_screen(xi[0], xi[1]);
 
                     // Each observer carries a beacon at the dominant wavelength of their own marker
@@ -3771,11 +3742,57 @@ Tick Enable Observer on Alice's or Bob's card",
                     let rest_nm = beacon_nm(other_who);
                     let beacon = beacon_colour::seen_beacon(rest_nm, seen.g);
 
+                    // What the projection costs, drawn rather than left for the box to confess.
+                    // The mark stands where the emission event would stand if the light had
+                    // arrived in this plane: on the past cone at the light-travel distance lambda,
+                    // on the side `AsSeen::sight_sign` names. The dashed tie runs from the dot to
+                    // it, horizontally, so its length is lambda (1 - |n^1|) - how much shorter the
+                    // projected radial offset is than the distance the light really came. That
+                    // length is not the out-of-plane offset, which is lambda |n^2| and which the
+                    // box prints. Both the mark and the tie are faint, in the other observer's own
+                    // colour, because neither of them is her event: the dot is.
+                    //
+                    // Both are clipped to the canvas before anything is dashed, and the reason is
+                    // arithmetic rather than tidiness: on a deep approach the automatic framing
+                    // takes the window down to 1e-10 M while lambda stays of order M, so the mark
+                    // lands 1e10 canvases away and a dashed segment run out to it would be asked
+                    // for ten billion dashes.
+                    let faint = other_color.gamma_multiply(SEEN_MARK_ALPHA);
+                    let mark = to_screen(seen.sight_sign() * seen.lambda, -seen.lambda);
+                    if mark.x.is_finite()
+                        && mark.y.is_finite()
+                        && (mark.x - other_pos.x).abs() >= SEEN_TIE_MIN_PX
+                    {
+                        if rect.contains(mark) {
+                            clipped.circle_filled(mark, SEEN_MARK_RADIUS, faint);
+                        }
+                        for piece in clip_polyline_to_rect(
+                            &[
+                                [other_pos.x as f64, other_pos.y as f64],
+                                [mark.x as f64, mark.y as f64],
+                            ],
+                            rect,
+                        ) {
+                            for dash in egui::Shape::dashed_line(
+                                &piece,
+                                Stroke::new(1.0, faint),
+                                4.0,
+                                3.0,
+                            ) {
+                                clipped.add(dash);
+                            }
+                        }
+                    }
+
                     // The straight line from the dot to the focus observer's own event *is* the
                     // light. In Riemann normal coordinates a null geodesic through the origin is a
-                    // straight 45-degree line, and the emission event was placed on that geodesic
-                    // by its own affine length, so the segment between the two is the ray drawn to
-                    // scale rather than a pointer added to explain the picture.
+                    // straight 45-degree line, and the projection of a straight line is a straight
+                    // line, so the segment between the two is the ray drawn to scale rather than a
+                    // pointer added to explain the picture. A null ray projected onto a plane it
+                    // does not lie in comes out *steeper* than 45 degrees, by the part of its
+                    // motion the plane cannot hold; that steepness is the depth cue and it is what
+                    // projection does to light, so the view draws it as it falls and never tilts
+                    // it back onto the cone.
                     let ray_colour = match beacon {
                         Beacon::Seen(colour) => colour.gamma_multiply(0.45),
                         Beacon::Ring => Color32::from_white_alpha(60),
@@ -4022,10 +4039,9 @@ impl WaveCrests {
 /// nearest the observer in azimuth, pushed into the chart, and the push keeps the two components
 /// the plane holds and drops the third: light travelling along the drawn spacelike leg draws a 45
 /// degree line, and light crossing that leg draws a steeper one, since only the component of its
-/// motion along the leg is in the picture. The view's leg is the line of sight to this same
-/// sender, so the arrival happening now is the radial case of the old radial plane - it lies
-/// along the axis exactly - and an older arrival, sent from a direction the sender has since left,
-/// is the oblique one.
+/// motion along the leg is in the picture. The view's leg is the focus observer's own radial one,
+/// so a crest whose light arrives radially is the 45-degree case and every other crest leans
+/// steeper by the amount its motion points round the hole.
 /// A crest still in flight is placed by that ray's current event through the linearised chart,
 /// and only within twice `reach` M of the observer, the window the picture is framed to, which
 /// is the region the chart can speak for.
@@ -4375,7 +4391,7 @@ fn branches_drawn_line(
 ///
 /// The now-axis crossing first. xi^0 = 0 is the observer's own rest space, so where the curve cuts
 /// it is where the surface is *at this moment* for this observer - and it is the point the box's
-/// own ruler distance names, since the box measures along this same drawn leg
+/// own ruler distance names, since the box measures along this same radial leg
 /// (`ruler_distance_along`), so the box and the number in it stand at the same place. Failing that,
 /// the visible point nearest the middle of the canvas, which is the one a reader is most likely to
 /// be looking at.
@@ -4561,15 +4577,24 @@ fn as_seen_lines(
         )));
     }
 
-    // Which way the canvas is looking. The view draws the plane of the focus observer's time axis
-    // and this line of sight, so the horizontal axis points at the source and the angle says where
-    // that is against the one direction a reader already has a name for. Nothing is dropped from
-    // the offset any more - the whole of it lies in the drawn plane - so there is no third
-    // component left to print.
+    // Where the light came from, and what the picture leaves out. The canvas draws the focus
+    // observer's own radial plane, so the first line places the source against the axis a reader
+    // can see, and the dot is that source projected onto the plane. The second line is the size of
+    // what the projection dropped: how far the emission event stands out of the drawn plane, round
+    // the hole, on this observer's own ruler. The header carried the angle while the axis followed
+    // it; the angle is a reading about the other observer, so it reads here.
     lines.push(body(format!(
         "line of sight ={}",
         sight_angle_label(seen.sight_angle())
     )));
+    lines.push(body(if seen.n[1].abs() < 1e-9 {
+        "in this plane: nothing round the hole".to_string()
+    } else {
+        format!(
+            "{} round the hole, out of this plane",
+            ruler_distance_label(metric, seen.lambda * seen.n[1].abs())
+        )
+    }));
 
     // Where the solver read the emission event from, on the two occasions when that is a statement
     // about the physics rather than about the bookkeeping.
@@ -4609,18 +4634,6 @@ fn as_seen_lines(
 /// the side rather than leaving a signed number to be read as one. Straight out and straight in
 /// get their own wording, because "0° prograde of outward" is a sentence about nothing. The
 /// leading space belongs to the string so that a caller can concatenate it onto a name.
-/// How far a line of sight lies from the radial direction, in degrees on [0, 90].
-///
-/// Either radial direction counts: a sight line 3 degrees off straight inward is as radial as one
-/// 3 degrees off straight outward, because the drawn plane is the same plane and the view's own
-/// sign convention (`AsSeen::plane_leg`) puts outward on the right either way. The rest-frame
-/// view's cone legs keep their radial names below ten degrees of this and take the other
-/// observer's name above it.
-fn off_radial_degrees(radians: f64) -> f64 {
-    let degrees = radians.to_degrees().abs();
-    degrees.min(180.0 - degrees)
-}
-
 fn sight_angle_label(radians: f64) -> String {
     let degrees = radians.to_degrees();
     if degrees.abs() < 0.5 {
@@ -6431,6 +6444,76 @@ mod rest_frame_tests {
             (whole(bounds.width()) && whole(bounds.height())).then(|| bounds.center())
         }
 
+        /// The faint mark the view paints on the past cone: where the emission event would stand
+        /// if the light had arrived in the drawn plane. The one circle of `SEEN_MARK_RADIUS` on
+        /// the canvas, which is a radius nothing else here paints.
+        fn cone_mark(&self) -> Option<Pos2> {
+            self.shapes.iter().find_map(|s| match s {
+                egui::Shape::Circle(c)
+                    if (c.radius - SEEN_MARK_RADIUS).abs() < 1e-6
+                        && self.rect.contains(c.center) =>
+                {
+                    Some(c.center)
+                }
+                _ => None,
+            })
+        }
+
+        /// The dashes of the tie from the dot to that mark: segments in the other observer's own
+        /// colour at `SEEN_MARK_ALPHA`, which nothing else on this canvas strokes.
+        fn tie_dashes(&self, other: Who) -> Vec<[Pos2; 2]> {
+            let colour = (if other == Who::Alice { Theme::ALICE_COLOR } else { Theme::BOB_COLOR })
+                .gamma_multiply(SEEN_MARK_ALPHA);
+            self.shapes
+                .iter()
+                .filter_map(|s| match s {
+                    egui::Shape::LineSegment { points, stroke } if stroke.color == colour => {
+                        Some(*points)
+                    }
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// The arriving light: the straight segment from the focus observer's own event to the
+        /// dot, as [origin, dot]. It is the only two-point path with an end on the origin.
+        fn ray_segment(&self) -> Option<[Pos2; 2]> {
+            let c = self.rect.center();
+            self.shapes.iter().find_map(|s| match s {
+                egui::Shape::Path(p) if p.points.len() == 2 => {
+                    let (a, b) = (p.points[0], p.points[1]);
+                    if a.distance(c) < 0.5 {
+                        Some([a, b])
+                    } else if b.distance(c) < 0.5 {
+                        Some([b, a])
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            })
+        }
+
+        /// The focus observer's own proper-time ticks up the time axis, as screen heights: the
+        /// short strokes of width 1.2 in that observer's colour.
+        fn clock_ticks(&self, who: Who) -> Vec<f32> {
+            let colour = if who == Who::Alice { Theme::ALICE_COLOR } else { Theme::BOB_COLOR };
+            let mut out: Vec<f32> = self
+                .shapes
+                .iter()
+                .filter_map(|s| match s {
+                    egui::Shape::LineSegment { points, stroke }
+                        if stroke.color == colour && (stroke.width - 1.2).abs() < 1e-6 =>
+                    {
+                        Some(points[0].y)
+                    }
+                    _ => None,
+                })
+                .collect();
+            out.sort_by(f32::total_cmp);
+            out
+        }
+
         /// Every polyline stroked in `colour`, as chart points. The surface curves are the only
         /// paths this canvas strokes in a surface's own colour.
         fn curve(&self, colour: Color32) -> Vec<Vec<[f64; 2]>> {
@@ -6666,33 +6749,30 @@ mod rest_frame_tests {
     }
 
     #[test]
-    fn test_the_isco_view_puts_the_seen_dot_on_the_cone_edge_and_inside_the_horizon_curve() {
-        // The defect this change was for, at the configuration that showed it. Alice orbits on
-        // the prograde ISCO of an a = 0.90 hole, where the orbital speed against the hovering
-        // observers is about 0.9 c and against the ZAMO about 0.6 c, so the light reaching her
-        // from Bob - the app's own raindrop, dropped from 27 M - arrives strongly aberrated and
-        // the arrival direction has a large azimuthal component. Projected onto the radial plane
-        // the dot lost that component: it sat inside the 45-degree past cone, and once Bob's
-        // image had piled up against r+ the shortening carried the dot *through* the drawn r+
-        // curve while the emission event was still plainly in Region I.
+    fn test_the_isco_view_projects_the_dot_into_the_plane_and_marks_the_cone() {
+        // The three things the view draws of the other observer, at the configuration where the
+        // projection costs most. Alice orbits on the prograde ISCO of an a = 0.90 hole, where the
+        // orbital speed against the hovering observers is about 0.9 c and against the ZAMO about
+        // 0.6 c, so the light reaching her from Bob - the app's own raindrop, dropped from 27 M -
+        // arrives strongly aberrated and a large part of the offset to his emission event points
+        // round the hole, out of the plane this canvas draws.
         //
-        // With the drawn plane turned onto the line of sight there is nothing left to lose. The
-        // dot is at (lambda, -lambda) by construction, and the r+ curve's point in that same
-        // direction is the affine length along the same geodesic direction, so the two are
-        // comparable and the dot can only pass the curve when the light really did come from
-        // beyond r+.
+        // The canvas draws Alice's own radial plane whatever that offset does (section 1b), so the
+        // emission event goes in as a projection and the view states the price rather than turning
+        // the plane to hide it: the dot at (lambda n^1, -lambda), strictly inside the past cone; a
+        // faint mark on the cone at (+/- lambda, -lambda), where the event would stand if the
+        // light had arrived in this plane; a dashed horizontal tie of length lambda (1 - |n^1|)
+        // between the two; and the ray from the dot to the origin, which the projection leaves
+        // steeper than 45 degrees because part of its motion has left the picture.
         //
-        // Most of the time there is no such point to compare against, and that is physics too:
-        // the ray along the line of sight, followed into the past beyond the emission event, is a
-        // ray that came from a source outside r+, so it either turned at a periapsis outside r+
-        // or it came from the past horizon further back than the window shows. Measured over this
-        // run the r+ curve never stood in the dot's direction at all - it lay in the future and
-        // inward sectors, at 10 M and more - so the comparison is made wherever it can be and its
-        // count is reported rather than required.
+        // The dot is read against the very answer the canvas drew - `seen_held` carries it,
+        // whether this frame solved it or held it - because the canvas re-checks for the youngest
+        // image once per M of the observer's time and a solve run beside it can be a frame ahead.
         //
-        // The image drawn is the youngest one (`as_seen_youngest`), which is what the canvas
-        // draws, and the window is wide enough to hold it: from this orbit the youngest image's
-        // affine length swings up past 30 M before the direct image is born.
+        // What this test no longer asserts is where the dot stands against the r+ curve. The curve
+        // is this plane's slice through r+ and the emission event stands off the plane, so the
+        // comparison is not a statement about that event at all. The box's region tag is, and the
+        // test reads that instead.
         let metric = KerrSchild::new(1.0, 0.90);
         let r_isco = metric.isco(true);
         let mut alice = Observer::new_with_phi(
@@ -6706,11 +6786,12 @@ mod rest_frame_tests {
         );
         let mut bob = raindrop(&metric, "Bob", 27.0, 0.0);
         let mut canvas = fresh(40.0);
+        let key = (Who::Alice, Who::Bob);
 
         let mut checked = 0;
-        let mut against_curve = 0;
+        let mut marked = 0;
         let mut widest_angle = 0.0f64;
-        let mut deepest = f64::INFINITY;
+        let mut deepest_tie = 0.0f64;
         let mut outward_frames = 0;
         let mut inward_frames = 0;
         for step in 1..=1200 {
@@ -6722,20 +6803,28 @@ mod rest_frame_tests {
             if step % 10 != 0 {
                 continue;
             }
-            let seen =
-                as_seen_youngest(&metric, &alice, &bob, None).expect("Alice sees Bob throughout");
+            let Some(drawn) = p.seen_dot().or_else(|| p.ring_centre()) else {
+                continue;
+            };
+            let seen = canvas.seen_held[&key].0;
             // The exact statement first, before any of it has been through a screen coordinate:
-            // in this plane the emission event is on the past cone edge, on the source's side,
-            // which is the right-hand edge while Bob is outward of Alice and the left-hand edge
-            // once the line of sight to him has swung inward.
-            let xi = seen.xi_plane();
-            let side = seen.sight_sign();
+            // the drawn point is the orthogonal projection of xi = lambda (-1, n^1, n^2) onto the
+            // radial plane, so it keeps lambda n^1 and drops lambda n^2.
+            let xi = seen.xi_projected();
             assert!(
-                (xi[0] - side * seen.lambda).abs() < 1e-12 * seen.lambda.max(1.0)
+                (xi[0] - seen.lambda * seen.n[0]).abs() < 1e-12 * seen.lambda.max(1.0)
                     && (xi[1] + seen.lambda).abs() < 1e-12 * seen.lambda.max(1.0),
-                "the drawn point must be (+/- lambda, -lambda): {xi:?} against {}",
+                "the drawn point must be (lambda n^1, -lambda): {xi:?} against lambda = {} and \
+                 n = {:?}",
+                seen.lambda,
+                seen.n
+            );
+            assert!(
+                xi[0].abs() <= seen.lambda,
+                "a projection can only shorten the offset: {xi:?} against {}",
                 seen.lambda
             );
+            let side = seen.sight_sign();
             assert_eq!(
                 side,
                 if seen.n[0] > 0.0 { 1.0 } else { -1.0 },
@@ -6749,28 +6838,28 @@ mod rest_frame_tests {
             }
             widest_angle = widest_angle.max(seen.sight_angle().abs().to_degrees());
 
-            let Some(drawn) = p.seen_dot().or_else(|| p.ring_centre()) else {
-                continue;
-            };
             let painted = p.to_chart(drawn);
             checked += 1;
             // Half a screen point in chart units, which is the resolution the dot was painted at.
             let tol = 0.5 / p.scale();
             assert!(
-                (painted[1] + painted[0].abs()).abs() < tol,
-                "the painted dot must sit on the 45-degree past cone: {painted:?}"
+                (painted[0] - xi[0]).abs() < tol && (painted[1] - xi[1]).abs() < tol,
+                "the painted dot must stand at the projection: {painted:?} against {xi:?}"
+            );
+            assert!(
+                painted[1] <= -painted[0].abs() + tol,
+                "and inside the past cone, never outside it: {painted:?}"
             );
             // The side the canvas painted the dot on has to agree with the direction the canvas
-            // printed for the line of sight. Read off the painting rather than off `seen`,
-            // because the canvas re-checks for the youngest image once per M and the fresh solve
-            // above can be a frame ahead of it, on a different image with the other sign.
+            // printed for the line of sight, which reads in the other observer's box now that the
+            // header no longer names a direction that depends on him.
             let painted_inward = painted[0] < 0.0;
             let printed_inward = p.text.contains("of inward") || p.text.contains("straight inward");
             let printed_outward =
                 p.text.contains("of outward") || p.text.contains("straight outward");
             assert!(
                 printed_inward != printed_outward,
-                "the header names one radial direction and only one: {}",
+                "the box names one radial direction and only one: {}",
                 p.text
             );
             assert_eq!(
@@ -6780,45 +6869,77 @@ mod rest_frame_tests {
                 p.text
             );
 
-            // Against the r+ curve along the dot's own direction.
-            let psi = painted[1].atan2(painted[0]);
-            if let Some(surface) = curve_radius_at(&p.curve(Theme::HORIZON_OUTER), psi) {
-                against_curve += 1;
-                let radius = painted[0].hypot(painted[1]);
-                let margin = surface - radius;
-                deepest = deepest.min(margin);
+            // The mark, the tie and the ray. The mark goes in only once the two stand a point
+            // apart on the screen, which is the whole of the rule (`SEEN_TIE_MIN_PX`): below that
+            // the tie has no length a reader could read and the picture is the in-plane one.
+            if let Some(mark) = p.cone_mark() {
+                marked += 1;
+                let m = p.to_chart(mark);
                 assert!(
-                    seen.emission.r <= metric.outer_horizon() || margin > -tol,
-                    "the dot is past the r+ curve at {radius} M against {surface} M while the \
-                     emission event stands at r = {} M, outside r+ = {}",
-                    seen.emission.r,
-                    metric.outer_horizon()
+                    (m[0] - side * seen.lambda).abs() < tol && (m[1] + seen.lambda).abs() < tol,
+                    "the mark stands at (+/- lambda, -lambda): {m:?} against lambda = {}",
+                    seen.lambda
+                );
+                assert!(
+                    (m[1] + m[0].abs()).abs() < tol,
+                    "which is to say on the 45-degree past cone: {m:?}"
+                );
+                let tie = (m[0] - painted[0]).abs();
+                deepest_tie = deepest_tie.max(tie);
+                assert!(
+                    (tie - seen.lambda * (1.0 - seen.n[0].abs())).abs() < 2.0 * tol,
+                    "the tie measures lambda (1 - |n^1|): {tie} against {}",
+                    seen.lambda * (1.0 - seen.n[0].abs())
+                );
+                let dashes = p.tie_dashes(Who::Bob);
+                assert!(!dashes.is_empty(), "a mark with no tie drawn to it");
+                let (lo, hi) = (drawn.x.min(mark.x) - 1.0, drawn.x.max(mark.x) + 1.0);
+                for end in dashes.iter().flatten() {
+                    assert!(
+                        (end.y - drawn.y).abs() <= 1.0 && end.x >= lo && end.x <= hi,
+                        "every dash of the tie runs level from the dot to the mark: {end:?} \
+                         against the dot at {drawn:?} and the mark at {mark:?}"
+                    );
+                }
+                let [origin, dot] = p.ray_segment().expect("the light is drawn to the dot");
+                assert!(
+                    (dot.y - origin.y).abs() > (dot.x - origin.x).abs(),
+                    "a null ray projected out of its own plane draws steeper than 45 degrees: \
+                     from {origin:?} to {dot:?}"
                 );
             }
+
             assert!(
                 seen.emission.r > metric.outer_horizon(),
                 "this run never sees Bob cross: seen at r = {}",
                 seen.emission.r
             );
-            // Region I, which the box tags "Ergo" once the emission event is inside r_E.
+            // Which region the emission event is in is the exact reading, and it is the one the
+            // box carries: the dot against a curve is not that reading any more.
             assert!(
                 p.text.contains("Bob as seen [Region I]") || p.text.contains("Bob as seen [Ergo]"),
-                "and the box says which region the emission event is in: {}",
+                "the box says which region the emission event is in: {}",
+                p.text
+            );
+            assert!(
+                p.text.contains("round the hole, out of this plane"),
+                "and how far out of the drawn plane that event stands: {}",
                 p.text
             );
         }
         println!(
-            "{checked} frames of the prograde ISCO watching a raindrop from 27 M: the dot stayed \
-             on the past cone edge every time, the line of sight swung as far as {widest_angle:.1} \
-             degrees from outward, and in {against_curve} of the frames the r+ curve stood along \
-             the dot's own direction - the dot's closest approach to it was {deepest:.4} M"
+            "{checked} frames of the prograde ISCO watching a raindrop from 27 M: the dot stood at \
+             the projection every time, the line of sight swung as far as {widest_angle:.1} \
+             degrees from outward, and {marked} of those frames drew the cone mark and its tie - \
+             the longest tie ran {deepest_tie:.4} M"
         );
         assert!(checked >= 80, "only {checked} frames had anything drawn");
+        assert!(marked >= 40, "only {marked} frames drew the mark: {checked} were checked");
         assert!(
             widest_angle > 60.0,
             "the point of the case is a line of sight well off radial: {widest_angle} degrees"
         );
-        println!("{outward_frames} frames put Bob on the right-hand edge and {inward_frames} on the left");
+        println!("{outward_frames} frames put the mark on the right-hand edge and {inward_frames} on the left");
         assert!(
             outward_frames > 0 && inward_frames > 0,
             "this run swings the line of sight through both halves: {outward_frames} outward, \
@@ -6827,42 +6948,47 @@ mod rest_frame_tests {
 
         // And the consistency the signal crests have to share. A crest is placed by pushing the
         // arriving ray's own null direction through this same frame and dropping whatever lies
-        // along the third leg - see `wave_crests` - and the ray that carries Bob's newest pulse
-        // to Alice is the ray that carries Bob's image, because there is only one null connection
-        // between those two events. So that direction has no third component left to drop: in
-        // the frame's own (time, along the leg, third) order it comes through as exactly
-        // (1, -/+ 1, 0), a future-directed 45-degree stroke through the arrival that runs away
-        // from the dot along the leg, on whichever side the dot is.
+        // along the third leg - see `wave_crests` - and the ray that carries Bob's newest pulse to
+        // Alice is the ray that carries Bob's image, because there is only one null connection
+        // between those two events. So the crest and the dot are shortened by the very same
+        // component: in the frame's own (time, along the leg, third) order the arriving direction
+        // comes through as (1, -n^1, -n^2), whose third entry is what the picture cannot hold and
+        // whose second is what puts the dot at lambda n^1.
         let seen = as_seen_youngest(&metric, &alice, &bob, None).expect("Alice still sees Bob");
         let u = alice.four_velocity(&metric);
         let axial = Tetrad::from_four_velocity_axial(&metric, alice.r, &u);
-        let leg = seen.plane_leg();
-        let s_leg: [f64; 3] =
-            core::array::from_fn(|mu| leg[0] * axial.e1[mu] + leg[1] * axial.e2[mu]);
-        let frame = LocalFrame::for_observer_plane(&metric, alice.r, &u, &s_leg);
+        let frame = LocalFrame::new(&metric, alice.r, axial);
         let arriving = axial.null_direction(seen.alpha + std::f64::consts::PI);
         let local = frame.vector_to_local(&arriving);
-        let side = seen.sight_sign();
         println!(
-            "the arriving ray's direction in the drawn frame is {local:?}, against (1, {}, 0)",
-            -side
+            "the arriving ray's direction in the drawn frame is {local:?}, against (1, {}, {})",
+            -seen.n[0],
+            -seen.n[1]
         );
         assert!(
             (local[0] - 1.0).abs() < 1e-9
-                && (local[1] + side).abs() < 1e-9
-                && local[2].abs() < 1e-9,
-            "the light arrives in the drawn plane, along the line of sight: {local:?}"
+                && (local[1] + seen.n[0]).abs() < 1e-9
+                && (local[2] + seen.n[1]).abs() < 1e-9,
+            "the light arrives along the line of sight, and the drawn plane holds two of its \
+             three components: {local:?}"
+        );
+        assert!(
+            local[2].abs() > 1e-3,
+            "the case is worthless unless the ray really does leave the plane: {local:?}"
         );
     }
 
     #[test]
     fn test_the_picture_is_held_while_the_observers_clock_stands_still() {
         // The user's report: Bob freezing onto the far branch of r- with Alice's image deep in
-        // redshift, and on one frame in three the box read "Alice: no image" and the drawn plane
-        // snapped to the radial one, so r- flipped from a shallow line across his future to a
-        // 45-degree line and back. Past u^t ~ 1e7 the solver cannot resolve his frame, but his
-        // clock is moving under 1e-8 M a frame, so the picture at his event is the picture it was:
-        // the view holds it and says so, and the plane stays put.
+        // redshift, and on one frame in three the box read "Alice: no image". Past u^t ~ 1e7 the
+        // solver cannot resolve his frame, but his clock is moving under 1e-8 M a frame, so the
+        // picture at his event is the picture it was: the view holds it and says so.
+        //
+        // The canvas draws his own radial plane now, so a lost solve can no longer move r-; what
+        // the hold protects is Alice's dot, her mark on the cone and every number in her box. The
+        // r- trace is checked here all the same, as the witness that nothing else ever depended on
+        // her: the slope beside him may not move whatever her solve does.
         let metric = KerrSchild::new(1.0, 0.90);
         let mut bob = Observer::new_with_phi(
             &metric,
@@ -6885,9 +7011,9 @@ mod rest_frame_tests {
         let mut frames = 0;
         let mut angle: Option<String> = None;
         let mut angle_changes = 0;
-        // The drawn r- trace's slope nearest Bob, frame by frame past the boost limit. Before
-        // the picture was held it jumped between the outward side, flat ahead and the inward
-        // side as the solved line of sight wandered and the drawn plane turned with it.
+        // The drawn r- trace's slope nearest Bob, frame by frame past the boost limit. While the
+        // canvas drew the plane of the line of sight this jumped between the outward side, flat
+        // ahead and the inward side as the solve wandered.
         let mut slopes: Vec<f64> = Vec::new();
         let mut held_past_limit = 0;
         while bob.four_velocity(&metric)[0] < 1e8 {
@@ -6925,13 +7051,13 @@ mod rest_frame_tests {
                     slopes.push(slope);
                 }
             }
-            // The header's direction, as the plane's witness: it may not flip to the radial
-            // fallback and back once the picture is deep.
+            // The direction the box quotes, as the held image's witness: it may not flip to
+            // "no image" and back once the picture is deep.
             if bob.four_velocity(&metric)[0] > 1e5 {
                 let now = p
                     .text
                     .lines()
-                    .find(|line| line.contains("of outward") || line.contains("of inward"))
+                    .find(|line| line.starts_with("line of sight ="))
                     .map(str::to_string);
                 if angle.is_some() && now != angle {
                     angle_changes += 1;
@@ -6940,12 +7066,12 @@ mod rest_frame_tests {
             }
         }
         println!(
-            "{frames} frames to u^t = {:.2e}: {no_image_frames} with no image, {held_frames} held, the header's direction changed {angle_changes} times past u^t = 1e5",
+            "{frames} frames to u^t = {:.2e}: {no_image_frames} with no image, {held_frames} held, the box's line of sight changed {angle_changes} times past u^t = 1e5",
             bob.four_velocity(&metric)[0]
         );
         assert_eq!(no_image_frames, 0, "the picture never goes out");
         assert!(held_frames > 0, "and it is held once his clock has stopped");
-        assert_eq!(angle_changes, 0, "and the plane does not snap");
+        assert_eq!(angle_changes, 0, "and the image does not snap about");
         let (lo, hi) = slopes.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), s| {
             (lo.min(*s), hi.max(*s))
         });
@@ -6962,18 +7088,18 @@ mod rest_frame_tests {
     }
 
     #[test]
-    fn test_the_other_observer_is_drawn_on_the_past_cone_and_never_past_the_horizon() {
-        // The two statements the placement has to make, over a long run rather than at one moment.
+    fn test_an_in_plane_image_lands_on_the_cone_and_draws_no_tie() {
+        // The other half of the projection, over a long run: a pair whose light never leaves the
+        // drawn plane. Alice hovers at r = 8 M of a hole with no spin and Bob falls from r = 6 M
+        // at the same azimuth, so the light between them is radial, n^2 = 0, and the projection
+        // drops nothing at all. The dot then lands *on* the 45-degree past cone, the mark
+        // coincides with it, and the view draws neither the mark nor a tie: there is no shortening
+        // to show. The box says the same thing in words.
         //
-        // On or inside the past light cone, because the dot is at xi = lambda (-1, n^1, n^2) and
-        // the view drops n^2: |xi^1| <= lambda, with equality only for light that arrives with no
-        // azimuthal component at all. The first-order placement of the same-coordinate-time offset
-        // this replaced had no such bound and could put the other observer outside the cone, which
-        // no arriving light can do.
-        //
-        // And never on the far side of the drawn r+ curve, which is the other half of the picture
-        // being one picture: a hovering observer never sees an infaller cross, so the seen event
-        // has to pile up *outside* r+ and stay there, on the curve this same canvas draws.
+        // Along a radial line of sight the dot and the r+ curve are affine lengths along the one
+        // direction, so here - and only here - the comparison between them is a statement about
+        // the emission event. A hovering observer never sees an infaller cross, so the seen event
+        // has to pile up outside r+ and stay there, on the curve this same canvas draws.
         let metric = KerrSchild::new(1.0, 0.0);
         let mut alice = hovering(&metric, "Alice", 8.0, 0.0);
         let mut bob = raindrop(&metric, "Bob", 6.0, 0.0);
@@ -6981,6 +7107,7 @@ mod rest_frame_tests {
         let mut checked = 0;
         let mut against_curve = 0;
         let mut closest = f64::INFINITY;
+        let mut worst_off_cone = 0.0f64;
         // One canvas for the whole run, as the app has one: the view keeps the last answer and
         // warm-starts the next solve from it.
         let mut canvas = fresh(16.0);
@@ -6996,9 +7123,25 @@ mod rest_frame_tests {
             // A tolerance of half a screen point in chart units, which is the resolution the dot
             // was painted at: `Pos2` is f32 and a ring's centre is an average of dash ends.
             let tol = 0.5 / p.scale();
+            let off_cone = (xi[1] + xi[0].abs()).abs();
+            worst_off_cone = worst_off_cone.max(off_cone);
             assert!(
-                xi[1] <= -xi[0].abs() + tol,
-                "the seen event must sit on or inside the past cone: xi = {xi:?}"
+                off_cone < tol,
+                "the light arrives in the plane, so the dot lands on the past cone: xi = {xi:?}"
+            );
+            assert!(
+                p.cone_mark().is_none(),
+                "nothing to mark: the dot is already on the cone at {xi:?}"
+            );
+            assert!(
+                p.tie_dashes(Who::Bob).is_empty(),
+                "and nothing to tie it to: {xi:?}"
+            );
+            assert!(
+                p.text.contains("in this plane: nothing round the hole"),
+                "the box says the offset is nil rather than printing a number under the ruler's \
+                 own resolution: {}",
+                p.text
             );
             let psi = xi[1].atan2(xi[0]);
             if let Some(surface) = curve_radius_at(&p.curve(Theme::HORIZON_OUTER), psi) {
@@ -7013,9 +7156,11 @@ mod rest_frame_tests {
             }
         }
         println!(
-            "{checked} frames of a hovering watcher: the seen event stayed on the past cone every \
-             time, and in {against_curve} of them the drawn r+ curve was in reach of its own \
-             direction - the closest the image came to that curve was {closest:.4} M"
+            "{checked} frames of a hovering watcher on a radial line of sight: the dot stayed on \
+             the past cone every time, the furthest any of them strayed off it being \
+             {worst_off_cone:.2e} M, no frame drew a mark or a tie, and in {against_curve} of them \
+             the drawn r+ curve stood along the dot's own direction - the closest the image came \
+             to that curve was {closest:.4} M"
         );
         assert!(checked >= 30, "only {checked} frames had anything drawn");
         assert!(against_curve >= 10, "only {against_curve} frames could be checked against r+");
@@ -7063,10 +7208,11 @@ mod rest_frame_tests {
         // the light did on the way here. The three lines this replaced - "In Alice's frame:", an
         // azimuthal offset under it and a first-order radial speed - are gone.
         //
-        // The azimuthal offset xi^2 has gone too, and for a better reason than tidiness: the view
-        // now draws the plane that contains the line of sight, so the whole of the offset lies in
-        // the picture and the third component is zero by construction. What stands in its place
-        // is the direction that plane points in.
+        // Where the old "azimuthal offset" went. That line was a first-order coordinate offset
+        // taken at the same coordinate time, which is neither where the other observer is nor
+        // where the other observer is seen. Two lines stand in its place and both are readings of
+        // the arriving light: the direction it came from, and how far out of the drawn plane the
+        // emission event stands - the offset the dot's projection drops.
         let metric = KerrSchild::new(1.0, 0.0);
         let mut alice = hovering(&metric, "Alice", 8.0, 0.0);
         let mut bob = raindrop(&metric, "Bob", 6.0, 0.0);
@@ -7092,6 +7238,13 @@ mod rest_frame_tests {
         assert!(
             p.text.contains("line of sight = straight inward"),
             "the radial pair must read as radial: {}",
+            p.text
+        );
+        // And nothing of that light lies out of the drawn plane, so the box says so in words
+        // rather than printing a number below the ruler's own resolution.
+        assert!(
+            p.text.contains("in this plane: nothing round the hole"),
+            "a radial line of sight drops nothing: {}",
             p.text
         );
         for gone in ["In Alice's frame:", "radial speed", "azimuthal offset"] {
@@ -7204,7 +7357,7 @@ mod rest_frame_tests {
         assert!(p.text.contains("infrared"), "the box has to say where the light went: {}", p.text);
         // The ring stands where the exact solve put it, not at some fallback.
         let xi = p.to_chart(centre);
-        let want = seen.xi_plane();
+        let want = seen.xi_projected();
         assert!(
             (xi[0] - want[0]).abs() < 2.0 / p.scale() && (xi[1] - want[1]).abs() < 2.0 / p.scale(),
             "the ring must stand on the seen event: {xi:?} against {want:?}"
@@ -7304,61 +7457,177 @@ mod rest_frame_tests {
     }
 
     #[test]
-    fn test_the_cone_legs_are_named_outward_only_while_the_axis_is_radial() {
-        // The legs used to read "+45 Outward" and "-45 Inward" in every picture, including the
-        // ones where the horizontal axis had swung most of a right angle round the hole to follow
-        // the line of sight. Now the radial words appear only where the drawn axis really is the
-        // radial one, and elsewhere the legs are named after the observer the axis points at.
+    fn test_the_frame_is_the_same_picture_with_the_other_observer_on_or_off() {
+        // The requirement the whole change was for, and the strictest one this view carries: the
+        // focus observer's frame belongs to the focus observer. Switch the other observer on and
+        // every surface curve, every grid line, the light cone, the observer's own clock ticks and
+        // every word in his own box stand exactly where they stood without her. She is painted
+        // into the finished picture and she may not move it.
+        //
+        // The view used to draw the plane of the line of sight to her, so her solve chose the
+        // plane and the whole canvas turned with it - which on the user's own close pair tilted
+        // the picture from frame to frame while the same picture with her switched off was
+        // smooth. Nothing above section 4 reads her answer now, and this test is what holds that.
+        //
+        // Alice orbits the prograde ISCO of an a = 0.90 hole and watches Bob's raindrop fall from
+        // 27 M. At that orbital speed aberration swings his image most of a right angle round her
+        // sky, which is the configuration that used to turn her plane most. Both canvases are
+        // played frame by frame and compared on every frame, because the defect was a
+        // frame-to-frame one and a single frame would never have shown it.
         let metric = KerrSchild::new(1.0, 0.90);
-        let alice = hovering(&metric, "Alice", 3.0, 0.0);
-        let legs = |p: &Pass| -> Vec<String> {
-            p.text
-                .lines()
-                .filter(|line| line.starts_with("+45°") || line.starts_with("-45°"))
-                .map(str::to_string)
-                .collect()
+        let r_isco = metric.isco(true);
+        let mut alice = Observer::new_with_phi(
+            &metric,
+            "Alice",
+            0.0,
+            r_isco,
+            0.0,
+            0.0,
+            WorldlineParams::released(&metric, r_isco, 0.0, Release::CircularPrograde),
+        );
+        let mut bob = raindrop(&metric, "Bob", 27.0, 0.0);
+        let key = (Who::Alice, Who::Bob);
+
+        // The ergosphere's stroke carries the faint alpha the view paints it at, which is what
+        // tells it from the static limit's own colour.
+        let ergo = Color32::from_rgba_unmultiplied(
+            Theme::ERGOSPHERE_LINE.r(),
+            Theme::ERGOSPHERE_LINE.g(),
+            Theme::ERGOSPHERE_LINE.b(),
+            80,
+        );
+        // The boxes that quote a number, read word for word. The line-by-line test below cannot
+        // catch a changed number on its own: a box whose figures had moved would still be a block
+        // of lines in the right place.
+        // The title is matched on its head, because an observer's own box carries the region tag
+        // in its title line - "Bob [Region I]" - and that tag is one of the readings under test.
+        let block = |text: &str, title: &str, rows: usize| -> Vec<String> {
+            let mut lines = text.lines().skip_while(|l| !l.starts_with(title));
+            (0..rows).filter_map(|_| lines.next().map(str::to_string)).collect()
         };
 
-        // Bob a radian round and outward: his light reaches Alice 51 degrees off her radial axis,
-        // and the right-hand leg - the side `AsSeen::sight_sign` draws him on - points at him.
-        let p = pass(
-            &metric,
-            Some(&alice),
-            Some(&hovering(&metric, "Bob", 4.0, 1.0)),
-            ReferenceFrame::Alice,
-            8.0,
-        );
-        println!("51 degrees off radial: {:?}", legs(&p));
-        assert_eq!(legs(&p), vec!["+45° toward Bob", "-45° away from Bob"]);
+        // Two canvases played in step: one with Alice on it, one with her switched off. Each keeps
+        // its own state between frames, as the app's one does.
+        let mut with_canvas = fresh(40.0);
+        let mut alone_canvas = fresh(40.0);
+        let mut frames = 0;
+        let mut drawn_frames = 0;
+        let mut widest_angle = 0.0f64;
+        let mut out_of_plane = 0.0f64;
+        let mut points = 0;
+        let mut grid_lines = 0;
+        let mut ticks = 0;
+        for _ in 0..80 {
+            play(&metric, &mut alice, &mut bob, 1, 0.1);
+            // The distant clock's grid is on, because the grid is part of the picture and its
+            // slices used to come out horizontal on the frames where the plane had turned tangent.
+            let with_her = pass_on_with_grid(
+                &mut with_canvas,
+                &metric,
+                Some(&alice),
+                Some(&bob),
+                ReferenceFrame::Alice,
+                true,
+            );
+            let alone = pass_on_with_grid(
+                &mut alone_canvas,
+                &metric,
+                Some(&alice),
+                None,
+                ReferenceFrame::Alice,
+                true,
+            );
+            frames += 1;
+            if with_her.seen_dot().is_some() || with_her.ring_centre().is_some() {
+                drawn_frames += 1;
+            }
+            if let Some((seen, _, _)) = with_canvas.seen_held.get(&key) {
+                let d = seen.sight_angle().to_degrees().abs();
+                widest_angle = widest_angle.max(d.min(180.0 - d));
+                out_of_plane = out_of_plane.max(seen.lambda * seen.n[1].abs());
+            }
+            assert!(
+                alone.seen_dot().is_none() && alone.ring_centre().is_none(),
+                "nobody may be drawn in the frame Bob is switched out of"
+            );
 
-        // Bob almost straight out: three degrees off radial, where "Outward" is the better word
-        // and the reader loses nothing by it.
-        let p = pass(
-            &metric,
-            Some(&alice),
-            Some(&hovering(&metric, "Bob", 4.0, 0.2)),
-            ReferenceFrame::Alice,
-            8.0,
-        );
-        println!("3 degrees off radial: {:?}", legs(&p));
-        assert_eq!(legs(&p), vec!["+45° Outward", "-45° Inward"]);
+            // Every surface curve, point for point.
+            for (name, colour) in [
+                ("r+", Theme::HORIZON_OUTER),
+                ("r-", Theme::HORIZON_CAUCHY),
+                ("the static limit", ergo),
+                ("the ring", Theme::SINGULARITY_LINE),
+            ] {
+                let a = with_her.curve(colour);
+                points += a.iter().map(Vec::len).sum::<usize>();
+                assert_eq!(
+                    a,
+                    alone.curve(colour),
+                    "{name} is drawn from a different set of points once Alice is on the canvas"
+                );
+            }
 
-        // Bob inward and round behind, 26 degrees off the inward radial direction. Right is still
-        // outward, so now the right-hand leg is the one pointing away from him.
-        let p = pass(
-            &metric,
-            Some(&alice),
-            Some(&hovering(&metric, "Bob", 2.0, 0.02)),
-            ReferenceFrame::Alice,
-            8.0,
-        );
-        println!("26 degrees off inward: {:?}", legs(&p));
-        assert_eq!(legs(&p), vec!["+45° away from Bob", "-45° toward Bob"]);
+            let grid = with_her.grid_crossings();
+            grid_lines += grid.len();
+            assert_eq!(grid, alone.grid_crossings(), "the distant clock's grid moved with Alice");
 
-        // With nobody to see, the axis falls back to the radial one and so do the words.
-        let p = pass(&metric, Some(&alice), None, ReferenceFrame::Alice, 8.0);
-        println!("no other observer: {:?}", legs(&p));
-        assert_eq!(legs(&p), vec!["+45° Outward", "-45° Inward"]);
+            assert_eq!(
+                with_her.cone_wedges(Who::Alice),
+                alone.cone_wedges(Who::Alice),
+                "Alice's own light cone changed"
+            );
+            let tick_rows = with_her.clock_ticks(Who::Alice);
+            ticks += tick_rows.len();
+            assert_eq!(tick_rows, alone.clock_ticks(Who::Alice), "Alice's own clock ticks moved");
+
+                // And the words. Every line the canvas paints without him is painted with him too,
+            // in the same order: the head banner, the grid's labels, the ruler's ticks, the four
+            // surface boxes and Alice's own box. His box adds lines and takes none away.
+            let mut with_lines = with_her.text.lines();
+            for line in alone.text.lines() {
+                assert!(
+                    with_lines.any(|l| l == line),
+                    "the line {line:?} of the picture without Bob is missing, or out of order, \
+                     in the picture with him:\n{}\nagainst\n{}",
+                    with_her.text,
+                    alone.text
+                );
+            }
+            for (title, rows) in [
+                ("Outer Horizon r\u{208a}", 4),
+                ("Cauchy Horizon r\u{208b}", 4),
+                ("Ergosphere", 3),
+                ("Alice", 3),
+            ] {
+                let a = block(&with_her.text, title, rows);
+                assert_eq!(a.len(), rows, "no {title:?} box on the canvas: {}", with_her.text);
+                assert_eq!(
+                    a,
+                    block(&alone.text, title, rows),
+                    "the {title:?} box changed once Bob was on the canvas"
+                );
+            }
+        }
+
+        println!(
+            "{frames} frames of Alice's prograde ISCO watching Bob's raindrop from 27 M, drawn \
+             twice over: {drawn_frames} of them put him on her canvas, at up to {widest_angle:.1} \
+             degrees off her radial axis and with up to {out_of_plane:.3} M of his light-travel \
+             distance standing out of the drawn plane. Across the two canvases {points} curve \
+             points, {grid_lines} grid crossings and {ticks} clock ticks came out identical, and \
+             so did every line of text her own picture carries."
+        );
+        // A fifth of the run at least. His image is a long way down her past cone early on - up
+        // to 34 M of light-travel distance against a 40 M window - so the canvas clips it on the
+        // frames before the fall brings him in, and a dot the canvas has clipped is nothing for
+        // this test to compare.
+        assert!(drawn_frames >= 20, "Bob has to be on her canvas: {drawn_frames} of {frames}");
+        assert!(
+            widest_angle > 20.0,
+            "the case is worthless unless his light arrives well off her radial axis: \
+             {widest_angle} degrees"
+        );
+        assert!(points > 1000 && grid_lines > 100 && ticks > 100, "the canvas has to be drawing");
     }
 
     #[test]
@@ -7433,48 +7702,56 @@ mod rest_frame_tests {
     }
 
     #[test]
-    fn test_the_horizon_box_measures_along_the_drawn_axis_when_the_plane_has_turned() {
-        // The second half of the same inconsistency. The drawn curve and the box agreed while the
-        // canvas drew the radial plane, because both were the radial integral; once the view
-        // turned its plane to the line of sight the curve crossed the now-axis along the *drawn*
-        // leg while the box went on quoting the radial one, and the two numbers parted company
-        // again. `ruler_distance_along` is what puts them back together.
+    fn test_the_horizon_box_measures_along_the_radial_axis_the_view_draws() {
+        // One canvas, one answer. The box prints the ruler distance to r+ and the drawn curve
+        // crosses the now-axis at a distance, and the two have to be the same number because they
+        // are the same integral: the arclength of the spacelike geodesic that leaves this event
+        // along the leg the canvas draws. That leg is the observer's own radial one, whoever else
+        // is on the canvas (section 1b), so the rest-frame view's reading and the (t, r) chart's
+        // are one reading and neither box has to name an axis.
+        //
+        // The view once drew the plane of the line of sight instead, and this test was the witness
+        // that the box had followed the plane: from this configuration the drawn leg reached r+ in
+        // 3.606 M where the radial leg takes 4.156 M. Now the same configuration has to produce
+        // the radial number and no other, with Bob on the canvas exactly as without him.
         //
         // Alice hovers at r = 3 M of an a = 0.90 hole and Bob hovers out at r = 4 M, a radian
-        // round from her, which lands his light on her at about 51 degrees off her outward radial
-        // direction: far enough round for the two integrals to differ by much more than any
-        // tolerance here, and nothing like the edge case of a sight line gone tangential.
+        // round from her, which lands his light on her about 51 degrees off her outward radial
+        // direction - far enough round that a view which still turned its plane would be caught
+        // by many times any tolerance here.
         let metric = KerrSchild::new(1.0, 0.90);
         let rp = metric.outer_horizon();
         let alice = hovering(&metric, "Alice", 3.0, 0.0);
         let bob = hovering(&metric, "Bob", 4.0, 1.0);
         let u = alice.four_velocity(&metric);
 
-        // The leg the view draws, built here the way section 1b builds it: the axial tetrad turned
-        // by the line of sight's own components.
         let seen = as_seen_youngest(&metric, &alice, &bob, None).expect("Alice sees Bob");
-        let leg = seen.plane_leg();
-        let drawn_leg = Tetrad::from_four_velocity_axial(&metric, alice.r, &u)
-            .turned(leg[0], leg[1])
+        let radial = ruler_distance(&metric, alice.r, &u, rp).expect("r+ is a place from r = 3 M");
+        // The same number by the other route: the leg the view hands the box, which is the axial
+        // tetrad's own e1.
+        let drawn_leg = Tetrad::from_four_velocity_axial(&metric, alice.r, &u).e1;
+        let along =
+            ruler_distance_along(&metric, alice.r, &drawn_leg, rp).expect("and the leg reaches it");
+        // What a view that turned its plane onto this line of sight would have printed instead.
+        let turned_leg = Tetrad::from_four_velocity_axial(&metric, alice.r, &u)
+            .turned(seen.n[0], seen.n[1])
             .e1;
-        let along = ruler_distance_along(&metric, alice.r, &drawn_leg, rp)
-            .expect("the drawn leg reaches r+");
-        let radial = ruler_distance(&metric, alice.r, &u, rp).expect("so does the radial leg");
+        let turned = ruler_distance_along(&metric, alice.r, &turned_leg, rp)
+            .expect("the line of sight reaches it too");
 
         let p = pass(&metric, Some(&alice), Some(&bob), ReferenceFrame::Alice, 8.0);
-        // psi = pi is the now-direction the drawn leg reaches r+ along: the leg's own r-component
-        // is positive (e2 carries none in the axial gauge, and `AsSeen::plane_leg` fixes the sign
-        // so that the outward component is the positive one), so the half of the axis that closes
-        // on the horizon is the other one.
+        // psi = pi is the observer's own inward now-direction, which is the half of the axis that
+        // closes on the horizon: the drawn leg's own r-component is the positive one.
         let crossing = curve_radius_at(&p.curve(Theme::HORIZON_OUTER), std::f64::consts::PI)
             .expect("the r+ curve crosses that half of the now-axis on this canvas");
         println!(
-            "Alice at r = 3 M sees Bob {}: the drawn r+ curve cuts the now-axis at \
-             {crossing:.9} M, the box prints {} ({along:.9} M along the drawn leg), and the \
-             radial leg reaches r+ in {radial:.9} M - a difference of {:.1}%",
-            sight_angle_label(seen.sight_angle()).trim(),
+            "Alice at r = 3 M sees Bob{}: the drawn r+ curve cuts the now-axis at {crossing:.9} M, \
+             the box prints {} ({along:.9} M along the radial leg, against {radial:.9} M by the \
+             radial quadrature), and a plane turned onto that line of sight would have said \
+             {turned:.9} M - {:.1}% away",
+            sight_angle_label(seen.sight_angle()),
             ruler_distance_label(&metric, along),
-            100.0 * (along - radial) / radial
+            100.0 * (turned - radial) / radial
         );
 
         assert!(
@@ -7483,20 +7760,41 @@ mod rest_frame_tests {
             seen.sight_angle().to_degrees()
         );
         assert!(
+            (turned - radial).abs() > 0.05 * radial,
+            "the test is worthless unless a turned plane really would read differently: \
+             {turned} M against {radial} M"
+        );
+        assert!(
+            (along - radial).abs() <= 1e-9 * radial,
+            "the leg the view hands the box is the radial one: {along} M against {radial} M"
+        );
+        assert!(
             (crossing - along).abs() <= 1e-6 * along,
             "the drawn curve says {crossing} M and the box's integral says {along} M"
         );
         assert!(
-            (along - radial).abs() > 0.05 * radial,
-            "and the radial integral is a different number: {radial} M against {along} M"
+            p.text.contains(&format!(
+                "{} from Alice",
+                ruler_distance_label(&metric, radial)
+            )),
+            "the box must print the radial distance, and name no axis: {}",
+            p.text
         );
         assert!(
-            p.text.contains(&format!(
-                "{} from Alice along this axis",
-                ruler_distance_label(&metric, along)
-            )),
-            "the box must print the drawn leg's distance and say which axis it is: {}",
+            !p.text.contains("along this axis"),
+            "both canvases measure along the one axis now, so neither says 'this axis': {}",
             p.text
+        );
+
+        // And with Bob switched off the box prints the same words, which is the whole point.
+        let alone = pass(&metric, Some(&alice), None, ReferenceFrame::Alice, 8.0);
+        assert!(
+            alone.text.contains(&format!(
+                "{} from Alice",
+                ruler_distance_label(&metric, radial)
+            )),
+            "the reading cannot depend on Bob: {}",
+            alone.text
         );
     }
 
@@ -7745,49 +8043,70 @@ mod rest_frame_tests {
     }
 
     #[test]
-    fn test_the_surface_box_names_the_surfaces_character_and_not_the_drawn_traces() {
-        // The words used to be read off the slope of the surface's trace in the drawn plane. That
-        // plane is the plane of the line of sight, and turning it away from radial can only flatten
-        // a trace - the trace's norm is cos^2(theta) Delta / r^2 - sin^2(theta) (u^r)^2 against
-        // g^rr for the surface itself - so from r = 3 M a sight line well off radial flattened the
-        // r+ trace past 45 degrees and the box called the outer horizon null, and then spacelike,
-        // with the observer a ruler distance outside it. The words now come from Delta at the
-        // surface's own radius, which is a statement about the surface and about nothing else.
+    fn test_the_surface_box_names_the_surfaces_character_and_the_radial_trace_agrees() {
+        // The words in a surface's box come from Delta at that surface's own radius, which is a
+        // statement about the surface and about nothing else. They used to be read off the slope
+        // of the surface's trace in the drawn plane, and that was wrong while the canvas drew the
+        // plane of the line of sight: turning a plane away from radial can only flatten a trace -
+        // the trace's norm is cos^2(theta) Delta / r^2 - sin^2(theta) (u^r)^2 against g^rr for the
+        // surface itself - so from r = 3 M a sight line well off radial flattened the r+ trace
+        // past 45 degrees and the box called the outer horizon null, and then spacelike, with the
+        // observer a ruler distance outside it.
+        //
+        // The canvas draws the radial plane again, so the trace carries the surface's own
+        // character and the words and the drawing agree. The test asserts both halves: the words
+        // are the surface's, and in this plane the trace's character is the same word. The
+        // agreement is a property of this plane rather than a licence to read geometry off a
+        // drawing, which is why the box still reads Delta.
         let metric = KerrSchild::new(1.0, 0.90);
         let bob = raindrop(&metric, "Bob", 3.0, 0.0);
         // Alice stands at the same radius, round the hole, so the light reaching Bob from her
-        // arrives a long way off his radial axis and the canvas turns its plane with it.
+        // arrives a long way off his radial axis - the configuration that used to turn the plane.
         let alice = hovering(&metric, "Alice", 3.0, 1.2);
         let seen = as_seen(&metric, &bob, &alice, None).expect("Bob sees Alice across the hole");
-        // From whichever radial direction is nearer, which is the angle the header quotes and the
-        // angle the flattening of the trace turns on.
+        // From whichever radial direction is nearer, which is the angle the box quotes and the
+        // angle the flattening of the trace used to turn on.
         let degrees = seen.sight_angle().to_degrees().abs();
         let off_radial = degrees.min(180.0 - degrees);
         let p = pass(&metric, Some(&alice), Some(&bob), ReferenceFrame::Bob, 8.0);
-        let trace = LocalFrame::new(
-            &metric,
-            bob.r,
-            Tetrad::from_four_velocity_axial(&metric, bob.r, &bob.four_velocity(&metric))
-                .turned(seen.plane_leg()[0], seen.plane_leg()[1]),
-        )
-        .surface_r_const(metric.outer_horizon());
+        let axial = Tetrad::from_four_velocity_axial(&metric, bob.r, &bob.four_velocity(&metric));
+        let drawn = LocalFrame::new(&metric, bob.r, axial).surface_r_const(metric.outer_horizon());
+        let turned = LocalFrame::new(&metric, bob.r, axial.turned(seen.n[0], seen.n[1]))
+            .surface_r_const(metric.outer_horizon());
         println!(
-            "from r = 3 M with the line of sight {off_radial:.0}° off the nearer radial direction \
-             ({}) the r+ trace has slope {:.3} in the drawn plane, which reads {:?}, while r+ \
-             itself is null and the box says so; the box's lines are:\n{}",
+            "from r = 3 M with the line of sight {off_radial:.0} degrees off the nearer radial \
+             direction ({}) the r+ trace has slope {:.3} in the radial plane this canvas draws, \
+             which reads {:?}; a plane turned onto that line of sight would have drawn it at \
+             {:.3}, which reads {:?}; r+ itself is null either way and the box says so. The box's \
+             lines are:\n{}",
             sight_angle_label(seen.sight_angle()).trim(),
-            trace.slope().abs(),
-            trace.character(2e-3),
+            drawn.slope().abs(),
+            drawn.character(2e-3),
+            turned.slope().abs(),
+            turned.character(2e-3),
             p.text
         );
         assert!(
             off_radial > 39.0,
-            "the sight line has to be far enough off radial to flatten the trace: {off_radial}°"
+            "the sight line has to be far enough off radial to have flattened the trace: \
+             {off_radial} degrees"
         );
         assert_ne!(
-            trace.character(2e-3),
+            turned.character(2e-3),
             SurfaceCharacter::Timelike,
-            "the trace really is flattened here, which is what the old words were read off"
+            "the flattening was real, which is what the old words were read off"
+        );
+        // And in the plane the canvas draws, the trace no longer contradicts the geometry the
+        // observer stands in. `LocalLine::character` reads the tilt of the family r = const at the
+        // *observer's* own radius rather than at the surface's, and at r = 3 M of this hole
+        // Delta > 0, so every surface r = const leaves a timelike trace there. The radial plane
+        // carries that exactly; the turned plane flattened it into a lie about a horizon the
+        // observer could still hold station outside of.
+        assert_eq!(
+            drawn.character(2e-3),
+            SurfaceCharacter::Timelike,
+            "Delta > 0 at r = 3 M, so the trace of r = const there is timelike: slope {}",
+            drawn.slope()
         );
         assert!(
             p.text.contains("Null Surface"),

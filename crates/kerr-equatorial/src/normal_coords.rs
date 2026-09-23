@@ -217,7 +217,7 @@ pub enum HorizonBranch {
 pub struct SurfacePoint {
     /// The direction angle it was found along: T = sin(psi) e0 + cos(psi) s, with s the spacelike
     /// leg of the drawn plane - the observer's outward radial leg e1 for [`sample_surface`], the
-    /// line of sight for [`sample_surface_in_plane`]. So psi = 0 is the observer's now-direction
+    /// caller's leg for [`sample_surface_in_plane`]. So psi = 0 is the observer's now-direction
     /// along s, psi = pi/2 their own future and psi = 5 pi/4 the half of their past light cone
     /// that leans away from s.
     pub psi: f64,
@@ -483,9 +483,10 @@ pub fn sample_surface(
 /// [`affine_length_to_surface`] takes any tangent at all, so nothing in the construction was ever
 /// radial: the sweep T = sin(psi) e0 + cos(psi) s is as exact for one unit spacelike leg s as for
 /// another, and the curve that comes back is the slice of the same surface by the plane the caller
-/// named. The rest-frame view uses it to draw the plane that contains the light arriving from the
-/// other observer, where the drawn point of that observer lies on the same ray as the surface
-/// curve's point in that direction and so can never be drawn through it.
+/// named. A view that draws the plane containing the light arriving from another observer would
+/// use it to put that observer's drawn point on the same ray as the surface curve's point in that
+/// direction; the app's rest-frame view drew that plane for a while and now draws the radial one,
+/// with the other observer projected into it.
 ///
 /// `s` is read for its spatial part alone, through [`Tetrad::turned_towards`]: the component along
 /// the observer's own 4-velocity drops out, the length drops out with the normalisation, and a
@@ -509,9 +510,11 @@ pub fn sample_surface_in_plane(
 /// This is [`sample_surface_in_plane`] for a caller that holds the frame rather than a vector to
 /// turn it towards, and it exists because the turn is the one lossy step: `Tetrad::turned_towards`
 /// reads the leg's components back through the metric, which is a cancellation of terms of size
-/// (u^t)^2 and is noise for a frame boosted past u^t ~ 1e7 (see its doc). The rest-frame view
-/// holds the arrival direction of the other observer's light as a pair of components in the axial
-/// tetrad, turns the tetrad by them exactly with `Tetrad::turned`, and hands the result here.
+/// (u^t)^2 and is noise for a frame boosted past u^t ~ 1e7 (see its doc). A caller that holds a
+/// direction as a pair of components in the axial tetrad turns the tetrad by them exactly with
+/// `Tetrad::turned` and hands the result here; the app's rest-frame view did so while it drew the
+/// plane of the line of sight, and the measurement in `Tetrad::turned_towards`'s doc was made
+/// that way.
 pub fn sample_surface_in_frame(
     metric: &KerrSchild,
     r0: f64,
