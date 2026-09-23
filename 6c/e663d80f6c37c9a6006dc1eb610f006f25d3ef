@@ -1,0 +1,41 @@
+src/gui/numbers.rs
+  s_d61dd82cbbe3eb::t_09ca56956b4812 1-144
+crates/kerr-equatorial/src/kerr_schild.rs
+  s_d61dd82cbbe3eb::t_5900d869053b9f 93,145,735-752
+  s_d61dd82cbbe3eb::t_d9a46fb6a77f59 753-754
+src/gui/mod.rs
+  s_d61dd82cbbe3eb::t_b3514545369673 2
+src/gui/cauchy_effects.rs
+  s_d61dd82cbbe3eb::t_b3514545369673 1,10-13,15,19-21,28
+  s_d61dd82cbbe3eb::t_5450522905f83b 33-35,60,86,100,113
+src/gui/spatial_canvas.rs
+  s_d61dd82cbbe3eb::t_5fb97053974485 3
+  s_d61dd82cbbe3eb::t_b3514545369673 728,732,746,755,766,785
+src/gui/spacetime_canvas.rs
+  s_d61dd82cbbe3eb::t_b3514545369673 34,1538-1540,1543,1545,1550-1551,1553,1565,1619-1623,1625-1626,1667-1668,1672,1684-1690,1714-1715,3057,4164,4175-4177,4667-4670,4675,5868
+  s_d61dd82cbbe3eb::t_70b17441897f23 30
+  s_d61dd82cbbe3eb::t_5fb97053974485 5
+  s_d61dd82cbbe3eb::t_5450522905f83b 31,1624,1627,1691-1698,1700,1710-1713,1730,5869,5910,7284,7288,7290
+  s_d61dd82cbbe3eb::t_0dc9663dfd0560 5721-5722
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "6ce663d80f6c37c9a6006dc1eb610f006f25d3ef",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_d61dd82cbbe3eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "67e2b484-2871-4c5e-babe-290375a44f9b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
