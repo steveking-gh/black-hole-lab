@@ -1,6 +1,7 @@
 ![GPL licensed](https://img.shields.io/badge/license-GPL-blue.svg)
 
 # BLACK HOLE LAB IS WORK IN PROGRESS
+
 ## Introduction
 
 Black Hole Lab is a physics simulation of a rotating black hole and two
@@ -13,12 +14,13 @@ the warping of space and time by the black hole.  The simulation also records
 whenever Alice and Bob receive a signal from the other.
 
 The simulation takes pains to respect Einstein's equations of general
-relativity.  To a double-floating point degree of accuracy, the effects shown in
+relativity.  To the precision of the numerical integration, the effects shown in
 Black Hole Lab are really what the math of general relativity says will happen.
-While the predictions of general relativity have been proven correct countless
-times, physicists agree that general relativity *cannot* be the final word on
-black holes.  Nobody knows yet what would *actually* happen to Alice and Bob
-inside a black hole!
+In some cases, the calculations stop at a limit, such as 10 billion for the
+ratio of the distant clock to Alice and Bob's clock. While the predictions of
+general relativity have been proven correct countless times, physicists agree
+that general relativity *cannot* be the final word on black holes.  Nobody knows
+yet what would *actually* happen to Alice and Bob inside a black hole.
 
 ## Starting Up
 
@@ -49,6 +51,89 @@ space.  The black hole looks like a colored bullseye while Alice and Bob are the
 yellow and turquoise dots respectively.  The black hole spins counter-clockwise.
 
 ![Equatorial View](assets/images/equatorial_view.png)
+
+## The Frame of Reference View
+
+The middle pane of Black Hole Lab is the frame of reference view.  You can
+choose whether this pane shows Alice or Bob's frame of reference, or you can
+show a 1D+1 or a 2D+1 "foliation" chart.  First, let's discuss what we mean by
+"frame of reference".
+
+### What is a Frame of Reference?
+
+Your *frame of reference* (FoR) is your local reality where your experiments
+measure the speed of light as `c` in all directions.  Your FoR is the all
+important determinant of distance, time and the order of events.  For example,
+two stopwatches in different FoRs could measure the same event as taking a
+million years or a millisecond.  The universe has no preferred FoR, so neither
+stopwatch is more correct than the other.
+
+### Coordinate Time vs Proper Time
+
+*Coordinate time* is the artificial "chart clock" used to step the mathematics
+of the simulation.  Fudging just slightly, one second of coordinate time is our common notion of one second.
+
+*Proper time* is the time measured in an observer's FoR, e.g. Bob's wristwatch.
+
+To get a sense of the difference, imagine Bob falling into the black hole while
+Alice observes from far away.  Let's compare Alice's proper time, Bob's proper time and the coordinate time.
+
+* In her proper time, Alice sees Bob slow as he nears the event horizon and his
+  watch ticking ever more slowly.  Wait as she might, Alice never sees Bob cross
+  the horizon as his light becomes too stretched (redshifted) to detect.  To
+  her, Bob's watch appears all but stopped.
+* In his proper time, Bob dives through the event horizon and into the black
+  hole at tremendous uninterrupted speed.  His watch says the whole trip took
+  just a few minutes.
+* In coordinate time, Bob moves smoothly across the event horizon without
+  slowing down.
+
+### Global Foliation Charts
+
+The default view in the FoR pane is the `Global Foliation Chart 1D+1`.
+
+![Global Foliation Chart 1D+1](assets/images/global_foliation_1d1.png)
+
+The global foliation chart shows the simulation's view of events.  Notice the `1D+1` notation.  The `1D` means this view shows 1 dimension of space horizontally.  Physicists judiciously choose that dimension to be the distance to the center of the black hole.  The `+1` is the time dimension shown vertically.  Bob and Alice's FoR views share this `1D+1` style.
+
+The other unique view is the **Global Foliation Chart 2D+1**
+
+![Global Foliation Chart 2D+1](assets/images/global_foliation_2d1.png)
+
+In this view, we get two dimensions of space like the Equatorial view, with time pointing vertically up.
+
+### Bob and Alice's FoR
+
+The last two options we can show are **Bob's Frame Of Reference 1D+1** and likewise for Alice.  These views show `1D+1` reality as measured by the observer.  The math gives us an oracle-like view since we can see places and events in the observer's *future*.  Of course a real Alice and Bob would only perceive their *now*.
+
+![Bob 1D+1](assets/images/bob_for_1d1.png)
+
+### Light Cones
+
+All the graphs above feature cone shapes centered on the observers.  These are
+**light cones**.  Light cones provide a helpful way to reason about observers
+and are common in diagrams on relativity.  The cone below the observer shows
+spacetime where light from *any past event* can reach the observer.  The cone
+above the observer shows the spacetime where light from *any future event* can
+reach the observer.  As a universal convention, physicists use a 45 degree line
+to represent the speed of light: the speed of light is one unit of space
+horizontally for one unit of time vertically.
+
+We pick on "light from an event" here, but this really means *any*
+cause-and-effect influence whatsoever.  An event outside your light cone
+*cannot* affect your reality in any way.
+
+### Light Cone Tilting
+
+If you look at the global foliation view above, you'll notice that Bob and
+Alice's light cones appear a tilted toward the black hole.  This is a real
+physical effect of the warping of spacetime by gravity.  It's quite fair to say
+that gravity *pulls on your future*.
+
+On the other hand, Bob's FoR view shows his light cone rigidly at 45 degrees.  From Bob's frame of reference, light moves at `c` in all directions.  Things might appear warped *within* Bob's light cone, but light itself moves unfailingly at `c` in an observer FoR.
+
+Note that Bob's FoR is a proper *frame of reference* while the global foliation view that shows tilted light cones is a *chart* to help us understand.
+
 
 ### The Black Hole Ergosphere
 
@@ -100,23 +185,24 @@ inner horizon. If the outer horizon is strange, the inner horizon is bizarre.  A
 few of the more mind-boggling aspects to think about:
 
 * The inner horizon is the boundary where the arrow of time stops pointing
-  strictly inward and tilts back to point into the future like normal space.  An
-  observer can once again move around in 3 dimensions.
+  strictly inward and tilts back to point into the future like normal space.
 
 * Like the outer horizon, the inner horizon can be both a moment in time or a
   place in space depending on which side you find yourself.
 
-* Unlike the outer horizon, the inner horizon profoundly compresses incoming
-  time.  As you get close, the outside universe appears to run ever faster
-  relative to your clock.  In general relativity, this effect grows
-  exponentially and without bound!  Unfortunately for you, this time compression
-  effect also gives incoming light an unbounded energy boost.  Physicists refer
-  to this phenomenon as "infinite blueshift". You fry in a bath of future light
-  boosted to extreme energy.
+* The inner horizon has two *branches*, so to speak. If you have high angular
+  momentum, you'll encounter the branch where the inner horizon profoundly
+  compresses incoming time.  As you get close, the outside universe appears to
+  run ever faster relative to your clock.  In general relativity, this effect
+  grows exponentially and without bound! Unfortunately for you, this time
+  compression effect also gives incoming light an unbounded energy boost.
+  Physicists refer to this phenomenon as "infinite blueshift". You fry in a bath
+  of future light boosted to extreme energy.
 
-* Whether you pass through the inner horizon or just asymptotically approach
-  depends on how much angular momentum you have, i.e. how steep is your fall
-  inward.
+  With low angular momentum, you fall through the first branch of the horizon.
+  In this case, you don't linger from the outside universe's perspective.  You
+  will unfortunately be fried by the "infinite blueshift" of light emitted from
+  everything that fell in before you on this path.
 
 Our understanding of the physics at this layer is even less clear than at the
 outer event horizon.  As before, Black Hole Lab let's general relativity be the
@@ -137,33 +223,6 @@ future and an observer can move around in 3 dimensions.
 If you enter `region III` with enough angular momentum, you swing back out
 toward the inner horizon, but this time asymptotically approaching from below.
 
-
-
-
-
-
-
-
-
-# Other Text
-
-A few things to keep in mind about the event horizon:
-
-
-## Frame's of Reference
-
-In Einstein's relativity theories, your frame of reference makes all the
-difference!  Your *frame of reference* is your local spacetime, e.g. inside your
-rocket ship, where your physic experiments measure the speed of light as 'c' in
-all directions.
-
-Imagine Bob and Alice falling into the black hole together while we
-watch from a safe and much less adventurous location.  We never see them cross
-the horizon!  Their light becomes increasingly stretched, aka redshifted, and
-we see their clocks run slower and slower.  At some point, Bob and Alice are
-just barely above the event horizon but are too dim for us to perceive anymore.
-You can think of the light reflecting off them as being "exhausted" from
-swimming upstream against the flow of space into the black hole.
 
 
 
