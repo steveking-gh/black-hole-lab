@@ -793,6 +793,9 @@ pub struct TelemetryBoxes {
     /// and saved beside one. A set of its own rather than a flag on the placement: a box can be
     /// shut without ever having been dragged, and `is_placed` means dragged.
     pub(crate) collapsed: HashSet<(Canvas, BoxId)>,
+    /// The box whose copy icon was last clicked, for as long as the pointer stays on that icon:
+    /// the icon's tip says the text was copied rather than offering to copy it again. Not saved.
+    copied: Option<(Canvas, BoxId)>,
 }
 
 impl TelemetryBoxes {
@@ -942,8 +945,27 @@ impl TelemetryBoxes {
             widget_id.with("disclosure"),
             egui::Sense::click(),
         );
+        // The copy icon registers after the box for the same reason, and only on an open box: a
+        // shut box shows its title and nothing else, so there is nothing on it to copy. What goes
+        // to the clipboard is every line of the box as printed, title first, one to a line, in
+        // the decimal style the screen shows.
+        let copy = (!collapsed).then(|| {
+            ui.interact(
+                copy_hit_rect(badge_rect, font_scale),
+                widget_id.with("copy"),
+                egui::Sense::click(),
+            )
+        });
         let toggled = toggle.clicked();
         let over_triangle = toggle.contains_pointer();
+        let over_copy = copy.as_ref().is_some_and(egui::Response::contains_pointer);
+        if copy.as_ref().is_some_and(egui::Response::clicked) {
+            let text: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+            ui.ctx().copy_text(text.join("\n"));
+            self.copied = Some(key);
+        } else if !over_copy && self.copied == Some(key) {
+            self.copied = None;
+        }
 
         let badge_rect = if toggled {
             // The corner the user is looking at holds still: the box is redrawn from the same
@@ -990,9 +1012,18 @@ impl TelemetryBoxes {
         } else {
             "Collapse this box to its title line"
         }));
-        // The box's own tip belongs to the rest of the box: two tooltips over one triangle would
-        // ask the reader which of the two answers the triangle.
-        if over_triangle {
+        if let Some(copy) = copy {
+            let _ = copy.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(numbers::text(
+                if self.copied == Some(key) {
+                    "Copied to the clipboard"
+                } else {
+                    "Copy the text of this box to the clipboard"
+                },
+            ));
+        }
+        // The box's own tip belongs to the rest of the box: two tooltips over one triangle, or
+        // over one copy icon, would ask the reader which of the two answers the icon.
+        if over_triangle || over_copy {
             response
         } else {
             response.on_hover_text(numbers::text(tip))
@@ -1166,6 +1197,9 @@ struct BoxMetrics {
     /// box. Every box pays for the column in both states: a box that changed width as it shut
     /// would move its own right-hand edge for no reason the user asked for.
     column: f32,
+    /// The column the copy icon stands in at the right of the title line, paid for in both
+    /// states for the same reason as `column`, though only an open box draws the icon.
+    copy_column: f32,
 }
 
 fn box_metrics(font_scale: f32) -> BoxMetrics {
@@ -1175,6 +1209,7 @@ fn box_metrics(font_scale: f32) -> BoxMetrics {
         pad_y: 6.0 * font_scale,
         line_spacing: 13.0 * font_scale,
         column: 18.0 * font_scale,
+        copy_column: 22.0 * font_scale,
     }
 }
 
@@ -1214,6 +1249,34 @@ fn disclosure_hit_rect(badge_rect: Rect, font_scale: f32) -> Rect {
     .intersect(badge_rect)
 }
 
+/// Where the copy icon is drawn: a small square centred in the title row's right-hand column.
+fn copy_art_rect(badge_rect: Rect, font_scale: f32) -> Rect {
+    let m = box_metrics(font_scale);
+    let scale = font_scale.clamp(0.7, 2.0);
+    Rect::from_center_size(
+        Pos2::new(
+            badge_rect.right() - m.pad_x - m.copy_column * 0.5,
+            badge_rect.top() + m.pad_y + m.line_spacing * 0.5,
+        ),
+        Vec2::splat(9.0 * scale),
+    )
+}
+
+/// What a click on the copy icon has to land in: the mirror of `disclosure_hit_rect` at the
+/// other end of the title row, from where the icon's column begins out to the box's right-hand
+/// edge and down the row, grown to `DISCLOSURE_HIT` where that is smaller and held inside the box.
+fn copy_hit_rect(badge_rect: Rect, font_scale: f32) -> Rect {
+    let m = box_metrics(font_scale);
+    let column_left = badge_rect.right() - m.pad_x - m.copy_column;
+    let width = DISCLOSURE_HIT.max(badge_rect.right() - column_left);
+    let height = DISCLOSURE_HIT.max(m.pad_y + m.line_spacing);
+    Rect::from_min_max(
+        Pos2::new(badge_rect.right() - width, badge_rect.top()),
+        Pos2::new(badge_rect.right(), badge_rect.top() + height),
+    )
+    .intersect(badge_rect)
+}
+
 /// The size the box is drawn at this frame: the whole card, or the title line alone.
 fn drawn_box_size(
     painter: &egui::Painter,
@@ -1245,7 +1308,7 @@ fn telemetry_box_size(painter: &egui::Painter, lines: &[TelemetryLine], font_sca
             let text_w = painter.layout_no_wrap(line.text.clone(), font, line.color).size().x;
             // The title line carries the triangle's column, so the box is wide enough for both
             // whether the title is the longest line or not.
-            if line.is_title { text_w + m.column } else { text_w }
+            if line.is_title { text_w + m.column + m.copy_column } else { text_w }
         })
         .fold(0.0_f32, f32::max);
 
@@ -1317,6 +1380,20 @@ fn paint_telemetry_box(
         triangle_colour,
         egui::epaint::PathStroke::NONE,
     ));
+
+    // The copy icon, on an open box only: two overlapping sheets, the back one showing above and
+    // to the left of the front one, which is the mark every editor copies with. Drawn in the
+    // title's colour, as the triangle is, and the front sheet filled in the box's own black so
+    // that it hides the part of the back sheet it covers.
+    if !collapsed {
+        let art = copy_art_rect(badge_rect, font_scale);
+        let offset = Vec2::splat(1.5 * font_scale);
+        let (back, front) = (art.translate(-offset), art.translate(offset));
+        let stroke = Stroke::new(1.0, triangle_colour);
+        painter.rect_stroke(back, 1.5, stroke, egui::StrokeKind::Inside);
+        painter.rect_filled(front, 1.5, Color32::BLACK);
+        painter.rect_stroke(front, 1.5, stroke, egui::StrokeKind::Inside);
+    }
 
     for (i, line) in lines.iter().enumerate() {
         let font = if line.bold {
@@ -4884,6 +4961,17 @@ mod tests {
         lines: &[TelemetryLine],
         events: Vec<egui::Event>,
     ) -> Vec<egui::Shape> {
+        telemetry_frame_output(ctx, boxes, lines, events).0
+    }
+
+    /// `telemetry_frame`, with the commands the frame gave the platform - a copy to the clipboard
+    /// among them - beside the shapes it painted.
+    fn telemetry_frame_output(
+        ctx: &egui::Context,
+        boxes: &mut TelemetryBoxes,
+        lines: &[TelemetryLine],
+        events: Vec<egui::Event>,
+    ) -> (Vec<egui::Shape>, Vec<egui::OutputCommand>) {
         let input = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(420.0, 340.0))),
             events,
@@ -4912,8 +5000,9 @@ mod tests {
         for clipped in output.shapes.iter() {
             flatten(&clipped.shape, &mut shapes);
         }
+        let commands = output.platform_output.commands.clone();
         output.drop_without_applying_deltas();
-        shapes
+        (shapes, commands)
     }
 
     /// The card a frame painted, read off the one rectangle carrying the box's own fill.
@@ -4986,6 +5075,52 @@ mod tests {
         assert!(!boxes.collapsed.contains(&key), "a second click opens the box again");
         assert_eq!(painted_card(&shapes), open, "exactly as it was");
         assert!(painted_text(&shapes).iter().any(|t| t == "tau 12.5 M"), "readings and all");
+    }
+
+    /// The copy icon at the other end of the title line puts the whole box on the clipboard as it
+    /// is printed, title first, and takes the click from the box: the box neither shuts nor moves.
+    /// A shut box has no icon to click, since it shows nothing but its title.
+    #[test]
+    fn test_a_click_on_the_copy_icon_puts_the_open_box_on_the_clipboard() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let mut boxes = TelemetryBoxes::default();
+        let lines = sample_lines();
+        let key = (Canvas::Spacetime, BoxId::Observer(Who::Bob));
+        let copied_text = |commands: &[egui::OutputCommand]| -> Vec<String> {
+            commands
+                .iter()
+                .filter_map(|c| match c {
+                    egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        let open = painted_card(&telemetry_frame(&ctx, &mut boxes, &lines, vec![]));
+        assert!(
+            !copy_hit_rect(open, 1.0).intersects(disclosure_hit_rect(open, 1.0)),
+            "the icon and the triangle are at opposite ends of the title line"
+        );
+        let at = copy_hit_rect(open, 1.0).center();
+        telemetry_frame(&ctx, &mut boxes, &lines, vec![egui::Event::PointerMoved(at)]);
+        telemetry_frame(&ctx, &mut boxes, &lines, vec![press(at)]);
+        let (shapes, commands) =
+            telemetry_frame_output(&ctx, &mut boxes, &lines, vec![release(at)]);
+        let copied = copied_text(&commands);
+        println!("copied: {copied:?}");
+        assert_eq!(copied, ["Bob [Region II]\ndr/dt -0.412 c\ntau 12.5 M"]);
+        assert!(!boxes.collapsed.contains(&key), "the box stayed open");
+        assert_eq!(painted_card(&shapes), open, "and where it was");
+
+        // Shut, the box has no icon: a click where it would be copies nothing.
+        boxes.collapsed.insert(key);
+        let shut = painted_card(&telemetry_frame(&ctx, &mut boxes, &lines, vec![]));
+        let at = copy_hit_rect(shut, 1.0).center();
+        telemetry_frame(&ctx, &mut boxes, &lines, vec![egui::Event::PointerMoved(at)]);
+        telemetry_frame(&ctx, &mut boxes, &lines, vec![press(at)]);
+        let (_, commands) = telemetry_frame_output(&ctx, &mut boxes, &lines, vec![release(at)]);
+        assert!(copied_text(&commands).is_empty(), "a shut box copies nothing: {commands:?}");
     }
 
     /// The triangle takes the click and nothing else does: within the layer it is registered after
