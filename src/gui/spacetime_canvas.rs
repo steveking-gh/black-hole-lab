@@ -2,6 +2,7 @@ use crate::gui::axis::{self, SECONDS_PER_YEAR};
 use crate::gui::beacon_colour::{self, Beacon};
 use crate::gui::controls::{impossible_mode_note, ReferenceFrame, SignalViews};
 use crate::gui::polyline::{SCREEN_SPACING, thin_to_pixels};
+use crate::gui::numbers;
 use crate::gui::ruler;
 use crate::gui::theme::Theme;
 use crate::physics::as_seen::{
@@ -26,9 +27,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 pub const TELEMETRY_HOVER_TIP: &str =
 "Drag: move the box anywhere on the canvas. On the equatorial view the box then holds that screen position while the observer moves on; on the (t, r) diagram the box keeps a fixed offset from the observer. Double-click: snap the box back to the observer. Click the triangle at the left of the title line: shut the box down to that title line, or open the box again. A shut box keeps its top-left corner and goes on reading the observer, so the title line stays live. Each canvas remembers box positions, and shut boxes, per observer.
 
+Proper time (τ) — the reading on the observer's own watch: the time a clock carried along this worldline has ticked off since the run began. Pause stops the reading, stepping back winds the reading back, Reset returns every reading to zero, and the reading stops where the worldline ends. Seconds, or M with the units box ticked. Every rate below that carries a τ counts against this clock.
+
 dr/dt — map speed, in c: how fast the marker crosses the (t, r) chart per tick of the chart's shared clock. Far from the hole this rate equals what a distant observer measures. Near the hole the chart runs on a clock that lets infall and light cross the horizon without freezing, so the number means something only against the drawn light wedge.
 
-dr/dτ — how fast the radial coordinate changes per unit of the observer's own proper time: kilometres of radius per second of that observer's watch, or M of r per M of τ with the units box ticked. Not a speed, and deliberately not labelled in c. Two owners split the two halves of this ratio — the chart owns r, the observer owns τ — so the value passes 1 on any deep infall and reaches −2.68 on a worldline asymptoting to r₋ while nothing moves faster than light. The watch runs slow, and r undercounts stretched space. Inside r₊ the radial coordinate is not even spacelike, which makes the quantity a countdown rate rather than a velocity. For speeds that really are speeds, read the v_ rows.
+dr/dτ — how fast the radial coordinate changes per unit of the observer's own proper time, in c: light-seconds of radius per second of that observer's watch. The c is a unit here and not a limit, because dr/dτ is not a speed. Two owners split the two halves of this ratio — the chart owns r, the observer owns τ — so the value passes 1 on any deep infall and reaches −2.68 on a worldline asymptoting to r₋ while nothing moves faster than light. The watch runs slow, and r undercounts stretched space. Inside r₊ the radial coordinate is not even spacelike, which makes the quantity a countdown rate rather than a velocity. For speeds that really are speeds, read the v_ rows.
 
 Ω — dϕ/dt: how fast the observer goes round the hole per unit of the chart's shared clock, signed, prograde positive. Radians per second, or inverse M with the units box ticked. The bracketed figure alongside is the local frame-dragging rate ω = −g_tϕ/g_ϕϕ, defined as the Ω of the zero-angular-momentum observer at that radius: the rate at which the hole turns space itself there. Far from the hole the two rates have nothing to do with each other and ω falls off as 2Ma/r³. Inside the static limit r = 2M every timelike worldline must share the hole's sign of Ω, however hard that worldline thrusts — the ergosphere is that fact, not the horizon. On r₋ the dragging reaches Ω₋ = a/(r₋² + a²), and a frozen worldline rides round at exactly Ω₋, the rate the Frozen line names.
 
@@ -1532,22 +1535,22 @@ fn horizon_box_lines(
 
 /// A dphi/dt or a dragging rate, in inverse M, signed so that prograde reads positive.
 ///
-/// Scientific notation below a thousandth of a radian per M: far from the hole Omega falls off as
-/// r^-3/2 and a fixed number of decimals would print a column of zeroes, while near r- the rates
-/// that matter are of order one.
+/// Four significant digits below a thousandth of a radian per M: far from the hole Omega falls off
+/// as r^-3/2 and a fixed number of decimals would print a column of zeroes, while near r- the
+/// rates that matter are of order one. See `numbers` for where each gives way to an exponent.
 fn rate_per_m(omega: f64) -> String {
     if omega != 0.0 && omega.abs() < 1e-3 {
-        format!("{:+.2e}/M", omega)
+        format!("{}/M", numbers::small_signed(omega))
     } else {
-        format!("{:+.4}/M", omega)
+        format!("{}/M", numbers::fixed_signed(omega, 4))
     }
 }
 
 /// The same rate in radians per second, for the mode that does not speak M. The span is wide -
-/// a supermassive hole's ISCO turns in hours and a stellar-mass one's in milliseconds - so this
-/// stays in scientific notation rather than trying to pick a scale per decade.
+/// a supermassive hole's ISCO turns in hours and a stellar-mass one's in milliseconds - so it
+/// takes an SI prefix per factor of a thousand: see `numbers::rad_per_second`.
 fn rate_per_second(per_s: f64) -> String {
-    format!("{:+.3e} rad/s", per_s)
+    numbers::rad_per_second(per_s)
 }
 
 /// One measured speed: v, the Lorentz factor between the two worldlines, and the celerity, with
@@ -1559,7 +1562,7 @@ fn rate_per_second(per_s: f64) -> String {
 /// light. Past four nines it prints the bound instead and leaves gamma to carry the magnitude.
 fn speed_row(s: &LocalSpeed) -> String {
     let v = if s.v >= 0.9999 { ">0.9999c".to_string() } else { format!("{:.3}c", s.v) };
-    let big = |x: f64| if x >= 1e3 { format!("{:.2e}", x) } else { format!("{:.2}", x) };
+    let big = |x: f64| numbers::fixed(x, 2);
     // Six characters and a pad to eight, so the = lands in the same column as the rates above.
     // The names are abbreviated to hold that column; the hover tip spells all three out, and
     // which of them can appear at all is `Observer::local_speeds`.
@@ -1613,20 +1616,15 @@ fn telemetry_lines(
     // km/s this used to lead with in physical mode was a six-digit number nobody reads: -161898
     // km/s says less than -0.54c does, and says it in more space. `Observer::velocity_km_s` is
     // still the conversion the tests bound against c.
-    let v_coord_str = format!("dr/dt   = {:+.2}c", v_c);
-    // No "c" on this one. dr/dtau is a coordinate rate against a proper time, not a speed
-    // anybody measures: it runs past 1 on any deep infall and reads -2.68 on a worldline
-    // asymptoting to r-, where nothing is moving faster than light and the radial coordinate is
-    // not even spacelike. Printed with a c it read as an impossibility. The numbers that *are*
-    // speeds, and are below c in every region and every frame, are the v_ rows below it.
-    // dr/dtau is a coordinate rate against a proper time, so its physical form is kilometres
-    // of radius per second of the observer's *own* clock - which is exactly why it can pass c,
-    // and why the two clocks are named in the label rather than left to be inferred.
-    let v_proper_str = if use_physical_units {
-        format!("dr/dτ   = {:+.3e} km/s (own clock)", u_prop * 299_792.458)
-    } else {
-        format!("dr/dτ   = {:+.2} M/τ", u_prop)
-    };
+    let v_coord_str = format!("dr/dt   = {}c", numbers::fixed_signed(v_c, 2));
+    // In c as well, and in both modes, like dr/dt above it: light-seconds of radius per second
+    // of the observer's *own* clock, which is the same number as M of r per M of tau. It is a
+    // coordinate rate against a proper time and not a speed anybody measures, so it runs past 1
+    // on any deep infall and reads -2.68 on a worldline asymptoting to r- with nothing moving
+    // faster than light; "(proper time)" says which clock, and the hover tip says why the c is a
+    // unit and not a bound. The numbers that *are* speeds, and are below c in every region and
+    // every frame, are the v_ rows below it.
+    let v_proper_str = format!("dr/dτ   = {}c (proper time)", numbers::fixed_signed(u_prop, 2));
 
     // The chart's other rate. Omega = dphi/dt against the local dragging rate omega: outside the
     // static limit they are independent, and inside it every timelike worldline is forced to
@@ -1666,14 +1664,12 @@ fn telemetry_lines(
     // leaves out is the whole of the Cauchy horizon singularity. The hover tip says so at length;
     // the label is there so that nobody reads a mild number near r- as a promise. See
     // `TELEMETRY_HOVER_TIP`.
-    let tidal_str = if a_tidal_grad >= 1e6 {
-        format!("Tidal (bg) = {:.2e} g/m", a_tidal_grad)
-    } else if a_tidal_grad >= 100.0 {
-        format!("Tidal (bg) = {:.0} g/m", a_tidal_grad)
+    let tidal_str = if a_tidal_grad >= 100.0 {
+        format!("Tidal (bg) = {} g/m", numbers::fixed(a_tidal_grad, 0))
     } else if a_tidal_grad >= 0.01 {
         format!("Tidal (bg) = {:.2} g/m", a_tidal_grad)
     } else {
-        format!("Tidal (bg) = {:.2e} g/m", a_tidal_grad)
+        format!("Tidal (bg) = {} g/m", numbers::small(a_tidal_grad))
     };
 
     // The conserved constants of the worldline actually being integrated, for free-fallers.
@@ -1685,14 +1681,23 @@ fn telemetry_lines(
     };
 
     let shift_tag = if nu_ratio > 1.0 { "blueshift" } else { "redshift" };
-    // Scientific notation at both ends of the scale. The ratio is proportional to u^t near the
-    // far branch of r- - exactly u^t r-^2/(r-^2 + a^2) in the limit - and `geodesic::U_T_STALL`
-    // follows the worldline out to u^t = 1e10, so a plain decimal would run to ten digits in a
-    // box laid out for four.
-    let nu_str = if !(0.01..1e4).contains(&nu_ratio) {
-        format!("ν_in/ν_∞ = {:.2e} ({})", nu_ratio, shift_tag)
+    // The ratio is proportional to u^t near the far branch of r- - exactly u^t r-^2/(r-^2 + a^2)
+    // in the limit - and `geodesic::U_T_STALL` follows the worldline out to u^t = 1e10, so the
+    // top of its range is where `numbers` turns to an exponent.
+    let nu_str = if nu_ratio < 0.01 {
+        format!("ν_in/ν_∞ = {} ({})", numbers::small(nu_ratio), shift_tag)
     } else {
-        format!("ν_in/ν_∞ = {:.2} ({})", nu_ratio, shift_tag)
+        format!("ν_in/ν_∞ = {} ({})", numbers::fixed(nu_ratio, 2), shift_tag)
+    };
+
+    // The observer's own watch, first under the title because every rate below it that carries a
+    // τ is counted on this clock. Every view builds its boxes here, so the line reads the same on
+    // each; the rest-frame view's box for the other observer is built from the emission event,
+    // and there it is the reading their watch showed as the light left.
+    let tau_str = if use_physical_units {
+        metric.format_physical_time(obs.tau)
+    } else {
+        format!("{}M", numbers::fixed(obs.tau, 2))
     };
 
     let mut lines = vec![
@@ -1700,6 +1705,12 @@ fn telemetry_lines(
             text: format!("{} [{}]", name, region_tag(metric, obs.r)),
             color,
             is_title: true,
+            bold: false,
+        },
+        TelemetryLine {
+            text: format!("Proper time (τ) = {tau_str}"),
+            color: Theme::TEXT_BRIGHT,
+            is_title: false,
             bold: false,
         },
         TelemetryLine { text: v_coord_str, color: Theme::TEXT_BRIGHT, is_title: false, bold: false },
@@ -1716,7 +1727,7 @@ fn telemetry_lines(
     ];
     // Inserted after the chart's own rates and before the accelerometer, so the box reads
     // outward from what the chart says to what somebody standing there measures.
-    let insert_at = 4;
+    let insert_at = 5;
     for (i, text) in speed_strs.into_iter().enumerate() {
         lines.insert(
             insert_at + i,
@@ -3042,10 +3053,8 @@ Tick Enable Observer on Alice's or Bob's card",
             let distant = distant_clock_offset_label(clock_grid.step_m * seconds_per_m);
             let ratio = if !u_t.is_finite() {
                 "∞".to_string()
-            } else if u_t < 1e4 {
-                format!("{u_t:.1}")
             } else {
-                format!("{u_t:.2e}")
+                numbers::fixed(u_t, 1)
             };
             let font2 = font.clone();
             head_lines.push(vec![
@@ -4152,7 +4161,7 @@ pub(crate) fn wave_crests(
 }
 
 /// A frequency in hertz with the usual SI prefix, at four significant digits: 489.0 mHz,
-/// 12.35 Hz, 1.095 kHz, 136.2 MHz. Below a microhertz or above a terahertz it falls back to
+/// 12.35 Hz, 1.095 kHz, 136.2 MHz. Below a picohertz or above a terahertz it falls back to
 /// scientific notation, and anything that is not a finite positive number is "n/a".
 pub(crate) fn format_frequency(hz: f64) -> String {
     if !hz.is_finite() || hz <= 0.0 {
@@ -4163,7 +4172,9 @@ pub(crate) fn format_frequency(hz: f64) -> String {
     let magnitude = hz.log10().floor() - 3.0;
     let quantum = 10f64.powf(magnitude);
     let hz = (hz / quantum).round() * quantum;
-    const PREFIXES: [(&str, f64); 7] = [
+    const PREFIXES: [(&str, f64); 9] = [
+        ("pHz", 1e-12),
+        ("nHz", 1e-9),
         ("µHz", 1e-6),
         ("mHz", 1e-3),
         ("Hz", 1.0),
@@ -4653,19 +4664,15 @@ fn sight_angle_label(radians: f64) -> String {
     }
 }
 
-/// A ratio printed at three decimals where three decimals say something, and in scientific notation
-/// at both ends of the scale. g runs from about 1e-10 on a hovering observer's last sight of an
-/// infaller to tens on the approach to r-, and a fixed number of decimals would print a column of
-/// zeroes at one end and a wall of digits at the other.
+/// A ratio printed at three decimals where three decimals say something, and at four significant
+/// digits below that. g runs from about 1e-10 on a hovering observer's last sight of an infaller
+/// to tens on the approach to r-, and a fixed number of decimals would print a column of zeroes at
+/// the small end. See `numbers` for where each end gives way to an exponent.
 fn loose_number(x: f64) -> String {
     if !x.is_finite() {
         return "∞".to_string();
     }
-    if x != 0.0 && !(1e-3..1e4).contains(&x.abs()) {
-        format!("{x:.3e}")
-    } else {
-        format!("{x:.3}")
-    }
+    if x != 0.0 && x.abs() < 1e-3 { numbers::small(x) } else { numbers::fixed(x, 3) }
 }
 
 /// Why there is no image of the other observer, in the words the box prints. Every variant is a
@@ -5711,7 +5718,8 @@ mod canvas_tests {
         }
         assert_eq!(format_frequency(0.0), "n/a");
         assert_eq!(format_frequency(f64::NAN), "n/a");
-        assert_eq!(format_frequency(1e-9), "1.000e-9 Hz");
+        assert_eq!(format_frequency(1e-9), "1.000 nHz");
+        assert_eq!(format_frequency(1e-15), "1.000e-15 Hz");
     }
 
     #[test]
@@ -5857,12 +5865,8 @@ mod canvas_tests {
         }
         assert!(box_text.contains("Ω       = +0.2254/M (drag +0.1125/M)"), "{box_text}");
 
-        // dr/dtau is the one rate in the box that is not a speed, and it no longer claims to be.
-        assert!(box_text.contains("0.00 M/τ"), "{box_text}");
-        assert!(
-            !box_text.lines().any(|l| l.starts_with("dr/dτ") && l.contains('c')),
-            "dr/dτ must not be labelled in c: {box_text}"
-        );
+        // dr/dtau is in c like dr/dt, and names the clock it is counted against.
+        assert!(box_text.contains("0.00c (proper time)"), "{box_text}");
 
         // Inside the static limit the static observer is gone and the box stops quoting one.
         let ergo_r = 0.5 * (metric.outer_horizon() + metric.ergosphere_equatorial());
@@ -5903,7 +5907,7 @@ mod canvas_tests {
             .join("
 ");
         assert!(phys.contains("rad/s"), "Ω reads as a rate per second: {phys}");
-        assert!(phys.contains("km/s (own clock)"), "and dr/dτ in km per second: {phys}");
+        assert!(phys.contains("0.00c (proper time)"), "and dr/dτ in c: {phys}");
         assert!(phys.contains("dr/dt   = -0.00c"), "speeds stay in c in both modes: {phys}");
         for line in phys.lines().filter(|l| !l.starts_with("E =")) {
             assert!(
@@ -7277,13 +7281,13 @@ mod rest_frame_tests {
         let at_emission = telemetry_lines("Bob", Theme::BOB_COLOR, &snapshot, &metric, false);
         let at_now = telemetry_lines("Bob", Theme::BOB_COLOR, &bob, &metric, false);
         assert_ne!(
-            at_emission[1].text, at_now[1].text,
+            at_emission[2].text, at_now[2].text,
             "the box would be reading the present event, not the emission event"
         );
         assert!(
-            p.text.contains(&at_emission[1].text),
+            p.text.contains(&at_emission[2].text),
             "the emission event's own dr/dt must be the line in the box: {:?} in {}",
-            at_emission[1].text,
+            at_emission[2].text,
             p.text
         );
     }

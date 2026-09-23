@@ -1,3 +1,4 @@
+use crate::gui::numbers;
 use crate::gui::theme::Theme;
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::Observer;
@@ -6,35 +7,32 @@ use crate::physics::wavefront::{SignalField, limiting_blueshift};
 pub struct CauchyEffects;
 
 /// Format the measured shift of ingoing principal null light, nu_obs / nu_inf = -k.u.
-/// Two decimals while the ratio is a number a reader can hold in their head, scientific notation
-/// at either end of that: the shift is proportional to u^t on the approach to the far branch of
-/// r-, where `geodesic::U_T_STALL` follows the worldline out to u^t = 1e10, and a plain decimal
-/// would be an unreadable run of ten digits in a line a few characters wide.
+/// Two decimals while the ratio is a number a reader can hold in their head, four significant
+/// digits below a hundredth, and `numbers`' rule for where either end becomes an exponent: the
+/// shift is proportional to u^t on the approach to the far branch of r-, where
+/// `geodesic::U_T_STALL` follows the worldline out to u^t = 1e10.
 fn fmt_nu(ratio: f64) -> String {
-    if !(0.01..1e4).contains(&ratio) {
-        format!("{:.2e}", ratio)
-    } else {
-        format!("{:.2}", ratio)
-    }
+    if ratio < 0.01 { numbers::small(ratio) } else { numbers::fixed(ratio, 2) }
 }
 
 /// Format a measured frequency ratio for the signal line: three decimals while it is a number a
-/// reader can hold in their head, scientific notation once the stack against r- takes over, and the
-/// infinity symbol for the degenerate a = 0 case, where there is no inner horizon and exp(kappa_-
-/// Delta t) has no finite value.
+/// reader can hold in their head, whole numbers once the stack against r- takes over (and
+/// `numbers`' exponent past a billion), and the infinity symbol for the degenerate a = 0 case,
+/// where there is no inner horizon and exp(kappa_- Delta t) has no finite value.
 fn fmt_shift(ratio: f64) -> String {
     if !ratio.is_finite() {
         "∞".to_string()
     } else if ratio.abs() < 100.0 {
         format!("{:.3}", ratio)
     } else {
-        format!("{:.2e}", ratio)
+        numbers::fixed(ratio, 0)
     }
 }
 
 impl CauchyEffects {
-    /// Render the dedicated relativistic telemetry HUD panel: proper clocks, radial separation and
-    /// the shift each observer measures for ingoing light.
+    /// Render the dedicated relativistic telemetry HUD panel: radii, radial separation, the
+    /// chart's coordinate time and the shift each observer measures for ingoing light. The
+    /// observers' proper times are on their own info boxes.
     ///
     /// Either observer may be absent - the "Enable Observer" box on their card unticked - and every
     /// line here is a statement about somebody, so each one is drawn only where the observers it
@@ -59,7 +57,7 @@ impl CauchyEffects {
                 ui.set_width(ui.available_width());
 
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("RELATIVISTIC TELEMETRY & PROPER CLOCKS").strong().color(Theme::HORIZON_OUTER));
+                    ui.label(egui::RichText::new("RELATIVISTIC TELEMETRY").strong().color(Theme::HORIZON_OUTER));
 
                     // Radial separation readout aligned to the right
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -85,12 +83,7 @@ impl CauchyEffects {
                         } else {
                             format!("{:.2}M", al.r)
                         };
-                        let tau_str = if use_physical_units {
-                            metric.format_physical_time(al.tau)
-                        } else {
-                            format!("{:.2}M ({})", al.tau, metric.format_physical_time(al.tau))
-                        };
-                        ui.label(egui::RichText::new(format!("Alice τ: {} [r={}]", tau_str, al_r_str)).color(Theme::ALICE_COLOR));
+                        ui.label(egui::RichText::new(format!("Alice r = {}", al_r_str)).color(Theme::ALICE_COLOR));
                         ui.label(
                             egui::RichText::new(format!("ν_in/ν_∞ = {}", fmt_nu(al.ingoing_frequency_ratio(metric))))
                                 .color(Theme::ALICE_COLOR),
@@ -104,12 +97,7 @@ impl CauchyEffects {
                         } else {
                             format!("{:.2}M", bob.r)
                         };
-                        let bob_tau_str = if use_physical_units {
-                            metric.format_physical_time(bob.tau)
-                        } else {
-                            format!("{:.2}M ({})", bob.tau, metric.format_physical_time(bob.tau))
-                        };
-                        ui.label(egui::RichText::new(format!("Bob τ: {} [r={}]", bob_tau_str, bob_r_str)).color(Theme::BOB_COLOR));
+                        ui.label(egui::RichText::new(format!("Bob r = {}", bob_r_str)).color(Theme::BOB_COLOR));
                         ui.label(
                             egui::RichText::new(format!("ν_in/ν_∞ = {}", fmt_nu(bob.ingoing_frequency_ratio(metric))))
                                 .color(Theme::BOB_COLOR),
@@ -122,7 +110,7 @@ impl CauchyEffects {
                     } else {
                         format!("{:.2}M ({})", current_time, metric.format_physical_time(current_time))
                     };
-                    ui.label(format!("Exterior Time t: {}", ext_t_str));
+                    ui.label(format!("Coordinate Time t: {}", ext_t_str));
                     if let Some(bob) = bob.as_ref().filter(|b| b.release_t > 0.0) {
                         let delay_str = if use_physical_units {
                             metric.format_physical_time(bob.release_t)

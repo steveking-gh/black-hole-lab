@@ -1,4 +1,5 @@
 pub mod axis;
+pub mod numbers;
 pub mod beacon_colour;
 pub mod theme;
 pub mod polyline;

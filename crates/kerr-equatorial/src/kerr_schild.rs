@@ -90,7 +90,7 @@ impl KerrSchild {
         if ly >= 0.01 {
             format!("{:.2} ly ({:.0} AU)", ly, au)
         } else if au >= 0.05 {
-            format!("{:.1} AU ({:.2e} km)", au, km)
+            format!("{:.1} AU ({} km)", au, plain_km(km))
         } else if km >= 1e6 {
             format!("{:.2} M km", km / 1e6)
         } else {
@@ -142,7 +142,7 @@ impl KerrSchild {
 
     /// Format a distance value in kilometers nicely.
     pub fn format_km(&self, km: f64) -> String {
-        if km >= 1e9 {
+        if km > 1e9 {
             format!("{:.2e} km", km)
         } else if km >= 1e6 {
             format!("{:.2}M km", km / 1e6)
@@ -730,6 +730,26 @@ impl KerrSchild {
         let r = r.max(1e-4);
         48.0 * self.m * self.m / r.powi(6)
     }
+}
+
+/// A kilometre count as a reader takes it in: whole kilometres grouped in threes by commas up to a
+/// billion - 149,600,000 - and an exponent only past that, where no box has room for the digits.
+fn plain_km(km: f64) -> String {
+    if km.abs() > 1e9 {
+        return format!("{km:.2e}");
+    }
+    let digits = format!("{:.0}", km.abs());
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3 + 1);
+    if km < 0.0 {
+        out.push('-');
+    }
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
 }
 
 #[cfg(test)]

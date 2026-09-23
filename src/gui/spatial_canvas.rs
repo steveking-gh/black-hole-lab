@@ -1,5 +1,6 @@
 use crate::gui::controls::{ReferenceFrame, SignalViews};
 use crate::gui::polyline::{SCREEN_SPACING, thin_to_pixels};
+use crate::gui::numbers;
 use crate::gui::ruler;
 use crate::gui::spacetime_canvas::{BoxId, Canvas, PendingBox, TelemetryBoxes};
 use crate::gui::theme::Theme;
@@ -724,11 +725,11 @@ impl SpatialCanvas {
                  Cartesian radius ρ = √(r²+a²); ring singularity at ρ = a\n\
                  Units: Kilometers (km) & Seconds (s)\n\
                  Scale: 1M = {}\n\
-                 Mass: {:.2e} M☉\n\
+                 Mass: {} M☉\n\
                  Outer Horizon r₊: {} ({:.2}M, ρ = {:.2}M)\n\
                  Cauchy Horizon r₋: {} ({:.2}M, ρ = {:.2}M)\n\
                  Spin a/M: {:.3}\n\
-                 Drag: Ω_H = {:.3}/M = {:.3e} rad/s\n\
+                 Drag: Ω_H = {:.3}/M = {}\n\
                  Front colour: ν an infaller here measures ÷ ν the infaller passing the emitter\n\
                  measured as it left: red ×1 (every front is born red), orange ×3, yellow ×10,\n\
                  green ×30, blue ×1000, violet ×100000, grey below ×1. One lightness throughout,\n\
@@ -742,7 +743,7 @@ impl SpatialCanvas {
                  Zoom: {:.0} px/M (scroll to zoom, drag the background to pan,\n\
                  drag either observer's marker to put them anywhere in the plane)",
                 metric.format_physical_distance(1.0),
-                metric.m_solar,
+                numbers::fixed(metric.m_solar, 2),
                 metric.format_km(metric.r_to_km(rp)),
                 rp,
                 rho_p,
@@ -751,7 +752,7 @@ impl SpatialCanvas {
                 rho_m,
                 metric.a_star(),
                 omega_h,
-                omega_h / metric.t_grav_seconds(),
+                numbers::rad_per_second(omega_h / metric.t_grav_seconds()),
                 wound_line,
                 centred_line,
                 self.zoom,
@@ -762,7 +763,7 @@ impl SpatialCanvas {
                  Cartesian radius ρ = √(r²+a²); ring singularity at ρ = a\n\
                  Physical Scale: 1M = GM/c² = {}\n\
                  Time Scale:     1M/c = GM/c³ = {}\n\
-                 Mass: {:.2e} M☉\n\
+                 Mass: {} M☉\n\
                  Outer Horizon r₊: {:.2}M ({}), ρ = {:.2}M\n\
                  Cauchy Horizon r₋: {:.2}M ({}), ρ = {:.2}M\n\
                  Spin a/M: {:.3}\n\
@@ -781,7 +782,7 @@ impl SpatialCanvas {
                  drag either observer's marker to put them anywhere in the plane)",
                 metric.format_physical_distance(1.0),
                 metric.format_physical_time(1.0),
-                metric.m_solar,
+                numbers::fixed(metric.m_solar, 2),
                 rp,
                 metric.format_physical_distance(rp),
                 rho_p,
