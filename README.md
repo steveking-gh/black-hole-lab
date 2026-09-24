@@ -46,9 +46,9 @@ You can also save and load your simulation using the associated buttons.
 
 ## The Equatorial Plane View
 
-The right hand side shows a top-down map of the black hole and surrounding
+The right hand side shows a top-down chart of the black hole and surrounding
 space.  The black hole looks like a colored bullseye while Alice and Bob are the
-yellow and turquoise dots respectively.  The black hole spins counter-clockwise.
+amber and mint dots respectively.  The black hole spins counter-clockwise.
 
 ![Equatorial View](assets/images/equatorial_view.png)
 
@@ -68,15 +68,14 @@ two stopwatches in different FoRs could measure the same event as taking a
 million years or a millisecond.  The universe has no preferred FoR, so neither
 stopwatch is more correct than the other.
 
-### A Chart vs Frame of Reference
+### Frame of Reference vs Chart
 
-Black Hole Lab shows several *charts* such as the `EQUATORIAL PLANE` view on the
-right.  The difference between these charts and a proper FoR is that a chart
-does *not* show the speed of light as constant in all directions.  You'll see
-light traveling "upstream" against gravity as moving more slowly than light
-aimed "downstream" into the black hole.  These charts treat light like more like
-a sound wave, yet still abide by the full mathematical rigor of general
-relativity and they can offer an interesting intuition about the physics.
+Black Hole Lab shows several *charts* such as the `EQUATORIAL PLANE` view.  The
+difference between these charts and a proper FoR is that a chart does *not* show
+the speed of light as constant in all directions.  You'll see light traveling
+"upstream" against gravity as moving more slowly than light aimed "downstream"
+into the black hole.  These charts treat light akin to a sound wave, yet still
+respect the mathematical rigor of general relativity.
 
 ### Coordinate Time vs Proper Time
 
@@ -122,16 +121,17 @@ The last two options we can show are **Bob's Frame Of Reference 1D+1** and likew
 
 All the graphs above feature cone shapes centered on the observers.  These are
 **light cones**.  Light cones provide a helpful way to reason about observers
-and are common in diagrams on relativity.  The cone below the observer shows
-spacetime where light from *any past event* can reach the observer.  The cone
-above the observer shows the spacetime where light from *any future event* can
-reach the observer.  As a universal convention, physicists use a 45 degree line
-to represent the speed of light: the speed of light is one unit of space
-horizontally for one unit of time vertically.
+and are common in diagrams on relativity.  The cone *below* the observer shows
+the region of spacetime where light from *any past event* can reach the
+observer.  The cone *above* the observer shows the region of spacetime where
+light from the observer can reach *any future event*.  As a universal
+convention, physicists use a 45 degree line to represent the speed of light:
+travels one unit of space horizontally per one unit of time vertically.
 
 We pick on "light from an event" here, but this really means *any*
 cause-and-effect influence whatsoever.  An event outside your light cone
-*cannot* affect your reality in any way.
+*cannot* affect your present reality.  Naturally as time goes by, an event
+outside your light cone *now* might not be outside your light cone *later*.
 
 ### Light Cone Tilting
 
@@ -174,11 +174,13 @@ In the `EQUATORIAL PLANE` view, zoom in to Bob with the mouse wheel.
 ![Bob Static 3](assets/images/bob_static_3.png)
 
 Here we can see the gravity and frame dragging of Sag A* pulling strongly on
-Bob's radio transmissions.  The lopsided radio waves show that the `EQUATORIAL
-PLANE` view is definitely a *chart* rather than a frame of reference.  We see
-the radio waves heading downstream with the flow of space moving faster than
-those aimed away from the black hole.  A real FoR would measure both moving at
-speed `c` with the "fast" waves blueshifted and the "slow" waves redshifted.
+Bob's radio transmissions.  The `EQUATORIAL PLANE` *chart* shows the radio waves
+heading downstream with the flow of space moving much faster than those aimed
+away from the black hole.  Another observer checking the signal in various
+places from their own FoR would measure all wavefronts moving at speed `c`, but
+with the "fast" waves blueshifted and the "slow" waves redshifted.  Bob notices
+nothing special in his FoR and his transmission looks identical in all
+directions.
 
 At this spot we also see from the `a_thrust` stat in Bob's info box that his
 rocket is accelerating at 188209 times earth gravity to keep him stationary
@@ -220,7 +222,7 @@ More details:
 
 ### The Black Hole Event Horizon (Region II)
 
-Next inside the ergosphere is the light blue *event horizon*.  The event horizon
+Next inside the ergosphere is the cyan *event horizon*.  The event horizon
 marks the boundary where the vacuum of space moves *into* the black hole faster
 than the speed of light.  This is the point of no return!  An object can cross
 the event horizon going in, but cannot cross back into *our* universe.  Crossing
@@ -259,16 +261,16 @@ few of the more mind-boggling aspects to think about:
 * Like the outer horizon, the inner horizon can be both a moment in time or a
   place in space depending on which side you find yourself.
 
-* The inner horizon has two *branches*, so to speak. If you have high angular
-  momentum, you'll encounter the branch where the inner horizon profoundly
-  compresses incoming time.  As you get close, the outside universe appears to
-  run ever faster relative to your clock.  In general relativity, this effect
-  grows exponentially and without bound! Unfortunately for you, this time
-  compression effect also gives incoming light an unbounded energy boost.
-  Physicists refer to this phenomenon as "infinite blueshift". You fry in a bath
-  of future light boosted to extreme energy.
+* The inner horizon has two *branches*, so to speak, which we'll call *near* and
+  *far*. If you have high angular momentum, you'll encounter the *far* branch
+  where the inner horizon profoundly compresses incoming time.  As you get
+  close, the outside universe appears to run ever faster relative to your clock.
+  In general relativity, this effect grows exponentially and without bound!
+  Unfortunately for you, this time compression effect also gives incoming light
+  an unbounded energy boost. Physicists refer to this phenomenon as "infinite
+  blueshift". You fry in a bath of future light boosted to extreme energy.
 
-  With low angular momentum, you fall through the first branch of the horizon.
+  With low angular momentum, you fall through the *near* branch of the horizon.
   In this case, you don't linger from the outside universe's perspective.  You
   will unfortunately be fried by the "infinite blueshift" of light emitted from
   everything that fell in before you on this path.
