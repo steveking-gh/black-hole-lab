@@ -68,6 +68,16 @@ two stopwatches in different FoRs could measure the same event as taking a
 million years or a millisecond.  The universe has no preferred FoR, so neither
 stopwatch is more correct than the other.
 
+### A Chart vs Frame of Reference
+
+Black Hole Lab shows several *charts* such as the `EQUATORIAL PLANE` view on the
+right.  The difference between these charts and a proper FoR is that a chart
+does *not* show the speed of light as constant in all directions.  You'll see
+light traveling "upstream" against gravity as moving more slowly than light
+aimed "downstream" into the black hole.  These charts treat light like more like
+a sound wave, yet still abide by the full mathematical rigor of general
+relativity and they can offer an interesting intuition about the physics.
+
 ### Coordinate Time vs Proper Time
 
 *Coordinate time* is the artificial "chart clock" used to step the mathematics
@@ -130,9 +140,68 @@ Alice's light cones appear a tilted toward the black hole.  This is a real
 physical effect of the warping of spacetime by gravity.  It's quite fair to say
 that gravity *pulls on your future*.
 
-On the other hand, Bob's FoR view shows his light cone rigidly at 45 degrees.  From Bob's frame of reference, light moves at `c` in all directions.  Things might appear warped *within* Bob's light cone, but light itself moves unfailingly at `c` in an observer FoR.
+On the other hand, Bob's FoR view shows his light cone rigidly at 45 degrees.
+From Bob's frame of reference, light moves at `c` in all directions.  Things
+might appear warped *within* Bob's light cone, but light itself moves
+unfailingly at `c` in an observer FoR.
 
-Note that Bob's FoR is a proper *frame of reference* while the global foliation view that shows tilted light cones is a *chart* to help us understand.
+Note that Bob's FoR is a *frame of reference* while the global foliation view
+that shows tilted light cones is a *chart* to help us understand.
+
+## Looking At Physics with Black Hole Lab
+
+The following sections show some interesting features of general relativity.
+We'll use Sagittarius A*, which scientists believe is the real black hole at the
+center of our galaxy.
+
+### Outside the Black Hole
+
+Uncheck Alice, then let's watch Bob holding still some ways outside the black
+hole.  Enable Bob's "Transmit Signal", then set Bob to "Static" and "At rest here".
+
+![Bob Static 1](assets/images/bob_static_1.png)
+
+Play the simulation for a bit and you'll see Bob transmitting.  The simulation only tracks the fixed number of Bob's transmission wave fronts as set the "Wavefronts kept" slider control.
+
+![Bob Static 2](assets/images/bob_static_2.png)
+
+We can see the black hole capturing a good portion of the radio waves.  If you
+look closely, you can see the waves face three different fates depending on the
+angle they crossed the event horizon.  More about that later.
+
+In the `EQUATORIAL PLANE` view, zoom in to Bob with the mouse wheel.
+
+![Bob Static 3](assets/images/bob_static_3.png)
+
+Here we can see the gravity and frame dragging of Sag A* pulling strongly on
+Bob's radio transmissions.  The lopsided radio waves show that the `EQUATORIAL
+PLANE` view is definitely a *chart* rather than a frame of reference.  We see
+the radio waves heading downstream with the flow of space moving faster than
+those aimed away from the black hole.  A real FoR would measure both moving at
+speed `c` with the "fast" waves blueshifted and the "slow" waves redshifted.
+
+At this spot we also see from the `a_thrust` stat in Bob's info box that his
+rocket is accelerating at 188209 times earth gravity to keep him stationary
+against the pull of gravity.  This is very analogous to swimming upstream
+against the fast current of space pouring into the black hole. On the other
+hand, we notice that the `Tidal` force on Bob, aka the famous
+*spaghettification* effect, is only 0.00001 g/m, which would be unnoticeable.
+
+### Receiving Radio Signals
+
+Bob and Alice record when they receive the other's radio signal.  Receiving a signal appears as a special tick mark on the observer's world line.
+
+![Signal Reception](assets/images/receiving_signal.png)
+
+In this `EQUATORIAL PLANE` view, we see 3 triangular tick marks on Alice's world line that mark exactly when she received the first 3 wavefronts that have already passed her in space.
+
+The observer FoR and global foliation views also show signal receptions.  Here's
+Alice's FoR.  We see 3 turquoise color wavefronts have passed Alice and are now
+in her past.  Several more are in her future.  Because this is an FoR, the waves
+move passed Alice at the speed of light and appears as 45 degree angle lines by
+definition.
+
+![Alice Reception](assets/images/alice_receive_1.png)
 
 
 ### The Black Hole Ergosphere
