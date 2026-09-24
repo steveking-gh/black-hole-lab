@@ -3634,8 +3634,8 @@ mod tests {
         let first: Vec<usize> =
             [&app.sim.alice_signal, &app.sim.bob_signal].iter().map(|f| f.pulses.len()).collect();
         assert_eq!(first, vec![1, 1], "Alice falling and Bob hovering both transmit at once");
-        assert_eq!(app.sim.alice_signal.pulses[0].rays.len(), 64);
-        assert_eq!(app.sim.bob_signal.pulses[0].rays.len(), 64);
+        assert!(app.sim.alice_signal.pulses[0].launched_with(64));
+        assert!(app.sim.bob_signal.pulses[0].launched_with(64));
 
         // Turned up part-way through the run. Bob is still hovering, so his clock runs slower than
         // Alice's and his second pulse is a little later than hers; stepping until both fields hold
@@ -3649,14 +3649,12 @@ mod tests {
         }
         for (who, field) in [("Alice", &app.sim.alice_signal), ("Bob", &app.sim.bob_signal)] {
             assert!(field.pulses.len() > 1, "{who} sent a second pulse by t = {}", app.sim.clock);
-            assert_eq!(
-                field.pulses.back().unwrap().rays.len(),
-                256,
+            assert!(
+                field.pulses.back().unwrap().launched_with(256),
                 "{who}'s newest pulse carries the count the slider now shows"
             );
-            assert_eq!(
-                field.pulses[0].rays.len(),
-                64,
+            assert!(
+                field.pulses[0].launched_with(64),
                 "{who}'s first pulse keeps the count it was emitted with"
             );
             assert_eq!(field.rays_per_pulse, 256, "and both fields agree on what comes next");
@@ -3674,8 +3672,8 @@ mod tests {
             let painted = painted_text(&mut app);
             assert!(painted.contains("Wavefront points"), "the slider is on the panel: {painted}");
             app.step_forward(0.05);
-            assert_eq!(app.sim.alice_signal.pulses[0].rays.len(), rays);
-            assert_eq!(app.sim.bob_signal.pulses[0].rays.len(), rays);
+            assert!(app.sim.alice_signal.pulses[0].launched_with(rays));
+            assert!(app.sim.bob_signal.pulses[0].launched_with(rays));
             // And a frame with that pulse standing in both fields, which is the drawing path.
             painted_text(&mut app);
         }

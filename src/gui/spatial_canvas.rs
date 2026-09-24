@@ -3902,7 +3902,7 @@ mod tests {
         field.emit_if_due(&metric, &emitter);
         assert_eq!(field.pulses.len(), 1, "one pulse, let go at r = 4.5");
         let n = field.pulses[0].rays.len();
-        assert_eq!(n, 12);
+        assert!(field.pulses[0].launched_with(12), "{n} rays");
         assert!(field.pulses[0].rays.iter().all(|ray| ray.alive()), "a fresh pulse is all alive");
         // Which pair carries the winding does not matter: every dot on a front is the same dot,
         // so the two the cut leaves are the only two the frame gains.

@@ -1465,6 +1465,12 @@ pub struct Pulse {
     /// the panel's "Wavefront points" slider has been moved - and it belongs to this pulse rather
     /// than to the field: everything that reads a wavefront reads `rays.len()`, so a field can
     /// carry pulses of several counts at once and each keeps its own for life.
+    ///
+    /// Between two of those rays there may be one more: the ray launched exactly on a boundary of
+    /// the frozen family, E - Omega_- L = 0, wherever the comb's neighbours disagree about the
+    /// sign. See `with_family_boundaries`. So `rays.len()` is n plus the number of boundaries, two
+    /// for an emitter whose cone holds the whole frozen arc and none for a hole with no spin, and
+    /// the rays are still in order of emission angle.
     pub rays: Vec<NullRay>,
     /// The pulse's *radial extent*, as (t, r_min, r_max) over the rays that were still alive at
     /// that time: what the pulse is on the (t, r) diagram, where the fan of azimuths cannot be
@@ -1904,6 +1910,13 @@ impl Pulse {
             self.track_dt *= 2.0;
         }
         self.extent_track.push((t, r_min, r_max));
+    }
+
+    /// Whether this pulse went out on a comb of `n` directions: n rays, and at most one more on
+    /// each of the two boundaries of its frozen family (see `with_family_boundaries`).
+    #[cfg(test)]
+    pub(crate) fn launched_with(&self, n: usize) -> bool {
+        (n..=n + 2).contains(&self.rays.len())
     }
 
     /// This pulse's ring history, or None if it is not one of the tagged pulses.
@@ -2352,6 +2365,130 @@ fn can_transmit(metric: &KerrSchild, emitter: &Observer) -> bool {
     !matches!(emitter.geodesic, Some(geo) if geo.stalled)
 }
 
+/// The comb of a fresh pulse with one ray added on each boundary of its frozen family.
+///
+/// The frozen family is the arc of the emitter's cone with E - Omega_- L < 0 (see
+/// `NullRay::frozen`); its rays settle onto r- from outside and never cross it, while their
+/// neighbours on the other side of the boundary cross r- into Region III and come back towards r-
+/// from inside, towards the other branch, which only frozen-signed light can cross. So the front of
+/// every pulse passes through r- at each boundary of that arc, at an azimuth the comb does not
+/// sample: measured at a = 0.9 from a static emitter at 6M, the two comb rays either side of a
+/// boundary end up 0.59 rad apart in azimuth, and the segment joining them - one end outside r-,
+/// the other inside - drew a long shallow slant across the horizon that no ray took.
+///
+/// The ray launched on the boundary itself is the front's crossing point. It rides r- closer than
+/// either family (7e-7 M at 20 M from emission, against 2e-3 and 1.5e-4 for its comb neighbours,
+/// and 3e-15 - the floor of the arithmetic - by 50 M), and the front near it is straight: rays
+/// launched 10^-1 to 10^-8 of a comb step either side lie on the line through it on both sides,
+/// their azimuth and their r - r- both in proportion to the launch offset, so the front crosses
+/// r- at the boundary ray's azimuth to 1e-4 rad at every time measured. That is why one ray per
+/// boundary is added and not a bracket of them: a bracket would lie on the segments already drawn.
+///
+/// A change of sign between two comb rays is a family boundary only where both of them stay in:
+/// the sign is E - Omega_- L, and an escaping ray with enough prograde angular momentum carries
+/// the frozen sign as well, so an emitter outside r+ sees the sign change twice - once on the
+/// ingoing side of the cone, between light that will freeze and light that will cross, and once
+/// on the outgoing side, between two rays that both leave for good and mean nothing to r-. A gap
+/// with an escaping ray at either end is skipped for a second reason as well: its frozen end may
+/// be followed, inside the same gap, by the prograde critical impact parameter, where the front
+/// is pinned on the photon orbit and no single ray resolves it (see `MAX_RESOLVED_WINDING` in the
+/// equatorial view). A boundary ray there joined light frozen on r- to light swinging round the
+/// hole: measured with a 36-ray comb from a static emitter at r = 30 M, a = 0.65, the segment
+/// between the two swept across a receiver 0.5 rad round and recorded every pulse a second time,
+/// 61 M late and at a shift of 1.0014 where the static pair measures exactly 1. So both ends of
+/// the gap are asked `NullRay::escape_bound`, the exact fate test on each ray's own potential,
+/// and the ray is added only where neither escapes.
+///
+/// The ray is not launched on the boundary itself but a hair inside the frozen family, where
+/// E - Omega_- L over |E| + Omega_- |L| - the family sign made scale-free - is `-BOUNDARY_MARGIN`.
+/// On the boundary the sign is rounding, and `NullRay::frozen` reads it afresh from the ray's
+/// direction wherever it is asked, so a ray launched there changed family as the integration
+/// drifted, and the fate tests that rest on that sign (`NullRay::ring_bound` among them) were being
+/// asked about a ray with no family at all. The exact boundary ray belongs to neither family - it
+/// closes on the sphere where the two branches of r- meet - so nothing is lost by stepping off it.
+/// The margin is a hundred times the drift in L/E that the integrator is held to, 1e-8, so the ray
+/// stays frozen for as long as it lives and "no frozen ray is ever inside r-" holds of every ray
+/// the field carries; and it is far too small to see: the bracketing measurement above put a ray a
+/// millionth of a comb step off the boundary on top of the boundary ray itself, within 10% of it in
+/// r - r- and under 1e-4 rad from it in azimuth.
+///
+/// The boundary is found in closed form, not searched for. Every direction of the cone is
+/// `Tetrad::null_direction`, k = e0 + cos(alpha) e1 + sin(alpha) e2, with k^t > 0, and
+/// E - Omega_- L = -g(xi, k) for the Killing vector xi = d_t + Omega_- d_phi, which is linear in
+/// k. So over the whole cone
+///
+///     E - Omega_- L = A + B cos(alpha) + C sin(alpha),     A, B, C = -g(xi, e0), -g(xi, e1), -g(xi, e2),
+///
+/// up to the positive factor k^t that no sign depends on, and its two zeros are
+/// alpha = atan2(C, B) +/- acos(-A / hypot(B, C)): none where |A| >= hypot(B, C), which is a cone
+/// entirely of one family. The margin is then one first-order step off the zero along the
+/// derivative -B sin(alpha) + C cos(alpha), towards the frozen side; the step is 1e-6 of the
+/// scale, so the second-order term it leaves is 1e-12 of the margin. Nothing about the comb enters
+/// either answer, so a 64-point pulse and a 1024-point one from the same event carry the same added
+/// ray to the last bit, and the comb's own signs are read off the same expression, so the gap a
+/// zero is placed in and the signs either side of that gap cannot disagree. Those signs are read
+/// only at the two ends of the gap each zero falls in. Read at every comb angle - a sine and a
+/// cosine for each of 144 - they were the whole of the cost: measured, an emission at the default
+/// count went from 6.0 us to 3.7 us when they stopped being, against 3.6 us for the comb alone. A hole with no spin has Omega_- = 0 and no
+/// frozen family, and an emitter whose cone holds no boundary gets the comb unchanged.
+fn with_family_boundaries(
+    metric: &KerrSchild,
+    tetrad: &Tetrad,
+    r: f64,
+    comb: Vec<NullRay>,
+    launch: impl Fn(f64) -> NullRay,
+) -> Vec<NullRay> {
+    /// How far inside the frozen family the boundary ray is launched, as a fraction of
+    /// |E| + Omega_- |L|.
+    const BOUNDARY_MARGIN: f64 = 1e-6;
+    let two_pi = 2.0 * std::f64::consts::PI;
+    let n = comb.len();
+    let step = two_pi / (n as f64);
+    let omega_minus = metric.inner_horizon_omega();
+    let g = metric.metric_components(r);
+    // E and L of a vector v of the cone: -g_{t mu} v^mu and g_{phi mu} v^mu.
+    let e_of = |v: &[f64; 3]| -(g[0][0] * v[0] + g[0][1] * v[1] + g[0][2] * v[2]);
+    let l_of = |v: &[f64; 3]| g[2][0] * v[0] + g[2][1] * v[1] + g[2][2] * v[2];
+    let sign_of = |v: &[f64; 3]| e_of(v) - omega_minus * l_of(v);
+    let (a, b, c) = (sign_of(&tetrad.e0), sign_of(&tetrad.e1), sign_of(&tetrad.e2));
+    let family = |alpha: f64| a + b * alpha.cos() + c * alpha.sin();
+    let amplitude = b.hypot(c);
+    if a.abs() >= amplitude {
+        return comb;
+    }
+    let frozen = |i: usize| family((i as f64) * step) < 0.0;
+    let centre = c.atan2(b);
+    let half = (-a / amplitude).acos();
+    let mut added: Vec<(usize, NullRay)> = Vec::with_capacity(2);
+    let mut comb = comb;
+    for zero in [centre - half, centre + half] {
+        let zero = zero.rem_euclid(two_pi);
+        let i = ((zero / step) as usize).min(n - 1);
+        let j = (i + 1) % n;
+        // A gap holding both zeros has the same sign at its two ends and no boundary the comb can
+        // see, and a gap with an escaping ray at either end is not a boundary of anything on r-.
+        if frozen(i) == frozen(j) || comb[i].escape_bound(metric) || comb[j].escape_bound(metric) {
+            continue;
+        }
+        let k = tetrad.null_direction(zero);
+        let scale = e_of(&k).abs() + omega_minus * l_of(&k).abs();
+        let slope = c * zero.cos() - b * zero.sin();
+        let alpha = zero - BOUNDARY_MARGIN * scale / slope;
+        // A zero closer to a comb ray than the margin would put the added ray on the far side
+        // of that ray, out of angular order; the comb ray is then the boundary to the eye already.
+        if alpha > (i as f64) * step && alpha < ((i + 1) as f64) * step {
+            added.push((i, launch(alpha)));
+        }
+    }
+    // Into the comb itself, the later gap first so that the earlier index still names its gap.
+    added.sort_by_key(|(i, _)| std::cmp::Reverse(*i));
+    for (i, extra) in added {
+        debug_assert!(extra.frozen(metric), "the added ray is launched inside the frozen family");
+        comb.insert(i + 1, extra);
+    }
+    comb
+}
+
 /// The 4-velocity to quote an observer's signals in, at emission and at reception alike: the
 /// 4-velocity of the worldline the observer is on, and nothing else.
 ///
@@ -2556,17 +2693,17 @@ impl SignalField {
         // The count is read here and nowhere else, so this pulse is fixed at whatever the slider
         // said when it was sent and the pulses already in flight are untouched.
         let n = self.rays_per_pulse;
-        let rays = (0..n)
-            .map(|i| {
-                // alpha = 0 is the emitter's outward radial leg and the ray count divides the
-                // turn exactly, so the last ray stops one step short of alpha = 2 pi and the front
-                // closes. That holds for every n: the angles are 2 pi i / n, spaced 360/n degrees.
-                let alpha = two_pi * (i as f64) / (n as f64);
-                NullRay::from_local_direction(
-                    metric, emitter.t, emitter.r, emitter.phi, &tetrad, alpha, &u,
-                )
-            })
-            .collect();
+        let launch = |alpha: f64| {
+            NullRay::from_local_direction(metric, emitter.t, emitter.r, emitter.phi, &tetrad, alpha, &u)
+        };
+        // alpha = 0 is the emitter's outward radial leg and the ray count divides the turn
+        // exactly, so the last ray stops one step short of alpha = 2 pi and the front closes. That
+        // holds for every n: the angles are 2 pi i / n, spaced 360/n degrees.
+        // Room for the rays added on the frozen family's boundaries, so they go in without a copy.
+        let mut comb: Vec<NullRay> = Vec::with_capacity(n + 2);
+        comb.extend((0..n).map(|i| launch(two_pi * (i as f64) / (n as f64))));
+        let rays = with_family_boundaries(metric, &tetrad, emitter.r, comb, launch);
+        let n = rays.len();
 
         self.pulses.push_back(Pulse {
             index: self.next_index,
@@ -4394,7 +4531,7 @@ mod tests {
             let mut field = SignalField::default();
             field.emit_if_due(&metric, &alice);
             let pulse = field.pulses.front().expect("a released Alice emits at once");
-            assert_eq!(pulse.rays.len(), RAYS_PER_PULSE);
+            assert!(pulse.launched_with(RAYS_PER_PULSE), "{} rays", pulse.rays.len());
 
             let mut frozen = 0usize;
             for (i, ray) in pulse.rays.iter().enumerate() {
@@ -4433,7 +4570,10 @@ mod tests {
                     );
                 }
             }
-            counts.push((r0, frozen));
+            // The arc's width is counted on the comb. The rays added on its boundaries are frozen
+            // by construction - see `with_family_boundaries` - and stand at the arc's two edges,
+            // so they are what the pulse has over its comb.
+            counts.push((r0, frozen - (pulse.rays.len() - RAYS_PER_PULSE)));
         }
 
         println!("frozen rays of {RAYS_PER_PULSE} per pulse: {counts:?}");
@@ -5947,7 +6087,7 @@ mod tests {
         }
         for p in field.pulses.iter() {
             taus.push(p.emitted_tau);
-            assert_eq!(p.rays.len(), RAYS_PER_PULSE);
+            assert!(p.launched_with(RAYS_PER_PULSE), "{} rays", p.rays.len());
         }
         assert!(taus.len() >= 2, "at least two pulses in 3M of t: {taus:?}");
         for w in taus.windows(2) {
@@ -6036,7 +6176,7 @@ mod tests {
 
         field.rays_per_pulse = 64;
         field.emit_if_due(&metric, &alice);
-        assert_eq!(field.pulses[0].rays.len(), 64);
+        assert!(field.pulses[0].launched_with(64), "{} rays", field.pulses[0].rays.len());
 
         // Turned up between emissions, with a step in between so that the cadence lets the second
         // pulse out at all.
@@ -6050,8 +6190,8 @@ mod tests {
             field.emit_if_due(&metric, &alice);
         }
         assert_eq!(field.pulses.len(), 2, "the cadence let a second pulse out by t = {t}");
-        assert_eq!(field.pulses[1].rays.len(), 1024, "the new pulse takes the new count");
-        assert_eq!(field.pulses[0].rays.len(), 64, "and the old one keeps the count it went out at");
+        assert!(field.pulses[1].launched_with(1024), "the new pulse takes the new count");
+        assert!(field.pulses[0].launched_with(64), "and the old one keeps the count it went out at");
     }
 
     #[test]
@@ -6059,8 +6199,10 @@ mod tests {
         // The angle convention, pinned. The emission angles are alpha = 2 pi i / n whatever n is,
         // so ray zero of a 64-point pulse and ray zero of a 1024-point one from the same event are
         // the *same* null geodesic - the emitter's own outward radial leg - and every ray of the
-        // coarse pulse is a ray of the fine one, at sixteen times the index. Nothing about the
-        // sampling density may leak into the physics of a ray.
+        // coarse pulse is a ray of the fine one. Nothing about the sampling density may leak into
+        // the physics of a ray. That includes the rays added on the boundaries of the frozen
+        // family: each is solved for in closed form from the emitter's tetrad, not from the comb,
+        // so it is the same ray in both.
         let metric = KerrSchild::new(1.0, 0.65);
         let params = WorldlineParams::default();
         let alice = Observer::new_with_phi(&metric, "Alice", 0.0, 4.5, 0.0, 0.25, params);
@@ -6071,7 +6213,12 @@ mod tests {
             field.pulses.into_iter().next().expect("a released Alice emits at once")
         };
         let (coarse, fine) = (emit(64), emit(1024));
-        assert_eq!((coarse.rays.len(), fine.rays.len()), (64, 1024));
+        assert!(coarse.launched_with(64) && fine.launched_with(1024));
+        assert_eq!(
+            coarse.rays.len() - 64,
+            fine.rays.len() - 1024,
+            "both combs find the same boundaries of the frozen family"
+        );
 
         let same = |a: &NullRay, b: &NullRay, what: &str| {
             for (x, y, name) in [
@@ -6090,9 +6237,16 @@ mod tests {
         assert!(leg.dr_dt > 0.0, "alpha = 0 leaves outward: dr/dt = {}", leg.dr_dt);
         same(leg, &fine.rays[0], "the outward radial leg");
         // And the whole of the coarse cone is a sub-sampling of the fine one: 1024 = 16 * 64, and
-        // 2 pi i / 64 is 2 pi (16 i) / 1024 exactly.
-        for i in 0..coarse.rays.len() {
-            same(&coarse.rays[i], &fine.rays[16 * i], &format!("ray {i} against ray {}", 16 * i));
+        // 2 pi i / 64 is 2 pi (16 i) / 1024 exactly. The boundary rays shift the indices after
+        // them, so each coarse ray is found in the fine pulse by what it is rather than where.
+        let close = |a: &NullRay, b: &NullRay| {
+            [(a.r, b.r), (a.phi, b.phi), (a.dr_dt, b.dr_dt), (a.dphi_dt, b.dphi_dt), (a.f_emit, b.f_emit)]
+                .iter()
+                .all(|(x, y)| (x - y).abs() <= 1e-12)
+        };
+        for (i, ray) in coarse.rays.iter().enumerate() {
+            let twin = fine.rays.iter().find(|f| close(ray, f));
+            assert!(twin.is_some(), "coarse ray {i} is a ray of the fine pulse");
         }
     }
 
@@ -7311,7 +7465,71 @@ mod tests {
 mod late_survivors_on_r_minus {
     //! Where the survivors of a pulse sent inside r+ sit at late times, and on which side of r-.
     use super::*;
-    use crate::physics::observer::{Observer, WorldlineParams};
+    use crate::physics::observer::{Observer, ObserverMode, WorldlineParams};
+
+    /// The front crosses r- where the frozen family ends, and the ray added on that boundary is
+    /// what puts the crossing where it is. Without it the two comb rays either side of the
+    /// boundary stood 0.59 rad apart, one outside r- and one inside, and the segment between them
+    /// drew a long shallow slant across the horizon.
+    ///
+    /// A static emitter at 6M, a = 0.90, the default comb: of the two sign changes of
+    /// E - Omega_- L round the cone, only the ingoing one lies between rays that both stay in, so
+    /// exactly one ray is added. At 30 M it is frozen, alive and on r- far closer than either comb
+    /// neighbour, and it stands within a tenth of a radian of the crossing ray beside it, so the
+    /// piece of front that goes through r- is a short one.
+    #[test]
+    fn test_the_front_crosses_r_minus_at_the_ray_added_on_the_frozen_familys_boundary() {
+        let metric = KerrSchild::new(1.0, 0.90);
+        let rm = metric.inner_horizon();
+        let mut bob =
+            Observer::new_with_phi(&metric, "Bob", 0.0, 6.0, 0.0, 0.0, WorldlineParams::default());
+        bob.mode = ObserverMode::Static;
+        let mut field = SignalField::default();
+        field.emit_if_due(&metric, &bob);
+        assert_eq!(
+            field.pulses[0].rays.len(),
+            RAYS_PER_PULSE + 1,
+            "one boundary between rays that stay in; the outgoing one is between two escapers"
+        );
+        let dt = 0.02;
+        for i in 0..1500 {
+            let t = ((i + 1) as f64) * dt;
+            bob.step(&metric, t, dt);
+            field.advance(&metric, dt);
+        }
+        let rays = &field.pulses[0].rays;
+        let n = rays.len();
+        // The added ray is the frozen one beside a crossing one that sits closest to r-.
+        let (b, gap) = (0..n)
+            .filter(|&i| rays[i].alive() && rays[i].frozen(&metric))
+            .filter(|&i| {
+                let (prev, next) = (&rays[(i + n - 1) % n], &rays[(i + 1) % n]);
+                !prev.frozen(&metric) || !next.frozen(&metric)
+            })
+            .map(|i| (i, (rays[i].r - rm).abs()))
+            .min_by(|x, y| x.1.total_cmp(&y.1))
+            .expect("a frozen ray stands at the boundary");
+        let crossing = if rays[(b + 1) % n].frozen(&metric) { (b + n - 1) % n } else { (b + 1) % n };
+        let frozen_side = if crossing == (b + 1) % n { (b + n - 1) % n } else { (b + 1) % n };
+        let (near, far) = (&rays[crossing], &rays[frozen_side]);
+        let span = (near.phi - rays[b].phi).abs();
+        println!(
+            "t = {:.1}: boundary ray r - r- = {:+.2e}; crossing neighbour {:+.2e}, {span:.4} rad \
+             away; frozen neighbour {:+.2e}",
+            field.t,
+            rays[b].r - rm,
+            near.r - rm,
+            far.r - rm
+        );
+        assert!(rays[b].r > rm, "the added ray is frozen and outside r-");
+        assert!(near.alive() && near.r < rm, "its crossing neighbour has gone through r-");
+        assert!(gap < 1e-8, "the boundary ray rides r- to {gap:.2e} M");
+        assert!(
+            gap < 1e-3 * (near.r - rm).abs().min(far.r - rm),
+            "far closer than either comb neighbour"
+        );
+        assert!(span < 0.1, "and the piece of front through r- is short: {span:.4} rad");
+    }
 
     /// Both families of survivors hug r-, from opposite sides, and both close on it at the rate
     /// kappa_-.
