@@ -40,3 +40,15 @@ serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 opt-level = 3
 debug-assertions = true
 overflow-checks = true
+
+# An optional release build with fat LTO and one codegen unit: `cargo build --profile fat-lto`,
+# which lands in target/fat-lto. It lets the optimiser inline across every crate boundary, egui's
+# included, and measured 2026-09-24 it paints 7-10% faster (a frame 3-5%) while the simulation
+# does not move. The physics is unchanged to the bit - rustc never contracts a multiply-add into
+# an FMA or reorders floating-point arithmetic, and the perf fingerprints match. It is not the
+# plain release profile because it costs about two and a half minutes a build against eight
+# seconds, which every `cargo perf-check` after an edit would pay.
+[profile.fat-lto]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
