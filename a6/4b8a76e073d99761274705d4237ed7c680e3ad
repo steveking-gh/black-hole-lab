@@ -1,0 +1,41 @@
+src/gui/controls.rs
+  s_e3dc24b22cfd01::t_e855ebb0f0ab41 608
+src/physics/wavefront.rs
+  s_e3dc24b22cfd01::t_a6989f58f64bb2 2430-2432
+  s_e3dc24b22cfd01::t_8f6745767a85a6 2403-2413,2415-2428,2433,2436-2437,2441-2442,2444,2446-2458,2460-2462,2464-2466,2468-2469,2472-2480,2482,2705
+  s_e3dc24b22cfd01::t_d11eff2f1be4b0 2429,2459,2463,2470,2483-2487,2489,2702-2704
+  s_e3dc24b22cfd01::t_981da7ee5b0646 4573-4576
+  s_e3dc24b22cfd01::t_fcafcc6687388f 1915-1919,4534,6090,6179,6193-6194,6202-6203,6216-6221,6240-6249
+  s_e3dc24b22cfd01::t_d6d1161451da15 2402,2414,2443
+  s_e3dc24b22cfd01::t_983744d88c0a0e 1468-1473,2368-2386,2434-2435,2438-2440,2445,2471,2481,2488,2696-2701,2706
+  s_e3dc24b22cfd01::t_1eb557ca752a54 7517-7518
+  s_e3dc24b22cfd01::t_a5a58facb45f4c 2387-2401,2467
+  s_e3dc24b22cfd01::t_ea3eae1b0e282a 6204-6205
+  s_e3dc24b22cfd01::t_eac07055b0ec0e 1920,7468-7516,7519-7532
+  s_e3dc24b22cfd01::t_b248fafa7ad5c4 1921,2490-2491
+src/gui/spatial_canvas.rs
+  s_e3dc24b22cfd01::t_f9f1b233f3ca31 3905
+src/app.rs
+  s_e3dc24b22cfd01::t_fcafcc6687388f 3637-3638,3652-3653,3656-3657,3675-3676
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "a64b8a76e073d99761274705d4237ed7c680e3ad",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_e3dc24b22cfd01": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fcca3dc2-e727-46cf-bf88-a27e341dbfe8",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
