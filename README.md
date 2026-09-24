@@ -33,7 +33,7 @@ global "foliation" chart.  On the right is the 2 dimensional equatorial view.
 ## Basic Controls
 
 To start, click **Play** in the top left.  You'll see Alice and Bob start moving
-and broadcasting the their signal.  By default, Alice orbits the black hole
+and broadcasting their signals.  By default, Alice orbits the black hole
 while Bob takes a rather uninteresting plunge inward.
 
 ![Basic Controls](assets/images/basic_controls.png)
@@ -103,17 +103,26 @@ The default view in the FoR pane is the `Global Foliation Chart 1D+1`.
 
 ![Global Foliation Chart 1D+1](assets/images/global_foliation_1d1.png)
 
-The global foliation chart shows the simulation's view of events.  Notice the `1D+1` notation.  The `1D` means this view shows 1 dimension of space horizontally.  Physicists judiciously choose that dimension to be the distance to the center of the black hole.  The `+1` is the time dimension shown vertically.  Bob and Alice's FoR views share this `1D+1` style.
+The global foliation chart shows the simulation's view of events.  Notice the
+`1D+1` notation.  The `1D` means this view shows 1 dimension of space
+horizontally.  Physicists judiciously choose that dimension to be the radial
+separation from ring singularity.  The `+1` is the time dimension shown
+vertically.  Bob and Alice's FoR views share this `1D+1` style.
 
 The other unique view is the **Global Foliation Chart 2D+1**
 
 ![Global Foliation Chart 2D+1](assets/images/global_foliation_2d1.png)
 
-In this view, we get two dimensions of space like the Equatorial view, with time pointing vertically up.
+In this view, we get two dimensions of space like the Equatorial view, with time
+pointing vertically up.
 
 ### Bob and Alice's FoR
 
-The last two options we can show are **Bob's Frame Of Reference 1D+1** and likewise for Alice.  These views show `1D+1` reality as measured by the observer.  The math gives us an oracle-like view since we can see places and events in the observer's *future*.  Of course a real Alice and Bob would only perceive their *now*.
+The last two options we can show are **Bob's Frame Of Reference 1D+1** and
+likewise for Alice.  These views show `1D+1` reality as measured by the
+observer.  The math gives us an oracle-like view since we can see places and
+events in the observer's *future*.  Of course a real Alice and Bob would only
+perceive their *now*.
 
 ![Bob 1D+1](assets/images/bob_for_1d1.png)
 
@@ -136,7 +145,7 @@ outside your light cone *now* might not be outside your light cone *later*.
 ### Light Cone Tilting
 
 If you look at the global foliation view above, you'll notice that Bob and
-Alice's light cones appear a tilted toward the black hole.  This is a real
+Alice's light cones appear tilted toward the black hole.  This is a real
 physical effect of the warping of spacetime by gravity.  It's quite fair to say
 that gravity *pulls on your future*.
 
@@ -157,17 +166,20 @@ center of our galaxy.
 ### Outside the Black Hole
 
 Uncheck Alice, then let's watch Bob holding still some ways outside the black
-hole.  Enable Bob's "Transmit Signal", then set Bob to "Static" and "At rest here".
+hole.  Enable Bob's "Transmit Signal", then set Bob to "Static" and "At rest
+here".
 
 ![Bob Static 1](assets/images/bob_static_1.png)
 
-Play the simulation for a bit and you'll see Bob transmitting.  The simulation only tracks the fixed number of Bob's transmission wave fronts as set the "Wavefronts kept" slider control.
+Play the simulation for a bit and you'll see Bob transmitting.  The simulation
+only tracks the fixed number of Bob's transmission wavefronts as set by the
+"Wavefronts kept" slider control.
 
 ![Bob Static 2](assets/images/bob_static_2.png)
 
 We can see the black hole capturing a good portion of the radio waves.  If you
 look closely, you can see the waves face three different fates depending on the
-angle they crossed the event horizon.  More about that later.
+angle at which they crossed the event horizon.  More about that later.
 
 In the `EQUATORIAL PLANE` view, zoom in to Bob with the mouse wheel.
 
@@ -200,7 +212,7 @@ In this `EQUATORIAL PLANE` view, we see 3 triangular tick marks on Alice's world
 The observer FoR and global foliation views also show signal receptions.  Here's
 Alice's FoR.  We see 3 turquoise color wavefronts have passed Alice and are now
 in her past.  Several more are in her future.  Because this is an FoR, the waves
-move passed Alice at the speed of light and appears as 45 degree angle lines by
+move past Alice at the speed of light and appear as 45 degree angle lines by
 definition.
 
 ![Alice Reception](assets/images/alice_receive_1.png)
@@ -258,7 +270,7 @@ few of the more mind-boggling aspects to think about:
 * The inner horizon is the boundary where the arrow of time stops pointing
   strictly inward and tilts back to point into the future like normal space.
 
-* Like the outer horizon, the inner horizon can be both a moment in time or a
+* Like the outer horizon, the inner horizon can be either a moment in time or a
   place in space depending on which side you find yourself.
 
 * The inner horizon has two *branches*, so to speak, which we'll call *near* and
@@ -291,15 +303,12 @@ infinite density.  In Black Hole Lab, the ring singularity is mathematically
 radius r = 0.  In `region III`, the arrow of time once again points toward the
 future and an observer can move around in 3 dimensions.
 
-If you enter `region III` with enough angular momentum, you swing back out
-toward the inner horizon, but this time asymptotically approaching from below.
+If you enter `region III` with enough angular momentum, you swing back outward
+toward the underside of the inner horizon.  In the coordinate time, this
+approach is asymptotic so the simulation can never show an observer crossing
+back through r_.  However, in the proper time of the observer, this crossing
+happens quickly.  According to general relativity, the observer finds himself in
+an entirely different spacetime and *not* the black hole!
 
 
-
-
-### Radio Waves
-
-The orange rings around Alice and Bob show the propagation of their radio
-signals, which travel at the speed of light.  Notice how the black hole tugs
-strongly on Alice's signal
 
