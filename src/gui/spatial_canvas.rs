@@ -26,7 +26,8 @@ use egui::{Color32, Pos2, Stroke, Vec2};
 #[derive(Clone, Copy)]
 pub struct FrontStyle {
     /// Draw each segment of a front as the curve linear in (r, phi) between its two rays
-    /// (`segment_arc`), or draw nothing between them and leave the front as its calculated points.
+    /// (`segment_arc_between`), or draw nothing between them and leave the front as its calculated
+    /// points.
     /// See `FRONT_POINT_RADIUS`.
     pub arcs: bool,
     /// Drop the segments whose two rays have wound more than `MAX_RESOLVED_WINDING` apart, which
@@ -1159,7 +1160,7 @@ fn draw_ring_spin_arrow(painter: &egui::Painter, center: Pos2, ring_px: f32, spi
 /// is carried *along* each segment rather than averaged over it: log10(gain) is interpolated
 /// linearly between the two rays in the same loop coordinate the position is interpolated in, and
 /// the polyline is cut into bands of at most `FRONT_BAND_DECADES` each, every band drawn at the
-/// colour of its own midpoint (see `banded_segment`). Where the front is being torn apart - one ray
+/// colour of its own midpoint (see `gain_bands`). Where the front is being torn apart - one ray
 /// freezing onto r- while its neighbour crosses - a single segment spans the whole ramp, and one
 /// mean colour said the far end had gained a hundred thousandfold when it had gained nothing.
 ///
@@ -1298,12 +1299,13 @@ const MAX_ARC_PIECES: usize = 2000;
 /// piece of front: one whole turn of the hole.
 ///
 /// A segment joins two rays let go 2.5 degrees apart at the default sampling, and everything drawn
-/// between them is the interpolation linear in (r, phi) of `segment_arc`. That is a faithful
-/// picture of the front while the pair stays together, and it stops being one the moment the pair
-/// straddles a critical impact parameter. At a = 0.90 the prograde equatorial photon orbit sits at
-/// r_ph = 1.56, just outside r+ = 1.44: a ray let go marginally inside the critical angle spirals
-/// in and freezes on r-, its neighbour marginally outside it hangs on r_ph for tens of M and then
-/// escapes, and the real front between them is *pinned on that orbit* - a spiral in from the far
+/// between them is the interpolation linear in (r, phi) of `segment_arc_between`. That is a
+/// faithful picture of the front while the pair stays together, and it stops being one the moment
+/// the pair straddles a critical impact parameter. At a = 0.90 the prograde equatorial photon
+/// orbit sits at r_ph = 1.56, just outside r+ = 1.44: a ray let go marginally inside the critical
+/// angle spirals in and freezes on r-, its neighbour marginally outside it hangs on r_ph for tens
+/// of M and then escapes, and the real front between them is *pinned on that orbit* - a spiral in
+/// from the far
 /// ray to r_ph, a pile-up of turns at r_ph that no sampling of the light cone can resolve, and a
 /// spiral from r_ph down to r-. Two rays cannot carry that shape. What the interpolation draws
 /// instead is an Archimedean spiral with its winding spread evenly over every radius between the
@@ -1340,22 +1342,52 @@ const MAX_RESOLVED_WINDING: f64 = std::f64::consts::TAU;
 /// is what that piece of the front is. Frame dragging inside r+ pulls neighbouring rays apart by
 /// most of a radian, which is what `MAX_ARC_STEP` is for; what takes a pair past half a turn is a
 /// ray hung on a circular photon orbit outside r+, which is what `MAX_ARC_PIECES` is for.
+///
+/// `ends` are the two rays' own screen positions, which the caller has already projected once per
+/// ray for the dots and the fades, so only the interior points are embedded here. That is a saving
+/// of two projections on every segment - at the default spacing nearly every segment is a single
+/// piece, so it was projecting both of its points a second time - and it also closes the arc on
+/// the ray's own dot exactly. Walked out to s = 1, the far end is `from + 1.0 * (to - from)`,
+/// which can miss `to` by an ulp in r or phi; the ray's dot is where the ray is.
+fn segment_arc_between<F: Fn((f64, f64)) -> Pos2>(
+    metric: &KerrSchild,
+    from: (f64, f64),
+    to: (f64, f64),
+    ends: (Pos2, Pos2),
+    to_screen: &F,
+) -> Vec<Pos2> {
+    let d_phi = to.1 - from.1;
+    let pieces = (d_phi.abs() / MAX_ARC_STEP).ceil().max(1.0).min(MAX_ARC_PIECES as f64) as usize;
+    let mut arc = Vec::with_capacity(pieces + 1);
+    arc.push(ends.0);
+    arc.extend((1..pieces).map(|k| {
+        let s = (k as f64) / (pieces as f64);
+        let r = from.0 + s * (to.0 - from.0);
+        let phi = from.1 + s * d_phi;
+        to_screen(metric.cartesian_position(r, phi))
+    }));
+    arc.push(ends.1);
+    arc
+}
+
+/// `segment_arc_between` for a caller holding only the two chart positions, which projects the
+/// two ends itself. Each point is embedded once and in drawing order, near end first and far end
+/// last, so a `to_screen` that records what it is asked for records the polyline as drawn.
+#[cfg(test)]
 fn segment_arc<F: Fn((f64, f64)) -> Pos2>(
     metric: &KerrSchild,
     from: (f64, f64),
     to: (f64, f64),
     to_screen: &F,
 ) -> Vec<Pos2> {
-    let d_phi = to.1 - from.1;
-    let pieces = (d_phi.abs() / MAX_ARC_STEP).ceil().max(1.0).min(MAX_ARC_PIECES as f64) as usize;
-    (0..=pieces)
-        .map(|k| {
-            let s = (k as f64) / (pieces as f64);
-            let r = from.0 + s * (to.0 - from.0);
-            let phi = from.1 + s * d_phi;
-            to_screen(metric.cartesian_position(r, phi))
-        })
-        .collect()
+    let near = to_screen(metric.cartesian_position(from.0, from.1));
+    // The far end is a placeholder until the interior has been embedded, so that it is projected
+    // after it rather than before.
+    let mut arc = segment_arc_between(metric, from, to, (near, near), to_screen);
+    if let Some(far) = arc.last_mut() {
+        *far = to_screen(metric.cartesian_position(to.0, to.1));
+    }
+    arc
 }
 
 /// The radius, times the field's stroke scale, of the dot each calculated point of a front is
@@ -1363,10 +1395,11 @@ fn segment_arc<F: Fn((f64, f64)) -> Pos2>(
 /// winding cut has withdrawn.
 ///
 /// The Arcs between wavefront points checkbox is a drawing choice and only a drawing choice. On,
-/// each segment of a front between two neighbouring rays is drawn as the curve of `segment_arc`,
-/// the same interpolation in (r, phi) that `Pulse::scan` uses to test the front against a
-/// receiver, so the drawn front is the curve the detector is testing. Off, nothing is drawn between
-/// the rays at all: the front is shown as the calculated points themselves, one dot per live ray,
+/// each segment of a front between two neighbouring rays is drawn as the curve of
+/// `segment_arc_between`, the same interpolation in (r, phi) that `Pulse::scan` uses to test the
+/// front against a receiver, so the drawn front is the curve the detector is testing. Off, nothing
+/// is drawn between the rays at all: the front is shown as the calculated points themselves, one
+/// dot per live ray,
 /// which is the raw output of the integrator with no interpolation of any kind laid over it. That
 /// is worth being able to see, because everything an arc adds is inference - a segment between two
 /// rays most of a radian apart in the deep interior is drawn along a curve no ray was integrated
@@ -1399,9 +1432,9 @@ pub(crate) const CENTRED_RING_GAP: f32 = 5.0;
 /// then reads as a jump at a ray rather than as the climb along the front that it is.
 ///
 /// So the gain is carried along the segment: log10(gain) is interpolated linearly in the same loop
-/// coordinate s that `segment_arc` interpolates the position in, and the polyline is cut into bands
-/// of at most this many decades, each drawn at the colour of its own midpoint. A quarter of a
-/// decade is under half the narrowest leg of `Theme::FRONT_STOPS` - the half-decade from red
+/// coordinate s that `segment_arc_between` interpolates the position in, and the polyline is cut
+/// into bands of at most this many decades, each drawn at the colour of its own midpoint. A quarter
+/// of a decade is under half the narrowest leg of `Theme::FRONT_STOPS` - the half-decade from red
 /// to orange - so no band can straddle a stop of the ramp unnoticed, and the five-decade case costs
 /// twenty polylines where it used to cost one. The interpolation is in log10 because that is the
 /// coordinate the ramp itself is keyed to, so a band is a fixed slice of the drawn ramp rather than
@@ -1430,42 +1463,73 @@ fn front_log(gain: f64) -> f64 {
     }
 }
 
-/// Cut one drawn segment into bands of nearly constant gain: the polyline of `segment_arc` split at
-/// shared boundary points, each piece paired with the gain to colour it by. See
+/// Cut one drawn segment into bands of nearly constant gain: the polyline of `segment_arc_between`
+/// split at shared boundary points, each piece paired with the gain to colour it by. See
 /// `FRONT_BAND_DECADES`.
 ///
-/// `gain_from` belongs to the ray at s = 0 and `gain_to` to the ray at s = 1, the same loop
-/// coordinate `segment_arc` walks the position along, so band b covers the s-range from b/bands to
-/// (b + 1)/bands of that same curve and is coloured at the gain interpolated to its midpoint. The
-/// interpolation is linear in log10(gain), clamped as the ramp clamps it.
+/// `log_from` is the `front_log` of the ray at s = 0 and `log_to` of the ray at s = 1, the same
+/// loop coordinate `segment_arc_between` walks the position along, so band b covers the s-range
+/// from b/bands to (b + 1)/bands of that same curve and is coloured at the gain interpolated to its
+/// midpoint. The interpolation is linear in log10(gain), clamped as the ramp clamps it. The logs
+/// are taken by the caller, once per ray, because every ray ends two segments and would otherwise
+/// have its logarithm taken twice a frame.
 ///
 /// Consecutive bands share their boundary point rather than abutting, so the drawn front has no
 /// gaps in it: the concatenation of the bands, each shared point counted once, is the original
 /// polyline in order. A segment whose two ends carry the same gain is one band over the whole arc,
-/// which is the common case and costs nothing over drawing it directly. Asking for more bands than
-/// the arc has pieces would need boundary points that are not on the polyline, so the count falls
-/// back to the piece count instead: the colour of a two-point segment is then quantised more
-/// coarsely than `FRONT_BAND_DECADES` asks for, which is all two points can carry anyway.
-fn banded_segment(arc: Vec<Pos2>, gain_from: f64, gain_to: f64) -> Vec<(Vec<Pos2>, f64)> {
-    let (log_from, log_to) = (front_log(gain_from), front_log(gain_to));
+/// which is the common case and costs nothing over drawing it directly - not even a list to hold
+/// the one band in, which is what `Bands::One` is for. Asking for more bands than the arc has
+/// pieces would need boundary points that are not on the polyline, so the count falls back to the
+/// piece count instead: the colour of a two-point segment is then quantised more coarsely than
+/// `FRONT_BAND_DECADES` asks for, which is all two points can carry anyway.
+fn gain_bands(arc: Vec<Pos2>, log_from: f64, log_to: f64) -> Bands {
     let gain_at = |s: f64| 10.0_f64.powf(log_from + s * (log_to - log_from));
     let pieces = arc.len().saturating_sub(1);
     let wanted = ((log_to - log_from).abs() / FRONT_BAND_DECADES).ceil().max(1.0) as usize;
     let bands = wanted.clamp(1, MAX_FRONT_BANDS).min(pieces.max(1));
     if bands <= 1 || pieces == 0 {
-        return vec![(arc, gain_at(0.5))];
+        return Bands::One(Some((arc, gain_at(0.5))));
     }
-    (0..bands)
-        .map(|b| {
-            // Integer bounds, so band b ends exactly where band b + 1 begins and the last ends on
-            // the final point of the arc: the bands tile the segment with no gap and no overlap
-            // beyond the single point each consecutive pair shares.
-            let start = b * pieces / bands;
-            let end = (b + 1) * pieces / bands;
-            let s_mid = 0.5 * ((start + end) as f64) / (pieces as f64);
-            (arc[start..=end].to_vec(), gain_at(s_mid))
-        })
-        .collect()
+    Bands::Many(
+        (0..bands)
+            .map(|b| {
+                // Integer bounds, so band b ends exactly where band b + 1 begins and the last ends
+                // on the final point of the arc: the bands tile the segment with no gap and no
+                // overlap beyond the single point each consecutive pair shares.
+                let start = b * pieces / bands;
+                let end = (b + 1) * pieces / bands;
+                let s_mid = 0.5 * ((start + end) as f64) / (pieces as f64);
+                (arc[start..=end].to_vec(), gain_at(s_mid))
+            })
+            .collect::<Vec<_>>()
+            .into_iter(),
+    )
+}
+
+/// The bands of one segment, as `gain_bands` hands them out: the whole arc as a single band in the
+/// common case, carried as it is, or a list of them where the gain changes along the segment.
+/// Either way they come out in order along the arc, one polyline and its gain at a time.
+enum Bands {
+    One(Option<(Vec<Pos2>, f64)>),
+    Many(std::vec::IntoIter<(Vec<Pos2>, f64)>),
+}
+
+impl Iterator for Bands {
+    type Item = (Vec<Pos2>, f64);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Bands::One(band) => band.take(),
+            Bands::Many(bands) => bands.next(),
+        }
+    }
+}
+
+/// `gain_bands` from the two rays' gains rather than their logs, collected: for a caller that has
+/// one segment in hand and wants to look at its bands.
+#[cfg(test)]
+fn banded_segment(arc: Vec<Pos2>, gain_from: f64, gain_to: f64) -> Vec<(Vec<Pos2>, f64)> {
+    gain_bands(arc, front_log(gain_from), front_log(gain_to)).collect()
 }
 
 /// How far along the light's direction the screen probe of `screen_velocity` steps, in M, and how
@@ -1633,8 +1697,8 @@ impl Trails {
     ///
     /// The band is points `first ..= first + band.len() - 1` of a segment cut into `pieces` pieces,
     /// so point k of it sits at s = (first + k) / pieces of the segment, which is the coordinate
-    /// `segment_arc` interpolated the position in and `banded_segment` cut the colour in. The fade
-    /// at that point is the same interpolation of the two end rays' `Trail`s, `from` at s = 0 and
+    /// `segment_arc_between` interpolated the position in and `gain_bands` cut the colour in. The
+    /// fade at that point is the same interpolation of the two end rays' `Trail`s, `from` at s = 0 and
     /// `to` at s = 1: the heading is interpolated and put back on the unit circle, the length is
     /// interpolated as it stands, and the tail vertex is the front vertex pushed that length along
     /// the reverse of that heading. Both are interpolated because both are per ray - the two ends
@@ -1777,6 +1841,15 @@ pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
                 ray.gain_between(metric, pulse.emitted_r, &u_emit, &[ut, ur, up])
             })
             .collect();
+        // The same gains on the log scale the bands of a segment are interpolated in, taken once
+        // per ray for the same reason: each ray is an end of two segments. Only the segments read
+        // them, so with the arcs off there is nothing to take. The colours themselves are still
+        // taken from a gain, never straight from one of these logs: see `gain_bands`.
+        let logs: Vec<f64> = if style.arcs {
+            gains.iter().map(|&gain| front_log(gain)).collect()
+        } else {
+            Vec::new()
+        };
         // One projection per ray per frame, which the segment loop would otherwise repeat for each
         // of the two segments a ray belongs to. The ray positions themselves, which the dots of a
         // withdrawn segment sit on; the segments between them are drawn as arcs in (r, phi) between
@@ -1840,8 +1913,8 @@ pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
             if !pulse.rays[i].alive() || !pulse.rays[j].alive() {
                 continue;
             }
-            // The raw, unfolded winding between the pair, which is the span `segment_arc` would
-            // draw this segment over. Past a whole turn the two samples no longer bound a resolved
+            // The raw, unfolded winding between the pair, which is the span `segment_arc_between`
+            // would draw this segment over. Past a whole turn the two samples no longer bound a resolved
             // piece of front and the curve between them is the interpolation's own invention, so
             // nothing is drawn there and the two ends are marked instead. See
             // `MAX_RESOLVED_WINDING`.
@@ -1852,10 +1925,11 @@ pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
                 cut_end[j] = true;
                 continue;
             }
-            let arc = segment_arc(
+            let arc = segment_arc_between(
                 metric,
                 (pulse.rays[i].r, pulse.rays[i].phi),
                 (pulse.rays[j].r, pulse.rays[j].phi),
+                (points[i], points[j]),
                 to_screen,
             );
             // The gain is carried along the segment rather than averaged over it: one polyline per
@@ -1868,7 +1942,7 @@ pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
             // rays' headings in exactly as the colour is interpolated in it.
             let pieces = arc.len().saturating_sub(1);
             let mut first = 0usize;
-            for (band, gain) in banded_segment(arc, gains[i], gains[j]) {
+            for (band, gain) in gain_bands(arc, logs[i], logs[j]) {
                 let advance = band.len().saturating_sub(1);
                 let colour = Theme::front_colour(gain, Theme::SHIFT_ALPHA);
                 // The fade first, into the mesh that is painted under every line of this field. Its

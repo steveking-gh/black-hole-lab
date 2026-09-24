@@ -133,15 +133,106 @@ impl Camera {
     /// Screen position and depth (larger = farther from the eye) of a world point.
     ///
     /// `centre` is the screen point world (0, 0, 0) lands on, pan already included.
+    ///
+    /// For a single point. Anything projecting more than a handful takes a `projector` once and
+    /// projects through that, which gives the same numbers without building the basis each time.
     pub fn project(&self, centre: Pos2, p: [f64; 3]) -> (Pos2, f32) {
+        self.projector(centre).project(p)
+    }
+
+    /// This camera's projection onto a screen centred on `centre`, with the basis built once.
+    pub fn projector(&self, centre: Pos2) -> Projector {
         let (right, up, d) = self.basis();
+        Projector { right, up, d, scale: self.scale, centre }
+    }
+}
+
+/// One frame's projection: the camera's screen basis and scale together with the screen point
+/// world (0, 0, 0) lands on, taken once and then applied to every point of the frame.
+///
+/// `basis` costs two sin_cos and nine snaps, and a volume frame projects every vertex of every
+/// pipe, cone and pulse sheet and every point of both fields' fronts on the floor - hundreds of
+/// thousands of points, each of which used to rebuild the same three vectors from the same two
+/// angles. Nothing about the camera can change inside a frame, so the basis is built once, and the
+/// arithmetic applied to each point is exactly the arithmetic `Camera::project` has always done,
+/// in the same order: the picture is the same to the bit.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Projector {
+    right: [f32; 3],
+    up: [f32; 3],
+    d: [f32; 3],
+    scale: f32,
+    centre: Pos2,
+}
+
+impl Projector {
+    /// Screen position and depth (larger = farther from the eye) of a world point. See
+    /// `Camera::project`.
+    pub fn project(&self, p: [f64; 3]) -> (Pos2, f32) {
         // Down to f32 once, before any of the three dot products, so that the Top preset's
         // x * 1.0 + y * 0.0 + z * 0.0 reproduces `x as f32` bit for bit rather than rounding a
         // different f64 sum.
         let v = [p[0] as f32, p[1] as f32, p[2] as f32];
-        let x = centre.x + dot(v, right) * self.scale;
-        let y = centre.y - dot(v, up) * self.scale;
-        (Pos2::new(x, y), dot(v, d))
+        let x = self.centre.x + dot(v, self.right) * self.scale;
+        let y = self.centre.y - dot(v, self.up) * self.scale;
+        (Pos2::new(x, y), dot(v, self.d))
+    }
+
+    /// One strip of a pipe: a planar quad in world space as two triangles, one premultiplied
+    /// colour. Returns the mesh and its depth at the centroid.
+    ///
+    /// The two triangles share the diagonal 0-2, so the corners have to be given in order around
+    /// the quad; given them in that order a strip that projects to zero area - which is every
+    /// vertical strip in the Top view - still produces a mesh egui accepts and tessellates away to
+    /// nothing.
+    pub fn quad_mesh(&self, corners: [[f64; 3]; 4], colour: Color32) -> (egui::Mesh, f32) {
+        let mut mesh = egui::Mesh::default();
+        for c in corners {
+            mesh.colored_vertex(self.project(c).0, colour);
+        }
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        (mesh, self.centroid_depth(corners.iter().copied()))
+    }
+
+    /// A cone half: apex plus n rim points as a triangle fan, closing back to rim[0].
+    ///
+    /// This is the only primitive whose shape carries physics: the rim is where the null geodesics
+    /// leaving one event have got to after one step of t, so the fan is the cone's surface and not
+    /// a decoration drawn at a fixed opening angle. Near the horizon the rim is no longer centred on
+    /// the apex and the fan tips over with it, which is the whole thing the volume view exists to
+    /// show.
+    pub fn cone_mesh(&self, apex: [f64; 3], rim: &[[f64; 3]], fill: Color32) -> (egui::Mesh, f32) {
+        let mut mesh = egui::Mesh::default();
+        mesh.colored_vertex(self.project(apex).0, fill);
+        for p in rim {
+            mesh.colored_vertex(self.project(*p).0, fill);
+        }
+        let n = rim.len() as u32;
+        for i in 0..n {
+            mesh.add_triangle(0, 1 + i, 1 + (i + 1) % n);
+        }
+        let depth = self.centroid_depth(std::iter::once(apex).chain(rim.iter().copied()));
+        (mesh, depth)
+    }
+
+    /// The depth of the mean of a set of world points. Depth is linear in the world position, so
+    /// this is also the mean of the points' depths; it is the one number a whole primitive has to
+    /// be sorted by, and taking it at the centroid is what makes the sort stable under a reversal
+    /// of the corner order.
+    fn centroid_depth(&self, points: impl Iterator<Item = [f64; 3]>) -> f32 {
+        let mut sum = [0.0f64; 3];
+        let mut n = 0.0f64;
+        for p in points {
+            sum[0] += p[0];
+            sum[1] += p[1];
+            sum[2] += p[2];
+            n += 1.0;
+        }
+        if n == 0.0 {
+            return 0.0;
+        }
+        self.project([sum[0] / n, sum[1] / n, sum[2] / n]).1
     }
 }
 
@@ -277,33 +368,20 @@ impl PrimBuffer {
     }
 }
 
-/// One strip of a pipe: a planar quad in world space as two triangles, one premultiplied colour.
-/// Returns the mesh and its depth at the centroid.
-///
-/// The two triangles share the diagonal 0-2, so the corners have to be given in order around the
-/// quad; given them in that order a strip that projects to zero area - which is every vertical
-/// strip in the Top view - still produces a mesh egui accepts and tessellates away to nothing.
+/// `Projector::quad_mesh` through a camera and a centre, for a caller with one quad to build. The
+/// frame itself builds every quad through the one projector it takes.
+#[cfg(test)]
 pub fn quad_mesh(
     cam: &Camera,
     centre: Pos2,
     corners: [[f64; 3]; 4],
     colour: Color32,
 ) -> (egui::Mesh, f32) {
-    let mut mesh = egui::Mesh::default();
-    for c in corners {
-        mesh.colored_vertex(cam.project(centre, c).0, colour);
-    }
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(0, 2, 3);
-    (mesh, centroid_depth(cam, centre, corners.iter().copied()))
+    cam.projector(centre).quad_mesh(corners, colour)
 }
 
-/// A cone half: apex plus n rim points as a triangle fan, closing back to rim[0].
-///
-/// This is the only primitive whose shape carries physics: the rim is where the null geodesics
-/// leaving one event have got to after one step of t, so the fan is the cone's surface and not a
-/// decoration drawn at a fixed opening angle. Near the horizon the rim is no longer centred on the
-/// apex and the fan tips over with it, which is the whole thing the volume view exists to show.
+/// `Projector::cone_mesh` through a camera and a centre, for a caller with one cone to build.
+#[cfg(test)]
 pub fn cone_mesh(
     cam: &Camera,
     centre: Pos2,
@@ -311,17 +389,7 @@ pub fn cone_mesh(
     rim: &[[f64; 3]],
     fill: Color32,
 ) -> (egui::Mesh, f32) {
-    let mut mesh = egui::Mesh::default();
-    mesh.colored_vertex(cam.project(centre, apex).0, fill);
-    for p in rim {
-        mesh.colored_vertex(cam.project(centre, *p).0, fill);
-    }
-    let n = rim.len() as u32;
-    for i in 0..n {
-        mesh.add_triangle(0, 1 + i, 1 + (i + 1) % n);
-    }
-    let depth = centroid_depth(cam, centre, std::iter::once(apex).chain(rim.iter().copied()));
-    (mesh, depth)
+    cam.projector(centre).cone_mesh(apex, rim, fill)
 }
 
 /// How far from edge-on a cone's wall may be, as the cosine between its outward normal and the
@@ -514,30 +582,6 @@ fn lip_runs(rim: &[[f64; 3]], visibility: &[f64]) -> Vec<(Vec<[f64; 3]>, f32, bo
         runs.push((run, strength(run_level), false));
     }
     runs
-}
-
-
-/// The depth of the mean of a set of world points. Depth is linear in the world position, so this
-/// is also the mean of the points' depths; it is the one number a whole primitive has to be sorted
-/// by, and taking it at the centroid is what makes the sort stable under a reversal of the corner
-/// order.
-fn centroid_depth(
-    cam: &Camera,
-    centre: Pos2,
-    points: impl Iterator<Item = [f64; 3]>,
-) -> f32 {
-    let mut sum = [0.0f64; 3];
-    let mut n = 0.0f64;
-    for p in points {
-        sum[0] += p[0];
-        sum[1] += p[1];
-        sum[2] += p[2];
-        n += 1.0;
-    }
-    if n == 0.0 {
-        return 0.0;
-    }
-    cam.project(centre, [sum[0] / n, sum[1] / n, sum[2] / n]).1
 }
 
 /// Fresnel weight of a vertical strip whose outward horizontal normal is `n_xy` against the view
@@ -1155,12 +1199,15 @@ impl VolumeCanvas {
         self.focus_offset = offset;
         let centre = rect.center() + camera.pan - offset;
 
-        // 3. The projection, as the two closures the rest of the frame is written in.
-        let project = |p: [f64; 3]| camera.project(centre, p);
+        // 3. The projection, as the two closures the rest of the frame is written in. Both go
+        // through one `Projector`, so the screen basis is built once for the frame rather than
+        // once per point: see that type.
+        let view = camera.projector(centre);
+        let project = |p: [f64; 3]| view.project(p);
         // The floor map is exactly the `Fn((f64, f64)) -> Pos2` the equatorial view's drawing
         // helpers take, which is what lets the fronts, the trails and the arrival ticks be the same
         // code here as there rather than a second implementation that could disagree with it.
-        let floor = |(x, y): (f64, f64)| camera.project(centre, [x, y, 0.0]).0;
+        let floor = |(x, y): (f64, f64)| view.project([x, y, 0.0]).0;
         // Height is a coordinate-time difference in M, kept in f64 the whole way into `project`,
         // which takes the one rounding to f32 it needs. Near r- the interesting times differ from
         // t_now by parts in 1e7 of t_now itself, and taking the difference in f32 would quantise
@@ -1239,12 +1286,8 @@ impl VolumeCanvas {
                 let Some(c) = corners else {
                     continue;
                 };
-                let (mesh, depth) = quad_mesh(
-                    &camera,
-                    centre,
-                    [c[0], c[1], c[2], c[3]],
-                    glass(colour, base_alpha, weight),
-                );
+                let (mesh, depth) =
+                    view.quad_mesh([c[0], c[1], c[2], c[3]], glass(colour, base_alpha, weight));
                 buf.push(Layer::Below, depth, Prim::Mesh(mesh));
             }
             if let Some(points) = ring(r, 0.0) {
@@ -1352,7 +1395,7 @@ impl VolumeCanvas {
                 // arrowhead: the bright end is the end the observer is at now.
                 let t_mid = 0.5 * (run[0].0 + run[run.len() - 1].0);
                 let fade = (0.45 + 0.55 * ((t_mid - t_min) / span)).clamp(0.0, 1.0) as f32;
-                let depth = centroid_depth(&camera, centre, run.iter().map(|(_, p)| *p));
+                let depth = view.centroid_depth(run.iter().map(|(_, p)| *p));
                 let points: Vec<Pos2> = run.iter().map(|(_, p)| project(*p).0).collect();
                 // A run the zoom has thrown a million pixels off the canvas is not drawn: its
                 // squared length is past f32 and it would tessellate to nothing good.
@@ -1452,7 +1495,7 @@ impl VolumeCanvas {
                     fixed
                 };
                 // The sort stands: a cone inside a pipe really is seen through the pipe's wall.
-                let (mesh, depth) = cone_mesh(&camera, centre, apex, rim, fill);
+                let (mesh, depth) = view.cone_mesh(apex, rim, fill);
                 buf.push(layer, depth, Prim::Mesh(mesh));
                 // The rim, as a bright lip in this half's own colour, drawn only where the eye can
                 // see it - past the cone's own wall, and past the other half's - and fading out
@@ -1594,7 +1637,7 @@ impl VolumeCanvas {
                             mesh.add_triangle(base, base + 2, base + 3);
                         }
                         if !mesh.is_empty() {
-                            let depth = centroid_depth(&camera, centre, corners.into_iter());
+                            let depth = view.centroid_depth(corners.into_iter());
                             buf.push(Layer::Below, depth, Prim::Mesh(mesh));
                         }
                         // One row of overlap, so the chunks meet instead of leaving a gap.
@@ -1613,7 +1656,7 @@ impl VolumeCanvas {
                     while start + 1 < points.len() {
                         let end = (start + WORLDLINE_RUN).min(points.len());
                         let run = &points[start..end];
-                        let depth = centroid_depth(&camera, centre, run.iter().copied());
+                        let depth = view.centroid_depth(run.iter().copied());
                         buf.push(
                             Layer::Below,
                             depth,
@@ -1722,7 +1765,7 @@ impl VolumeCanvas {
                                 mesh.add_triangle(base, base + 2, base + 3);
                             }
                             if !mesh.is_empty() {
-                                let depth = centroid_depth(&camera, centre, corners.into_iter());
+                                let depth = view.centroid_depth(corners.into_iter());
                                 // Every row is at t <= now, so the whole surface is below the
                                 // floor.
                                 buf.push(Layer::Below, depth, Prim::Mesh(mesh));
