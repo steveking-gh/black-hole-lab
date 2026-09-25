@@ -122,6 +122,9 @@
 //! a couple of its own rays by name, picked once at emission from their exact conserved quantities
 //! by `select_role_rays`: the steepest freezer and the highest climber. The track records
 //! their radii beside the edges, and the canvas draws each of them exactly as it draws an edge.
+//! A pulse also follows, in the same way, the two of its rays that straddle the critical angle of
+//! each photon orbit it can reach (`photon_orbit_straddlers`): their comets close on r_ph on the
+//! chart, stand on it while the rays circle, and part, one captured and one returning.
 //!
 //! The 2D+1 volume view wants the other projection - the whole front, azimuths and all, swept up in
 //! t - and that is a surface rather than a curve, so it is not kept for every pulse. A pulse whose
@@ -293,10 +296,101 @@ const TRACK_MIN_DT: f64 = 0.02;
 /// whole infall, and the spacing doubles at each one after that.
 const TRACK_MAX_POINTS: usize = 4000;
 
+/// Samples each ray of a pulse keeps in its `RayTrail`: at the fixed `TRACK_MIN_DT` cadence, 2.56 M
+/// of coordinate time, which is about one default comet tail on the (t, r) chart.
+pub(crate) const RAY_TRAIL_SAMPLES: usize = 128;
+
+/// The recent radius of *every* ray of one pulse, for the chart's "Ray comets" diagnostic: a ring
+/// buffer of the last `RAY_TRAIL_SAMPLES` samples per ray, recorded at the fixed `TRACK_MIN_DT`
+/// cadence and never thinned.
+///
+/// View state, not physics. It exists only while the panel's "Ray comets" setting is on - see
+/// `SignalField::set_ray_comet_stride`, which drops every trail the moment the setting goes off -
+/// and it is neither saved nor part of `Simulation::fingerprint`. A step backwards empties it
+/// rather than rewinding it, and the tails rebuild as the run plays on.
+///
+/// `NullRay` is not enlarged for this: its layout is tuned for the integrator, and a trail that
+/// only a diagnostic reads belongs beside the rays, not inside them. The radii are f32 because the
+/// only reader is a screen position; the times are f64 because the chart's time axis is.
+#[derive(Debug, Clone)]
+pub(crate) struct RayTrail {
+    /// Ray-major: ray i's samples are `radii[i * RAY_TRAIL_SAMPLES..][..RAY_TRAIL_SAMPLES]`, slot
+    /// by slot in step with `times`. A ray that was dead at a sample's time holds NaN there.
+    radii: Box<[f32]>,
+    /// The coordinate time of each slot, shared by every ray of the pulse.
+    times: Box<[f64; RAY_TRAIL_SAMPLES]>,
+    /// The slot the next sample goes into.
+    next: usize,
+    /// How many slots hold a sample, at most `RAY_TRAIL_SAMPLES`.
+    len: usize,
+}
+
+impl RayTrail {
+    /// An empty trail for a pulse of `rays` rays.
+    pub(crate) fn new(rays: usize) -> Self {
+        Self {
+            radii: vec![f32::NAN; rays * RAY_TRAIL_SAMPLES].into_boxed_slice(),
+            times: Box::new([f64::NAN; RAY_TRAIL_SAMPLES]),
+            next: 0,
+            len: 0,
+        }
+    }
+
+    /// Forget every sample and keep the allocation: what a step backwards does to a trail.
+    pub(crate) fn clear(&mut self) {
+        self.next = 0;
+        self.len = 0;
+    }
+
+    /// How many samples the trail holds.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.len
+    }
+
+    /// The time of the newest sample, or None for an empty trail.
+    pub(crate) fn newest_t(&self) -> Option<f64> {
+        (self.len > 0).then(|| self.times[(self.next + RAY_TRAIL_SAMPLES - 1) % RAY_TRAIL_SAMPLES])
+    }
+
+    /// Record where every ray stands at `t`, if at least `TRACK_MIN_DT` has passed since the newest
+    /// sample - the rule, and the floating-point slack, of `Pulse::extend_track` - overwriting the
+    /// oldest sample once the ring is full. A dead ray records NaN.
+    fn record(&mut self, rays: &[NullRay], t: f64) {
+        if let Some(last) = self.newest_t()
+            && t < last + TRACK_MIN_DT * (1.0 - 1e-9)
+        {
+            return;
+        }
+        let slot = self.next;
+        self.times[slot] = t;
+        for (i, ray) in rays.iter().enumerate() {
+            let r = if ray.alive() { ray.r as f32 } else { f32::NAN };
+            if let Some(cell) = self.radii.get_mut(i * RAY_TRAIL_SAMPLES + slot) {
+                *cell = r;
+            }
+        }
+        self.next = (slot + 1) % RAY_TRAIL_SAMPLES;
+        self.len = (self.len + 1).min(RAY_TRAIL_SAMPLES);
+    }
+
+    /// Ray `ray`'s samples as (t, r), newest first. NaN radii are handed out as they are: the
+    /// reader decides where a tail stops.
+    pub(crate) fn newest_first(&self, ray: usize) -> impl Iterator<Item = (f64, f32)> + '_ {
+        let base = ray * RAY_TRAIL_SAMPLES;
+        (1..=self.len).map(move |back| {
+            let slot = (self.next + RAY_TRAIL_SAMPLES - back) % RAY_TRAIL_SAMPLES;
+            (self.times[slot], self.radii.get(base + slot).copied().unwrap_or(f32::NAN))
+        })
+    }
+}
+
 /// How many rays of a pulse are singled out at emission to be followed on their own, beside the
-/// two extremes of its radial extent: the steepest freezer and the highest climber. See
-/// `select_role_rays`, which chooses them and says why, and `Pulse::role_rays`, which keeps them.
-pub(crate) const ROLES: usize = 2;
+/// two extremes of its radial extent: the steepest freezer, the highest climber, and the two
+/// rays straddling the critical angle of each of the prograde and the retrograde photon orbit.
+/// See `select_role_rays`, which chooses them and says why, `photon_orbit_straddlers`, which finds
+/// the last four, and `Pulse::role_rays`, which keeps them.
+pub(crate) const ROLES: usize = 6;
 
 /// Columns of a `TrackPoint`: the lower edge, the upper edge, and one per role.
 pub(crate) const TRACK_COLUMNS: usize = 2 + ROLES;
@@ -1661,7 +1755,9 @@ pub struct Pulse {
     /// has died, is NaN in that row.
     pub extent_track: Vec<TrackPoint>,
     /// The rays of `rays`, by index, that the (t, r) chart follows beside the two extremes: role 0
-    /// the steepest freezer and role 1 the highest climber, chosen once at emission by
+    /// the steepest freezer, role 1 the highest climber, roles 2 and 3 the rays either side of
+    /// the prograde photon orbit's critical angle and roles 4 and 5 those of the retrograde one,
+    /// below then above by launch angle, chosen once at emission by
     /// `select_role_rays` from the rays' exact conserved quantities, or None where the pulse has
     /// no ray of that kind. Fixed for the life of the pulse: a ray's (E, L) never change, so
     /// neither does which ray plays which role.
@@ -1677,6 +1773,11 @@ pub struct Pulse {
     /// emission event, extended at every `SignalField::advance` by `Pulse::extend_history`, and cut
     /// back by `SignalField::step_back` alongside the extent track.
     pub(crate) history: Option<RingHistory>,
+    /// The recent radius of every ray of this pulse, for the chart's "Ray comets" diagnostic, or
+    /// None while that setting is off. View state: allocated at emission or by the first
+    /// `SignalField::advance` after the setting goes on, dropped the moment it goes off, emptied
+    /// by `SignalField::step_back`, and neither saved nor fingerprinted. See `RayTrail`.
+    pub(crate) trail: Option<RayTrail>,
     /// The front and the receiver as both stood at the previous detection pass, or None before
     /// this pulse has had one. It is the other half of every reception: a crossing is a statement
     /// about an interval, and this is the near end of it. See `Pulse::sweep`.
@@ -2661,11 +2762,136 @@ fn with_family_boundaries(
     comb
 }
 
+/// The rays of a fresh pulse that straddle the critical angle of each equatorial photon orbit the
+/// emitter can reach, by index into `rays`: `[prograde below, prograde above, retrograde below,
+/// retrograde above]`, "below" and "above" by launch angle on the cone, each None where the pulse
+/// has no such pair. Nothing is launched: the pair is found among the pulse's own rays,
+/// family-boundary rays included, which are real rays of the pulse like any other.
+///
+/// A circular photon orbit is unstable, and only the ray whose L/E is exactly the orbit's critical
+/// impact parameter b_c (`KerrSchild::photon_orbit_impact`) approaches it and stays. The rays
+/// either side of that angle carry b off b_c by some small epsilon, close on the orbit, circle it
+/// for a time of order ln(1/epsilon)/lambda, lambda the orbit's instability rate, and leave on
+/// opposite sides. The ray with too little angular momentum, |b| < |b_c|, has no turning point
+/// near the orbit and goes through it; the ray with too much turns short of the orbit and goes
+/// back the way it came. For Alice's prograde pair, which heads in from the ISCO, the ray short of
+/// b_c is captured through r+ and the ray past it climbs back out. The retrograde pair heads out
+/// from inside its orbit and is the mirror image: the ray short of b_c escapes, and the ray past
+/// it turns back inward and is captured. Which of "below" and "above" is which depends on how
+/// L/E runs round the cone at the emitter; from the ISCO at a = 0.9 both pairs have "above" short
+/// of b_c, so the prograde "above" ray is captured and the retrograde "above" ray escapes.
+///
+/// So the two comets on each pair close on r_ph, stand on it while the rays circle, and part -
+/// which is what a real pulse's light near the critical angle does at every time, the continuum
+/// leaving the orbit on both sides for ever. How long a pair circles is set by how close the
+/// comb's spacing puts it to the critical angle, and so by the ray-count slider: the comets mark
+/// where the pulse's light is circling, and the length of their stay on r_ph is a property of the
+/// sampling and not of the orbit.
+///
+/// The critical angle is found in closed form, as `with_family_boundaries` finds its boundary.
+/// Over the cone k = e0 + cos(alpha) e1 + sin(alpha) e2 both E = -g_{t mu} k^mu and
+/// L = g_{phi mu} k^mu are linear in k, so
+///
+///     L - b_c E = A + B cos(alpha) + C sin(alpha),     A, B, C = (L - b_c E)(e0, e1, e2),
+///
+/// with zeros at alpha = atan2(C, B) +/- acos(-A / hypot(B, C)), and none where
+/// |A| >= hypot(B, C): no direction of that cone carries b_c. Of the two directions with
+/// L/E = b_c, the one taken has E > 0 - at the orbit's root E (r^2 + a^2) - a L has the sign of E,
+/// and only E > 0 circles future-directed outside r+ - and heads toward the orbit: dr/dt < 0 from
+/// outside it, dr/dt > 0 from inside. The potential of b_c is non-negative on both sides of its
+/// double zero (the third zero of the cubic is at -2 r_ph), so rays near that angle reach the
+/// orbit's neighbourhood with nothing to turn them first.
+///
+/// No pair is chosen for an emitter at or inside r+, from where no photon orbit is reachable, nor
+/// for one standing within 1e-9 M of the orbit, where the critical ray has dr/dt = 0 and no side
+/// to approach from.
+///
+/// The pair is found by bisection on each ray's launch angle, read back off its direction as
+/// atan2(g(v, e2), g(v, e1)). The rays are in angle order from alpha = 0, family-boundary rays
+/// included, and a ray of angle 0 reads back a rounding either side of 0, so the search starts
+/// after ray 0; a critical angle past the last ray is straddled by the last ray and ray 0.
+///
+/// Measured from the prograde ISCO at a = 0.9 with the default comb, 145 rays, stepped at 0.1 M
+/// to 80 M by `test_the_photon_orbit_straddlers_circle_and_part`:
+///
+///   * prograde, rays 62 and 63, L/E 2.861 and 2.811 about b_c = 2.844: ray 62 turns 7.3e-2 M
+///     outside r_ph+ and escapes; ray 63 spends 5.8 M and a third of a turn within 0.05 M of the
+///     orbit, comes within 2.3e-4 M of it, leaves inward at 12.7 M and is frozen on r- by 80 M;
+///   * retrograde, rays 114 and 115, L/E -7.128 and -6.151 about b_c = -6.832: ray 114 turns
+///     0.62 M inside r_ph- and falls to the ring; ray 115 spends 0.5 M within 0.05 M of the orbit,
+///     comes within 1.7e-4 M of it, leaves outward at 10.7 M and escapes.
+///
+/// At the default spacing of 2.5 degrees the pairs sit percents off b_c, so the comets touch
+/// r_ph briefly and part; a finer comb puts them closer and they stand on r_ph for longer.
+///
+/// It touches no ray, so no physics fingerprint can see it. Measured by `cargo perf-check`'s
+/// emission row, a 144-ray pulse from the ISCO costs 4.9 us with the straddlers found against
+/// 4.3 us without them.
+pub(crate) fn photon_orbit_straddlers(
+    metric: &KerrSchild,
+    tetrad: &Tetrad,
+    r: f64,
+    rays: &[NullRay],
+) -> [Option<usize>; 4] {
+    /// How close to an orbit an emitter may stand and still have a pair chosen for it.
+    const ON_ORBIT: f64 = 1e-9;
+    let mut pairs = [None; 4];
+    let n = rays.len();
+    if r <= metric.outer_horizon() || n < 2 {
+        return pairs;
+    }
+    let two_pi = 2.0 * std::f64::consts::PI;
+    let g = metric.metric_components(r);
+    // E and L of a vector v of the cone: -g_{t mu} v^mu and g_{phi mu} v^mu.
+    let e_of = |v: &[f64; 3]| -(g[0][0] * v[0] + g[0][1] * v[1] + g[0][2] * v[2]);
+    let l_of = |v: &[f64; 3]| g[2][0] * v[0] + g[2][1] * v[1] + g[2][2] * v[2];
+    let dot = |v: &[f64; 3], w: &[f64; 3]| {
+        (0..3).map(|mu| (0..3).map(|nu| g[mu][nu] * v[mu] * w[nu]).sum::<f64>()).sum::<f64>()
+    };
+    // The launch angle of a ray standing on the emission event: k = k^t v, and g(k, e1) and
+    // g(k, e2) are cos(alpha) and sin(alpha) because the frame is orthonormal.
+    let angle_of = |ray: &NullRay| {
+        let v = ray.direction();
+        dot(&v, &tetrad.e2).atan2(dot(&v, &tetrad.e1)).rem_euclid(two_pi)
+    };
+    for (slot, prograde) in [(0, true), (2, false)] {
+        let r_ph = metric.photon_orbit(prograde);
+        if (r - r_ph).abs() < ON_ORBIT {
+            continue;
+        }
+        let b_c = metric.photon_orbit_impact(prograde);
+        let off = |v: &[f64; 3]| l_of(v) - b_c * e_of(v);
+        let (a, b, c) = (off(&tetrad.e0), off(&tetrad.e1), off(&tetrad.e2));
+        let amplitude = b.hypot(c);
+        if a.abs() >= amplitude {
+            continue;
+        }
+        let centre = c.atan2(b);
+        let half = (-a / amplitude).acos();
+        let inward = r_ph < r;
+        let critical = [centre - half, centre + half].into_iter().find_map(|zero| {
+            let alpha = zero.rem_euclid(two_pi);
+            let k = tetrad.null_direction(alpha);
+            let toward = if inward { k[1] < 0.0 } else { k[1] > 0.0 };
+            (e_of(&k) > 0.0 && toward).then_some(alpha)
+        });
+        let Some(alpha) = critical else {
+            continue;
+        };
+        // The first ray past the critical angle, and the one before it, round the turn.
+        let above = 1 + rays[1..].partition_point(|ray| angle_of(ray) < alpha);
+        pairs[slot] = Some(above - 1);
+        pairs[slot + 1] = Some(above % n);
+    }
+    pairs
+}
+
 /// The rays of a freshly launched pulse that the (t, r) chart follows beside the two extremes of
-/// its radial extent, by index into `rays`: `[steepest freezer, highest climber]`, each None
-/// where the pulse has no ray of that kind. Chosen once, at emission, from the rays' exact
-/// conserved quantities, and never revised: (E, L) are constants of the motion, so a choice made
-/// from them is as good at t = 100 M as it was at the emission event.
+/// its radial extent, by index into `rays`: `[steepest freezer, highest climber, prograde below,
+/// prograde above, retrograde below, retrograde above]`, each None where the pulse has no ray of
+/// that kind. Chosen once, at emission, from the rays' exact conserved quantities, and never
+/// revised: (E, L) are constants of the motion, so a choice made from them is as good at
+/// t = 100 M as it was at the emission event.
 ///
 /// Why any choice is needed. The extremes mark the pile of light on r- only where the emitter is
 /// inside r+, because only there is the outermost ray the one that freezes. From outside r+ - Alice
@@ -2720,6 +2946,12 @@ fn with_family_boundaries(
 /// climbing below it. None where no crossing ray turns above the
 /// ring, and None for an emitter inside r-, where the pulse's upper edge already is its climber.
 ///
+/// **Roles 2 to 5, the photon-orbit straddlers**: the pair of rays either side of the critical
+/// angle of the prograde photon orbit, then the pair for the retrograde one, below then above by
+/// launch angle, as `photon_orbit_straddlers` found them and handed in as `straddlers`. They are
+/// passed through unchanged, and a straddler may also be the freezer or the climber: one ray
+/// can play two roles, and the chart then draws two comets on the one worldline.
+///
 /// "Steepest" and "highest" are expectations about which ray settles first, and nothing
 /// downstream leans on them being right. Each comet is drawn on its role ray's own worldline, so
 /// whatever ray is chosen, what the chart shows is exactly where that ray is; a poorer choice only
@@ -2738,11 +2970,13 @@ pub(crate) fn select_role_rays(
     metric: &KerrSchild,
     emitted_r: f64,
     rays: &[NullRay],
+    straddlers: [Option<usize>; 4],
 ) -> [Option<usize>; ROLES] {
     let rm = metric.inner_horizon();
     let omega_minus = metric.inner_horizon_omega();
+    let [pro_below, pro_above, retro_below, retro_above] = straddlers;
     if emitted_r <= rm {
-        return [None; ROLES];
+        return [None, None, pro_below, pro_above, retro_below, retro_above];
     }
     // Every ray of a fresh pulse stands on the emission event, so one metric serves the whole
     // comb, and each ray's (E, L) per unit k^t is the same arithmetic `NullRay::constants` does.
@@ -2798,7 +3032,7 @@ pub(crate) fn select_role_rays(
             .enumerate()
             .fold(None, |best, (k, ray)| steepest_above(dr_dt, best, k, constants(ray)));
     };
-    [freezer, climber.map(|(i, _)| i)]
+    [freezer, climber.map(|(i, _)| i), pro_below, pro_above, retro_below, retro_above]
 }
 
 /// The 4-velocity to quote an observer's signals in, at emission and at reception alike: the
@@ -2916,6 +3150,14 @@ pub struct SignalField {
     /// the transmission: the pulse is gone from the field and no rewind brings it back, so a run
     /// that has lost arrivals goes on having lost them and goes on saying so.
     pub(crate) dropped_in_flight: usize,
+    /// The chart's "Ray comets" setting as the app last pushed it in: draw a comet on every k-th
+    /// ray of every pulse, and 0 for off. Set through `set_ray_comet_stride`, once a frame.
+    ///
+    /// View state carried here because the field is what has to record the trails those comets
+    /// draw: while it is above zero `advance` keeps a `RayTrail` on every pulse, and while it is
+    /// zero no trail exists and `advance` does nothing it would not do anyway. It changes no ray,
+    /// is not saved, and is not in `Simulation::fingerprint`.
+    pub(crate) ray_comet_stride: usize,
 }
 
 impl Default for SignalField {
@@ -2932,6 +3174,7 @@ impl Default for SignalField {
             heard: Vec::new(),
             budget_exhausted: 0,
             dropped_in_flight: 0,
+            ray_comet_stride: 0,
         }
     }
 }
@@ -3016,9 +3259,17 @@ impl SignalField {
         comb.extend((0..n).map(|i| launch(two_pi * (i as f64) / (n as f64))));
         let rays = with_family_boundaries(metric, &tetrad, emitter.r, comb, launch);
         let n = rays.len();
-        let role_rays = select_role_rays(metric, emitter.r, &rays);
+        let straddlers = photon_orbit_straddlers(metric, &tetrad, emitter.r, &rays);
+        let role_rays = select_role_rays(metric, emitter.r, &rays, straddlers);
         // The seed row is the emission event, and every role ray the pulse has stands on it.
         let seed_roles = role_rays.map(|role| role.map_or(f64::NAN, |_| emitter.r));
+        // A trail only while the "Ray comets" setting is on, seeded with the emission event, where
+        // every ray of the pulse stands. Off, this is one comparison and no allocation.
+        let trail = (self.ray_comet_stride > 0).then(|| {
+            let mut trail = RayTrail::new(rays.len());
+            trail.record(&rays, emitter.t);
+            trail
+        });
 
         self.pulses.push_back(Pulse {
             index: self.next_index,
@@ -3042,6 +3293,7 @@ impl SignalField {
                 .next_index
                 .is_multiple_of(HISTORY_PULSE_STRIDE)
                 .then(|| RingHistory::seeded(n, emitter.t, emitter.r, emitter.phi)),
+            trail,
             prev: None,
             receptions: Vec::new(),
         });
@@ -3085,8 +3337,8 @@ impl SignalField {
     /// is not reachable from the panel, whose slider stops there, and is here so that a cap of zero
     /// from anywhere else cannot leave a transmitting emitter with nothing in flight at all.
     ///
-    /// O(1) per eviction, `pulses` being a deque. A `Pulse` is 256 bytes, so shifting the rest of a
-    /// full field down one would move 16 KB at the default cap of 64 and 32 KB at the panel's top
+    /// O(1) per eviction, `pulses` being a deque. A `Pulse` is 360 bytes, so shifting the rest of a
+    /// full field down one would move 23 KB at the default cap of 64 and 46 KB at the panel's top
     /// of 128 - once per emission rather than once per step, so a tenth of a megabyte a second at
     /// worst, but there was never anything to buy it with.
     fn trim_to_cap(&mut self, metric: &KerrSchild) {
@@ -3108,6 +3360,23 @@ impl SignalField {
     pub fn set_max_pulses(&mut self, metric: &KerrSchild, pulses: usize) {
         self.max_pulses = pulses;
         self.trim_to_cap(metric);
+    }
+
+    /// Set the "Ray comets" stride - a comet on every `stride`-th ray, 0 for off - and drop every
+    /// pulse's `RayTrail` when it goes off, so a setting that is off holds no memory for it.
+    /// Turning it on allocates nothing here: `advance` gives each pulse its trail on the next step.
+    pub fn set_ray_comet_stride(&mut self, stride: usize) {
+        if stride == 0 && self.ray_comet_stride != 0 {
+            for pulse in self.pulses.iter_mut() {
+                pulse.trail = None;
+            }
+        }
+        self.ray_comet_stride = stride;
+    }
+
+    /// The "Ray comets" stride this field was last given: 0 for off. See `ray_comet_stride`.
+    pub fn ray_comet_stride(&self) -> usize {
+        self.ray_comet_stride
     }
 
     /// Advance every live ray by dt of coordinate time, then record how far each pulse's radial
@@ -3140,6 +3409,12 @@ impl SignalField {
             // is the ring.
             pulse.extend_track(metric, t);
             pulse.extend_history(metric, t, &raindrop);
+            // The "Ray comets" trails, read off the rays after they have moved and never written
+            // back to them. Off, this is one comparison per pulse.
+            if self.ray_comet_stride > 0 {
+                let n = pulse.rays.len();
+                pulse.trail.get_or_insert_with(|| RayTrail::new(n)).record(&pulse.rays, t);
+            }
         }
         self.budget_exhausted += exhausted;
     }
@@ -3203,6 +3478,11 @@ impl SignalField {
                 history.rows.truncate(keep);
             }
             pulse.receptions.retain(|rec| rec.t <= target_t);
+            // A trail is a view of the recent past and is not rewound: it is emptied, and the
+            // tails rebuild from here as the run plays on.
+            if let Some(trail) = pulse.trail.as_mut() {
+                trail.clear();
+            }
             // A mark is a statement about where the front and the receiver were, and the rewind has
             // just moved both: the priming pass takes a fresh one at the rewound state.
             pulse.prev = None;
@@ -4205,6 +4485,81 @@ mod tests {
     }
 
     #[test]
+    fn test_ray_trails_record_every_ray_on_the_cadence_only_while_asked_to() {
+        // The "Ray comets" trails: with the setting on, every ray of a pulse is sampled on the
+        // fixed `TRACK_MIN_DT` cadence, the newest sample is the ray where it stands, a dead ray
+        // records NaN from its death on, and nothing a trail does moves a ray. Off frees them, and
+        // a step backwards empties them.
+        let (metric, mut field) = isco_pulse(0.9);
+        let (_, mut plain) = isco_pulse(0.9);
+        assert!(field.pulses[0].trail.is_none(), "off by default, and nothing allocated");
+        field.set_ray_comet_stride(1);
+        assert!(field.pulses[0].trail.is_none(), "turning it on allocates on the next step");
+
+        let dt = 0.1;
+        let check = |field: &SignalField, steps: usize| {
+            let pulse = &field.pulses[0];
+            let trail = pulse.trail.as_ref().expect("a trail once the field has stepped");
+            assert_eq!(trail.len(), steps.min(RAY_TRAIL_SAMPLES), "a sample at every 0.1 M step");
+            let times: Vec<f64> = trail.newest_first(0).map(|(t, _)| t).collect();
+            assert_eq!(times[0], field.t, "the newest sample is taken at the field's clock");
+            for pair in times.windows(2) {
+                assert!(pair[0] - pair[1] >= TRACK_MIN_DT * (1.0 - 1e-9), "{pair:?}");
+            }
+            for (i, ray) in pulse.rays.iter().enumerate() {
+                let (_, newest) = trail.newest_first(i).next().expect("a sample");
+                if ray.alive() {
+                    assert_eq!(newest, ray.r as f32, "ray {i}: the newest sample is its radius");
+                }
+                for (t, r) in trail.newest_first(i) {
+                    match ray.death_t {
+                        Some(death) if t >= death => {
+                            assert!(r.is_nan(), "ray {i} dead at {death} recorded {r} at {t}")
+                        }
+                        _ => assert!(r.is_finite(), "ray {i} alive at {t} recorded {r}"),
+                    }
+                }
+            }
+        };
+        for _ in 0..10 {
+            field.advance(&metric, dt);
+            plain.advance(&metric, dt);
+        }
+        check(&field, 10);
+        // Carried on until rays have reached the ring, so the NaN rule has a death to act on.
+        for _ in 10..60 {
+            field.advance(&metric, dt);
+            plain.advance(&metric, dt);
+        }
+        let dead = field.pulses[0].rays.iter().filter(|r| !r.alive()).count();
+        assert!(dead > 0, "6 M from the ISCO some ray must have died");
+        check(&field, 60);
+        // And on past the ring's length, so the newest sample overwrites the oldest.
+        for _ in 60..150 {
+            field.advance(&metric, dt);
+            plain.advance(&metric, dt);
+        }
+        check(&field, 150);
+        let oldest = field.pulses[0].trail.as_ref().unwrap().newest_first(0).last().unwrap().0;
+        assert!((field.t - oldest - dt * (RAY_TRAIL_SAMPLES - 1) as f64).abs() < 1e-9, "{oldest}");
+
+        // A trail reads the rays and never writes them.
+        for (a, b) in field.pulses[0].rays.iter().zip(plain.pulses[0].rays.iter()) {
+            assert_eq!((a.r, a.phi, a.dr_dt, a.dphi_dt), (b.r, b.phi, b.dr_dt, b.dphi_dt));
+            assert_eq!(a.death_t, b.death_t);
+        }
+
+        let mut rewound = field.clone();
+        rewound.step_back(&metric, dt);
+        assert_eq!(rewound.pulses[0].trail.as_ref().expect("kept").len(), 0, "emptied");
+
+        field.set_ray_comet_stride(0);
+        assert!(field.pulses.iter().all(|p| p.trail.is_none()), "off frees every trail");
+        field.advance(&metric, dt);
+        assert!(field.pulses.iter().all(|p| p.trail.is_none()), "and records nothing while off");
+    }
+
+    #[test]
     fn test_role_rays_are_chosen_from_the_exact_conserved_quantities() {
         // From the prograde ISCO at a = 0.9, Alice's cone holds both kinds of ray that settle onto
         // r- and neither of the pulse's edges is one of them. The pick has to find a freezer -
@@ -4213,7 +4568,7 @@ mod tests {
         let (metric, field) = isco_pulse(0.9);
         let pulse = field.pulses.back().expect("one pulse");
         let rm = metric.inner_horizon();
-        let [Some(freezer), Some(climber)] = pulse.role_rays else {
+        let [Some(freezer), Some(climber), ..] = pulse.role_rays else {
             panic!("an ISCO pulse at a = 0.9 has both roles: {:?}", pulse.role_rays);
         };
         let freezer_ray = &pulse.rays[freezer];
@@ -4246,13 +4601,18 @@ mod tests {
         // Inside r- the pulse's upper edge already is its climber, and nothing approaches r- from
         // above: no role is picked.
         let deep = cone_at(&metric, 0.45);
-        assert_eq!(select_role_rays(&metric, 0.45, &deep), [None; ROLES], "an emitter inside r-");
+        assert_eq!(
+            select_role_rays(&metric, 0.45, &deep, [None; 4]),
+            [None; ROLES],
+            "an emitter inside r-"
+        );
 
-        // A hole with no spin has no inner horizon, so no ray freezes and none turns inside it.
+        // A hole with no spin has no inner horizon, so no ray freezes and none turns inside it;
+        // only the photon-orbit roles remain.
         let (_, still) = isco_pulse(0.0);
         let pulse = still.pulses.back().expect("one pulse");
-        assert_eq!(pulse.role_rays, [None; ROLES], "a = 0 picks nothing");
-        assert!(pulse.extent_track[0].roles.iter().all(|r| r.is_nan()), "and records nothing");
+        assert_eq!(pulse.role_rays[..2], [None; 2], "a = 0 picks no freezer and no climber");
+        assert!(pulse.extent_track[0].roles[..2].iter().all(|r| r.is_nan()), "and records neither");
     }
 
     #[test]
@@ -4273,7 +4633,7 @@ mod tests {
             field.advance(&metric, 0.1);
         }
         let pulse = field.pulses.back().expect("one pulse");
-        let [Some(freezer), Some(climber)] = pulse.role_rays else {
+        let [Some(freezer), Some(climber), ..] = pulse.role_rays else {
             panic!("both roles: {:?}", pulse.role_rays);
         };
         let (freezer_ray, climber_ray) = (&pulse.rays[freezer], &pulse.rays[climber]);
@@ -4309,6 +4669,166 @@ mod tests {
         assert!(below > 0.0 && below < 1e-2, "the climber stands {below} M below r-");
         assert!(climber_ray.dr_dt > 0.0, "and is climbing: dr/dt = {}", climber_ray.dr_dt);
         assert_eq!(below, nearest_below, "the highest climber is the nearest to r- from below");
+    }
+
+    #[test]
+    fn test_each_photon_orbit_is_straddled_by_two_neighbouring_rays() {
+        // From the prograde ISCO at a = 0.9, r = 2.32 M sits between the prograde photon orbit at
+        // 1.56 M and the retrograde one at 3.91 M. Each orbit's pair must be two neighbours of the
+        // comb whose L/E lie either side of the orbit's critical impact parameter, and both must
+        // head toward the orbit: in for the prograde pair, out for the retrograde one.
+        let (metric, field) = isco_pulse(0.9);
+        let pulse = field.pulses.back().expect("one pulse");
+        assert!(pulse.launched_with(RAYS_PER_PULSE), "nothing is launched: {}", pulse.rays.len());
+        let n = pulse.rays.len();
+        let [_, _, Some(pro_below), Some(pro_above), Some(retro_below), Some(retro_above)] =
+            pulse.role_rays
+        else {
+            panic!("an ISCO pulse at a = 0.9 straddles both orbits: {:?}", pulse.role_rays);
+        };
+        for (below, above, sense, inward) in
+            [(pro_below, pro_above, true, true), (retro_below, retro_above, false, false)]
+        {
+            assert_eq!(above, (below + 1) % n, "the pair are neighbours");
+            let b_c = metric.photon_orbit_impact(sense);
+            let (b_below, b_above) =
+                (pulse.rays[below].l_over_e(&metric), pulse.rays[above].l_over_e(&metric));
+            println!(
+                "{}: rays {below} and {above} of {n}, L/E {b_below:.6} and {b_above:.6} about \
+                 b_c = {b_c:.6}, dr/dt {:.4} and {:.4}",
+                if sense { "prograde" } else { "retrograde" },
+                pulse.rays[below].dr_dt,
+                pulse.rays[above].dr_dt
+            );
+            assert!((b_below - b_c) * (b_above - b_c) < 0.0, "the pair straddles b_c");
+            for i in [below, above] {
+                assert_eq!(pulse.rays[i].dr_dt < 0.0, inward, "ray {i} heads toward its orbit");
+            }
+        }
+
+        // From inside r+ no photon orbit is reachable.
+        let metric = KerrSchild::new(1.0, 0.9);
+        let raindrop =
+            Observer::new_with_phi(&metric, "Alice", 0.0, 1.2, 0.0, 0.0, Default::default());
+        let mut field = SignalField::default();
+        assert!(field.emit_if_due(&metric, &raindrop));
+        let pulse = field.pulses.back().expect("one pulse");
+        assert_eq!(pulse.role_rays[2..], [None; 4], "a raindrop at 1.2 M is inside r+");
+
+        // With no spin both senses share the orbit at 3M, and the two pairs carry L of opposite
+        // signs; from the ISCO at 6M both head in.
+        let (metric, still) = isco_pulse(0.0);
+        let pulse = still.pulses.back().expect("one pulse");
+        let [_, _, Some(pro_below), Some(pro_above), Some(retro_below), Some(retro_above)] =
+            pulse.role_rays
+        else {
+            panic!("a = 0 straddles the orbit at 3M in both senses: {:?}", pulse.role_rays);
+        };
+        for (i, prograde) in
+            [(pro_below, true), (pro_above, true), (retro_below, false), (retro_above, false)]
+        {
+            let ray = &pulse.rays[i];
+            assert_eq!(ray.constants(&metric).1 > 0.0, prograde, "L of ray {i}");
+            assert!(ray.dr_dt < 0.0, "ray {i} heads in to 3M");
+        }
+    }
+
+    #[test]
+    fn test_the_photon_orbit_straddlers_circle_and_part() {
+        // The four straddlers of the ISCO pulse at a = 0.9, with the default comb, carried 80 M
+        // at 0.1 M a step. For each: the time it spends within 0.05 M of its orbit, the turns it
+        // makes there, and which way it leaves. Each pair must part: one ray captured - inside r+
+        // or dead at the ring - and the other on its way out of the drawn field or gone from it.
+        const BAND: f64 = 0.05;
+        let (metric, mut field) = isco_pulse(0.9);
+        let rp = metric.outer_horizon();
+        let roles = field.pulses.back().expect("one pulse").role_rays;
+        let followed: Vec<(usize, bool, &str)> = [
+            (roles[2], true, "prograde below"),
+            (roles[3], true, "prograde above"),
+            (roles[4], false, "retrograde below"),
+            (roles[5], false, "retrograde above"),
+        ]
+        .into_iter()
+        .map(|(i, sense, name)| (i.expect("all four straddlers"), sense, name))
+        .collect();
+        // Per straddler: time within the band, azimuth swept there, and (time, sign) of leaving.
+        let mut dwell = vec![(0.0f64, 0.0f64, None::<(f64, f64)>); followed.len()];
+        let mut closest = vec![f64::INFINITY; followed.len()];
+        let mut last_phi: Vec<f64> =
+            followed.iter().map(|&(i, ..)| field.pulses.back().unwrap().rays[i].phi).collect();
+        let dt = 0.1;
+        for step in 1..=800 {
+            field.advance(&metric, dt);
+            let t = (step as f64) * dt;
+            let pulse = field.pulses.back().expect("one pulse");
+            for (k, &(i, sense, _)) in followed.iter().enumerate() {
+                let ray = &pulse.rays[i];
+                let off = ray.r - metric.photon_orbit(sense);
+                if ray.alive() {
+                    closest[k] = closest[k].min(off.abs());
+                }
+                if ray.alive() && off.abs() < BAND {
+                    dwell[k].0 += dt;
+                    dwell[k].1 += (ray.phi - last_phi[k]).abs();
+                } else if dwell[k].0 > 0.0 && dwell[k].2.is_none() {
+                    dwell[k].2 = Some((t, off.signum()));
+                }
+                last_phi[k] = ray.phi;
+            }
+        }
+        let pulse = field.pulses.back().expect("one pulse");
+        // +1 escaping or gone out, -1 captured, 0 not yet decided at 80 M.
+        let fate = |i: usize| {
+            let ray = &pulse.rays[i];
+            if ray.died_escaping() || ray.escape_bound(&metric) {
+                1
+            } else if ray.died_at_ring() || ray.r < rp {
+                -1
+            } else {
+                0
+            }
+        };
+        let fates: Vec<i32> = followed.iter().map(|&(i, ..)| fate(i)).collect();
+        for (k, &(i, sense, name)) in followed.iter().enumerate() {
+            let ray = &pulse.rays[i];
+            let (time, swept, left) = dwell[k];
+            println!(
+                "{name} (ray {i}, L/E {:.6} against b_c {:.6}): {time:.1} M within {BAND} M of \
+                 r_ph and {:.2} turns there, closest {:.2e} M, {}; at 80 M r = {:.4}, {}",
+                ray.l_over_e(&metric),
+                metric.photon_orbit_impact(sense),
+                swept / std::f64::consts::TAU,
+                closest[k],
+                match left {
+                    Some((t, s)) if s > 0.0 => format!("left outward at t = {t:.1} M"),
+                    Some((t, _)) => format!("left inward at t = {t:.1} M"),
+                    None => "never left".to_string(),
+                },
+                ray.r,
+                match fates[k] {
+                    1 => "escaping",
+                    -1 => "captured",
+                    _ => "undecided",
+                }
+            );
+        }
+        for pair in fates.chunks(2) {
+            if pair.contains(&0) {
+                continue;
+            }
+            assert_eq!(pair[0], -pair[1], "a pair parts on opposite sides of its orbit: {fates:?}");
+        }
+        // The ray with too little angular momentum has no turning point near the orbit and
+        // crosses r_ph, lingering there on the way; the one with too much turns short of it, by a
+        // margin set by how far the comb's spacing put it from b_c.
+        for (k, &(i, sense, name)) in followed.iter().enumerate() {
+            let b_c = metric.photon_orbit_impact(sense);
+            let short = pulse.rays[i].l_over_e(&metric).abs() < b_c.abs();
+            if short {
+                assert!(dwell[k].0 > 0.0, "{name} crosses its orbit and lingers within {BAND} M");
+            }
+        }
     }
 
     /// The exact radial potential of an equatorial null geodesic of conserved (E, L), divided by
@@ -4739,6 +5259,7 @@ mod tests {
             role_rays: [None; ROLES],
             track_dt: TRACK_MIN_DT,
             history: None,
+            trail: None,
             prev: None,
             receptions: Vec::new(),
         };
@@ -4949,6 +5470,7 @@ mod tests {
             role_rays: [None; ROLES],
             track_dt: TRACK_MIN_DT,
             history: None,
+            trail: None,
             prev: None,
             receptions: Vec::new(),
         };
@@ -5639,6 +6161,7 @@ mod tests {
             role_rays: [None; ROLES],
             track_dt: TRACK_MIN_DT,
             history: None,
+            trail: None,
             prev: None,
             receptions: Vec::new(),
         };
@@ -5759,6 +6282,7 @@ mod tests {
             role_rays: [None; ROLES],
             track_dt: TRACK_MIN_DT,
             history: None,
+            trail: None,
             prev: None,
             receptions: Vec::new(),
         };
@@ -5873,6 +6397,7 @@ mod tests {
             role_rays: [None; ROLES],
             track_dt: TRACK_MIN_DT,
             history: None,
+            trail: None,
             prev: None,
             receptions: Vec::new(),
         };
@@ -5992,6 +6517,7 @@ mod tests {
             role_rays: [None; ROLES],
             track_dt: TRACK_MIN_DT,
             history: None,
+            trail: None,
             prev: None,
             receptions: Vec::new(),
         };

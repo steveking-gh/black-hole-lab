@@ -269,6 +269,14 @@ impl Simulation {
             .set_max_pulses(&self.metric, pulses);
     }
 
+    /// Push the chart's "Ray comets" stride into both transmissions: a comet on every `stride`-th
+    /// ray of every pulse, 0 for off. Off drops every ray trail at once. View state only: no ray
+    /// moves and the fingerprint does not see it. See `SignalField::set_ray_comet_stride`.
+    pub fn set_ray_comet_stride(&mut self, stride: usize) {
+        self.alice_signal.set_ray_comet_stride(stride);
+        self.bob_signal.set_ray_comet_stride(stride);
+    }
+
     /// Start the run again with these two observers: the clock back to zero, both transmissions
     /// dropped, and the given worldlines in place of whoever was there.
     ///

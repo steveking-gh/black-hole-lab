@@ -301,8 +301,10 @@ pub struct Pulse {
     pub rays: Vec<Ray>,
     pub extent_track: Vec<TrackPoint>,
     /// `Pulse::role_rays`: the index into `rays` of each ray the (t, r) chart follows beside the
-    /// two edges, role 0 the steepest freezer and role 1 the highest climber, null for a role
-    /// the pulse has no ray for. Added after the format shipped: a file without it loads with no
+    /// two edges, role 0 the steepest freezer, role 1 the highest climber, roles 2 and 3 the rays
+    /// either side of the prograde photon orbit's critical angle and roles 4 and 5 those of the
+    /// retrograde one, null for a role the pulse has no ray for. A file written before the orbit
+    /// roles lists two and loads with the other four absent. Added after the format shipped: a file without it loads with no
     /// roles, and a pulse with no role at all writes an empty list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub role_rays: Vec<Option<u64>>,
@@ -515,6 +517,12 @@ pub struct Controls {
     /// loads in point style, which is what every build before the box wrote in.
     #[serde(default)]
     pub decimal_is_comma: bool,
+    /// The "Ray comets" dropdown on the (t, r) chart: a comet on every k-th ray of every pulse,
+    /// with k this stride, and 0 for off. Additive: a file from before the setting carries no such
+    /// field and opens with it off. The trails the comets draw are view state and are not saved;
+    /// they rebuild as the run plays.
+    #[serde(default)]
+    pub ray_comet_stride: u64,
 }
 
 /// `gui::controls::ObserverSettings`: one OBSERVER card.

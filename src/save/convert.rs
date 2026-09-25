@@ -309,6 +309,8 @@ fn field_from_v1(field: &v1::SignalField) -> SignalField {
         heard: field.heard.iter().map(reception_from_v1).collect(),
         budget_exhausted: field.budget_exhausted as usize,
         dropped_in_flight: field.dropped_in_flight as usize,
+        // The panel's setting, not the file's: the app pushes it in on the next frame.
+        ray_comet_stride: 0,
     }
 }
 
@@ -339,6 +341,8 @@ fn pulse_from_v1(pulse: &v1::Pulse) -> Pulse {
         }),
         track_dt: pulse.track_dt.0,
         history: pulse.history.as_ref().map(history_from_v1),
+        // View state, not in the file: the next step gives the pulse a trail if "Ray comets" is on.
+        trail: None,
         prev: pulse.prev.as_ref().map(|mark| FrontMark {
             rays: mark
                 .rays
@@ -525,6 +529,7 @@ pub fn controls_to_v1(controls: &AppControls, metric: &KerrSchild) -> v1::Contro
         show_distant_clock_grid: controls.show_distant_clock_grid,
         font_scale: n(controls.font_scale),
         step_grain: Some(controls.step_grain.key().to_string()),
+        ray_comet_stride: controls.ray_comet_stride as u64,
     }
 }
 
@@ -570,6 +575,7 @@ pub fn controls_from_v1(controls: &v1::Controls) -> AppControls {
         },
         show_distant_clock_grid: controls.show_distant_clock_grid,
         font_scale: controls.font_scale.f32(),
+        ray_comet_stride: controls.ray_comet_stride as usize,
         ..AppControls::default()
     }
 }

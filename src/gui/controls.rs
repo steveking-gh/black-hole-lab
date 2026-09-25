@@ -382,6 +382,14 @@ pub struct AppControls {
     /// `step_back` cannot recover an evicted pulse - while raising it widens the window from that
     /// frame onward. Like every control on this panel it survives Reset.
     pub max_pulses: usize,
+    /// The "Ray comets" diagnostic on the (t, r) chart: a comet on every k-th ray of every pulse,
+    /// with k this stride, and 0 for off. The panel offers the strides of `RAY_COMET_STRIDES`.
+    ///
+    /// Pushed into both transmissions once a frame by `SpacetimeApp::ui`, as `max_pulses` is,
+    /// because the fields record the trails the comets draw: see `SignalField::ray_comet_stride`.
+    /// Off costs nothing and holds no memory. Saved with the panel, and a file from before the
+    /// setting opens with it off.
+    pub ray_comet_stride: usize,
     /// Whether the segments of a wavefront between neighbouring rays are drawn at all: on, each is
     /// the curve linear in (r, phi) between its two rays; off, only the rays themselves are drawn,
     /// one dot per calculated point and nothing between them.
@@ -485,6 +493,7 @@ impl Default for AppControls {
             transport_flash: None,
             rays_per_pulse: RAYS_PER_PULSE,
             max_pulses: MAX_PULSES,
+            ray_comet_stride: 0,
             draw_front_arcs: true,
             hide_wound_segments: true,
             show_spatial_details: false,
@@ -608,6 +617,21 @@ const ZAMO_TIP: &str = "The zero-angular-momentum observer, the frame in which a
 const WAVEFRONT_POINTS_TIP: &str = "How finely a pulse samples the emitter's light cone: n directions at α = 2πi/n, spaced 360/n degrees apart — 2.5° at the default of 144 — with α = 0, the emitter's own outward radial leg, always first whatever n is. Each direction is one exact null geodesic, so this count sets the resolution of the whole picture the light draws: more points give finer tongues where the ring swallows the front, a finer grain in the frozen arcs stacked on r₋, shorter segments around the loop on the equatorial view, and rarer handovers from one sheet of a front to the next in the reception test, since neighbouring rays then sit closer together in azimuth. Points cost. Integrating the rays, testing the rays against the receiver's worldline and drawing every one of them all scale linearly in the count: about 1.1 ms of frame time for each extra 72 rays a pulse with forty pulses in flight, of which the integration and the reception test take 0.3 ms, so 1024 points costs about seven times the work of 144 and the play loop feels the difference first. One or two rays ride on top of the count. Where the arc of light that freezes onto r₋ meets the light that crosses r₋, the app launches one more ray on the meeting point itself. That ray marks where the front goes through r₋. Without that ray, the picture guesses the crossing from two rays that can stand half a radian apart. The count applies to pulses sent from now on. Light already in flight is the geodesics the app launched, and each pulse keeps the count that pulse went out with, so the slider changes the transmission rather than redrawing the transmission.";
 
 /// The hover tip on the Wavefronts kept slider.
+/// The strides the panel's "Ray comets" dropdown offers, in the order it lists them: off, then
+/// ever denser. A stride of k draws a comet on rays 0, k, 2k, ... of every pulse.
+pub const RAY_COMET_STRIDES: [usize; 5] = [0, 32, 8, 2, 1];
+
+/// What the "Ray comets" dropdown calls a stride.
+fn ray_comet_label(stride: usize) -> String {
+    match stride {
+        0 => "Off".to_string(),
+        1 => "All".to_string(),
+        k => format!("1 in {k}"),
+    }
+}
+
+const RAY_COMETS_TIP: &str = "A diagnostic for the (t, r) chart. It draws a comet on every k-th ray of every pulse, chosen by the ray's index and not by any property of the ray, so the chart shows the whole of the light with no selection in it. Where many rays stand at one radius their comets overlap, and the overlap is the only thing that makes a place bright. The everyday comets on the two edges of each pulse and on its role rays stay as they are. Each tail covers the last 2.56 M of its ray. At All with many wavefront points and many wavefronts kept, the chart draws hundreds of thousands of comets and the frame rate drops; Off costs nothing.";
+
 const WAVEFRONTS_KEPT_TIP: &str = "How many wavefronts each transmission holds at once. Past this count the field drops the oldest, so the count sets the length of the history the picture keeps. At the default of 64 a single infall never loses a pulse - a whole fall from r = 4.5M sends about forty pulses at the emission interval of 0.1M of the emitter's proper time - while a hovering emitter, who transmits for as long as the wait lasts, runs past 64 and draws the oldest arcs from light sent long before the release. Turn the count down to read one front at a time, or to watch a single pulse break on r₋ with no sixty others stacked over that pulse; turn the count up to see the whole stack a long transmission builds against the Cauchy horizon.
 
 Together with the points slider above, this count is the other half of what a frame costs: the integration, the reception test and the drawing all scale as the product of the two, so 128 fronts at 1024 points carries 131 k exact null geodesics every step, against 9 k at the pair of defaults. The 2D+1 volume view couples to the count as well - every eighth pulse by serial number carries a swept surface, so the cap fixes how many of those sheets can fly at once, eight at the default and sixteen at the top.
@@ -672,7 +696,7 @@ Inside r₊ the rays that never reach r₋ are the prograde ones, which the hole
 
 Each loop is one pulse and encloses Alice, since light leaves her isotropically in her own frame, and the dot on the loop marks the emission event on Alice's trail. Inside r₊ the flow carries the whole loop inward, so the loop's outer edge never gets further from the hole than that dot.
 
-On the (t, r) diagram, which cannot draw azimuth at all, a pulse appears as a radial extent: two edges, the most ingoing ray of the pulse below and the outermost ray above. The diagram marks each edge with a short comet in her amber - brightest where that edge of the front stands at the chart's present, fading away down the track the edge has already covered, so the tail points back the way the edge came. The lower edge is the ingoing edge of Alice's own light cone carried forward - the 45° line dr/dt = −1 for a hole with no spin, a little steeper for a hole that spins, and steeper again the deeper the light goes - and inside r₊ that edge runs on to the ring while the upper edge freezes on r₋. So the upper-edge comets of her interior pulses stand in a column on the Cauchy horizon, where in this chart the outgoing light of the whole interior accumulates, and that column is what a later infaller cuts through. Two more comets per pulse ride single rays that the app picks at emission from their conserved energy and angular momentum: the steepest freezer, which settles onto r₋ from above, and the highest climber, which falls through r₋, turns inside it and climbs back to r₋ from below. From the ISCO neither edge of her pulse is such a ray, so those two comets mark her light settling onto r₋ from both sides, as the edge comets of Bob's interior pulses mark Bob's light. A worldline between the two edges of a pulse sits in range of that pulse rather than receiving the pulse: the diagram cannot say whether the ray standing at that radius sits at the receiver's azimuth. The dots on a worldline are the actual receptions, and those dots are the only marks of one. A pulse whose every ray has died has no front left to stand anywhere, and so no comet.";
+On the (t, r) diagram, which cannot draw azimuth at all, a pulse appears as a radial extent: two edges, the most ingoing ray of the pulse below and the outermost ray above. The diagram marks each edge with a short comet in her amber - brightest where that edge of the front stands at the chart's present, fading away down the track the edge has already covered, so the tail points back the way the edge came. The lower edge is the ingoing edge of Alice's own light cone carried forward - the 45° line dr/dt = −1 for a hole with no spin, a little steeper for a hole that spins, and steeper again the deeper the light goes - and inside r₊ that edge runs on to the ring while the upper edge freezes on r₋. So the upper-edge comets of her interior pulses stand in a column on the Cauchy horizon, where in this chart the outgoing light of the whole interior accumulates, and that column is what a later infaller cuts through. Two more comets per pulse ride single rays that the app picks at emission from their conserved energy and angular momentum: the steepest freezer, which settles onto r₋ from above, and the highest climber, which falls through r₋, turns inside it and climbs back to r₋ from below. From the ISCO neither edge of her pulse is such a ray, so those two comets mark her light settling onto r₋ from both sides, as the edge comets of Bob's interior pulses mark Bob's light. Two more comets per photon orbit ride the two rays of the pulse nearest that orbit's critical angle, one on either side. Those two rays close on the orbit's radius r_ph, circle there for a while and leave on opposite sides, one captured by the hole and one returning the way it came. How long the pair circles depends on how close the ray spacing puts the two rays to the critical angle, and the light of a real pulse leaves the orbit at every time; light lingers at r_ph and never piles up as it does on r₋. A worldline between the two edges of a pulse sits in range of that pulse rather than receiving the pulse: the diagram cannot say whether the ray standing at that radius sits at the receiver's azimuth. The dots on a worldline are the actual receptions, and those dots are the only marks of one. A pulse whose every ray has died has no front left to stand anywhere, and so no comet.";
 
 /// The hover tip on the Transmit Signal checkbox of Bob's card. The return path, which is not the
 /// mirror image of Alice's: it has an end.
@@ -688,7 +712,7 @@ Put a Release Delay on his card instead and he trails her down the same infall. 
 
 Where her worldline ends — on the ring, or frozen on r₋ — his transmission stops arriving for that reason instead: one last pulse of his reached her, and the emission event of that pulse is the boundary, on his own worldline, of the causal past of the end of hers. Neither view marks that event; the HUD names the event once her worldline has finished, giving the pulse, when and where he sent the pulse, and how many later ones never arrive.
 
-On the (t, r) diagram the app draws his pulses exactly as hers, each as a comet on each of the two edges of that pulse's own radial extent but in his mint: lower edge the most ingoing ray, upper edge the outermost, each comet bright where that edge stands now and fading back down the track the edge has covered, a worldline between the two edges in range of the pulse rather than receiving the pulse, and the dots the actual arrivals. His pulses carry the same two extra comets as hers, on the steepest freezer and the highest climber that the app picks when each pulse leaves him; a pulse that Bob sends from inside r₋ carries neither extra comet, since no ray of that pulse approaches r₋ from above and the pulse's upper edge already is its climber.";
+On the (t, r) diagram the app draws his pulses exactly as hers, each as a comet on each of the two edges of that pulse's own radial extent but in his mint: lower edge the most ingoing ray, upper edge the outermost, each comet bright where that edge stands now and fading back down the track the edge has covered, a worldline between the two edges in range of the pulse rather than receiving the pulse, and the dots the actual arrivals. His pulses carry the same two extra comets as hers, on the steepest freezer and the highest climber that the app picks when each pulse leaves him; a pulse that Bob sends from inside r₋ carries neither extra comet, since no ray of that pulse approaches r₋ from above and the pulse's upper edge already is its climber. His pulses also carry two comets per photon orbit, on the two rays nearest that orbit's critical angle, one on either side: the two rays close on r_ph, circle there for a while and leave on opposite sides, one captured and one returning, for as long as the ray spacing lets them, while the light of a real pulse leaves the orbit at every time. A pulse that Bob sends from inside r₊ reaches no photon orbit and carries no orbit comet.";
 
 /// What to say about an observer whose selected mode cannot exist where they are, or None when the
 /// selection is fine.
@@ -1858,6 +1882,27 @@ impl AppControls {
                     .text("Wavefronts kept"),
             )
             .on_hover_text(numbers::text(WAVEFRONTS_KEPT_TIP));
+            ui.horizontal_wrapped(|ui| {
+                // Laid out as the Step Size row above: a dropdown as wide as a slider and its
+                // value box, then the label in the sliders' label column.
+                let slider_and_value =
+                    ui.spacing().slider_width + ui.spacing().item_spacing.x + 40.0;
+                egui::ComboBox::from_id_salt("ray_comets_combo")
+                    .selected_text(ray_comet_label(self.ray_comet_stride))
+                    .width(slider_and_value)
+                    .show_ui(ui, |ui| {
+                        for stride in RAY_COMET_STRIDES {
+                            ui.selectable_value(
+                                &mut self.ray_comet_stride,
+                                stride,
+                                ray_comet_label(stride),
+                            );
+                        }
+                    })
+                    .response
+                    .on_hover_text(numbers::text(RAY_COMETS_TIP));
+                ui.label("Ray comets").on_hover_text(numbers::text(RAY_COMETS_TIP));
+            });
             ui.checkbox(&mut self.draw_front_arcs, "Arcs between wavefront points")
                 .on_hover_text(numbers::text(FRONT_ARCS_TIP));
             ui.checkbox(&mut self.hide_wound_segments, "Hide segments wound past a full turn")

@@ -2614,10 +2614,15 @@ Tick Enable Observer on Alice's or Bob's card",
         // alone; a pulse Alice sends from the ISCO has the escaper for its upper edge and the ray
         // to the ring for its lower one, and the rays of hers that settle onto r- - from above,
         // and from below after turning inside it - lie strictly between the two edges, where no
-        // edge comet ever marks them. The role comets mark one of each. Every column is drawn
-        // with the same colour, width and fade as every other: the chart says where light is, and
-        // which ray it is is the hover tip's business. A role with no live ray has no head and no
-        // comet, and a tail stops at the first row where its role had none.
+        // edge comet ever marks them. The role comets mark one of each. Four more roles ride the
+        // two rays either side of the critical angle of each photon orbit that the pulse can reach
+        // (`photon_orbit_straddlers`): each pair of comets closes on r_ph, stands on it while the
+        // rays circle, and parts, one captured and one returning, marking where the pulse's light
+        // lingers, not where it piles up.
+        // Every column is drawn with the same colour, width and fade as every other: the chart
+        // says where light is, and which ray it is is the hover tip's business. A role with no
+        // live ray has no head and no comet, and a tail stops at the first row where its role had
+        // none.
         //
         // A worldline between the two edges of one pulse is *in range* of that pulse - some part
         // of the front stands at that radius - which is not the same as receiving it, because the
@@ -2662,6 +2667,19 @@ Tick Enable Observer on Alice's or Bob's card",
         // and leaves the clock on that target - but a clock behind the track would put the head
         // below the point the tail starts from and draw a line that doubles back on itself, so that
         // case falls back to the track alone rather than drawing something untrue.
+        //
+        // Beside all of that stands one diagnostic, the panel's "Ray comets": a comet on every
+        // k-th ray of every pulse, chosen by index and not by any property of the ray, so the chart
+        // shows the whole projected null congruence with no selection in it. The head is the ray
+        // at the field's clock and the tail is the pulse's `RayTrail`, the last 2.56 M of that ray
+        // on a fixed 0.02 M cadence, cut on the screen by `comet_tail` and faded by `fading_line`
+        // exactly as a column comet is. A tail stops at the first sample that found the ray dead.
+        // Brightness is overlap and nothing else, so the head alpha is shared out over the comets
+        // a pulse draws - 1200 over their count, held between 3 and 80; below 3 the premultiplied
+        // colour rounds amber to a green-yellow - and a place is bright
+        // only where many rays stand together, as the column comets are on r-. The column comets
+        // are drawn first and unchanged. Off, the field keeps no trails and this pass is skipped
+        // whole.
         let draw_comets = |field: &SignalField, colour: Color32| {
             let head_colour = Color32::from_rgba_unmultiplied(
                 colour.r(),
@@ -2720,6 +2738,47 @@ Tick Enable Observer on Alice's or Bob's card",
                         Theme::COMET_TAIL_PX,
                         COMET_WIDTH,
                         head_colour,
+                    ));
+                }
+            }
+            // The "Ray comets" diagnostic. See the paragraph above `draw_comets`.
+            let stride = field.ray_comet_stride();
+            if stride == 0 {
+                return;
+            }
+            let now = to_screen_y(field.t);
+            for pulse in field.pulses.iter() {
+                let Some(trail) = pulse.trail.as_ref() else {
+                    continue;
+                };
+                let comets_per_pulse = pulse.rays.len().div_ceil(stride).max(1);
+                let alpha = (1200 / comets_per_pulse).clamp(3, 80) as u8;
+                let ray_colour =
+                    Color32::from_rgba_unmultiplied(colour.r(), colour.g(), colour.b(), alpha);
+                for (i, ray) in pulse.rays.iter().enumerate().step_by(stride) {
+                    if !ray.alive() {
+                        continue;
+                    }
+                    let head = Pos2::new(to_screen_x(ray.r), now);
+                    if !reach.contains(head) {
+                        continue;
+                    }
+                    let samples = trail
+                        .newest_first(i)
+                        .skip_while(|&(t, _)| t > field.t)
+                        .take_while(|&(_, r)| !r.is_nan())
+                        .map(|(t, r)| Pos2::new(to_screen_x(f64::from(r)), to_screen_y(t)));
+                    let tail =
+                        comet_tail(std::iter::once(head).chain(samples), Theme::COMET_TAIL_PX);
+                    if tail.len() < 2 {
+                        continue;
+                    }
+                    painter.add(fading_line(
+                        tail,
+                        head,
+                        Theme::COMET_TAIL_PX,
+                        COMET_WIDTH,
+                        ray_colour,
                     ));
                 }
             }
@@ -6207,11 +6266,21 @@ mod canvas_tests {
     /// is what lets the assertions place a comet head on the now line exactly rather than within
     /// a recording cadence of it.
     fn falling_transmission() -> (KerrSchild, Observer, SignalField, f64) {
+        falling_transmission_with_ray_comets(0)
+    }
+
+    /// `falling_transmission` with the "Ray comets" stride set before the first step, so the field
+    /// records a trail on every pulse from its emission on. The stride is view state: the rays
+    /// come out bit for bit the same whatever it is.
+    fn falling_transmission_with_ray_comets(
+        stride: usize,
+    ) -> (KerrSchild, Observer, SignalField, f64) {
         use crate::physics::observer::WorldlineParams;
         let metric = KerrSchild::new(1.0, 0.90);
         let mut bob =
             Observer::new_with_phi(&metric, "Bob", 0.0, 4.5, 0.0, 0.0, WorldlineParams::default());
         let mut field = SignalField::default();
+        field.set_ray_comet_stride(stride);
         let dt = 0.1;
         for i in 0..30 {
             let t = ((i + 1) as f64) * dt;
@@ -6337,6 +6406,73 @@ mod canvas_tests {
         );
         assert!(full_length > 0, "some of these tracks are longer than one tail");
         assert!(worst_end_alpha <= 5, "a full tail must reach the background: {worst_end_alpha}");
+    }
+
+    #[test]
+    fn test_ray_comets_add_one_comet_per_live_ray_at_its_radius_on_the_now_line() {
+        // The "Ray comets" diagnostic at a stride of one: every live ray of every pulse gets a
+        // comet of its own, headed at that ray's radius on the now line, on top of the column
+        // comets, which stay exactly as they are. Off, the frame is today's frame shape for shape.
+        let (metric, bob, plain, now) = falling_transmission();
+        let (_, _, mut striding, striding_now) = falling_transmission_with_ray_comets(1);
+        assert_eq!(now, striding_now, "the stride moves no clock");
+        let baseline = distant_view_pass(&metric, &bob, &plain, now);
+        let base_comets = faded_strokes(&baseline).len();
+
+        let shapes = distant_view_pass(&metric, &bob, &striding, now);
+        let rect = canvas_rect(&shapes);
+        let reach = rect.expand(Theme::COMET_TAIL_PX);
+        let canvas = SpacetimeCanvas::default();
+        let (t_min, t_max) = (now - canvas.time_window * 0.7, now + canvas.time_window * 0.3);
+        let to_x = |r: f64| rect.left() + (r / canvas.max_r) as f32 * rect.width();
+        let to_y = |t: f64| rect.bottom() - ((t - t_min) / (t_max - t_min)) as f32 * rect.height();
+        let now_y = to_y(now);
+
+        // Every live ray of a pulse sent before now, whose head can reach the canvas. A pulse sent
+        // at this very instant has a single sample, where its head stands, and so no tail yet.
+        let mut expected: Vec<(Pos2, u8)> = Vec::new();
+        for pulse in striding.pulses.iter().filter(|p| p.emitted_t < now) {
+            let alpha = (1200 / pulse.rays.len()).clamp(3, 80) as u8;
+            for ray in pulse.rays.iter().filter(|r| r.alive()) {
+                let head = Pos2::new(to_x(ray.r), now_y);
+                if reach.contains(head) {
+                    expected.push((head, alpha));
+                }
+            }
+        }
+        assert!(expected.len() > 1000, "only {} live rays to mark", expected.len());
+        let comets = faded_strokes(&shapes);
+        assert_eq!(
+            comets.len(),
+            base_comets + expected.len(),
+            "one extra comet per live ray, and the column comets unchanged"
+        );
+        let extra: Vec<&PathShape> = comets
+            .iter()
+            .filter(|c| alpha_at(&c.stroke, c.points[0]) != Theme::COMET_HEAD_ALPHA)
+            .collect();
+        assert_eq!(extra.len(), expected.len(), "the ray comets carry their own alpha");
+        for comet in &extra {
+            let head = comet.points[0];
+            let alpha = alpha_at(&comet.stroke, head);
+            assert!(
+                expected.iter().any(|(h, a)| (*h - head).length() < 1e-3 && *a == alpha),
+                "a ray comet at {head:?} with alpha {alpha}, where no live ray stands"
+            );
+        }
+        println!(
+            "{} column comets and {} ray comets at alpha {:?}",
+            base_comets,
+            extra.len(),
+            expected.first().map(|e| e.1)
+        );
+
+        // Off again: the trails go, and the frame is today's frame.
+        striding.set_ray_comet_stride(0);
+        assert!(striding.pulses.iter().all(|p| p.trail.is_none()), "off frees every trail");
+        let off = distant_view_pass(&metric, &bob, &striding, now);
+        assert_eq!(off.len(), baseline.len(), "off draws exactly the shapes of today's chart");
+        assert_eq!(faded_strokes(&off).len(), base_comets);
     }
 
     #[test]

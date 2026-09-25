@@ -295,6 +295,58 @@ impl KerrSchild {
         2.0 * self.m * (1.0 + (2.0 / 3.0 * arg.acos()).cos())
     }
 
+    /// The critical impact parameter b_c = L/E of the equatorial circular photon orbit, prograde
+    /// or retrograde: the one ratio of the conserved quantities a null geodesic must carry exactly
+    /// to circle at `photon_orbit(prograde)`. Prograde orbits carry b_c of the sign of a, and the
+    /// prograde orbit of a hole with no spin is taken to carry b_c > 0, so the two senses at a = 0
+    /// are 3 sqrt(3) M and -3 sqrt(3) M on the one orbit at 3M.
+    ///
+    /// For a null geodesic of conserved (E, L) the equatorial radial potential is
+    ///
+    ///     R(r) = [E (r^2 + a^2) - a L]^2 - Delta (L - a E)^2,
+    ///
+    /// the motion needs R >= 0, and a circular orbit at r_ph needs R(r_ph) = 0 and
+    /// R'(r_ph) = 0 together: a double zero. With E = 1 and x = b - a the first condition reads
+    /// (r^2 - a x)^2 = Delta x^2, so r^2 - a x = +/- sqrt(Delta) x and
+    ///
+    ///     x = r^2 / (a + sqrt(Delta))     or     x = r^2 / (a - sqrt(Delta)),
+    ///
+    /// two impact parameters that both put a zero of R at r_ph. Only one of them makes the zero
+    /// double. The other puts a simple zero there - R changes sign at r_ph - which is a turning
+    /// point: a ray of that b reaches r_ph from the side where R > 0 and bounces off it, the
+    /// periastron of a scattered ray or the apastron of a captured one, and never circles. So
+    /// both roots are evaluated in R'(r_ph) = 4 r (r^2 - a x) - 2 (r - M) x^2, and the one where it
+    /// vanishes is the orbit's. Measured relative to the size of its terms, R' is zero to
+    /// rounding at the orbit's root and of order one at the other, except at a = 0, where the two
+    /// senses share one radius and both roots are double; the sign convention above then decides.
+    ///
+    /// At the orbit's root r^2 - a x = sqrt(Delta) |x| > 0, so E (r^2 + a^2) - a L has the sign
+    /// of E there, and a future-directed ray outside r+ circles only with E > 0.
+    pub fn photon_orbit_impact(&self, prograde: bool) -> f64 {
+        let (m, a) = (self.m, self.a);
+        let r = self.photon_orbit(prograde);
+        let root_delta = self.delta(r).max(0.0).sqrt();
+        // R'(r) / E^2 relative to the magnitude of its two terms, for b = a + x.
+        let slope = |x: f64| {
+            let (first, second) = (4.0 * r * (r * r - a * x), 2.0 * (r - m) * x * x);
+            (first - second).abs() / (first.abs() + second.abs()).max(f64::MIN_POSITIVE)
+        };
+        // The sense's own sign: prograde is the sign of a, and positive at a = 0.
+        let spin_sign = if a < 0.0 { -1.0 } else { 1.0 };
+        let sense = if prograde { spin_sign } else { -spin_sign };
+        let expected = r * r / (a + sense * root_delta);
+        let other = r * r / (a - sense * root_delta);
+        let (s_expected, s_other) = (slope(expected), slope(other));
+        // The expected root wins every tie, and a non-finite other root - a = sqrt(Delta) - is no
+        // candidate at all.
+        let x = if other.is_finite() && s_other < s_expected && s_expected >= 1e-12 {
+            other
+        } else {
+            expected
+        };
+        a + x
+    }
+
     /// Radius of the innermost stable circular orbit, prograde or retrograde (Bardeen, Press and
     /// Teukolsky 1972): with Z1 = 1 + (1 - a^2)^{1/3} [(1 + a)^{1/3} + (1 - a)^{1/3}] and
     /// Z2 = sqrt(3 a^2 + Z1^2), r = M [3 + Z2 ∓ sqrt((3 - Z1)(3 + Z1 + 2 Z2))]. Six M for no spin,
@@ -1260,6 +1312,51 @@ mod tests {
             let dilation = ks.circular_orbit_dilation(r, prograde).unwrap();
             assert!(dilation > 1.0 && dilation.is_finite(), "dt/dtau = {dilation}");
         }
+    }
+
+    #[test]
+    fn test_the_photon_orbit_impact_parameter_makes_a_double_zero_of_the_potential() {
+        // A ray of L/E = b_c circles at r_ph exactly when r_ph is a double zero of its radial
+        // potential, R(r) = [E (r^2 + a^2) - a L]^2 - Delta (L - a E)^2, so both R and dR/dr
+        // must vanish there. Each is measured against the sum of the magnitudes of its terms.
+        for a in [0.0, 0.65, 0.9, 0.998] {
+            let ks = KerrSchild::new(1.0, a);
+            let a = ks.a;
+            for prograde in [true, false] {
+                let r = ks.photon_orbit(prograde);
+                let b = ks.photon_orbit_impact(prograde);
+                let (p, q, delta) = (r * r + a * a - a * b, b - a, ks.delta(r));
+                let potential = (p * p - delta * q * q).abs() / (p * p + delta.abs() * q * q);
+                let (first, second) = (4.0 * r * p, 2.0 * (r - ks.m) * q * q);
+                let slope = (first - second).abs() / (first.abs() + second.abs());
+                println!(
+                    "a = {a}, {}: r_ph = {r:.6} M, b_c = {b:.9} M, |R| {potential:.1e}, \
+                     |R'| {slope:.1e}",
+                    if prograde { "prograde" } else { "retrograde" }
+                );
+                assert!(potential < 1e-10, "R(r_ph) = {potential} relative");
+                assert!(slope < 1e-10, "R'(r_ph) = {slope} relative");
+                // Prograde orbits carry L/E of the sign of the spin, and positive at a = 0.
+                assert_eq!(b > 0.0, prograde, "b_c = {b} at a = {a}");
+                // The other zero of R(r_ph) = 0 in b is a simple one wherever the spin separates
+                // the two senses: a turning point, with R' of the order of its own terms.
+                if a > 0.0 {
+                    let root_delta = delta.sqrt();
+                    let x = [r * r / (a + root_delta), r * r / (a - root_delta)]
+                        .into_iter()
+                        .find(|x| (a + x - b).abs() > 1e-9 * b.abs())
+                        .expect("two roots");
+                    let (first, second) = (4.0 * r * (r * r - a * x), 2.0 * (r - ks.m) * x * x);
+                    let other = (first - second).abs() / (first.abs() + second.abs());
+                    assert!(other > 1e-2, "the other root b = {} has R' {other} relative", a + x);
+                }
+            }
+        }
+        // The Schwarzschild values in closed form: 3 sqrt(3) M on the orbit at 3M.
+        let still = KerrSchild::new(1.0, 0.0);
+        let bc = 3.0 * 3f64.sqrt();
+        assert!((still.photon_orbit_impact(true) - bc).abs() < 1e-12);
+        assert!((still.photon_orbit_impact(false) + bc).abs() < 1e-12);
     }
 
     #[test]

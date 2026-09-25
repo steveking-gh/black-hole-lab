@@ -544,6 +544,27 @@ fn test_the_step_grain_comes_back_from_a_file_and_an_older_file_opens_at_the_def
 }
 
 #[test]
+fn test_the_ray_comets_setting_comes_back_from_a_file_and_an_older_file_opens_with_it_off() {
+    // "Ray comets" is an additive field: every stride the panel offers survives the text of a
+    // file, and a file from before the setting existed opens with it off.
+    let metric = default_app().sim.metric;
+    for stride in crate::gui::controls::RAY_COMET_STRIDES {
+        let controls = AppControls { ray_comet_stride: stride, ..AppControls::default() };
+        let written = convert::controls_to_v1(&controls, &metric);
+        let text = serde_json::to_string(&written).expect("writable");
+        let read: v1::Controls = serde_json::from_str(&text).expect("readable");
+        assert_eq!(convert::controls_from_v1(&read).ray_comet_stride, stride);
+    }
+    assert_eq!(AppControls::default().ray_comet_stride, 0, "the panel opens with it off");
+
+    // The committed golden file predates the setting, so it is the real version-1 document
+    // without the field, and it opens with the setting off.
+    let golden = read_document(include_str!("golden/v1.json").as_bytes()).expect("the golden loads");
+    assert_eq!(golden.controls.ray_comet_stride, 0, "the golden file carries no stride");
+    assert_eq!(convert::controls_from_v1(&golden.controls).ray_comet_stride, 0);
+}
+
+#[test]
 fn test_the_decimal_mark_travels_with_the_run_and_an_older_file_opens_in_point_style() {
     // "Decimal is comma" is saved with the run, and like the Step Size dropdown it is an additive
     // field: a file from before the box existed has no such field and opens with the box unticked,

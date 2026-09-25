@@ -380,6 +380,10 @@ impl eframe::App for SpacetimeApp {
         // to thin a crowded picture is most likely to be. Raising it only widens the window from
         // here on: the pulses already evicted are gone. See `SignalField::max_pulses`.
         self.sim.set_max_pulses(self.controls.max_pulses);
+        // The "Ray comets" diagnostic goes in on the same once-a-frame path, before the step, so
+        // the step that follows records the trails it will draw - and turning it off frees them on
+        // the next frame, played or paused.
+        self.sim.set_ray_comet_stride(self.controls.ray_comet_stride);
 
         // Advance simulation if playing
         if self.controls.is_playing {
