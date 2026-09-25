@@ -300,6 +300,12 @@ pub struct Pulse {
     pub emitted_phi: Num,
     pub rays: Vec<Ray>,
     pub extent_track: Vec<TrackPoint>,
+    /// `Pulse::role_rays`: the index into `rays` of each ray the (t, r) chart follows beside the
+    /// two edges, role 0 the steepest freezer and role 1 the highest climber, null for a role
+    /// the pulse has no ray for. Added after the format shipped: a file without it loads with no
+    /// roles, and a pulse with no role at all writes an empty list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub role_rays: Vec<Option<u64>>,
     pub track_dt: Num,
     pub history: Option<RingHistory>,
     /// Where this pulse's front and its receiver stood at the last detection pass. See `FrontMark`
@@ -384,11 +390,17 @@ pub enum RayEnd {
 }
 
 /// One entry of a pulse's extent track: the radial interval the front spanned at that time.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TrackPoint {
     pub t: Num,
     pub r_min: Num,
     pub r_max: Num,
+    /// The radius of each of the pulse's role rays at that time, in the order of
+    /// `Pulse::role_rays`, null where the role has no live ray. Added after the format shipped: a
+    /// file without it loads with no role recorded, and a row with no live role writes an empty
+    /// list. A null rather than `Num`'s `"nan"` because a missing ray is not a number at all.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roles: Vec<Option<Num>>,
 }
 
 /// `physics::wavefront::RingHistory`.

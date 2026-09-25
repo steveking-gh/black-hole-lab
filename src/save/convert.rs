@@ -33,7 +33,7 @@ use crate::physics::observer::{Observer, ObserverMode, Release, TrailPoint, Who}
 use crate::physics::simulation::Simulation;
 use crate::physics::wavefront::{
     Delivery, FrontMark, NullRay, Pulse, RayEnd, RayMark, RaySample, Reception, RingHistory,
-    RingRow, SignalField,
+    RingRow, SignalField, TrackPoint,
 };
 
 use super::v1;
@@ -128,12 +128,26 @@ fn pulse_to_v1(pulse: &Pulse) -> v1::Pulse {
         extent_track: pulse
             .extent_track
             .iter()
-            .map(|(t, r_min, r_max)| v1::TrackPoint {
-                t: n(*t),
-                r_min: n(*r_min),
-                r_max: n(*r_max),
+            .map(|point| v1::TrackPoint {
+                t: n(point.t),
+                r_min: n(point.lo),
+                r_max: n(point.hi),
+                // A row with no role at all - every pulse saved before roles existed, and every
+                // pulse with no ray of either kind - writes nothing, rather than a list of nulls
+                // on each of up to four thousand rows. Reading an empty list gives back all NaN,
+                // which is the row that was written.
+                roles: if point.roles.iter().all(|r| r.is_nan()) {
+                    Vec::new()
+                } else {
+                    point.roles.iter().map(|r| (!r.is_nan()).then(|| n(*r))).collect()
+                },
             })
             .collect(),
+        role_rays: if pulse.role_rays.iter().all(Option::is_none) {
+            Vec::new()
+        } else {
+            pulse.role_rays.iter().map(|role| role.map(|i| i as u64)).collect()
+        },
         track_dt: n(pulse.track_dt),
         history: pulse.history.as_ref().map(history_to_v1),
         prev: pulse.prev.as_ref().map(|mark| v1::FrontMark {
@@ -309,8 +323,20 @@ fn pulse_from_v1(pulse: &v1::Pulse) -> Pulse {
         extent_track: pulse
             .extent_track
             .iter()
-            .map(|p| (p.t.0, p.r_min.0, p.r_max.0))
+            .map(|p| TrackPoint {
+                t: p.t.0,
+                lo: p.r_min.0,
+                hi: p.r_max.0,
+                // A file older than the roles carries none, and a role past the end of the list
+                // is one the file does not name: NaN, "no live ray in that role", either way.
+                roles: std::array::from_fn(|i| {
+                    p.roles.get(i).copied().flatten().map_or(f64::NAN, |r| r.0)
+                }),
+            })
             .collect(),
+        role_rays: std::array::from_fn(|i| {
+            pulse.role_rays.get(i).copied().flatten().map(|role| role as usize)
+        }),
         track_dt: pulse.track_dt.0,
         history: pulse.history.as_ref().map(history_from_v1),
         prev: pulse.prev.as_ref().map(|mark| FrontMark {

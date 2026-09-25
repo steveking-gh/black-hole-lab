@@ -236,6 +236,32 @@ fn test_a_save_round_trips_through_its_own_bytes() {
     assert_eq!(after.view, before.view, "the views came back changed");
     assert!(!restored.controls.is_playing, "a load comes up paused");
 
+    // The role rays and their columns of the track, on the live types, because they are the two
+    // fields the format added for them and the schema comparison above would pass just as well if
+    // both halves of the conversion dropped them. Alice on the ISCO sends pulses with both roles,
+    // so there is something to lose.
+    let bits = |r: f64| if r.is_nan() { u64::MAX } else { r.to_bits() };
+    let roles_of = |app: &SpacetimeApp| {
+        app.sim
+            .alice_signal
+            .pulses
+            .iter()
+            .chain(app.sim.bob_signal.pulses.iter())
+            .map(|pulse| {
+                let columns: Vec<_> =
+                    pulse.extent_track.iter().map(|p| p.roles.map(bits)).collect();
+                (pulse.role_rays, columns)
+            })
+            .collect::<Vec<_>>()
+    };
+    let (saved_roles, restored_roles) = (roles_of(&app), roles_of(&restored));
+    assert!(
+        saved_roles.iter().any(|(roles, columns)| roles.iter().all(Option::is_some)
+            && columns.iter().flatten().any(|b| *b != u64::MAX)),
+        "the run has to carry role rays with recorded radii for this to test anything"
+    );
+    assert_eq!(restored_roles, saved_roles, "the role rays or their columns came back changed");
+
     // The plain-text spelling is the same document as the compressed one, which is what lets the
     // golden file live in the repository as readable JSON.
     let text = to_json(&before).expect("writable as text");

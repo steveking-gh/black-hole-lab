@@ -114,6 +114,15 @@
 //! the pulse reaches it is a question about azimuth, which the projection has thrown away and only
 //! the per-sheet crossing test of `Pulse::scan` answers.
 //!
+//! The two edges show r- as a pile of light only where the emitter is inside r+, because only
+//! there is the outermost ray the one that freezes. For an emitter outside r+ the upper edge is
+//! the escaper and the lower edge the ray to the ring, and the rays that settle onto r- - the
+//! frozen family from above, and from below the crossing rays that turn inside r- and climb back -
+//! lie strictly between the two edges, where no edge ever marks them. So each pulse also follows
+//! a couple of its own rays by name, picked once at emission from their exact conserved quantities
+//! by `select_role_rays`: the steepest freezer and the highest climber. The track records
+//! their radii beside the edges, and the canvas draws each of them exactly as it draws an edge.
+//!
 //! The 2D+1 volume view wants the other projection - the whole front, azimuths and all, swept up in
 //! t - and that is a surface rather than a curve, so it is not kept for every pulse. A pulse whose
 //! index is a multiple of `HISTORY_PULSE_STRIDE` is *tagged* and carries a `RingHistory`: a sampled
@@ -283,6 +292,58 @@ const TRACK_MIN_DT: f64 = 0.02;
 /// `TRACK_MIN_DT` this is 80 M of coordinate time before the first thinning, which is more than a
 /// whole infall, and the spacing doubles at each one after that.
 const TRACK_MAX_POINTS: usize = 4000;
+
+/// How many rays of a pulse are singled out at emission to be followed on their own, beside the
+/// two extremes of its radial extent: the steepest freezer and the highest climber. See
+/// `select_role_rays`, which chooses them and says why, and `Pulse::role_rays`, which keeps them.
+pub(crate) const ROLES: usize = 2;
+
+/// Columns of a `TrackPoint`: the lower edge, the upper edge, and one per role.
+pub(crate) const TRACK_COLUMNS: usize = 2 + ROLES;
+
+/// One row of a pulse's `Pulse::extent_track`: the radial interval its front spanned at the time
+/// `t`, and the radius each of its role rays stood at then.
+///
+/// A role that the pulse does not have, or whose ray is dead by `t`, is NaN - the convention
+/// `RingHistory` already keeps for a dead ray - so a reader drawing a role's column stops at the
+/// first NaN rather than drawing a piece of track through a radius no ray occupies.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TrackPoint {
+    /// Coordinate time of the row.
+    pub t: f64,
+    /// The lower edge of the front, `Pulse::radial_extent`'s r_min.
+    pub lo: f64,
+    /// The upper edge of the front, `Pulse::radial_extent`'s r_max.
+    pub hi: f64,
+    /// The radius of each role ray, in the order of `Pulse::role_rays`, or NaN.
+    pub roles: [f64; ROLES],
+}
+
+impl TrackPoint {
+    /// A row with both edges given and no role recorded: every role NaN. The tests build their
+    /// hand-made pulses' seeds with it.
+    #[cfg(test)]
+    pub(crate) fn new(t: f64, lo: f64, hi: f64) -> Self {
+        Self { t, lo, hi, roles: [f64::NAN; ROLES] }
+    }
+
+    /// Column `i` of the row, in the order the (t, r) chart draws them: 0 the lower edge, 1 the
+    /// upper edge, 2 onward the roles. NaN for a role with no live ray, and for `i` past the end.
+    pub fn column(&self, i: usize) -> f64 {
+        match i {
+            0 => self.lo,
+            1 => self.hi,
+            _ => self.roles.get(i - 2).copied().unwrap_or(f64::NAN),
+        }
+    }
+
+    /// The row as the (t, r_min, r_max) triple the track used to be stored as, for the tests that
+    /// read the two edges and nothing else.
+    #[cfg(test)]
+    pub(crate) fn edges(&self) -> (f64, f64, f64) {
+        (self.t, self.lo, self.hi)
+    }
+}
 
 /// Every `HISTORY_PULSE_STRIDE`-th pulse of a field keeps a `RingHistory`: pulses whose `index` is
 /// a multiple of this one are *tagged*, the rest carry nothing.
@@ -663,10 +724,18 @@ impl NullRay {
     /// C are squares, and the whole of c is homogeneous of degree two in (E, L), so the per-unit-
     /// k^t constants of `constants` give the same zeros as affinely normalised ones would.
     fn turns_between(&self, metric: &KerrSchild, lo: f64, hi: f64) -> bool {
+        Self::turns_given(metric, self.constants(metric), lo, hi)
+    }
+
+    /// `turns_between` for a ray whose `constants` are already in hand, as (E, L) per unit k^t.
+    ///
+    /// Every ray of a fresh pulse stands at the emission radius, so `select_role_rays` reads one
+    /// metric for the whole comb and hands the constants in, where asking each ray would read one
+    /// metric per ray per question.
+    fn turns_given(metric: &KerrSchild, (e, l): (f64, f64), lo: f64, hi: f64) -> bool {
         if lo >= hi {
             return false;
         }
-        let (e, l) = self.constants(metric);
         let q = l - metric.a * e;
         let (a3, b1, c0) =
             (e * e, metric.a * metric.a * e * e - l * l, 2.0 * metric.m * q * q);
@@ -679,6 +748,69 @@ impl NullRay {
             }
         }
         lowest <= 0.0
+    }
+
+    /// The largest zero strictly between `lo` and `hi` of the radial potential of a ray with
+    /// constants (E, L) per unit k^t, found where the potential is positive at `hi`, or None if
+    /// there is none there.
+    ///
+    /// The same cubic as `turns_between`, c(r) = A r^3 + B r + C, and the same fact about it: c is
+    /// unimodal on r > 0, falling to its one minimum at r* = sqrt(-B / 3A) when B < 0 and rising
+    /// everywhere when B >= 0. With c(hi) > 0 the largest zero below `hi` is therefore on the
+    /// rising branch, between max(r*, lo) and `hi`, and there is one exactly when c is not positive
+    /// at that left end.
+    ///
+    /// The zero is found by Newton's method from `hi`, which on this branch cannot go wrong: c is
+    /// convex for r > 0 (c'' = 6 A r >= 0) and rising there, so each Newton step from a point where
+    /// c > 0 lands between the zero and that point, and the iterates fall monotonically onto the
+    /// zero from above, quadratically once they are close. The loop stops when a step no longer
+    /// moves the iterate down or lands on c <= 0, which is the zero to within the last bits f64
+    /// can tell apart there. Bisection would do the same job sixty halvings at a time; Newton
+    /// takes a handful of steps, and this runs for every crossing ray of every pulse.
+    ///
+    /// Asked with `hi` = r-, it is the radius a falling ray of the crossing family turns at once it
+    /// is through the inner horizon: the ray arrives from above, so the first zero it meets is the
+    /// largest. At r- itself Delta = 0 and R(r-) = [E (r-^2 + a^2) - a L]^2, which is
+    /// (r-^2 + a^2)^2 (E - Omega_- L)^2 and positive for every ray off the family boundary, so
+    /// c(r-) > 0 holds for every ray that crosses and the guard on `hi` costs such a caller
+    /// nothing. The guard keeps the answer honest elsewhere: where c(hi) <= 0 the largest zero may
+    /// lie above `hi`, and the question is not the one this answers.
+    ///
+    /// It runs once per ray per emission, from `select_role_rays`, and never per frame.
+    fn highest_turn_given(
+        metric: &KerrSchild,
+        (e, l): (f64, f64),
+        lo: f64,
+        hi: f64,
+    ) -> Option<f64> {
+        if lo >= hi {
+            return None;
+        }
+        let q = l - metric.a * e;
+        let (a3, b1, c0) =
+            (e * e, metric.a * metric.a * e * e - l * l, 2.0 * metric.m * q * q);
+        let c = |r: f64| a3 * r * r * r + b1 * r + c0;
+        if c(hi) <= 0.0 {
+            return None;
+        }
+        let r_star = if a3 > 0.0 && b1 < 0.0 { (-b1 / (3.0 * a3)).sqrt() } else { lo };
+        if c(r_star.clamp(lo, hi)) > 0.0 {
+            return None;
+        }
+        let mut r = hi;
+        // A bound on the loop and nothing more: convergence from hi takes a handful of steps.
+        for _ in 0..100 {
+            let value = c(r);
+            if value <= 0.0 {
+                break;
+            }
+            let next = r - value / (3.0 * a3 * r * r + b1);
+            if next.is_nan() || next >= r {
+                break;
+            }
+            r = next;
+        }
+        (r > lo).then_some(r)
     }
 
     /// Whether this ray will reach the ring: its radial potential has no zero between the ring
@@ -786,11 +918,21 @@ impl NullRay {
     /// horizon-blind test read the outer zeros of its potential as an escape from the deep
     /// interior, re-pinning the wedge's upper edge to `R_ESCAPE`.
     pub fn escape_bound(&self, metric: &KerrSchild) -> bool {
-        let rp = metric.outer_horizon();
-        if !self.alive() || self.r <= rp || self.turns_between(metric, self.r, R_ESCAPE) {
+        if !self.alive() || self.r <= metric.outer_horizon() {
             return false;
         }
-        self.dr_dt > 0.0 || self.turns_between(metric, rp, self.r)
+        self.escape_bound_given(metric, self.constants(metric))
+    }
+
+    /// `escape_bound` for a ray whose `constants` are already in hand; see `turns_given` for why
+    /// a caller would have them.
+    fn escape_bound_given(&self, metric: &KerrSchild, constants: (f64, f64)) -> bool {
+        let rp = metric.outer_horizon();
+        if !self.alive() || self.r <= rp || Self::turns_given(metric, constants, self.r, R_ESCAPE)
+        {
+            return false;
+        }
+        self.dr_dt > 0.0 || Self::turns_given(metric, constants, rp, self.r)
     }
 
     /// Advance the ray by dt of coordinate time along the non-affine geodesic equation of the
@@ -1512,7 +1654,18 @@ pub struct Pulse {
     ///
     /// While the pulse is being swallowed, neither edge is a live ray at all: see
     /// `Pulse::radial_extent`, which pins them to the boundary the front is standing on.
-    pub extent_track: Vec<(f64, f64, f64)>,
+    ///
+    /// Each row also carries the radius of every role ray of `role_rays`, recorded on the same
+    /// cadence, thinned by the same rule and cut back by the same `step_back`, so a role's column
+    /// is that one ray's own worldline on the (t, r) diagram. A role the pulse lacks, or whose ray
+    /// has died, is NaN in that row.
+    pub extent_track: Vec<TrackPoint>,
+    /// The rays of `rays`, by index, that the (t, r) chart follows beside the two extremes: role 0
+    /// the steepest freezer and role 1 the highest climber, chosen once at emission by
+    /// `select_role_rays` from the rays' exact conserved quantities, or None where the pulse has
+    /// no ray of that kind. Fixed for the life of the pulse: a ray's (E, L) never change, so
+    /// neither does which ray plays which role.
+    pub(crate) role_rays: [Option<usize>; ROLES],
     /// Coordinate-time spacing the track is currently stored at: `TRACK_MIN_DT`, doubled once for
     /// each thinning `TRACK_MAX_POINTS` has forced. See `Pulse::extend_track`.
     pub(crate) track_dt: f64,
@@ -1886,7 +2039,7 @@ impl Pulse {
     /// replaces, was to stop recording, and the drawn front then stopped moving at a time that
     /// depended on how long the app had been running.
     fn extend_track(&mut self, metric: &KerrSchild, t: f64) {
-        let Some(&(last_t, ..)) = self.extent_track.last() else {
+        let Some(last_t) = self.extent_track.last().map(|p| p.t) else {
             return;
         };
         // The comparison carries a relative slack of a part in 1e9 because a caller whose own
@@ -1896,7 +2049,7 @@ impl Pulse {
         if t < last_t + self.track_dt * (1.0 - 1e-9) {
             return;
         }
-        let Some((r_min, r_max)) = self.radial_extent(metric) else {
+        let Some(point) = self.track_point(metric, t) else {
             return;
         };
         if self.extent_track.len() >= TRACK_MAX_POINTS {
@@ -1909,7 +2062,26 @@ impl Pulse {
             });
             self.track_dt *= 2.0;
         }
-        self.extent_track.push((t, r_min, r_max));
+        self.extent_track.push(point);
+    }
+
+    /// The row of `extent_track` this pulse stands at right now, labelled with the time `t` it is
+    /// read at, or None once no ray of it is alive: both edges from `Pulse::radial_extent`, pins to
+    /// the ring and to `R_ESCAPE` included, and each role ray's radius, NaN for a role the pulse
+    /// lacks or whose ray has died.
+    ///
+    /// It is the one reading of a pulse's radial state, and both of its uses take it from here:
+    /// `extend_track` stores it on the recording cadence, and the (t, r) chart reads it at the
+    /// field's own clock for the heads of the comets, so a head and the tail behind it are built by
+    /// the same function column for column.
+    pub(crate) fn track_point(&self, metric: &KerrSchild, t: f64) -> Option<TrackPoint> {
+        let (lo, hi) = self.radial_extent(metric)?;
+        let roles = self.role_rays.map(|role| {
+            role.and_then(|i| self.rays.get(i))
+                .filter(|ray| ray.alive())
+                .map_or(f64::NAN, |ray| ray.r)
+        });
+        Some(TrackPoint { t, lo, hi, roles })
     }
 
     /// Whether this pulse went out on a comb of `n` directions: n rays, and at most one more on
@@ -2489,6 +2661,146 @@ fn with_family_boundaries(
     comb
 }
 
+/// The rays of a freshly launched pulse that the (t, r) chart follows beside the two extremes of
+/// its radial extent, by index into `rays`: `[steepest freezer, highest climber]`, each None
+/// where the pulse has no ray of that kind. Chosen once, at emission, from the rays' exact
+/// conserved quantities, and never revised: (E, L) are constants of the motion, so a choice made
+/// from them is as good at t = 100 M as it was at the emission event.
+///
+/// Why any choice is needed. The extremes mark the pile of light on r- only where the emitter is
+/// inside r+, because only there is the outermost ray the one that freezes. From outside r+ - Alice
+/// on the ISCO - the upper edge is the escaper and the lower edge the ray to the ring, and every
+/// ray that settles onto r- lies strictly between the two edges. Measured from a saved run, the
+/// oldest ISCO pulse held 20 live rays within 0.05 M above r- and 12 climbing below it, and no
+/// edge on any of them.
+///
+/// **Role 0, the steepest freezer**: among the rays of the frozen family, E - Omega_- L < 0
+/// (`NullRay::frozen`), that do not leave the drawn field (`NullRay::escape_bound` false), the one
+/// that leaves the emission event most steeply inward: the most negative dr/dt there.
+///
+/// The physics behind the rule is the family's margin,
+///
+///     (E - Omega_- L) / (|E| + Omega_- |L|),
+///
+/// the scale-free form `with_family_boundaries` sorts the families by. The frozen family is the
+/// arc of the cone that frame dragging carries forward in phi. Its least-dragged member, at the
+/// margin closest to zero, falls in most directly and reaches r- first; its most-dragged member
+/// sits near the prograde photon orbit's critical L/E and lingers there before it falls. That was
+/// measured, and the measurement decided the pick. From the prograde ISCO at a = 0.9 the first
+/// choice here was the *most* negative margin among the frozen rays that do not escape, the
+/// neighbour of the escapers at L/E = 2.81: 40 M after emission it still stood 2.6e-2 M above
+/// r-, reaching 5.8e-4 M at 50 M, 1.2e-5 M at 60 M and 5.4e-9 M at 80 M, while the ray at the
+/// other end of the arc was 1.2e-12 M above r- at 40 M and 1e-15 M at 80 M.
+///
+/// The margin itself does not make a usable rule, for two reasons, and dr/dt at emission does.
+/// The frozen arc has two boundaries with the same L/E, and from inside r+ both can carry a
+/// launched boundary ray at a margin of -1e-6 by construction, so the margin chooses between
+/// them in the twelfth digit - and they do not behave alike: from r = 1.2 at a = 0.65 the one on
+/// the E > 0, ingoing side was 6e-11 M above r- after 8 M, the one on the E < 0 side 2.2e-5 M.
+/// And inside the ergoregion part of the arc has E < 0, where L/E stops ordering it at all: a
+/// ray at the E < 0 end of that same arc has L/E = 0.37 against 0.74 at the boundary. The most
+/// ingoing frozen ray is one ray with no tie, it is the one that falls in most directly by
+/// definition, and it is the fast boundary in both cases measured: ray 79 of the 145 from the
+/// ISCO (dr/dt = -0.927 at emission) and ray 62 from r = 1.2 at a = 0.65 (-0.9565, against
+/// -0.1268 for the slow boundary ray). From the ISCO that ray is the one launched on the family
+/// boundary by `with_family_boundaries`, a hair inside the frozen family: a real ray of the
+/// pulse, integrated like every other, so the comet rides it honestly.
+///
+/// None where the family is empty or all of it escapes - a hole with no spin, whose Omega_- is
+/// zero - and None for an emitter inside r-, where nothing approaches r- from above at all.
+///
+/// **Role 1, the highest climber**: only for an emitter outside r-. Among the rays of the crossing
+/// family that do not escape and whose radial potential has a zero strictly inside (R_STOP, r-),
+/// the one whose largest such zero is highest (`NullRay::highest_turn_given`). Such a ray falls
+/// through r- at finite t, turns at that zero - the first it meets on the way down - and climbs
+/// back to r- from below, where Region III's outgoing light accumulates on the Cauchy horizon, so
+/// it settles onto r- from the inside. The one with the highest turning point has the shortest
+/// climb and is expected to be the first to settle, and from the ISCO at a = 0.9 it is: 40 M
+/// after emission it stands 4.5e-8 M below r-, still climbing, the nearest to r- of the rays
+/// climbing below it. None where no crossing ray turns above the
+/// ring, and None for an emitter inside r-, where the pulse's upper edge already is its climber.
+///
+/// "Steepest" and "highest" are expectations about which ray settles first, and nothing
+/// downstream leans on them being right. Each comet is drawn on its role ray's own worldline, so
+/// whatever ray is chosen, what the chart shows is exactly where that ray is; a poorer choice only
+/// settles later, which is what the first freezer pick above did.
+/// `test_the_role_rays_settle_onto_r_minus_from_both_sides` holds both measurements.
+///
+/// It touches no ray: the choice is read off the directions as launched, so no physics
+/// fingerprint can see it. One metric serves the whole comb, since every ray stands on the
+/// emission event, and the escape test - the costly part - is asked of the frozen rays in order
+/// of their dr/dt only until one passes it, so the sixty-odd escaping frozen rays of an ISCO
+/// pulse are never tested. The climber's turning radius is found by Newton's method rather than
+/// bisection. Measured by `cargo perf-check`'s emission row, a 144-ray pulse from the ISCO costs
+/// 4.3 us with the selection against 3.7 us without it; the first version, reading a metric per
+/// ray per question and testing every deeper frozen ray for escape, cost 6.4 us.
+pub(crate) fn select_role_rays(
+    metric: &KerrSchild,
+    emitted_r: f64,
+    rays: &[NullRay],
+) -> [Option<usize>; ROLES] {
+    let rm = metric.inner_horizon();
+    let omega_minus = metric.inner_horizon_omega();
+    if emitted_r <= rm {
+        return [None; ROLES];
+    }
+    // Every ray of a fresh pulse stands on the emission event, so one metric serves the whole
+    // comb, and each ray's (E, L) per unit k^t is the same arithmetic `NullRay::constants` does.
+    let g = metric.metric_components(emitted_r);
+    // (E, L) per unit k^t of a ray standing on the emission event.
+    let constants = |ray: &NullRay| {
+        debug_assert_eq!(ray.r, emitted_r, "role rays are chosen at the emission event");
+        let v = ray.direction();
+        let e = -(g[0][0] * v[0] + g[0][1] * v[1] + g[0][2] * v[2]);
+        let l = g[2][0] * v[0] + g[2][1] * v[1] + g[2][2] * v[2];
+        (e, l)
+    };
+    // `NullRay::frozen`: the sign of `NullRay::inner_horizon_energy`.
+    let is_frozen = |(e, l): (f64, f64)| e - omega_minus * l < 0.0;
+    // The frozen ray with the most negative dr/dt at emission among those whose dr/dt is above
+    // `floor`: the steepest not yet ruled out.
+    type Candidate = (f64, usize, (f64, f64));
+    let steepest_above = |floor: f64, best: Option<Candidate>, i: usize, c: (f64, f64)| {
+        let dr_dt = rays[i].dr_dt;
+        if is_frozen(c) && dr_dt > floor && best.is_none_or(|(top, ..)| dr_dt < top) {
+            Some((dr_dt, i, c))
+        } else {
+            best
+        }
+    };
+    let mut candidate: Option<Candidate> = None;
+    let mut climber: Option<(usize, f64)> = None;
+    for (i, ray) in rays.iter().enumerate() {
+        let c = constants(ray);
+        if is_frozen(c) {
+            candidate = steepest_above(f64::NEG_INFINITY, candidate, i, c);
+        } else if let Some(turn) = NullRay::highest_turn_given(metric, c, R_STOP, rm)
+            && climber.is_none_or(|(_, best)| turn > best)
+            && !ray.escape_bound_given(metric, c)
+        {
+            climber = Some((i, turn));
+        }
+    }
+    // The escape test is asked of the frozen rays in order of their dr/dt, steepest first, and
+    // only until one passes it. From the ISCO the first one asked, the ray launched on the family
+    // boundary, passes, so the sixty-odd escaping frozen rays are never tested and the whole
+    // search is the one pass above; a pulse whose steepest freezers escape pays a further pass per
+    // escaper. Two rays of exactly equal dr/dt would see only the first of them asked.
+    let freezer = loop {
+        let Some((dr_dt, i, c)) = candidate else {
+            break None;
+        };
+        if !rays[i].escape_bound_given(metric, c) {
+            break Some(i);
+        }
+        candidate = rays
+            .iter()
+            .enumerate()
+            .fold(None, |best, (k, ray)| steepest_above(dr_dt, best, k, constants(ray)));
+    };
+    [freezer, climber.map(|(i, _)| i)]
+}
+
 /// The 4-velocity to quote an observer's signals in, at emission and at reception alike: the
 /// 4-velocity of the worldline the observer is on, and nothing else.
 ///
@@ -2704,6 +3016,9 @@ impl SignalField {
         comb.extend((0..n).map(|i| launch(two_pi * (i as f64) / (n as f64))));
         let rays = with_family_boundaries(metric, &tetrad, emitter.r, comb, launch);
         let n = rays.len();
+        let role_rays = select_role_rays(metric, emitter.r, &rays);
+        // The seed row is the emission event, and every role ray the pulse has stands on it.
+        let seed_roles = role_rays.map(|role| role.map_or(f64::NAN, |_| emitter.r));
 
         self.pulses.push_back(Pulse {
             index: self.next_index,
@@ -2712,7 +3027,13 @@ impl SignalField {
             emitted_r: emitter.r,
             emitted_phi: emitter.phi,
             rays,
-            extent_track: vec![(emitter.t, emitter.r, emitter.r)],
+            extent_track: vec![TrackPoint {
+                t: emitter.t,
+                lo: emitter.r,
+                hi: emitter.r,
+                roles: seed_roles,
+            }],
+            role_rays,
             track_dt: TRACK_MIN_DT,
             // Every eighth pulse carries a surface as well as a wedge. The stride is taken on the
             // serial number rather than on the position in the field, so which pulses are tagged
@@ -2764,9 +3085,9 @@ impl SignalField {
     /// is not reachable from the panel, whose slider stops there, and is here so that a cap of zero
     /// from anywhere else cannot leave a transmitting emitter with nothing in flight at all.
     ///
-    /// O(1) per eviction, `pulses` being a deque. A `Pulse` is 224 bytes, so shifting the rest of a
-    /// full field down one moved 14 KB at the default cap of 64 and 28 KB at the panel's top of
-    /// 128 - once per emission rather than once per step, so a tenth of a megabyte a second at
+    /// O(1) per eviction, `pulses` being a deque. A `Pulse` is 256 bytes, so shifting the rest of a
+    /// full field down one would move 16 KB at the default cap of 64 and 32 KB at the panel's top
+    /// of 128 - once per emission rather than once per step, so a tenth of a megabyte a second at
     /// worst, but there was never anything to buy it with.
     fn trim_to_cap(&mut self, metric: &KerrSchild) {
         while self.pulses.len() > self.max_pulses.max(1) {
@@ -2872,7 +3193,7 @@ impl SignalField {
             // points to keep are a prefix: `partition_point` finds where that prefix ends. The
             // floor of one is the seed, the emission event, which is never cut away.
             let keep =
-                pulse.extent_track.partition_point(|(t, _, _)| *t <= target_t + 1e-9).max(1);
+                pulse.extent_track.partition_point(|p| p.t <= target_t + 1e-9).max(1);
             pulse.extent_track.truncate(keep);
             // The history is cut on the same rule, by the same search, and with the same tolerance:
             // a row recorded after the target was recorded off rays that have just been integrated
@@ -3840,12 +4161,14 @@ mod tests {
             "the frozen family should be the whole prograde arc: {profile:?}"
         );
         profile.sort_by(|a, b| b.0.total_cmp(&a.0));
-        // The ordering holds across the settled part of the arc. Its outer edge is the ray with
-        // E - Omega_- L closest to zero from below, which freezes the slowest of all and after 8 M
-        // is still on its way in, so it can sit a hair outside a neighbour that froze earlier and
-        // carries less shift. With the cone sampled at 2.5 degrees that edge ray is caught
-        // (at five degrees it fell in the gap), and it is the only inversion allowed: it must be
-        // the shallowest pair, and everything deeper must be strictly bluer.
+        // The ordering holds across the settled part of the arc. Its outer edge is the E < 0 end
+        // of the arc, and that end is still on its way in after 8 M: measured, rays 16 and 15,
+        // at margins (E - Omega_- L) / (|E| + Omega_- |L|) of -1.0 and -0.33, stand 1.41e-3 and
+        // 1.37e-3 M above r-, while the ray closest to zero from below, ray 60 at -0.00019, is the
+        // deepest of all at 1.0e-8 M. So the outer edge can sit a hair outside a neighbour that
+        // froze earlier and carries less shift. With the cone sampled at 2.5 degrees that edge ray
+        // is caught (at five degrees it fell in the gap), and it is the only inversion allowed: it
+        // must be the shallowest pair, and everything deeper must be strictly bluer.
         let inversions: Vec<usize> = profile
             .windows(2)
             .enumerate()
@@ -3865,6 +4188,127 @@ mod tests {
             profile.last().unwrap().1 > 100.0 * profile[0].1,
             "and the profile must span orders of magnitude: {profile:?}"
         );
+    }
+
+    /// A field holding one pulse, sent by Alice on the prograde ISCO of a hole of spin `a`, and the
+    /// metric it was sent in.
+    fn isco_pulse(a: f64) -> (KerrSchild, SignalField) {
+        let metric = KerrSchild::new(1.0, a);
+        let r = metric.isco(true);
+        let (energy, l_ang) = metric.circular_orbit(r, true).expect("a prograde ISCO orbit");
+        let params =
+            WorldlineParams { energy, l_ang, outgoing: false, ..WorldlineParams::default() };
+        let alice = Observer::new_with_phi(&metric, "Alice", 0.0, r, 0.0, 0.0, params);
+        let mut field = SignalField::default();
+        assert!(field.emit_if_due(&metric, &alice), "the first pulse is due at once");
+        (metric, field)
+    }
+
+    #[test]
+    fn test_role_rays_are_chosen_from_the_exact_conserved_quantities() {
+        // From the prograde ISCO at a = 0.9, Alice's cone holds both kinds of ray that settle onto
+        // r- and neither of the pulse's edges is one of them. The pick has to find a freezer -
+        // frozen family, not escaping - and a climber - crossing family, turning strictly inside
+        // r- - and each has to be what its role says by the same exact tests that define the role.
+        let (metric, field) = isco_pulse(0.9);
+        let pulse = field.pulses.back().expect("one pulse");
+        let rm = metric.inner_horizon();
+        let [Some(freezer), Some(climber)] = pulse.role_rays else {
+            panic!("an ISCO pulse at a = 0.9 has both roles: {:?}", pulse.role_rays);
+        };
+        let freezer_ray = &pulse.rays[freezer];
+        let climber_ray = &pulse.rays[climber];
+        assert!(freezer_ray.inner_horizon_energy(&metric) < 0.0, "the freezer is frozen-signed");
+        assert!(!freezer_ray.escape_bound(&metric), "and does not leave the drawn field");
+        // The rule, checked on the rays themselves: the most negative dr/dt at emission among
+        // the frozen rays that do not escape.
+        let steepest = pulse
+            .rays
+            .iter()
+            .filter(|ray| ray.frozen(&metric) && !ray.escape_bound(&metric))
+            .map(|ray| ray.dr_dt)
+            .fold(f64::INFINITY, f64::min);
+        assert_eq!(freezer_ray.dr_dt, steepest, "the steepest freezer");
+        assert!(climber_ray.inner_horizon_energy(&metric) > 0.0, "the climber crosses r-");
+        assert!(!climber_ray.escape_bound(&metric), "and does not leave the drawn field");
+        let turn = NullRay::highest_turn_given(&metric, climber_ray.constants(&metric), R_STOP, rm)
+            .expect("the climber turns above the ring");
+        assert!(turn > R_STOP && turn < rm, "the climber turns at {turn}, inside r- = {rm}");
+        // The seed row puts both on the emission event.
+        let seed = pulse.extent_track[0];
+        assert_eq!(seed.roles, [pulse.emitted_r; ROLES], "every role starts at the emission event");
+        println!(
+            "ISCO pulse at a = 0.9: {} rays, freezer ray {freezer}, climber ray {climber} turning \
+             at r = {turn:.6} against r- = {rm:.6}",
+            pulse.rays.len()
+        );
+
+        // Inside r- the pulse's upper edge already is its climber, and nothing approaches r- from
+        // above: no role is picked.
+        let deep = cone_at(&metric, 0.45);
+        assert_eq!(select_role_rays(&metric, 0.45, &deep), [None; ROLES], "an emitter inside r-");
+
+        // A hole with no spin has no inner horizon, so no ray freezes and none turns inside it.
+        let (_, still) = isco_pulse(0.0);
+        let pulse = still.pulses.back().expect("one pulse");
+        assert_eq!(pulse.role_rays, [None; ROLES], "a = 0 picks nothing");
+        assert!(pulse.extent_track[0].roles.iter().all(|r| r.is_nan()), "and records nothing");
+    }
+
+    #[test]
+    fn test_the_role_rays_settle_onto_r_minus_from_both_sides() {
+        // The expectation behind the picks, measured. The ISCO pulse of the test above is carried
+        // 40 M, and each role ray is set against every other ray of its own kind.
+        //
+        // The climber meets the expectation in full: 40 M out it stands 4.5e-8 M below r- and
+        // still climbing, the nearest to r- of the rays climbing below it.
+        //
+        // So does the freezer, the steepest ray of the frozen family, which from the ISCO is its
+        // least-dragged: 40 M out it stands 1.2e-12 M above r-, the nearest of every frozen ray
+        // still alive. The most-dragged, the first pick, sits by the prograde photon orbit and
+        // was still 2.6e-2 M above r- at 40 M; see `select_role_rays`.
+        let (metric, mut field) = isco_pulse(0.9);
+        let rm = metric.inner_horizon();
+        for _ in 0..400 {
+            field.advance(&metric, 0.1);
+        }
+        let pulse = field.pulses.back().expect("one pulse");
+        let [Some(freezer), Some(climber)] = pulse.role_rays else {
+            panic!("both roles: {:?}", pulse.role_rays);
+        };
+        let (freezer_ray, climber_ray) = (&pulse.rays[freezer], &pulse.rays[climber]);
+        assert!(freezer_ray.alive() && climber_ray.alive(), "both role rays live 40 M");
+        let nearest_frozen = pulse
+            .rays
+            .iter()
+            .filter(|ray| ray.alive() && ray.frozen(&metric))
+            .map(|ray| ray.r - rm)
+            .fold(f64::INFINITY, f64::min);
+        let climbing_below: Vec<f64> = pulse
+            .rays
+            .iter()
+            .filter(|ray| ray.alive() && ray.r < rm && ray.dr_dt > 0.0)
+            .map(|ray| rm - ray.r)
+            .collect();
+        let nearest_below = climbing_below.iter().copied().fold(f64::INFINITY, f64::min);
+        println!(
+            "40 M after an ISCO emission at a = 0.9: the freezer stands {:.3e} M above r- at \
+             dr/dt = {:.3e}, the nearest live frozen ray {nearest_frozen:.3e}; the climber stands \
+             {:.3e} M below r- at dr/dt = {:.3e}, the nearest of {} rays climbing below r- \
+             {nearest_below:.3e}",
+            freezer_ray.r - rm,
+            freezer_ray.dr_dt,
+            rm - climber_ray.r,
+            climber_ray.dr_dt,
+            climbing_below.len()
+        );
+        let above = freezer_ray.r - rm;
+        assert!(above > 0.0 && above < 1e-3, "the freezer stands {above} M above r-");
+        assert_eq!(above, nearest_frozen, "the steepest freezer is the nearest to r-");
+        let below = rm - climber_ray.r;
+        assert!(below > 0.0 && below < 1e-2, "the climber stands {below} M below r-");
+        assert!(climber_ray.dr_dt > 0.0, "and is climbing: dr/dt = {}", climber_ray.dr_dt);
+        assert_eq!(below, nearest_below, "the highest climber is the nearest to r- from below");
     }
 
     /// The exact radial potential of an equatorial null geodesic of conserved (E, L), divided by
@@ -4291,7 +4735,8 @@ mod tests {
             emitted_r: r0,
             emitted_phi: 0.0,
             rays,
-            extent_track: vec![(0.0, r0, r0)],
+            extent_track: vec![TrackPoint::new(0.0, r0, r0)],
+            role_rays: [None; ROLES],
             track_dt: TRACK_MIN_DT,
             history: None,
             prev: None,
@@ -4336,7 +4781,7 @@ mod tests {
         // outward anywhere in it.
         let mut inside = 0;
         let mut previous: Option<f64> = None;
-        for &(t, r_min, _) in pulse.extent_track.iter() {
+        for (t, r_min, _) in pulse.extent_track.iter().map(TrackPoint::edges) {
             if t < first || t > last {
                 continue;
             }
@@ -4365,7 +4810,7 @@ mod tests {
         let mut worst_rise_before = 0.0f64;
         let mut before_points = 0;
         for pair in pulse.extent_track.windows(2) {
-            let ((t0, lo0, _), (t1, lo1, _)) = (pair[0], pair[1]);
+            let ((t0, lo0, _), (t1, lo1, _)) = (pair[0].edges(), pair[1].edges());
             if t1 > first {
                 break;
             }
@@ -4384,7 +4829,7 @@ mod tests {
         let after: Vec<(f64, f64, f64)> = pulse
             .extent_track
             .iter()
-            .copied()
+            .map(TrackPoint::edges)
             .filter(|(t, _, _)| *t > last)
             .collect();
         let step_out = after.first().map(|&(_, lo, _)| lo - R_STOP).unwrap_or(0.0);
@@ -4433,8 +4878,8 @@ mod tests {
         // this run has long finished being swallowed.
         let metric = KerrSchild::new(1.0, 0.90);
         let field = run_field_to(&metric, 110.0, 0.02);
-        let width_at = |track: &[(f64, f64, f64)], when: f64| {
-            track.iter().rev().find(|(t, ..)| *t <= when).map(|&(t, lo, hi)| (t, hi - lo))
+        let width_at = |track: &[TrackPoint], when: f64| {
+            track.iter().rev().find(|p| p.t <= when).map(|p| (p.t, p.hi - p.lo))
         };
 
         let mut checked = 0;
@@ -4446,7 +4891,7 @@ mod tests {
             let Some((t60, w60)) = width_at(&pulse.extent_track, 60.0) else {
                 continue;
             };
-            let &(t_last, lo, hi) = pulse.extent_track.last().expect("a track has its seed");
+            let (t_last, lo, hi) = pulse.extent_track.last().expect("a track has its seed").edges();
             assert!(
                 t_last > 100.0,
                 "pulse {} stopped recording at t = {t_last}, before the band this test is about",
@@ -4500,7 +4945,8 @@ mod tests {
             emitted_r: r0,
             emitted_phi: 0.0,
             rays,
-            extent_track: vec![(0.0, r0, r0)],
+            extent_track: vec![TrackPoint::new(0.0, r0, r0)],
+            role_rays: [None; ROLES],
             track_dt: TRACK_MIN_DT,
             history: None,
             prev: None,
@@ -4517,17 +4963,17 @@ mod tests {
         for i in 1..=12_500 {
             pulse.extend_track(&metric, (i as f64) * dt);
         }
-        let (last_t, ..) = *pulse.extent_track.last().unwrap();
+        let (last_t, ..) = pulse.extent_track.last().unwrap().edges();
         assert!(
             last_t > 249.0,
             "the track must still be recording at the end of the run: last point at t = {last_t}"
         );
         assert!(pulse.extent_track.len() <= TRACK_MAX_POINTS);
-        assert_eq!(pulse.extent_track[0].0, 0.0, "the emission event is never thinned away");
+        assert_eq!(pulse.extent_track[0].t, 0.0, "the emission event is never thinned away");
         assert!((pulse.track_dt / TRACK_MIN_DT - 4.0).abs() < 1e-9, "{}", pulse.track_dt);
         let mut worst_gap = 0.0f64;
         for pair in pulse.extent_track.windows(2) {
-            worst_gap = worst_gap.max(pair[1].0 - pair[0].0);
+            worst_gap = worst_gap.max(pair[1].t - pair[0].t);
         }
         println!(
             "250 M at {TRACK_MIN_DT} M: {} points spaced {:.3} M apart at most, the cap being \
@@ -4916,14 +5362,14 @@ mod tests {
         for pulse in field.pulses.iter() {
             let seed = pulse.extent_track[0];
             assert_eq!(
-                (seed.0, seed.1, seed.2),
+                seed.edges(),
                 (pulse.emitted_t, pulse.emitted_r, pulse.emitted_r),
                 "pulse {} does not start at its own emission event",
                 pulse.index
             );
             let mut envelope = pulse.emitted_r;
             let mut envelope_t = pulse.emitted_t;
-            for &(t, r_min, r_max) in pulse.extent_track.iter() {
+            for (t, r_min, r_max) in pulse.extent_track.iter().map(TrackPoint::edges) {
                 assert!(r_min <= r_max, "pulse {}: extent {r_min} > {r_max} at t = {t}", pulse.index);
                 if t > envelope_t {
                     envelope = ingoing_edge_advance(&metric, envelope, t - envelope_t);
@@ -5189,7 +5635,8 @@ mod tests {
             emitted_r: r_receiver,
             emitted_phi: 0.0,
             rays,
-            extent_track: vec![(0.0, r_receiver, r_receiver)],
+            extent_track: vec![TrackPoint::new(0.0, r_receiver, r_receiver)],
+            role_rays: [None; ROLES],
             track_dt: TRACK_MIN_DT,
             history: None,
             prev: None,
@@ -5308,7 +5755,8 @@ mod tests {
             emitted_r: r_receiver,
             emitted_phi: 0.0,
             rays,
-            extent_track: vec![(0.0, r_receiver, r_receiver)],
+            extent_track: vec![TrackPoint::new(0.0, r_receiver, r_receiver)],
+            role_rays: [None; ROLES],
             track_dt: TRACK_MIN_DT,
             history: None,
             prev: None,
@@ -5421,7 +5869,8 @@ mod tests {
             emitted_r: r_receiver,
             emitted_phi: 0.0,
             rays,
-            extent_track: vec![(0.0, r_receiver, r_receiver)],
+            extent_track: vec![TrackPoint::new(0.0, r_receiver, r_receiver)],
+            role_rays: [None; ROLES],
             track_dt: TRACK_MIN_DT,
             history: None,
             prev: None,
@@ -5539,7 +5988,8 @@ mod tests {
             emitted_r: r_receiver,
             emitted_phi: 0.0,
             rays,
-            extent_track: vec![(0.0, r_receiver, r_receiver)],
+            extent_track: vec![TrackPoint::new(0.0, r_receiver, r_receiver)],
+            role_rays: [None; ROLES],
             track_dt: TRACK_MIN_DT,
             history: None,
             prev: None,
@@ -5832,7 +6282,7 @@ mod tests {
     /// substitute for the per-sheet crossing test.
     fn came_into_range(pulse: &Pulse, track: &[(f64, f64)]) -> Option<f64> {
         let mut was_inside = false;
-        for &(t, lo, hi) in pulse.extent_track.iter() {
+        for (t, lo, hi) in pulse.extent_track.iter().map(TrackPoint::edges) {
             let r = radius_at(track, t);
             let inside = r >= lo && r <= hi;
             if inside && !was_inside {
@@ -5983,12 +6433,12 @@ mod tests {
             // The extent track is truncated with everything else, and never below its seed.
             let seed = pulse.extent_track[0];
             assert_eq!(
-                (seed.0, seed.1, seed.2),
+                seed.edges(),
                 (pulse.emitted_t, pulse.emitted_r, pulse.emitted_r),
                 "pulse {} lost its emission event to the rewind",
                 pulse.index
             );
-            for &(t, r_min, r_max) in pulse.extent_track.iter() {
+            for (t, r_min, r_max) in pulse.extent_track.iter().map(TrackPoint::edges) {
                 assert!(
                     t <= 9.0 + 1e-9 || pulse.extent_track.len() == 1,
                     "pulse {}: an extent point at t = {t} survived a rewind to t = 9",

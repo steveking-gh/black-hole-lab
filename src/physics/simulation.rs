@@ -476,6 +476,17 @@ impl Simulation {
                     ));
                 }
                 previous = Some(pulse.index);
+                // A role names a ray of its own pulse by index, and the canvas reads that ray's
+                // radius every frame: an index past the end is a file that has been edited, not a
+                // state the emission can produce.
+                let n = pulse.rays.len();
+                if let Some(role) = pulse.role_rays.iter().flatten().find(|i| **i >= n) {
+                    return Err(format!(
+                        "{name} pulse {} follows ray {role} of {}",
+                        pulse.index,
+                        pulse.rays.len()
+                    ));
+                }
                 for ray in pulse.rays.iter() {
                     for (what, value) in [
                         ("t", ray.t),

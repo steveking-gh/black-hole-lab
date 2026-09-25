@@ -13,7 +13,7 @@ use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::geodesic::{proper_time_between, R_STOP};
 use crate::physics::local_frame::{ruler_distance_along, LocalFrame, SurfaceCharacter};
 use crate::physics::observer::{LocalRestFrame, LocalSpeed, Observer, ObserverMode, Who};
-use crate::physics::wavefront::{NullRay, Reception, SignalField};
+use crate::physics::wavefront::{NullRay, Reception, SignalField, TRACK_COLUMNS, TrackPoint};
 use egui::{epaint::PathShape, Color32, Pos2, Rect, Stroke, Vec2};
 use crate::physics::normal_coords::{
     HorizonBranch, RadialConstants, SurfaceSampling, affine_length_to_surface,
@@ -2605,6 +2605,20 @@ Tick Enable Observer on Alice's or Bob's card",
         // r-. So the row of comets along the now line is where every front of both transmissions
         // stands at this moment, and each tail says which way that edge of it is going.
         //
+        // A comet is drawn per *column* of the track, and the two edges are only the first two
+        // columns. The rest follow the role rays `select_role_rays` chose at emission - the
+        // steepest freezer and the highest climber - each on that ray's own recorded radius,
+        // so a role comet is exactly where one ray is and not a statistic of the front. The roles
+        // are what make Alice's r- light visible. Every pulse Bob sends from inside r+ already
+        // has its upper edge frozen on r-, so his pile of interior light shows up as edge comets
+        // alone; a pulse Alice sends from the ISCO has the escaper for its upper edge and the ray
+        // to the ring for its lower one, and the rays of hers that settle onto r- - from above,
+        // and from below after turning inside it - lie strictly between the two edges, where no
+        // edge comet ever marks them. The role comets mark one of each. Every column is drawn
+        // with the same colour, width and fade as every other: the chart says where light is, and
+        // which ray it is is the hover tip's business. A role with no live ray has no head and no
+        // comet, and a tail stops at the first row where its role had none.
+        //
         // A worldline between the two edges of one pulse is *in range* of that pulse - some part
         // of the front stands at that radius - which is not the same as receiving it, because the
         // diagram cannot show azimuth and the receiver may be at another one. That range used to
@@ -2629,8 +2643,9 @@ Tick Enable Observer on Alice's or Bob's card",
         // is still there, and the column of ticks is the pile of outgoing interior light that a
         // later infaller cuts through.
         //
-        // The head is the pulse's extent at the field's own clock, `Pulse::radial_extent` read off
-        // the live rays, and the recorded track supplies only the tail behind it. Nothing is
+        // The head is the pulse's row at the field's own clock, `Pulse::track_point` read off the
+        // live rays - the same function that writes each row of the track - and the recorded track
+        // supplies only the tail behind it. Nothing is
         // extrapolated or interpolated by that: the rays stand at exactly `SignalField::t`, which
         // is the time this chart draws its now line at, so the head is a radius the front has been
         // computed to be at and not a guess past the end of what is known. The track cannot serve
@@ -2639,8 +2654,8 @@ Tick Enable Observer on Alice's or Bob's card",
         // up to that whole spacing. Any step shorter than the cadence, and any zoom that makes
         // 0.02 M more than a point of screen, shows that lag directly: the head stands still for
         // several steps while the now line moves on, and then jumps forward when the next point is
-        // recorded. Which edge of the extent a head belongs to is the same question for the tail,
-        // so one pass over the rays serves both edges of a pulse.
+        // recorded. Which column a head belongs to is the same question for the tail, so one pass
+        // over the rays serves every comet of a pulse.
         //
         // The head is prepended only while the field's clock is at or after the newest track point.
         // It always is in the app - `SignalField::step_back` truncates the track to t <= its target
@@ -2658,19 +2673,24 @@ Tick Enable Observer on Alice's or Bob's card",
             // canvas cannot put anything on it, and the whole pulse costs one rectangle test.
             let reach = rect.expand(Theme::COMET_TAIL_PX);
             for pulse in field.pulses.iter() {
-                // This is the "has a live front" test as well as the reading: `radial_extent` is
-                // None exactly when no ray of the pulse is alive, since it returns None on an empty
-                // min/max, so a spent pulse is skipped here and nothing else has to ask.
-                let Some((lo_now, hi_now)) = pulse.radial_extent(metric) else {
+                // This is the "has a live front" test as well as the reading: `track_point` is
+                // None exactly when no ray of the pulse is alive, since `radial_extent` returns
+                // None on an empty min/max, so a spent pulse is skipped here and nothing else has
+                // to ask.
+                let Some(now_point) = pulse.track_point(metric, field.t) else {
                     continue;
                 };
                 let Some(&newest) = pulse.extent_track.last() else {
                     continue;
                 };
-                let head_at = if field.t >= newest.0 { (field.t, lo_now, hi_now) } else { newest };
-                for hi_edge in [false, true] {
-                    let at = |&(t, lo, hi): &(f64, f64, f64)| {
-                        Pos2::new(to_screen_x(if hi_edge { hi } else { lo }), to_screen_y(t))
+                let head_at = if field.t >= newest.t { now_point } else { newest };
+                for column in 0..TRACK_COLUMNS {
+                    // A role the pulse lacks, or whose ray has died, has no head and no comet.
+                    if head_at.column(column).is_nan() {
+                        continue;
+                    }
+                    let at = |p: &TrackPoint| {
+                        Pos2::new(to_screen_x(p.column(column)), to_screen_y(p.t))
                     };
                     let head = at(&head_at);
                     if !reach.contains(head) {
@@ -2680,8 +2700,15 @@ Tick Enable Observer on Alice's or Bob's card",
                     // the track is the head - the usual case while a run plays in steps at or over
                     // the recording cadence - `comet_tail` drops it as a point no further than
                     // `SCREEN_SPACING` from the one already kept, so the duplicate costs a vertex
-                    // that is never emitted rather than a zero-length first segment.
-                    let track = pulse.extent_track.iter().rev().map(at);
+                    // that is never emitted rather than a zero-length first segment. A NaN in the
+                    // column ends the tail: the edges never carry one, and a role's column carries
+                    // one only where that role had no live ray, which is not a place to draw.
+                    let track = pulse
+                        .extent_track
+                        .iter()
+                        .rev()
+                        .take_while(|p| !p.column(column).is_nan())
+                        .map(at);
                     let tail =
                         comet_tail(std::iter::once(head).chain(track), Theme::COMET_TAIL_PX);
                     if tail.len() < 2 {
@@ -6234,12 +6261,13 @@ mod canvas_tests {
         }
 
         // Where the heads have to be: the two edges of every pulse that still has a live ray, at
-        // the newest point of its track, which at this step is the field's own clock. The 0.1 M
-        // step is five times the recording cadence, so the track and the clock agree here and this
-        // test cannot tell which of the two a head is read from;
+        // the newest point of its track, which at this step is the field's own clock, and the
+        // radius of every role ray of that pulse still alive there. The 0.1 M step is five times
+        // the recording cadence, so the track and the clock agree here and this test cannot tell
+        // which of the two a head is read from;
         // `test_a_comet_head_stands_at_the_live_front_between_two_recorded_track_points` is the one
         // that separates them.
-        let live: Vec<(f64, f64, f64)> = field
+        let live: Vec<TrackPoint> = field
             .pulses
             .iter()
             .filter(|p| p.rays.iter().any(NullRay::alive))
@@ -6247,11 +6275,24 @@ mod canvas_tests {
             .collect();
         assert!(live.len() >= 10, "only {} of Bob's pulses still have a front", live.len());
         let mut heads: Vec<Pos2> = Vec::new();
-        for &(t, lo, hi) in &live {
-            assert_eq!(t, now, "a 0.1 M step records a track point at every advance");
-            heads.push(Pos2::new(to_x(lo), to_y(t)));
-            heads.push(Pos2::new(to_x(hi), to_y(t)));
+        let mut role_heads = 0;
+        for point in &live {
+            assert_eq!(point.t, now, "a 0.1 M step records a track point at every advance");
+            for column in 0..TRACK_COLUMNS {
+                let r = point.column(column);
+                if r.is_nan() {
+                    continue;
+                }
+                heads.push(Pos2::new(to_x(r), to_y(point.t)));
+                if column >= 2 && rect.contains(*heads.last().unwrap()) {
+                    role_heads += 1;
+                }
+            }
         }
+        // The role comets are part of what is being checked, not a side effect of it: the fall
+        // starts outside r+, so Bob's early pulses carry a live freezer and a live climber, and
+        // every one of those on the canvas must be marked below as the edges are.
+        assert!(role_heads > 0, "no role ray of Bob's is alive on the canvas to be marked");
 
         let comets = faded_strokes(&shapes);
         let now_y = to_y(now);
@@ -6336,13 +6377,22 @@ mod canvas_tests {
         let mut worst_lag_m: f64 = 0.0;
         let mut worst_gap_px: f32 = 0.0;
         for pulse in field.pulses.iter() {
-            let Some((lo, hi)) = pulse.radial_extent(&metric) else { continue };
-            let &(t_rec, lo_rec, hi_rec) = pulse.extent_track.last().expect("a track has its seed");
+            let Some(live_point) = pulse.track_point(&metric, now) else { continue };
+            let recorded_point = *pulse.extent_track.last().expect("a track has its seed");
+            let t_rec = recorded_point.t;
             worst_lag_m = worst_lag_m.max(now - t_rec);
-            for (live_r, recorded_r) in [(lo, lo_rec), (hi, hi_rec)] {
+            // Every column that has a head: both edges, and each role whose ray is alive now.
+            for column in 0..TRACK_COLUMNS {
+                let live_r = live_point.column(column);
+                let recorded_r = recorded_point.column(column);
+                if live_r.is_nan() {
+                    continue;
+                }
                 let live = Pos2::new(to_x(live_r), now_y);
-                let recorded = Pos2::new(to_x(recorded_r), to_y(t_rec));
-                worst_gap_px = worst_gap_px.max(live.distance(recorded));
+                if !recorded_r.is_nan() {
+                    let recorded = Pos2::new(to_x(recorded_r), to_y(t_rec));
+                    worst_gap_px = worst_gap_px.max(live.distance(recorded));
+                }
                 heads.push(live);
             }
         }
