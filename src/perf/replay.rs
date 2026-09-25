@@ -145,6 +145,20 @@ pub(crate) fn scenarios() -> Vec<Scenario> {
             frame_only: false,
         },
         Scenario {
+            name: "isco-pair-1024x128",
+            what: "the same pair with both panel sliders at their top, 1024 wavefront points and \
+                   128 wavefronts kept: seven times the rays of `isco-pair-128` in flight, which \
+                   is the heaviest field the panel can ask for. Not in the quick tier; run it \
+                   with `--filter 1024`",
+            duration: 50.0,
+            setup: |app| {
+                isco_pair(app, 128);
+                app.controls.rays_per_pulse = 1024;
+            },
+            view: ReferenceFrame::DistantObserver,
+            frame_only: false,
+        },
+        Scenario {
             name: "far-branch-freeze",
             what: "Bob released at r = 9 M with E = 1, L = 2.2 at a = 0.9, who freezes onto the far \
                    branch of r- at about t = 85 M. Played past that, so the frozen-observer paths - \

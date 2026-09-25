@@ -1992,6 +1992,20 @@ fn sampling_window(rect: Rect, px_per_m: f64) -> f64 {
 /// blob, which is the one thing a mark whose job is to say *where* the front is must not do.
 const COMET_WIDTH: f32 = 1.2;
 
+/// The least alpha a "Ray comets" comet is stroked at, and why those comets do not fade.
+///
+/// A mesh vertex carries a `Color32`: four bytes, premultiplied. At an alpha of 3 the amber
+/// (255, 160, 40) is stored as (3, 2, 0), at 2 as (2, 1, 0) and at 1 as (1, 1, 0), so a tail that
+/// fades through those values changes hue as it goes - amber, then red, then yellow-green - and
+/// where hundreds of tails overlap the three steps of the fade became three horizontal bands of
+/// different colour across the whole chart (seen at All with 1024 points, where the shared-out
+/// alpha reaches the floor). Six is the least alpha at which the blue channel of amber survives
+/// the rounding, so the hue holds; and a ray comet is stroked in that one colour along its whole
+/// tail, ending where `comet_tail` cuts it, because any fade would have to pass through the bad
+/// values on its way to zero. The price is dynamic range: overlaps saturate a little sooner than
+/// they would at the honest alpha of 1, which for a diagnostic is the right trade.
+const RAY_COMET_ALPHA_FLOOR: usize = 6;
+
 /// One polyline lit `head_colour` at `head` and fading linearly to nothing `fade_px` further along
 /// it, as a single anti-aliased shape.
 ///
@@ -2672,14 +2686,14 @@ Tick Enable Observer on Alice's or Bob's card",
         // k-th ray of every pulse, chosen by index and not by any property of the ray, so the chart
         // shows the whole projected null congruence with no selection in it. The head is the ray
         // at the field's clock and the tail is the pulse's `RayTrail`, the last 2.56 M of that ray
-        // on a fixed 0.02 M cadence, cut on the screen by `comet_tail` and faded by `fading_line`
-        // exactly as a column comet is. A tail stops at the first sample that found the ray dead.
+        // on a fixed 0.02 M cadence, cut on the screen by `comet_tail` exactly as a column comet
+        // is, but stroked in one flat colour rather than faded, for the reason
+        // `RAY_COMET_ALPHA_FLOOR` gives. A tail stops at the first sample that found the ray dead.
         // Brightness is overlap and nothing else, so the head alpha is shared out over the comets
-        // a pulse draws - 1200 over their count, held between 3 and 80; below 3 the premultiplied
-        // colour rounds amber to a green-yellow - and a place is bright
-        // only where many rays stand together, as the column comets are on r-. The column comets
-        // are drawn first and unchanged. Off, the field keeps no trails and this pass is skipped
-        // whole.
+        // a pulse draws - 1200 over their count, held between that floor and 80 - and a place is
+        // bright only where many rays stand together, as the column comets are on r-. The column
+        // comets are drawn first and unchanged. Off, the field keeps no trails and this pass is
+        // skipped whole.
         let draw_comets = |field: &SignalField, colour: Color32| {
             let head_colour = Color32::from_rgba_unmultiplied(
                 colour.r(),
@@ -2752,7 +2766,7 @@ Tick Enable Observer on Alice's or Bob's card",
                     continue;
                 };
                 let comets_per_pulse = pulse.rays.len().div_ceil(stride).max(1);
-                let alpha = (1200 / comets_per_pulse).clamp(3, 80) as u8;
+                let alpha = (1200 / comets_per_pulse).clamp(RAY_COMET_ALPHA_FLOOR, 80) as u8;
                 let ray_colour =
                     Color32::from_rgba_unmultiplied(colour.r(), colour.g(), colour.b(), alpha);
                 for (i, ray) in pulse.rays.iter().enumerate().step_by(stride) {
@@ -2773,13 +2787,9 @@ Tick Enable Observer on Alice's or Bob's card",
                     if tail.len() < 2 {
                         continue;
                     }
-                    painter.add(fading_line(
-                        tail,
-                        head,
-                        Theme::COMET_TAIL_PX,
-                        COMET_WIDTH,
-                        ray_colour,
-                    ));
+                    // One flat colour along the whole tail, not `fading_line`: see
+                    // `RAY_COMET_ALPHA_FLOOR` for why a ray comet must not fade.
+                    painter.add(PathShape::line(tail, Stroke::new(COMET_WIDTH, ray_colour)));
                 }
             }
         };
@@ -6432,7 +6442,7 @@ mod canvas_tests {
         // at this very instant has a single sample, where its head stands, and so no tail yet.
         let mut expected: Vec<(Pos2, u8)> = Vec::new();
         for pulse in striding.pulses.iter().filter(|p| p.emitted_t < now) {
-            let alpha = (1200 / pulse.rays.len()).clamp(3, 80) as u8;
+            let alpha = (1200 / pulse.rays.len()).clamp(RAY_COMET_ALPHA_FLOOR, 80) as u8;
             for ray in pulse.rays.iter().filter(|r| r.alive()) {
                 let head = Pos2::new(to_x(ray.r), now_y);
                 if reach.contains(head) {
@@ -6441,20 +6451,38 @@ mod canvas_tests {
             }
         }
         assert!(expected.len() > 1000, "only {} live rays to mark", expected.len());
-        let comets = faded_strokes(&shapes);
         assert_eq!(
-            comets.len(),
-            base_comets + expected.len(),
-            "one extra comet per live ray, and the column comets unchanged"
+            faded_strokes(&shapes).len(),
+            base_comets,
+            "the column comets are unchanged and a ray comet is not a faded stroke"
         );
-        let extra: Vec<&PathShape> = comets
+        // A ray comet is a flat stroke of `COMET_WIDTH` in the emitter's colour at the shared-out
+        // alpha, which nothing else on this chart strokes.
+        let extra: Vec<(Pos2, u8)> = shapes
             .iter()
-            .filter(|c| alpha_at(&c.stroke, c.points[0]) != Theme::COMET_HEAD_ALPHA)
+            .filter_map(|s| match s {
+                egui::Shape::Path(p) => match p.stroke.color {
+                    // `Color32` is premultiplied, so Bob's colour is recognised by rebuilding
+                    // it at the stroke's own alpha rather than by reading the channels back.
+                    egui::epaint::ColorMode::Solid(c)
+                        if (p.stroke.width - COMET_WIDTH).abs() < 1e-6
+                            && c.a() != Theme::COMET_HEAD_ALPHA
+                            && c == Color32::from_rgba_unmultiplied(
+                                Theme::BOB_COLOR.r(),
+                                Theme::BOB_COLOR.g(),
+                                Theme::BOB_COLOR.b(),
+                                c.a(),
+                            ) =>
+                    {
+                        Some((p.points[0], c.a()))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
             .collect();
-        assert_eq!(extra.len(), expected.len(), "the ray comets carry their own alpha");
-        for comet in &extra {
-            let head = comet.points[0];
-            let alpha = alpha_at(&comet.stroke, head);
+        assert_eq!(extra.len(), expected.len(), "one flat comet per live ray");
+        for &(head, alpha) in &extra {
             assert!(
                 expected.iter().any(|(h, a)| (*h - head).length() < 1e-3 && *a == alpha),
                 "a ray comet at {head:?} with alpha {alpha}, where no live ray stands"
