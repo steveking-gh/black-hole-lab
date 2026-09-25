@@ -2736,14 +2736,13 @@ impl SignalField {
     /// Take the side mark of the pulse just emitted, against the receiver where they now stand, and
     /// record nothing.
     ///
-    /// It is `SignalField::prime` for one pulse and with no record to reconcile.
-    /// `SignalPair::advance` gets this for free - a pulse emitted inside a step is marked by the
-    /// `detect_receptions` pass at the end of the same call, at the emission instant, because a
-    /// fresh pulse has no previous mark to sweep from - but a pulse emitted on the way *into* a step
-    /// is emitted before that pass exists. Marking it here, at the same pre-step state it was
-    /// emitted at, is what lets the sub-step that follows sweep it over the receiver; without the
-    /// mark the first sub-step would be spent establishing one and a crossing inside it would never
-    /// be seen.
+    /// It is `SignalField::prime` for one pulse and with no record to reconcile. Every emission
+    /// is followed by it, whichever of the two paths sent the pulse: `SignalPair::advance` emits
+    /// after its `detect_receptions` pass, so that the pulse the cap drops to make room has been
+    /// swept first, and `emit_due_now` emits on the way *into* a step before any pass exists.
+    /// Either way the fresh pulse is marked at the very state it was emitted at, which is what
+    /// lets the sub-step that follows sweep it over the receiver; without the mark that sub-step
+    /// would be spent establishing one and a crossing inside it would never be seen.
     pub(crate) fn mark_newest(&mut self, metric: &KerrSchild, receiver: &Observer) {
         let u_receiver = signalling_four_velocity(metric, receiver);
         if let Some(pulse) = self.pulses.back_mut() {
@@ -3146,12 +3145,11 @@ impl SignalPair<'_> {
     /// watch already reads to within `DUE_TOLERANCE`, which `Simulation::step_forward` sends here
     /// rather than splitting off a sub-step of nothing to send it at the end of.
     ///
-    /// The marking is the part that is easy to leave out. Inside `advance` a fresh pulse is marked
-    /// by the `detect_receptions` pass at the end of the same call, at the emission instant; a pulse
-    /// emitted before the clock moves has no such pass behind it, so `SignalField::mark_newest`
-    /// takes the mark here, at the same state the pulse was emitted at. The sub-step that follows
-    /// then sweeps it from that mark like any other pulse, and a crossing inside that sub-step is
-    /// seen. Nothing is recorded twice: this pass records nothing at all.
+    /// The marking is the part that is easy to leave out. A fresh pulse has no side mark until
+    /// something takes one, and `SignalField::mark_newest` takes it here, at the same state the
+    /// pulse was emitted at, exactly as `advance` does after its own emissions. The sub-step that
+    /// follows then sweeps it from that mark like any other pulse, and a crossing inside that
+    /// sub-step is seen. Nothing is recorded twice: this pass records nothing at all.
     pub fn emit_due_now(&mut self, metric: &KerrSchild, alice: Endpoint<'_>, bob: Endpoint<'_>) {
         if let Some(al) = alice.sender()
             && self.alice.emit_if_due(metric, al)
@@ -3200,10 +3198,18 @@ impl SignalPair<'_> {
 
     /// Carry both transmissions forward by dt of the simulation clock.
     ///
-    /// The order matters and is the same for each field. Advancing first and emitting second keeps
-    /// a fresh pulse at its emitter's current event instead of one step behind it, and detecting
-    /// last means a pulse emitted this frame already has a recorded side for its receiver before
-    /// the next frame can move it.
+    /// The order matters and is the same for each field: advance, detect, emit, then mark the pulse
+    /// just sent. Advancing first and emitting after keeps a fresh pulse at its emitter's current
+    /// event instead of one step behind it. Detecting *before* emitting is what the cap demands:
+    /// `emit_if_due` drops the oldest pulse to make room, and a pulse dropped before the pass has
+    /// run has made its last sweep for nothing - on the isco-pair-128 run one real arrival, Bob's
+    /// pulse #199 reaching Alice at t = 41.22 in the middle of a train of them, went missing that
+    /// way. Marking last is what the fresh pulse demands: a pulse's first scan only takes its side
+    /// mark and records nothing (see `Pulse::scan`), so a pulse left unmarked until the next pass
+    /// would spend that sub-step establishing a mark and miss any crossing inside it.
+    /// `mark_newest` takes the mark at the emission event and costs nothing. Until 2026-09-24 the
+    /// two fields ran in two different orders, each losing one of these: Alice's emitted and then
+    /// detected, Bob's detected and then emitted, from 819d28a on with no reason recorded.
     ///
     /// What this does *not* own any more is where inside a step a pulse is emitted. A pulse is due
     /// at an event on its emitter's worldline, and `Simulation::step_forward` cuts its sub-steps at
@@ -3218,6 +3224,16 @@ impl SignalPair<'_> {
     /// to hear it, and it goes on being carried and drawn. What does stop is the record. A
     /// reception is a crossing of a receiver's worldline, so with no receiver there is nothing to
     /// detect and nothing is written down.
+    ///
+    /// The two fields run side by side, one scoped thread each. Each field's chain - silence,
+    /// advance, emit, detect - touches only that field and reads the two observers, so the two
+    /// chains share nothing mutable and are independent; each is about a third of a played frame.
+    /// A scoped thread per field joins at the scope's closing brace, so both borrows are provably
+    /// released before anything paints, and the results never leave the calling thread's memory:
+    /// the fields are written in place, not sent back. One spawn per field per sub-step costs tens
+    /// of microseconds on Windows against milliseconds of ray integration. Each field does the same
+    /// arithmetic whether the two run side by side or one after the other, so the threads change
+    /// nothing in the physics.
     pub fn advance(
         &mut self,
         metric: &KerrSchild,
@@ -3225,26 +3241,34 @@ impl SignalPair<'_> {
         alice: Endpoint<'_>,
         bob: Endpoint<'_>,
     ) {
-        if alice.sender().is_none() {
-            self.alice.silence();
+        // One field's step, the same for both. The pairing is the caller's: a field's emitter is
+        // the endpoint that sends it and its receiver is the other one.
+        fn chain(
+            metric: &KerrSchild,
+            dt: f64,
+            field: &mut SignalField,
+            emitter: Endpoint<'_>,
+            receiver: Endpoint<'_>,
+        ) {
+            if emitter.sender().is_none() {
+                field.silence();
+            }
+            field.advance(metric, dt);
+            if let Some(r) = receiver.observer {
+                field.detect_receptions(metric, r);
+            }
+            if let Some(e) = emitter.sender()
+                && field.emit_if_due(metric, e)
+                && let Some(r) = receiver.observer
+            {
+                field.mark_newest(metric, r);
+            }
         }
-        if bob.sender().is_none() {
-            self.bob.silence();
-        }
-        self.alice.advance(metric, dt);
-        self.bob.advance(metric, dt);
-        if let Some(al) = alice.sender() {
-            self.alice.emit_if_due(metric, al);
-        }
-        if let Some(al) = alice.observer {
-            self.bob.detect_receptions(metric, al);
-        }
-        if let Some(b) = bob.sender() {
-            self.bob.emit_if_due(metric, b);
-        }
-        if let Some(b) = bob.observer {
-            self.alice.detect_receptions(metric, b);
-        }
+        let (alice_field, bob_field) = (&mut *self.alice, &mut *self.bob);
+        std::thread::scope(|s| {
+            s.spawn(|| chain(metric, dt, alice_field, alice, bob));
+            s.spawn(|| chain(metric, dt, bob_field, bob, alice));
+        });
     }
 
     /// Carry both transmissions back by dt of coordinate time, undoing `advance` rather than
@@ -3267,20 +3291,29 @@ impl SignalPair<'_> {
         alice: Option<&Observer>,
         bob: Option<&Observer>,
     ) {
-        self.alice.step_back(metric, dt);
-        self.bob.step_back(metric, dt);
         // Each field is primed against its own receiver: Alice's transmission is received by Bob,
         // and Bob's by Alice. A field's own clock is the time its rewind landed on, which is the
         // target the priming pass reconciles the reception record against. A field with no receiver
         // has no sides to re-establish and nothing to reconcile, so it is left as the rewind left
-        // it.
-        let (alice_target, bob_target) = (self.alice.t, self.bob.t);
-        if let Some(b) = bob {
-            self.alice.prime(metric, b, alice_target);
+        // it. The two fields rewind side by side on scoped threads, for the reasons `advance`
+        // gives: each field's rewind and priming reads only that field and its receiver.
+        fn chain(
+            metric: &KerrSchild,
+            dt: f64,
+            field: &mut SignalField,
+            receiver: Option<&Observer>,
+        ) {
+            field.step_back(metric, dt);
+            let target = field.t;
+            if let Some(r) = receiver {
+                field.prime(metric, r, target);
+            }
         }
-        if let Some(al) = alice {
-            self.bob.prime(metric, al, bob_target);
-        }
+        let (alice_field, bob_field) = (&mut *self.alice, &mut *self.bob);
+        std::thread::scope(|s| {
+            s.spawn(|| chain(metric, dt, alice_field, bob));
+            s.spawn(|| chain(metric, dt, bob_field, alice));
+        });
     }
 
     /// Set how many rays the next pulse of *either* transmission will carry.
