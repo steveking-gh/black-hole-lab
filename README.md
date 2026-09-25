@@ -304,11 +304,11 @@ radius r = 0.  In `region III`, the arrow of time once again points toward the
 future and an observer can move around in 3 dimensions.
 
 If you enter `region III` with enough angular momentum, you swing back outward
-toward the underside of the inner horizon.  In the coordinate time, this
-approach is asymptotic so the simulation can never show an observer crossing
-back through r_.  However, in the proper time of the observer, this crossing
-happens quickly.  According to general relativity, the observer finds himself in
-an entirely different spacetime and *not* the black hole!
+toward the underside of the inner horizon.  This approach is asymptotic in the
+simulation's coordinate time, so the simulation never shows a crossing back
+through r_.  However, in the proper time of the observer, this crossing happens
+quickly.  According to general relativity, the observer finds himself in an
+entirely different spacetime and *not* the black hole!
 
 
 
