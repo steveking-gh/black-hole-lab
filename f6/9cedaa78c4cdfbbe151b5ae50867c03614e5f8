@@ -1,0 +1,23 @@
+src/physics/wavefront.rs
+  s_441b3865051272::t_df4bfd7b8b7b0f 3201-3212
+  s_441b3865051272::t_8bd8e0b589da72 3148-3152
+  s_441b3865051272::t_932991496ce547 2739-2745
+  s_441b3865051272::t_3ba3d524537e0d 3227-3236,3244-3258,3265,3267-3271,3298-3310,3312-3316
+  s_441b3865051272::t_d422715657657a 3259-3264
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f69cedaa78c4cdfbbe151b5ae50867c03614e5f8",
+  "prompts": {},
+  "sessions": {
+    "s_441b3865051272": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b99ed06d-53e4-4aae-93f2-9c8943b3afb7",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
