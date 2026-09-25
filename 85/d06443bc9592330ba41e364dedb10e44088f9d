@@ -1,0 +1,29 @@
+src/gui/spacetime_canvas.rs
+  s_8aa93072b73a6b::t_12140e3905baa6 6465-6466,6469-6475
+  s_8aa93072b73a6b::t_08e63b79e3a4e9 1995-2008,2689-2691,2693-2696,2769,2790-2792,6445,6455-6457,6459-6461,6463-6464,6467-6468,6476-6482,6484-6485
+src/perf/replay.rs
+  s_8aa93072b73a6b::t_2c44e7821dbef4 148,153-160
+  s_8aa93072b73a6b::t_b6868e3d531174 149-152
+  s_8aa93072b73a6b::t_6c769d4197ffb2 147
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "85d06443bc9592330ba41e364dedb10e44088f9d",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_8aa93072b73a6b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "50fc83b7-c9fd-4cee-9aaa-b8e3131a67f9",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
