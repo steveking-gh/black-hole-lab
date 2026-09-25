@@ -515,7 +515,9 @@ pub(crate) fn benches(fx: &Fixtures) -> Vec<Bench<'_>> {
     warm!(
         "paint/spatial-canvas",
         "one headless pass painting the equatorial (x, y) view of the same state: every front as a \
-         closed polyline of 144 points",
+         closed polyline of 144 points. Both fields are over `PARALLEL_FRONT_RAYS`, so their fronts \
+         are built and tessellated on worker threads inside the pass, and this row carries a \
+         tessellation the other paint rows leave to egui's end of frame",
         {
             let ctx = headless_context();
             let mut canvas = SpatialCanvas::default();

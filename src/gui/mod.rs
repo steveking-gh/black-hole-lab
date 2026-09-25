@@ -4,6 +4,7 @@ pub mod units;
 pub mod beacon_colour;
 pub mod theme;
 pub mod polyline;
+pub mod mesh_pool;
 pub mod spacetime_canvas;
 pub mod spatial_canvas;
 pub mod cauchy_effects;

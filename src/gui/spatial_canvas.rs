@@ -1,4 +1,5 @@
 use crate::gui::units::UnitLabels;
+use crate::gui::mesh_pool::{MeshBuilder, TessellationSetup, build_meshes, mesh_workers};
 use crate::gui::controls::{ReferenceFrame, SignalViews};
 use crate::gui::polyline::{SCREEN_SPACING, thin_to_pixels};
 use crate::gui::numbers;
@@ -532,24 +533,36 @@ impl SpatialCanvas {
         // so the fronts read as something moving through the field rather than as part of the
         // observers' own trajectories. Bob's goes down first and Alice's over it, so where the two
         // overlap it is the heavier, primary field that stays legible.
-        draw_signal_field(
-            &painter,
-            metric,
-            signals.bob,
-            Theme::BOB_COLOR,
-            Theme::SECONDARY_FRONT_WIDTH,
-            style,
-            &to_screen,
-        );
-        draw_signal_field(
-            &painter,
-            metric,
-            signals.alice,
-            Theme::ALICE_COLOR,
-            1.0,
-            style,
-            &to_screen,
-        );
+        //
+        // A heavy field is drawn on several threads, a light one on this thread alone, and both
+        // ways put the same triangles on the screen; see `draw_signal_fields_parallel`. The meshes
+        // the threads hand back are tessellated for this painter as it stands, so a painter that
+        // egui would tint or move after the fact - faded out, or on a transformed layer, neither
+        // of which this canvas ever is - is left to the serial path.
+        let fields = [
+            (signals.bob, Theme::BOB_COLOR, Theme::SECONDARY_FRONT_WIDTH),
+            (signals.alice, Theme::ALICE_COLOR, 1.0),
+        ];
+        let heavy = fields.iter().any(|(signal, _, _)| field_rays(signal) >= PARALLEL_FRONT_RAYS);
+        if heavy
+            && painter.opacity() >= 1.0
+            && ui.ctx().layer_transform_to_global(painter.layer_id()).is_none()
+        {
+            let setup = TessellationSetup::capture(ui.ctx());
+            draw_signal_fields_parallel(
+                &painter,
+                &setup,
+                metric,
+                fields,
+                style,
+                &to_screen,
+                mesh_workers() + 1,
+            );
+        } else {
+            for (signal, colour, width) in fields {
+                draw_signal_field(&painter, metric, signal, colour, width, style, &to_screen);
+            }
+        }
 
         // 5. Both worldline trails, drawn together and before anything that sits on them: the
         // reception ticks below and the observers' own markers.
@@ -1596,19 +1609,20 @@ const MAX_TRAIL_MESH_VERTICES: usize = 65_532;
 /// r- has dr/dt -> 0 but goes on co-rotating at Omega_-, so it moves tangentially and does have a
 /// heading. Zero is returned for the first case and never invented for it.
 ///
-/// `eps` carries the step that last worked from ray to ray. The zoom cannot change within a frame,
-/// so once one ray has found a step long enough to read a direction off, every other ray of the
-/// field starts from that step instead of walking up to it again. It matters because a projection
-/// is not always cheap: `Camera::project` strikes the camera's basis with two sin_cos calls every
-/// time it is asked, so the difference between one probe per ray and three is measurable on the
-/// 2D+1 volume's floor.
+/// `probe` carries the step that last worked from ray to ray. The zoom cannot change within a
+/// frame, so once one ray has found a step long enough to read a direction off, every other ray of
+/// the field starts from that step instead of walking up to it again. It matters because a
+/// projection is not always cheap: `Camera::project` strikes the camera's basis with two sin_cos
+/// calls every time it is asked, so the difference between one probe per ray and three is
+/// measurable on the 2D+1 volume's floor.
 fn screen_velocity<F: Fn((f64, f64)) -> Pos2>(
     metric: &KerrSchild,
     ray: &NullRay,
     at: Pos2,
     to_screen: &F,
-    eps: &mut f64,
+    probe: &mut ProbeStep,
 ) -> Vec2 {
+    let eps = &mut probe.eps;
     let (x, y) = metric.cartesian_position(ray.r, ray.phi);
     let (vx, vy) = metric.cartesian_velocity(ray.r, ray.phi, ray.dr_dt, ray.dphi_dt);
     let speed = vx.hypot(vy);
@@ -1622,6 +1636,9 @@ fn screen_velocity<F: Fn((f64, f64)) -> Pos2>(
             // The step is what one `eps` of chart length along the light's direction is worth on
             // screen, and the light covers `speed` of that chart length per M of coordinate time.
             let velocity = step * ((speed / *eps) as f32);
+            if probe.first == FirstProbe::NotYet {
+                probe.first = FirstProbe::Found(*eps);
+            }
             return if velocity.is_finite() { velocity } else { Vec2::ZERO };
         }
         *eps *= TRAIL_PROBE_GROWTH;
@@ -1629,7 +1646,54 @@ fn screen_velocity<F: Fn((f64, f64)) -> Pos2>(
     // Nothing at any step: the step is put back where it started so that a ray whose own velocity
     // is what vanished cannot leave the whole field probing at a step a hundred thousand M long.
     *eps = TRAIL_PROBE_EPS;
+    if probe.first == FirstProbe::NotYet {
+        probe.first = FirstProbe::GaveUp;
+    }
     Vec2::ZERO
+}
+
+/// The probe step `screen_velocity` carries from ray to ray, and what the first ray to use it made
+/// of it.
+///
+/// The step is state, and state is what a field split into chunks has to reproduce. The serial
+/// painter walks every ray of a field with one step; a chunk drawn on its own thread starts from
+/// `TRAIL_PROBE_EPS` at its first pulse, while the serial walk arrives there carrying whatever the
+/// rays before it left. The two agree at a ray whenever they probe it from the same step, and the
+/// rungs of the ladder are the same numbers on both walks - each is `TRAIL_PROBE_EPS` grown by
+/// `TRAIL_PROBE_GROWTH` some whole number of times, by the same multiplications. So a chunk's first
+/// probe settles the question. If its walk up from the bottom rung found its step at or above the
+/// step the serial walk carried in, it passed through that step on the way and failed at every rung
+/// below it, and from that ray on the two walks are one walk. Otherwise the chunk is drawn again
+/// from the carried step. See `draw_signal_fields_parallel`, which is where that is decided.
+///
+/// A zoom where some rays of a field read a pixel off the bottom rung and some fall just short is
+/// the case this exists for: on the equatorial view it is a zoom within rounding of 100 px/M, where
+/// 1e-2 M is one pixel.
+#[derive(Clone, Copy, Debug)]
+struct ProbeStep {
+    /// The step the next ray starts from, in M.
+    eps: f64,
+    /// What the first ray to be probed made of the step, which is what decides whether a chunk's
+    /// fades are the serial ones.
+    first: FirstProbe,
+}
+
+impl ProbeStep {
+    /// A walk starting from `eps`, before any ray has been probed.
+    fn from(eps: f64) -> Self {
+        Self { eps, first: FirstProbe::NotYet }
+    }
+}
+
+/// How the first ray to be probed ended its walk up the ladder of `ProbeStep`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum FirstProbe {
+    /// No ray has been probed: every one was dead, or stood still in the chart.
+    NotYet,
+    /// It read its direction off this step.
+    Found(f64),
+    /// It read nothing at any step, and the step went back to `TRAIL_PROBE_EPS`.
+    GaveUp,
 }
 
 /// The fade behind one ray: which way the light there is going on screen, and how far back the fade
@@ -1681,16 +1745,37 @@ impl Trail {
 /// `MAX_ARC_STEP` for what the fade is and why its direction is the ray velocity.
 struct Trails {
     /// One mesh while a field's fade fits in one, and a new one past `MAX_TRAIL_MESH_VERTICES`.
+    /// Always the one mesh when the bands are being recorded.
     meshes: Vec<egui::Mesh>,
     /// Vertices a fresh mesh takes room for: a field's worth, so that the ordinary field is one
     /// allocation rather than a doubling run that copies more than a megabyte of vertices for
     /// nothing. See where `Trails::new` is called for where the estimate comes from.
     reserve: usize,
+    /// Where each band laid lies in the one mesh, when this is one chunk of a field being drawn on
+    /// its own thread; None when it is the whole field. A chunk cannot split its mesh where the
+    /// serial painter would, since that depends on how many vertices every chunk before it laid,
+    /// so it lays all of its bands into one mesh and says where each is. `ChunkTrails::assemble`
+    /// puts them back together.
+    bands: Option<Vec<TrailBand>>,
+}
+
+/// One band of fade laid into a chunk's mesh: its vertices and its indices, as ranges of that
+/// mesh, and the bounds of its vertices, which are the bounds egui culls a mesh by.
+#[derive(Clone, Copy)]
+struct TrailBand {
+    vertices: (u32, u32),
+    indices: (u32, u32),
+    bounds: egui::Rect,
 }
 
 impl Trails {
     fn new(reserve: usize) -> Self {
-        Self { meshes: Vec::new(), reserve }
+        Self { meshes: Vec::new(), reserve, bands: None }
+    }
+
+    /// Trails for one chunk of a field, laid into one mesh with every band recorded.
+    fn recording(reserve: usize) -> Self {
+        Self { meshes: Vec::new(), reserve, bands: Some(Vec::new()) }
     }
 
     /// Lay the fade behind one drawn band of a front.
@@ -1724,7 +1809,10 @@ impl Trails {
         if band.len() < 2 || pieces == 0 || from.length.max(to.length) < TRAIL_MIN_PX {
             return;
         }
-        let full = |m: &egui::Mesh| m.vertices.len() + 2 * band.len() > MAX_TRAIL_MESH_VERTICES;
+        let recording = self.bands.is_some();
+        let full = |m: &egui::Mesh| {
+            !recording && m.vertices.len() + 2 * band.len() > MAX_TRAIL_MESH_VERTICES
+        };
         if self.meshes.last().is_none_or(full) {
             let mut mesh = egui::Mesh::default();
             mesh.reserve_vertices(self.reserve);
@@ -1737,6 +1825,7 @@ impl Trails {
         // one piece between two neighbouring rays, so both of its points take that path and the
         // general case below is paid for only where the arc had to be cut up.
         let (at_start, at_end) = (-from.heading * from.length, -to.heading * to.length);
+        let (first_vertex, first_index) = (mesh.vertices.len() as u32, mesh.indices.len() as u32);
         for (k, at) in band.iter().enumerate() {
             let step = first + k;
             // No heading, no trail at this vertex: the tail sits on the front and the strip closes
@@ -1763,6 +1852,17 @@ impl Trails {
                 mesh.add_triangle(base - 2, base + 1, base);
             }
         }
+        if let Some(bands) = &mut self.bands {
+            let laid = &mesh.vertices[first_vertex as usize..];
+            bands.push(TrailBand {
+                vertices: (first_vertex, mesh.vertices.len() as u32),
+                indices: (first_index, mesh.indices.len() as u32),
+                bounds: laid.iter().fold(egui::Rect::NOTHING, |mut bounds, vertex| {
+                    bounds.extend_with(vertex.pos);
+                    bounds
+                }),
+            });
+        }
     }
 
     /// Everything laid, as the one shape that goes into the slot taken before the field's first
@@ -1773,6 +1873,12 @@ impl Trails {
     }
 }
 
+/// Paint one transmission: every live front of `signal` as its bands of shift colour with the
+/// trailing fade under them, and the emission dot of each pulse, through `to_screen`.
+///
+/// This is the serial painter, and the definition of the picture: `draw_signal_fields_parallel`
+/// draws the equatorial view's heavy fields on several threads, and what it hands egui is proved
+/// to tessellate to exactly what this does. The 2D+1 volume's floor draws through this directly.
 pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
     painter: &egui::Painter,
     metric: &KerrSchild,
@@ -1782,6 +1888,74 @@ pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
     style: FrontStyle,
     to_screen: &F,
 ) {
+    // How many vertices the mesh is expected to want. Each of a pulse's n rays begins one segment,
+    // a segment whose two rays have not wound far apart is one band of the two ray positions, and
+    // a band of m points carries 2m vertices: four vertices per ray, which is 36 864 for the
+    // default field of 64 pulses of 144 rays and 37 336 measured on a real one. The deep interior
+    // cuts a segment into hundreds of pieces and runs past the estimate, and the mesh then grows as
+    // any vector does; the estimate is here so that the ordinary field is one allocation rather
+    // than a doubling run through a megabyte of vertices.
+    let trails = Trails::new(if style.arcs {
+        trail_reserve(signal, 0..signal.pulses.len()).min(MAX_TRAIL_MESH_VERTICES)
+    } else {
+        0
+    });
+    let front = front_shapes(
+        metric,
+        signal,
+        0..signal.pulses.len(),
+        emission_colour,
+        width_scale,
+        style,
+        to_screen,
+        trails,
+        ProbeStep::from(TRAIL_PROBE_EPS),
+    );
+    // The trailing fades of the whole field go down first, so every fade lies under every line of
+    // this field however late the pulse that cast it is reached. With the arcs off there are no
+    // lines to annotate and there is no slot at all; with them on and no fade cast, the slot is
+    // left empty. One `Shape::Vec` because the mesh is split when it grows past what a 16-bit
+    // index can reach; at the default settings it is one mesh of about 37 000 vertices, against
+    // the 9 216 line shapes it lies under.
+    if style.arcs {
+        painter.add(front.trails.shape().unwrap_or(egui::Shape::Noop));
+    }
+    painter.extend(front.shapes);
+}
+
+/// Four trail vertices a ray over the pulses in `pulses`: see where `draw_signal_field` reserves.
+fn trail_reserve(signal: &SignalField, pulses: std::ops::Range<usize>) -> usize {
+    4 * signal.pulses.range(pulses).map(|pulse| pulse.rays.len()).sum::<usize>()
+}
+
+/// What `front_shapes` makes of a run of pulses: the fades, the shapes that lie over them in the
+/// order they are to be painted, and the probe step as the last ray left it.
+struct FrontShapes {
+    trails: Trails,
+    shapes: Vec<egui::Shape>,
+    probe: ProbeStep,
+}
+
+/// The shapes of the pulses `pulses` of `signal`, built without a painter: the pure half of
+/// `draw_signal_field`, which can therefore run on any thread.
+///
+/// `pulses` restricts the pulses drawn and nothing else. Every pulse is still reached by its index
+/// in the whole field, so the gap that bounds a fade is read off the pulse's true neighbours at
+/// k - 1 and k + 1 even where one of them lies across the edge of the run. `trails` is what the
+/// fades are laid into, and `probe` the step the first ray is probed from.
+#[allow(clippy::too_many_arguments)]
+fn front_shapes<F: Fn((f64, f64)) -> Pos2>(
+    metric: &KerrSchild,
+    signal: &SignalField,
+    pulses: std::ops::Range<usize>,
+    emission_colour: Color32,
+    width_scale: f32,
+    style: FrontStyle,
+    to_screen: &F,
+    mut trails: Trails,
+    mut probe: ProbeStep,
+) -> FrontShapes {
+    let mut shapes: Vec<egui::Shape> = Vec::new();
     // `derivatives` reads only (E, L) off the state and takes the radius as an argument, so one
     // instance of the raindrop congruence serves every ray of every pulse.
     let raindrop = GeodesicState::new_infall(metric, 0.0, 12.0, 1.0, 0.0);
@@ -1793,28 +1967,9 @@ pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
         emission_colour.b(),
         150,
     );
-    // The trailing fades of the whole field, and the place on the painter they will be put. The
-    // slot is taken before any pulse is drawn, so every fade lies under every line of this field
-    // however late the pulse that cast it is reached. With the arcs off there are no lines to
-    // annotate and no slot is taken at all.
-    let trail_slot = style.arcs.then(|| painter.add(egui::Shape::Noop));
-    // The probe step `screen_velocity` reads a screen velocity over, carried across every ray of
-    // every pulse of the field: see that function.
-    let mut probe_eps = TRAIL_PROBE_EPS;
-    // How many vertices the mesh is expected to want. Each of a pulse's n rays begins one segment,
-    // a segment whose two rays have not wound far apart is one band of the two ray positions, and
-    // a band of m points carries 2m vertices: four vertices per ray, which is 36 864 for the
-    // default field of 64 pulses of 144 rays and 37 336 measured on a real one. The deep interior
-    // cuts a segment into hundreds of pieces and runs past the estimate, and the mesh then grows as
-    // any vector does; the estimate is here so that the ordinary field is one allocation rather
-    // than a doubling run through a megabyte of vertices.
-    let mut trails = Trails::new(if style.arcs {
-        (4 * signal.pulses.iter().map(|pulse| pulse.rays.len()).sum::<usize>())
-            .min(MAX_TRAIL_MESH_VERTICES)
-    } else {
-        0
-    });
-    for (k, pulse) in signal.pulses.iter().enumerate() {
+    // The probe step `screen_velocity` reads a screen velocity over is carried across every ray of
+    // every pulse drawn here: see that function, and `ProbeStep`.
+    for (k, pulse) in pulses.clone().zip(signal.pulses.range(pulses)) {
         // A spent pulse is kept in the field so that stepping backwards can bring it back, but it
         // has no front left to draw and no dot to anchor.
         if !pulse.rays.iter().any(|ray| ray.alive()) {
@@ -1892,7 +2047,7 @@ pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
                     }
                     let elapsed = (ray.t - pulse.emitted_t) as f32;
                     Trail::of(
-                        screen_velocity(metric, ray, *at, to_screen, &mut probe_eps),
+                        screen_velocity(metric, ray, *at, to_screen, &mut probe),
                         gap,
                         elapsed,
                     )
@@ -1949,7 +2104,7 @@ pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
                 // head is this band's own colour, the very colour and opacity the line beside it is
                 // stroked in, and it falls from there to nothing.
                 trails.band(&band, first, pieces, (fades[i], fades[j]), colour);
-                painter.add(egui::Shape::line(band, Stroke::new(1.2 * width_scale, colour)));
+                shapes.push(egui::Shape::line(band, Stroke::new(1.2 * width_scale, colour)));
                 first += advance;
             }
         }
@@ -1961,25 +2116,290 @@ pub(crate) fn draw_signal_field<F: Fn((f64, f64)) -> Pos2>(
                 // The calculated point itself: with the arcs on it is implied by the two segments
                 // meeting there, with them off it is all there is of this ray, and at the end of a
                 // segment dropped for winding it is what is left once the inference is withdrawn.
-                painter.circle_filled(
+                shapes.push(egui::Shape::circle_filled(
                     *point,
                     FRONT_POINT_RADIUS * width_scale,
                     Theme::front_colour(gains[i], Theme::SHIFT_ALPHA),
-                );
+                ));
             }
         }
         // The anchor: where on Alice's trail this loop was let go of.
         let emitted = to_screen(metric.cartesian_position(pulse.emitted_r, pulse.emitted_phi));
-        painter.circle_filled(emitted, 2.0, dot);
+        shapes.push(egui::Shape::circle_filled(emitted, 2.0, dot));
+    }
+    FrontShapes { trails, shapes, probe }
+}
+
+/// The fewest rays, live or spent, a transmission has to hold before the equatorial view draws it
+/// on several threads rather than on the calling one.
+///
+/// Below it the spawns cost more than the drawing they would share out: the whole field is a
+/// fraction of a millisecond. Both paths put the same triangles on the screen - see
+/// `draw_signal_fields_parallel` - so where the line falls changes nothing that can be seen. At the
+/// panel's defaults, 64 pulses of 144 rays, a field is well over it.
+pub(crate) const PARALLEL_FRONT_RAYS: usize = 4096;
+
+/// Every ray a field holds, live or spent: what `PARALLEL_FRONT_RAYS` is measured against.
+fn field_rays(signal: &SignalField) -> usize {
+    signal.pulses.iter().map(|pulse| pulse.rays.len()).sum()
+}
+
+/// One chunk of a field as the thread that drew it hands it back: its fades, its lines and dots
+/// already tessellated where they can be, and the probe step its rays left.
+struct FrontChunk {
+    trails: ChunkTrails,
+    lines: Vec<egui::Shape>,
+    probe: ProbeStep,
+}
+
+/// The fades of one chunk of a field: every band laid into the one mesh, and where each band lies
+/// in it. See `Trails::recording`.
+struct ChunkTrails {
+    mesh: egui::Mesh,
+    bands: Vec<TrailBand>,
+}
+
+/// A run of consecutive bands of one chunk, all of which egui would have kept, and the bounds of
+/// their vertices.
+struct TrailPiece {
+    chunk: usize,
+    bands: std::ops::Range<usize>,
+    bounds: egui::Rect,
+}
+
+impl ChunkTrails {
+    /// The fades of a whole field, from its chunks in order, as the meshes to hand egui: exactly
+    /// the vertices and triangles egui would have kept of the serial painter's `Trails`, in the
+    /// same order.
+    ///
+    /// Order alone is not enough, because egui culls a mesh whole, by the bounds of all of its
+    /// vertices, and the serial painter's meshes are not the chunks'. It cuts a new mesh wherever
+    /// the one in hand would pass `MAX_TRAIL_MESH_VERTICES`, counting from the first band of the
+    /// field. So the cut is replayed here over the bands every chunk recorded, which is cheap - a
+    /// count and a union of bounds per band - and each of the serial meshes is judged by the bounds
+    /// it would have had. Of the bands that survive, each chunk's consecutive run is handed over as
+    /// one mesh, and where a run's own bounds would not survive egui's cull it is joined to its
+    /// neighbours until the joined bounds do. A join copies vertices, and only a view with most of
+    /// a field off the canvas makes one; a chunk whose every band survives is handed over as the
+    /// mesh it already is.
+    fn assemble(mut chunks: Vec<ChunkTrails>, judge: &MeshBuilder) -> Vec<egui::Shape> {
+        // Which of the serial painter's meshes each band would have gone into, and their bounds.
+        let mut meshes: Vec<(usize, egui::Rect)> = Vec::new();
+        let mut belongs: Vec<Vec<usize>> = Vec::with_capacity(chunks.len());
+        for chunk in &chunks {
+            let mut of = Vec::with_capacity(chunk.bands.len());
+            for band in &chunk.bands {
+                let laid = (band.vertices.1 - band.vertices.0) as usize;
+                if meshes.last().is_none_or(|(held, _)| held + laid > MAX_TRAIL_MESH_VERTICES) {
+                    meshes.push((0, egui::Rect::NOTHING));
+                }
+                let last = meshes.len() - 1;
+                meshes[last].0 += laid;
+                meshes[last].1 = meshes[last].1.union(band.bounds);
+                of.push(last);
+            }
+            belongs.push(of);
+        }
+        let kept: Vec<bool> = meshes.iter().map(|(_, bounds)| judge.keeps(*bounds)).collect();
+
+        // The surviving bands, as each chunk's runs of them.
+        let mut pieces: Vec<TrailPiece> = Vec::new();
+        for (c, chunk) in chunks.iter().enumerate() {
+            let mut open: Option<TrailPiece> = None;
+            for (b, band) in chunk.bands.iter().enumerate() {
+                if kept[belongs[c][b]] {
+                    let piece = open.get_or_insert(TrailPiece {
+                        chunk: c,
+                        bands: b..b,
+                        bounds: egui::Rect::NOTHING,
+                    });
+                    piece.bands.end = b + 1;
+                    piece.bounds = piece.bounds.union(band.bounds);
+                } else if let Some(piece) = open.take() {
+                    pieces.push(piece);
+                }
+            }
+            pieces.extend(open);
+        }
+
+        // Runs joined until egui would keep each. What is left at the end joins the last mesh
+        // handed over; it cannot be all there is, since a mesh egui keeps has bounds on the canvas
+        // and its bands are among these.
+        let mut handed: Vec<Vec<TrailPiece>> = Vec::new();
+        let mut joining: Vec<TrailPiece> = Vec::new();
+        let mut bounds = egui::Rect::NOTHING;
+        for piece in pieces {
+            bounds = bounds.union(piece.bounds);
+            joining.push(piece);
+            if judge.keeps(bounds) {
+                handed.push(std::mem::take(&mut joining));
+                bounds = egui::Rect::NOTHING;
+            }
+        }
+        if !joining.is_empty() {
+            match handed.last_mut() {
+                Some(last) => last.append(&mut joining),
+                None => handed.push(joining),
+            }
+        }
+
+        handed
+            .into_iter()
+            .map(|pieces| {
+                let whole = |piece: &TrailPiece| {
+                    piece.bands.start == 0 && piece.bands.end == chunks[piece.chunk].bands.len()
+                };
+                if let [piece] = pieces.as_slice()
+                    && whole(piece)
+                {
+                    return egui::Shape::mesh(std::mem::take(&mut chunks[piece.chunk].mesh));
+                }
+                let mut mesh = egui::Mesh::default();
+                for piece in &pieces {
+                    let from = &chunks[piece.chunk];
+                    let first = from.bands[piece.bands.start];
+                    let last = from.bands[piece.bands.end - 1];
+                    let (v0, v1) = (first.vertices.0, last.vertices.1);
+                    let (i0, i1) = (first.indices.0, last.indices.1);
+                    let offset = mesh.vertices.len() as u32;
+                    mesh.vertices.extend_from_slice(&from.mesh.vertices[v0 as usize..v1 as usize]);
+                    mesh.indices.extend(
+                        from.mesh.indices[i0 as usize..i1 as usize]
+                            .iter()
+                            .map(|index| index - v0 + offset),
+                    );
+                }
+                egui::Shape::mesh(mesh)
+            })
+            .collect()
+    }
+}
+
+/// One chunk of a field, drawn and tessellated: the pulses `pulses` of `signal`, as
+/// `front_shapes` makes them with the probe starting from `eps`, the fades recorded band by band
+/// and everything else put through a `MeshBuilder` of this frame's `setup`, culled against `clip`.
+#[allow(clippy::too_many_arguments)]
+fn front_chunk<F: Fn((f64, f64)) -> Pos2>(
+    setup: &TessellationSetup,
+    clip: egui::Rect,
+    metric: &KerrSchild,
+    (signal, emission_colour, width_scale): (&SignalField, Color32, f32),
+    pulses: std::ops::Range<usize>,
+    style: FrontStyle,
+    to_screen: &F,
+    eps: f64,
+) -> FrontChunk {
+    let reserve = if style.arcs { trail_reserve(signal, pulses.clone()) } else { 0 };
+    let front = front_shapes(
+        metric,
+        signal,
+        pulses,
+        emission_colour,
+        width_scale,
+        style,
+        to_screen,
+        Trails::recording(reserve),
+        ProbeStep::from(eps),
+    );
+    let lines = setup.builder(clip).tessellate(front.shapes);
+    let Trails { mut meshes, bands, .. } = front.trails;
+    FrontChunk {
+        trails: ChunkTrails {
+            mesh: meshes.pop().unwrap_or_default(),
+            bands: bands.unwrap_or_default(),
+        },
+        lines,
+        probe: front.probe,
+    }
+}
+
+/// Paint both transmissions, Bob's then Alice's as `fields` gives them, exactly as two calls of
+/// `draw_signal_field` would - the same triangles, in the same order - with the building and the
+/// tessellating shared out over threads.
+///
+/// Each field holding `PARALLEL_FRONT_RAYS` rays or more is cut into `chunks` runs of consecutive
+/// pulses, and a smaller one is one run; every run is a job for `mesh_pool::build_meshes`, which
+/// builds its shapes with `front_shapes` and tessellates them into meshes on whatever thread takes
+/// it. The painter is only touched here, on the calling thread, once every job is in: per field,
+/// the fades of every run first and then its lines and dots run by run, which is the order the
+/// serial painter lays them in - the whole haze of a field under the whole of its fronts.
+///
+/// Two things carry from pulse to pulse on the serial painter, and a run starting part of the way
+/// through a field has to reproduce both. The gap that bounds a fade is read off a pulse's
+/// neighbours in the whole field, which every run can see. The probe step is state, and is
+/// reconciled after the fact: a run whose first probe shows it would have probed differently from
+/// the step the serial walk carried into it is drawn again from that step, on this thread. See
+/// `ProbeStep`. The count of runs drawn again is returned, for the test that proves the two paths
+/// the same; at any zoom but one within rounding of 100 px/M it is nought.
+pub(crate) fn draw_signal_fields_parallel<F: Fn((f64, f64)) -> Pos2 + Sync>(
+    painter: &egui::Painter,
+    setup: &TessellationSetup,
+    metric: &KerrSchild,
+    fields: [(&SignalField, Color32, f32); 2],
+    style: FrontStyle,
+    to_screen: &F,
+    chunks: usize,
+) -> usize {
+    let clip = painter.clip_rect();
+    let draw = |field: usize, pulses: std::ops::Range<usize>, eps: f64| {
+        front_chunk(setup, clip, metric, fields[field], pulses, style, to_screen, eps)
+    };
+    // Each field's runs, as (field, pulses), in the order they are painted.
+    let mut runs: Vec<(usize, std::ops::Range<usize>)> = Vec::new();
+    for (f, (signal, _, _)) in fields.iter().enumerate() {
+        let n = signal.pulses.len();
+        let cuts =
+            if field_rays(signal) >= PARALLEL_FRONT_RAYS { chunks.clamp(1, n.max(1)) } else { 1 };
+        let per = n.div_ceil(cuts).max(1);
+        runs.extend((0..n).step_by(per).map(|start| (f, start..(start + per).min(n))));
+    }
+    let jobs: Vec<_> = runs
+        .iter()
+        .map(|(field, pulses)| {
+            let (field, pulses, draw) = (*field, pulses.clone(), &draw);
+            move || draw(field, pulses, TRAIL_PROBE_EPS)
+        })
+        .collect();
+    let mut drawn = build_meshes(jobs);
+
+    // The probe step the serial walk would have carried into each run, and every run whose first
+    // probe says it would have come out differently drawn again from that step.
+    let mut again = 0;
+    for f in 0..fields.len() {
+        let mut carried = TRAIL_PROBE_EPS;
+        for (k, (field, pulses)) in runs.iter().enumerate() {
+            if *field != f {
+                continue;
+            }
+            let agrees = carried == TRAIL_PROBE_EPS
+                || match drawn[k].probe.first {
+                    FirstProbe::NotYet => true,
+                    FirstProbe::Found(eps) => eps >= carried,
+                    FirstProbe::GaveUp => false,
+                };
+            if !agrees {
+                drawn[k] = draw(f, pulses.clone(), carried);
+                again += 1;
+            }
+            if drawn[k].probe.first != FirstProbe::NotYet {
+                carried = drawn[k].probe.eps;
+            }
+        }
     }
 
-    // Every fade of the field into the slot taken before the first line went down, so the whole
-    // haze sits under the whole of the field it belongs to. One `Shape::Vec` because the mesh is
-    // split when it grows past what a 16-bit index can reach; at the default settings it is one
-    // mesh of about 37 000 vertices, against the 9 216 line shapes it lies under.
-    if let (Some(slot), Some(shape)) = (trail_slot, trails.shape()) {
-        painter.set(slot, shape);
+    let judge = setup.builder(clip);
+    let mut drawn = drawn.into_iter();
+    for f in 0..fields.len() {
+        let field: Vec<FrontChunk> =
+            drawn.by_ref().take(runs.iter().filter(|(field, _)| *field == f).count()).collect();
+        let (trails, lines): (Vec<ChunkTrails>, Vec<Vec<egui::Shape>>) =
+            field.into_iter().map(|chunk| (chunk.trails, chunk.lines)).unzip();
+        if style.arcs {
+            painter.extend(ChunkTrails::assemble(trails, &judge));
+        }
+        painter.extend(lines.into_iter().flatten());
     }
+    again
 }
 
 /// One arrival, as a mark on the receiver's trail: a small filled triangle, apex up, in the
@@ -4346,5 +4766,224 @@ mod tests {
             let pieces = (raw.abs() / MAX_ARC_STEP).ceil().min(MAX_ARC_PIECES as f64) as usize;
             assert_eq!(arc.len(), pieces + 1, "segment {i} of {raw} rad in {} pieces", arc.len() - 1);
         }
+    }
+
+    /// The ISCO pair of the perf tier's fixtures, each transmitting 145 rays a pulse until both
+    /// hold 64 pulses: Alice on the prograde ISCO at 2.32 M, whose light runs in to r- and winds
+    /// there, and Bob on the retrograde one at 8.72 M. Both fields are over `PARALLEL_FRONT_RAYS`,
+    /// and 145 rays a pulse so that no count of runs divides a field evenly. Built once and shared.
+    fn isco_pair_fields() -> &'static (KerrSchild, SignalField, SignalField) {
+        use crate::physics::observer::{Release, WorldlineParams};
+        static FIELDS: std::sync::OnceLock<(KerrSchild, SignalField, SignalField)> =
+            std::sync::OnceLock::new();
+        FIELDS.get_or_init(|| {
+            let metric = KerrSchild::new(1.0, 0.90);
+            let orbiter = |name: &str, prograde: bool, phi: f64| {
+                let r = metric.isco(prograde);
+                let (energy, l_ang) = metric.circular_orbit(r, prograde).expect("an ISCO here");
+                let release =
+                    if prograde { Release::CircularPrograde } else { Release::CircularRetrograde };
+                let params = WorldlineParams { energy, l_ang, outgoing: false, release };
+                Observer::new_with_phi(&metric, name, 0.0, r, 0.0, phi, params)
+            };
+            let (mut alice, mut bob) = (orbiter("Alice", true, 0.0), orbiter("Bob", false, 0.5));
+            let (mut alice_field, mut bob_field) = (SignalField::default(), SignalField::default());
+            for field in [&mut alice_field, &mut bob_field] {
+                field.rays_per_pulse = 145;
+            }
+            let (dt, mut t) = (0.05, 0.0);
+            while alice_field.pulses.len() < 64 || bob_field.pulses.len() < 64 {
+                alice_field.emit_if_due(&metric, &alice);
+                bob_field.emit_if_due(&metric, &bob);
+                alice.step(&metric, t, dt);
+                bob.step(&metric, t, dt);
+                alice_field.advance(&metric, dt);
+                bob_field.advance(&metric, dt);
+                t += dt;
+                assert!(t < 200.0, "both fields fill in well under 200 M");
+            }
+            (metric, alice_field, bob_field)
+        })
+    }
+
+    /// One vertex exactly as the GPU is given it: position, texture coordinate and colour, the
+    /// floats as their bits so that equality is equality to the bit.
+    type RawVertex = [u32; 5];
+
+    /// One primitive of a tessellated frame: its clip rect as bits, its texture, its vertices and
+    /// its indices.
+    type RawPrimitive = ([u32; 4], egui::TextureId, Vec<RawVertex>, Vec<u32>);
+
+    /// The equatorial canvas's own projection at `zoom` px/M with the hole at `centre`,
+    /// arithmetic for arithmetic.
+    fn canvas_projection(zoom: f32, centre: Pos2) -> impl Fn((f64, f64)) -> Pos2 + Sync {
+        move |(x, y): (f64, f64)| centre + Vec2::new(x as f32 * zoom, -(y as f32) * zoom)
+    }
+
+    /// Whatever `paint` puts on a 400 px canvas, and the frame egui's own end-of-frame
+    /// tessellation makes of it.
+    fn tessellated_front_frame(
+        mut paint: impl FnMut(&egui::Ui, &egui::Painter),
+    ) -> Vec<RawPrimitive> {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let (_, painter) =
+                ui.allocate_painter(egui::Vec2::new(400.0, 400.0), egui::Sense::hover());
+            paint(ui, &painter);
+        });
+        let shapes = std::mem::take(&mut output.shapes);
+        let primitives = ctx.tessellate(shapes, output.pixels_per_point);
+        output.drop_without_applying_deltas();
+        primitives
+            .into_iter()
+            .map(|clipped| {
+                let r = clipped.clip_rect;
+                let clip = [r.min.x, r.min.y, r.max.x, r.max.y].map(f32::to_bits);
+                match clipped.primitive {
+                    egui::epaint::Primitive::Mesh(mesh) => {
+                        let vertices = mesh
+                            .vertices
+                            .iter()
+                            .map(|v| {
+                                [
+                                    v.pos.x.to_bits(),
+                                    v.pos.y.to_bits(),
+                                    v.uv.x.to_bits(),
+                                    v.uv.y.to_bits(),
+                                    u32::from_le_bytes(v.color.to_array()),
+                                ]
+                            })
+                            .collect();
+                        (clip, mesh.texture_id, vertices, mesh.indices)
+                    }
+                    egui::epaint::Primitive::Callback(_) => {
+                        panic!("the fronts paint no callbacks")
+                    }
+                }
+            })
+            .collect()
+    }
+
+    /// The first difference between two tessellated frames, or None where they are the same to
+    /// the bit.
+    fn first_difference(serial: &[RawPrimitive], parallel: &[RawPrimitive]) -> Option<String> {
+        if serial.len() != parallel.len() {
+            return Some(format!("{} primitives against {}", serial.len(), parallel.len()));
+        }
+        for (p, (a, b)) in serial.iter().zip(parallel).enumerate() {
+            if a.0 != b.0 || a.1 != b.1 {
+                return Some(format!("primitive {p}: clip rect or texture differs"));
+            }
+            if a.2.len() != b.2.len() || a.3.len() != b.3.len() {
+                return Some(format!(
+                    "primitive {p}: {} vertices and {} indices against {} and {}",
+                    a.2.len(),
+                    a.3.len(),
+                    b.2.len(),
+                    b.3.len()
+                ));
+            }
+            if let Some(v) = (0..a.2.len()).find(|&v| a.2[v] != b.2[v]) {
+                let (x, y) = (a.2[v], b.2[v]);
+                return Some(format!("primitive {p}, vertex {v}: {x:?} against {y:?}"));
+            }
+            if let Some(i) = (0..a.3.len()).find(|&i| a.3[i] != b.3[i]) {
+                return Some(format!("primitive {p}, index {i}: {} against {}", a.3[i], b.3[i]));
+            }
+        }
+        None
+    }
+
+    /// The two fields as the canvas hands them to either painter: Bob's first, at the secondary
+    /// width, and Alice's over it.
+    fn pair_as_painted() -> [(&'static SignalField, Color32, f32); 2] {
+        let (_, alice, bob) = isco_pair_fields();
+        [(bob, Theme::BOB_COLOR, Theme::SECONDARY_FRONT_WIDTH), (alice, Theme::ALICE_COLOR, 1.0)]
+    }
+
+    #[test]
+    fn test_parallel_front_meshes_equal_the_serial_ones() {
+        // The promise `draw_signal_fields_parallel` makes: whatever it hands egui tessellates to
+        // exactly the frame two calls of `draw_signal_field` do - the same primitives, the same
+        // vertices to the bit in position, texture coordinate and colour, the same indices in the
+        // same order. It is checked where it is kept, at the end of egui's own tessellation, so
+        // every cull egui makes of a shape or a mesh and every dot it draws from the font atlas is
+        // inside what is compared. Both fields of the ISCO pair are painted, both front styles, and
+        // runs of 1 (one mesh a field, built off the painter) up to more runs than there are
+        // threads, over four views: 12 px/M with every front on the canvas; the default 48; 100,
+        // where 1e-2 M is one pixel and the probe step's first rung reads a direction off some rays
+        // and not others; and 400 px/M with the hole off to one side, so most of every field is
+        // off the canvas and the culls, the serial fade meshes' and the lines', decide what is
+        // drawn.
+        let (metric, fields) = (&isco_pair_fields().0, pair_as_painted());
+        assert!(fields.iter().all(|(field, _, _)| field_rays(field) >= PARALLEL_FRONT_RAYS));
+        let mut drawn_again = 0;
+        for (zoom, centre) in [
+            (12.0, Pos2::new(200.0, 200.0)),
+            (48.0, Pos2::new(200.0, 200.0)),
+            (100.0, Pos2::new(200.0, 200.0)),
+            (400.0, Pos2::new(-300.0, 260.0)),
+        ] {
+            for style in [
+                FrontStyle { arcs: true, hide_wound: true },
+                FrontStyle { arcs: true, hide_wound: false },
+                FrontStyle { arcs: false, hide_wound: false },
+            ] {
+                let to_screen = canvas_projection(zoom, centre);
+                let serial = tessellated_front_frame(|_, painter| {
+                    for (signal, colour, width) in fields {
+                        let to_screen = &to_screen;
+                        draw_signal_field(painter, metric, signal, colour, width, style, to_screen);
+                    }
+                });
+                let vertices: usize = serial.iter().map(|p| p.2.len()).sum();
+                assert!(vertices > 0, "{zoom} px/M: the serial frame draws the fronts");
+                for chunks in [1, 2, 3, 8, 13] {
+                    let parallel = tessellated_front_frame(|ui, painter| {
+                        let setup = TessellationSetup::capture(ui.ctx());
+                        drawn_again += draw_signal_fields_parallel(
+                            painter, &setup, metric, fields, style, &to_screen, chunks,
+                        );
+                    });
+                    if let Some(difference) = first_difference(&serial, &parallel) {
+                        panic!(
+                            "{zoom} px/M, arcs {} and wound hidden {}, {chunks} runs a field: \
+                             {difference}",
+                            style.arcs, style.hide_wound
+                        );
+                    }
+                }
+                println!(
+                    "{zoom} px/M, arcs {}, wound hidden {}: {vertices} vertices the same to the \
+                     bit at every count of runs",
+                    style.arcs, style.hide_wound
+                );
+            }
+        }
+        println!("{drawn_again} runs drawn again from the carried probe step");
+        assert!(
+            drawn_again > 0,
+            "at 100 px/M some run starts where the serial walk carries a longer probe step, and \
+             that run is drawn again: the reconciliation this test has to see at work"
+        );
+    }
+
+    #[test]
+    fn test_parallel_front_meshes_are_deterministic() {
+        // Whichever thread takes whichever run, and in whatever order they finish, the same frame
+        // comes out: two builds of the same fields at the most runs a field is ever cut into here
+        // are the same to the bit.
+        let (metric, fields) = (&isco_pair_fields().0, pair_as_painted());
+        let style = FrontStyle { arcs: true, hide_wound: true };
+        let to_screen = canvas_projection(48.0, Pos2::new(200.0, 200.0));
+        let build = || {
+            tessellated_front_frame(|ui, painter| {
+                let setup = TessellationSetup::capture(ui.ctx());
+                draw_signal_fields_parallel(painter, &setup, metric, fields, style, &to_screen, 13);
+            })
+        };
+        let (first, second) = (build(), build());
+        assert_eq!(first_difference(&first, &second), None);
     }
 }
