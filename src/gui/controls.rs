@@ -192,6 +192,96 @@ impl StepGrain {
     }
 }
 
+/// Which comets the (t, r) chart draws: the panel's Comets dropdown.
+///
+/// The chart has two kinds of comet, and the names here are the ones its drawing code uses. A
+/// *column comet* rides one column of a pulse's `Pulse::extent_track`: the two edges of the pulse's
+/// radial extent, and the role rays `select_role_rays` picks at emission. A *ray comet* rides every
+/// k-th ray of a pulse by index, the diagnostic `SignalField::ray_comet_stride` records trails for.
+/// The entries nest: `Off` draws neither, `Columns` draws the column comets alone, and `Rays(k)`
+/// draws the column comets and every k-th ray's comet over them. No entry draws ray comets without
+/// the column comets, because the stride is a diagnostic laid over the everyday picture rather
+/// than a picture of its own.
+///
+/// `Columns` is the default because every build before this setting drew exactly that picture,
+/// and `key` carries the same promise as `StepGrain::key`: the slugs are fixed once a save format
+/// version has shipped, and the labels on screen stay free to change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChartComets {
+    Off,
+    #[default]
+    Columns,
+    /// The column comets and a ray comet on rays 0, k, 2k, ... of every pulse, with k this stride.
+    Rays(usize),
+}
+
+impl ChartComets {
+    /// Every entry the dropdown offers, in the order the dropdown lists them: nothing, then the
+    /// column comets alone, then ever denser strides of ray comets over them.
+    pub const ALL: [Self; 6] =
+        [Self::Off, Self::Columns, Self::Rays(32), Self::Rays(8), Self::Rays(2), Self::Rays(1)];
+
+    /// The "Ray comets" stride this entry asks both transmissions to record trails for: k for
+    /// `Rays(k)`, and 0 for the two entries that draw no ray comet. The app pushes the stride into
+    /// the simulation once a frame; see `SignalField::set_ray_comet_stride`.
+    pub fn stride(self) -> usize {
+        match self {
+            Self::Off | Self::Columns => 0,
+            Self::Rays(k) => k,
+        }
+    }
+
+    /// Whether the chart draws any comet at all: false for `Off` alone. Every other entry draws
+    /// the column comets, and a stride of ray comets over them where the field records trails.
+    pub fn drawn(self) -> bool {
+        self != Self::Off
+    }
+
+    /// What the dropdown calls this entry. The strides keep the labels they had when the dropdown
+    /// governed the ray comets alone: under the row's label "Comets", "All" now reads as every
+    /// comet the chart can draw, which is exactly what that entry draws.
+    pub fn label(self) -> String {
+        match self {
+            Self::Off => "Off".to_string(),
+            Self::Columns => "Edges and key rays".to_string(),
+            Self::Rays(1) => "All".to_string(),
+            Self::Rays(k) => format!("1 in {k}"),
+        }
+    }
+
+    /// This entry's slug, without its stride: a save file carries the stride in a field of its
+    /// own. See the type's own comment before touching one of these strings.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Columns => "columns",
+            Self::Rays(_) => "rays",
+        }
+    }
+
+    /// The entry a slug and a stride name together, or None for a slug this version has never
+    /// written. A "rays" slug with a stride of 0 names no stride to draw, and reads as `Columns`,
+    /// the picture closest to what the file asked for.
+    pub fn from_key(key: &str, stride: usize) -> Option<Self> {
+        match key {
+            "off" => Some(Self::Off),
+            "columns" => Some(Self::Columns),
+            "rays" => Some(Self::from_stride(stride)),
+            _ => None,
+        }
+    }
+
+    /// The entry a bare stride names, as every file from before the Off entry spells the setting:
+    /// 0 is `Columns`, because a build that wrote a stride of 0 drew the column comets, and k is
+    /// `Rays(k)`.
+    pub fn from_stride(stride: usize) -> Self {
+        match stride {
+            0 => Self::Columns,
+            k => Self::Rays(k),
+        }
+    }
+}
+
 /// The most coordinate time one played frame is allowed to take in Watch mode, in M.
 ///
 /// It is not a fudge on the physics: `watch_step` reports what it asked for and what it got, and
@@ -382,14 +472,17 @@ pub struct AppControls {
     /// `step_back` cannot recover an evicted pulse - while raising it widens the window from that
     /// frame onward. Like every control on this panel it survives Reset.
     pub max_pulses: usize,
-    /// The "Ray comets" diagnostic on the (t, r) chart: a comet on every k-th ray of every pulse,
-    /// with k this stride, and 0 for off. The panel offers the strides of `RAY_COMET_STRIDES`.
+    /// The Comets dropdown on the (t, r) chart: no comets, the column comets alone, or the column
+    /// comets with a ray comet on every k-th ray of every pulse. See `ChartComets`.
     ///
-    /// Pushed into both transmissions once a frame by `SpacetimeApp::ui`, as `max_pulses` is,
-    /// because the fields record the trails the comets draw: see `SignalField::ray_comet_stride`.
-    /// Off costs nothing and holds no memory. Saved with the panel, and a file from before the
-    /// setting opens with it off.
-    pub ray_comet_stride: usize,
+    /// `ChartComets::stride` is pushed into both transmissions once a frame by `SpacetimeApp::ui`,
+    /// as `max_pulses` is, because the fields record the trails the ray comets draw: see
+    /// `SignalField::ray_comet_stride`. Whether the chart draws any comet at all goes to the chart
+    /// alone, through `SpacetimeCanvas::render`, because nothing in the physics depends on a
+    /// drawing choice. The two entries without ray comets cost nothing in the fields and hold no
+    /// memory. Saved with the panel, and a file from before the Off entry opens with the column
+    /// comets on, which is what every earlier build drew.
+    pub comets: ChartComets,
     /// Whether the segments of a wavefront between neighbouring rays are drawn at all: on, each is
     /// the curve linear in (r, phi) between its two rays; off, only the rays themselves are drawn,
     /// one dot per calculated point and nothing between them.
@@ -493,7 +586,7 @@ impl Default for AppControls {
             transport_flash: None,
             rays_per_pulse: RAYS_PER_PULSE,
             max_pulses: MAX_PULSES,
-            ray_comet_stride: 0,
+            comets: ChartComets::Columns,
             draw_front_arcs: true,
             hide_wound_segments: true,
             show_spatial_details: false,
@@ -616,22 +709,10 @@ const ZAMO_TIP: &str = "The zero-angular-momentum observer, the frame in which a
 /// The hover tip on the Wavefront points slider.
 const WAVEFRONT_POINTS_TIP: &str = "How finely a pulse samples the emitter's light cone: n directions at α = 2πi/n, spaced 360/n degrees apart — 2.5° at the default of 144 — with α = 0, the emitter's own outward radial leg, always first whatever n is. Each direction is one exact null geodesic, so this count sets the resolution of the whole picture the light draws: more points give finer tongues where the ring swallows the front, a finer grain in the frozen arcs stacked on r₋, shorter segments around the loop on the equatorial view, and rarer handovers from one sheet of a front to the next in the reception test, since neighbouring rays then sit closer together in azimuth. Points cost. Integrating the rays, testing the rays against the receiver's worldline and drawing every one of them all scale linearly in the count: about 1.1 ms of frame time for each extra 72 rays a pulse with forty pulses in flight, of which the integration and the reception test take 0.3 ms, so 1024 points costs about seven times the work of 144 and the play loop feels the difference first. One or two rays ride on top of the count. Where the arc of light that freezes onto r₋ meets the light that crosses r₋, the app launches one more ray on the meeting point itself. That ray marks where the front goes through r₋. Without that ray, the picture guesses the crossing from two rays that can stand half a radian apart. The count applies to pulses sent from now on. Light already in flight is the geodesics the app launched, and each pulse keeps the count that pulse went out with, so the slider changes the transmission rather than redrawing the transmission.";
 
+/// The hover tip on the Comets dropdown. The entries and what each draws are `ChartComets`.
+const COMETS_TIP: &str = "Which comets the (t, r) chart draws. Off draws none, and everything else on the chart stays: the worldlines, the light cones, the horizons and the reception dots. Edges and key rays, the default, draws the everyday comets: one on each of the two edges of every pulse's radial extent, and one on each ray the app picks at emission - the steepest freezer, the highest climber, and the two rays either side of the critical angle of each photon orbit the pulse can reach. Each of those comets shines brightest where its edge or ray stands now and fades back down the track the edge or ray has already covered. The four strides lay a diagnostic over the everyday comets: a comet on every k-th ray of every pulse. The app picks those rays by index and by no property of the ray, so the chart shows the whole of the light with no selection in it. Where many rays stand at one radius their comets overlap, and the overlap alone makes a place bright. Each of those tails covers the last 2.56 M of its ray. At All with many wavefront points and many wavefronts kept, the chart draws hundreds of thousands of comets and the frame rate drops. Off and Edges and key rays cost the transmissions nothing, because only a stride makes each transmission record the trails that the ray comets draw.";
+
 /// The hover tip on the Wavefronts kept slider.
-/// The strides the panel's "Ray comets" dropdown offers, in the order it lists them: off, then
-/// ever denser. A stride of k draws a comet on rays 0, k, 2k, ... of every pulse.
-pub const RAY_COMET_STRIDES: [usize; 5] = [0, 32, 8, 2, 1];
-
-/// What the "Ray comets" dropdown calls a stride.
-fn ray_comet_label(stride: usize) -> String {
-    match stride {
-        0 => "Off".to_string(),
-        1 => "All".to_string(),
-        k => format!("1 in {k}"),
-    }
-}
-
-const RAY_COMETS_TIP: &str = "A diagnostic for the (t, r) chart. It draws a comet on every k-th ray of every pulse, chosen by the ray's index and not by any property of the ray, so the chart shows the whole of the light with no selection in it. Where many rays stand at one radius their comets overlap, and the overlap is the only thing that makes a place bright. The everyday comets on the two edges of each pulse and on its role rays stay as they are. Each tail covers the last 2.56 M of its ray. At All with many wavefront points and many wavefronts kept, the chart draws hundreds of thousands of comets and the frame rate drops; Off costs nothing.";
-
 const WAVEFRONTS_KEPT_TIP: &str = "How many wavefronts each transmission holds at once. Past this count the field drops the oldest, so the count sets the length of the history the picture keeps. At the default of 64 a single infall never loses a pulse - a whole fall from r = 4.5M sends about forty pulses at the emission interval of 0.1M of the emitter's proper time - while a hovering emitter, who transmits for as long as the wait lasts, runs past 64 and draws the oldest arcs from light sent long before the release. Turn the count down to read one front at a time, or to watch a single pulse break on r₋ with no sixty others stacked over that pulse; turn the count up to see the whole stack a long transmission builds against the Cauchy horizon.
 
 Together with the points slider above, this count is the other half of what a frame costs: the integration, the reception test and the drawing all scale as the product of the two, so 128 fronts at 1024 points carries 131 k exact null geodesics every step, against 9 k at the pair of defaults. The 2D+1 volume view couples to the count as well - every eighth pulse by serial number carries a swept surface, so the cap fixes how many of those sheets can fly at once, eight at the default and sixteen at the top.
@@ -1887,21 +1968,19 @@ impl AppControls {
                 // value box, then the label in the sliders' label column.
                 let slider_and_value =
                     ui.spacing().slider_width + ui.spacing().item_spacing.x + 40.0;
-                egui::ComboBox::from_id_salt("ray_comets_combo")
-                    .selected_text(ray_comet_label(self.ray_comet_stride))
+                // Labelled "Comets" rather than "Ray comets" because the row governs every comet
+                // on the chart, the column comets as well as the diagnostic ones.
+                egui::ComboBox::from_id_salt("chart_comets_combo")
+                    .selected_text(self.comets.label())
                     .width(slider_and_value)
                     .show_ui(ui, |ui| {
-                        for stride in RAY_COMET_STRIDES {
-                            ui.selectable_value(
-                                &mut self.ray_comet_stride,
-                                stride,
-                                ray_comet_label(stride),
-                            );
+                        for entry in ChartComets::ALL {
+                            ui.selectable_value(&mut self.comets, entry, entry.label());
                         }
                     })
                     .response
-                    .on_hover_text(numbers::text(RAY_COMETS_TIP));
-                ui.label("Ray comets").on_hover_text(numbers::text(RAY_COMETS_TIP));
+                    .on_hover_text(numbers::text(COMETS_TIP));
+                ui.label("Comets").on_hover_text(numbers::text(COMETS_TIP));
             });
             ui.checkbox(&mut self.draw_front_arcs, "Arcs between wavefront points")
                 .on_hover_text(numbers::text(FRONT_ARCS_TIP));

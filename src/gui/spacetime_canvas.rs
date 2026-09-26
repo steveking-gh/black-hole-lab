@@ -1993,7 +1993,7 @@ fn sampling_window(rect: Rect, px_per_m: f64) -> f64 {
 /// blob, which is the one thing a mark whose job is to say *where* the front is must not do.
 const COMET_WIDTH: f32 = 1.2;
 
-/// The least alpha a "Ray comets" comet is stroked at, and why those comets do not fade.
+/// The least alpha a ray comet is stroked at, and why those comets do not fade.
 ///
 /// A mesh vertex carries a `Color32`: four bytes, premultiplied. At an alpha of 3 the amber
 /// (255, 160, 40) is stored as (3, 2, 0), at 2 as (2, 1, 0) and at 1 as (1, 1, 0), so a tail that
@@ -2089,9 +2089,9 @@ fn comet_tail(head_first: impl Iterator<Item = Pos2>, max_px: f32) -> Vec<Pos2> 
 ///
 /// Below it the spawns cost more than the stroking they would share out. Both paths put the same
 /// triangles on the screen - see `draw_comets_parallel` - so where the line falls changes nothing
-/// that can be seen. At the panel's defaults, 64 pulses a field with "Ray comets" off, the chart
-/// draws about a thousand comets and stays on the calling thread; the diagnostic at every ray, or
-/// at every 8th ray of 1024, is over it many times.
+/// that can be seen. At the panel's defaults, 64 pulses a field with the column comets alone, the
+/// chart draws about a thousand comets and stays on the calling thread; the diagnostic at every
+/// ray, or at every 8th ray of 1024, is over it many times.
 pub(crate) const PARALLEL_COMETS: usize = 4096;
 
 /// How many runs of pulses the global chart cuts each field into for every thread that draws its
@@ -2106,7 +2106,7 @@ pub(crate) const PARALLEL_COMETS: usize = 4096;
 const COMET_RUNS_PER_THREAD: usize = 4;
 
 /// How many comets the global chart would draw for `fields` at most: every column of every pulse,
-/// and every k-th ray of every pulse where "Ray comets" is on.
+/// and every k-th ray of every pulse where the field records trails for the ray comets.
 ///
 /// An upper bound rather than a count - a spent pulse, a role with no ray and a head off the canvas
 /// all draw nothing, and finding that out is the drawing itself. It only chooses between the two
@@ -2123,7 +2123,7 @@ fn chart_comets(fields: &[(&SignalField, Color32)]) -> usize {
         .sum()
 }
 
-/// What `comet_shapes` makes of a run of pulses: the column comets, and the "Ray comets" that are
+/// What `comet_shapes` makes of a run of pulses: the column comets, and the ray comets that are
 /// painted over every column comet of the field.
 struct CometShapes {
     columns: Vec<egui::Shape>,
@@ -2196,7 +2196,7 @@ fn comet_shapes<X: Fn(f64) -> f32, Y: Fn(f64) -> f32>(
             columns.push(fading_line(tail, head, Theme::COMET_TAIL_PX, COMET_WIDTH, head_colour));
         }
     }
-    // The "Ray comets" diagnostic. See the last paragraph above the chart's comets in
+    // The ray comets, the diagnostic. See the last paragraph above the chart's comets in
     // `render_distant_observer`.
     let stride = field.ray_comet_stride();
     if stride == 0 {
@@ -2315,6 +2315,12 @@ fn draw_comets_parallel<X: Fn(f64) -> f32 + Sync, Y: Fn(f64) -> f32 + Sync>(
 
 impl SpacetimeCanvas {
     /// Render the 1D+1 spacetime canvas: the (t, r) foliation chart, or an observer's rest frame.
+    ///
+    /// `show_comets` is the panel's Comets dropdown as the chart needs it, `ChartComets::drawn`:
+    /// false draws no comet of any kind on the (t, r) chart and leaves everything else on it as it
+    /// is. Which rays carry a ray comet on top of the column comets is the fields' own
+    /// `SignalField::ray_comet_stride`, because the fields record the trails those comets draw. The
+    /// rest frames draw no comets, and ignore the flag.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
@@ -2329,6 +2335,7 @@ impl SpacetimeCanvas {
         font_scale: f32,
         signals: SignalViews<'_>,
         show_distant_clock_grid: bool,
+        show_comets: bool,
     ) {
         let total_size = egui::Vec2::new(ui.available_width(), canvas_height);
         let main_canvas_height = total_size.y.max(150.0);
@@ -2442,6 +2449,7 @@ Tick Enable Observer on Alice's or Bob's card",
                     use_physical_units,
                     font_scale,
                     signals,
+                    show_comets,
                 );
             }
         }
@@ -2461,6 +2469,7 @@ Tick Enable Observer on Alice's or Bob's card",
         use_physical_units: bool,
         font_scale: f32,
         signals: SignalViews<'_>,
+        show_comets: bool,
     ) {
         let t_min = current_time + self.time_offset - self.time_window * 0.7;
         let t_max = current_time + self.time_offset + self.time_window * 0.3;
@@ -2912,18 +2921,25 @@ Tick Enable Observer on Alice's or Bob's card",
         // below the point the tail starts from and draw a line that doubles back on itself, so that
         // case falls back to the track alone rather than drawing something untrue.
         //
-        // Beside all of that stands one diagnostic, the panel's "Ray comets": a comet on every
-        // k-th ray of every pulse, chosen by index and not by any property of the ray, so the chart
-        // shows the whole projected null congruence with no selection in it. The head is the ray
-        // at the field's clock and the tail is the pulse's `RayTrail`, the last 2.56 M of that ray
-        // on a fixed 0.02 M cadence, cut on the screen by `comet_tail` exactly as a column comet
-        // is, but stroked in one flat colour rather than faded, for the reason
+        // Beside all of that stands one diagnostic, the ray comets of the panel's Comets strides: a
+        // comet on every k-th ray of every pulse, chosen by index and not by any property of the
+        // ray, so the chart shows the whole projected null congruence with no selection in it. The
+        // head is the ray at the field's clock and the tail is the pulse's `RayTrail`, the last
+        // 2.56 M of that ray on a fixed 0.02 M cadence, cut on the screen by `comet_tail` exactly
+        // as a column comet is, but stroked in one flat colour rather than faded, for the reason
         // `RAY_COMET_ALPHA_FLOOR` gives. A tail stops at the first sample that found the ray dead.
-        // Brightness is overlap and nothing else, so the head alpha is shared out over the comets
-        // a pulse draws - 1200 over their count, held between that floor and 80 - and a place is
+        // Brightness is overlap and nothing else, so the head alpha is shared out over the comets a
+        // pulse draws - 1200 over their count, held between that floor and 80 - and a place is
         // bright only where many rays stand together, as the column comets are on r-. The column
-        // comets are drawn first and unchanged. Off, the field keeps no trails and this pass is
-        // skipped whole.
+        // comets are drawn first and unchanged. Without a stride the field keeps no trails and this
+        // pass is skipped whole.
+        //
+        // The panel's Off, `show_comets` false, skips every comet, the column comets as well as
+        // the ray comets, and nothing else: the horizons, the worldlines, the light cones and the
+        // reception dots stay. Off pushes a stride of 0 into the fields, so the fields keep no
+        // trail for a pass the chart would not draw. Skipping the whole block here, rather than
+        // each kind of comet inside `comet_shapes`, leaves the serial and the parallel painters
+        // exactly as they were: no caller ever asks either one for a picture without the columns.
         //
         // Bob's comets go down first and Alice's over them, as her fronts lie over his on the
         // equatorial view. A chart with `PARALLEL_COMETS` or more to draw - the diagnostic on at
@@ -2936,17 +2952,19 @@ Tick Enable Observer on Alice's or Bob's card",
         // view when both draw heavy fields in one frame: three reads of the context, which is
         // cheaper than passing it between the two canvases.
         let fields = [(signals.bob, Theme::BOB_COLOR), (signals.alice, Theme::ALICE_COLOR)];
-        if chart_comets(&fields) >= PARALLEL_COMETS
-            && painter.opacity() >= 1.0
-            && ui.ctx().layer_transform_to_global(painter.layer_id()).is_none()
-        {
-            let setup = TessellationSetup::capture(ui.ctx());
-            let runs = COMET_RUNS_PER_THREAD * (mesh_workers() + 1);
-            let (x, y) = (&to_screen_x, &to_screen_y);
-            draw_comets_parallel(painter, &setup, metric, fields, rect, x, y, runs);
-        } else {
-            for field in fields {
-                draw_comets(painter, metric, field, rect, &to_screen_x, &to_screen_y);
+        if show_comets {
+            if chart_comets(&fields) >= PARALLEL_COMETS
+                && painter.opacity() >= 1.0
+                && ui.ctx().layer_transform_to_global(painter.layer_id()).is_none()
+            {
+                let setup = TessellationSetup::capture(ui.ctx());
+                let runs = COMET_RUNS_PER_THREAD * (mesh_workers() + 1);
+                let (x, y) = (&to_screen_x, &to_screen_y);
+                draw_comets_parallel(painter, &setup, metric, fields, rect, x, y, runs);
+            } else {
+                for field in fields {
+                    draw_comets(painter, metric, field, rect, &to_screen_x, &to_screen_y);
+                }
             }
         }
 
@@ -5753,6 +5771,7 @@ mod canvas_tests {
                 1.0,
                 SignalViews { alice: &signal, bob: &signal },
                 show_distant_clock_grid,
+                true,
             );
         });
         let mut lines = 0;
@@ -6135,6 +6154,7 @@ mod canvas_tests {
                     1.0,
                     SignalViews { alice: &field, bob: &idle },
                     false,
+                    true,
                 );
             });
             let mut text = String::new();
@@ -6384,12 +6404,27 @@ mod canvas_tests {
     ///
     /// The canvas is left at its defaults, so the projection the assertions rebuild - r across
     /// (0, `max_r`), coordinate time up a `time_window`-wide window with the present three tenths
-    /// from the top - is the one the app opens on.
+    /// from the top - is the one the app opens on. The chart draws its comets, as the panel's
+    /// default Comets entry has it; `distant_view_pass_with_comets` says otherwise.
     fn distant_view_pass(
         metric: &KerrSchild,
         bob: &Observer,
         field: &SignalField,
         current_time: f64,
+    ) -> Vec<egui::Shape> {
+        let silent = SignalField::default();
+        let signals = SignalViews { alice: &silent, bob: field };
+        distant_view_pass_with_comets(metric, bob, signals, current_time, true)
+    }
+
+    /// `distant_view_pass` over both transmissions, with the chart's `show_comets` flag given as
+    /// the app passes it from `ChartComets::drawn`.
+    fn distant_view_pass_with_comets(
+        metric: &KerrSchild,
+        bob: &Observer,
+        signals: SignalViews<'_>,
+        current_time: f64,
+        show_comets: bool,
     ) -> Vec<egui::Shape> {
         let mut canvas = SpacetimeCanvas::default();
         let ctx = egui::Context::default();
@@ -6398,7 +6433,6 @@ mod canvas_tests {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
             ..Default::default()
         };
-        let silent = SignalField::default();
         let output = ctx.run_ui(input, |ui| {
             canvas.render(
                 ui,
@@ -6410,8 +6444,9 @@ mod canvas_tests {
                 false,
                 ReferenceFrame::DistantObserver,
                 1.0,
-                SignalViews { alice: &silent, bob: field },
+                signals,
                 false,
+                show_comets,
             );
         });
         let mut shapes = Vec::new();
@@ -6433,7 +6468,7 @@ mod canvas_tests {
         falling_transmission_with_ray_comets(0)
     }
 
-    /// `falling_transmission` with the "Ray comets" stride set before the first step, so the field
+    /// `falling_transmission` with the ray comets' stride set before the first step, so the field
     /// records a trail on every pulse from its emission on. The stride is view state: the rays
     /// come out bit for bit the same whatever it is.
     fn falling_transmission_with_ray_comets(
@@ -6574,9 +6609,10 @@ mod canvas_tests {
 
     #[test]
     fn test_ray_comets_add_one_comet_per_live_ray_at_its_radius_on_the_now_line() {
-        // The "Ray comets" diagnostic at a stride of one: every live ray of every pulse gets a
-        // comet of its own, headed at that ray's radius on the now line, on top of the column
-        // comets, which stay exactly as they are. Off, the frame is today's frame shape for shape.
+        // The ray comets at a stride of one: every live ray of every pulse gets a comet of its
+        // own, headed at that ray's radius on the now line, on top of the column comets, which
+        // stay exactly as they are. At a stride of 0 the frame is the column comets' frame shape
+        // for shape.
         let (metric, bob, plain, now) = falling_transmission();
         let (_, _, mut striding, striding_now) = falling_transmission_with_ray_comets(1);
         assert_eq!(now, striding_now, "the stride moves no clock");
@@ -6649,12 +6685,71 @@ mod canvas_tests {
             expected.first().map(|e| e.1)
         );
 
-        // Off again: the trails go, and the frame is today's frame.
+        // Back to a stride of 0: the trails go, and the frame is the column comets' frame.
         striding.set_ray_comet_stride(0);
         assert!(striding.pulses.iter().all(|p| p.trail.is_none()), "off frees every trail");
         let off = distant_view_pass(&metric, &bob, &striding, now);
         assert_eq!(off.len(), baseline.len(), "off draws exactly the shapes of today's chart");
         assert_eq!(faded_strokes(&off).len(), base_comets);
+    }
+
+    #[test]
+    fn test_the_panels_off_draws_no_comet_of_any_kind_and_nothing_else_changes() {
+        // The Comets dropdown's Off: the chart draws no column comet and no ray comet, and every
+        // other shape of the frame stays. Two frames are checked, one light enough for the serial
+        // painter and one heavy enough for the parallel painter. Off pushes a stride of 0 into
+        // the fields, but the chart must not lean on that: the heavy frame's fields stay at a
+        // stride of one, and the chart still draws no comet with `show_comets` false.
+        let (metric, bob, plain, now) = falling_transmission();
+        let silent = SignalField::default();
+        let (_, pair_bob, pair_alice) = comet_pair(1);
+        let heavy = [(&pair_bob, Theme::BOB_COLOR), (&pair_alice, Theme::ALICE_COLOR)];
+        assert!(chart_comets(&heavy) >= PARALLEL_COMETS, "{} comets", chart_comets(&heavy));
+        let light = [(&plain, Theme::BOB_COLOR), (&silent, Theme::ALICE_COLOR)];
+        assert!(chart_comets(&light) < PARALLEL_COMETS, "{} comets", chart_comets(&light));
+
+        // The serial painter draws every comet of either kind as one stroke of `COMET_WIDTH`,
+        // faded or flat, in an emitter's colour at whatever alpha the stroke carries; `Color32`
+        // is premultiplied, so the colour is recognised by rebuilding it at the stroke's own
+        // alpha. The parallel painter hands egui its comets as meshes, which this chart draws
+        // nothing else as.
+        let is_comet = |shape: &egui::Shape| match shape {
+            egui::Shape::Mesh(_) => true,
+            egui::Shape::Path(p) if (p.stroke.width - COMET_WIDTH).abs() < 1e-6 => {
+                match &p.stroke.color {
+                    egui::epaint::ColorMode::UV(_) => true,
+                    egui::epaint::ColorMode::Solid(c) => [Theme::BOB_COLOR, Theme::ALICE_COLOR]
+                        .iter()
+                        .any(|e| *c == Color32::from_rgba_unmultiplied(e.r(), e.g(), e.b(), c.a())),
+                }
+            }
+            _ => false,
+        };
+
+        let frames = [
+            ("light", SignalViews { alice: &silent, bob: &plain }, now, false),
+            ("heavy", SignalViews { alice: &pair_alice, bob: &pair_bob }, pair_bob.t, true),
+        ];
+        for (name, signals, t, parallel) in frames {
+            let on = distant_view_pass_with_comets(&metric, &bob, signals, t, true);
+            let comets = on.iter().filter(|s| is_comet(s)).count();
+            let meshes = on.iter().filter(|s| matches!(s, egui::Shape::Mesh(_))).count();
+            let faded = faded_strokes(&on).len();
+            if parallel {
+                assert!(meshes > 0, "{name}: the parallel painter handed egui no mesh");
+            } else {
+                assert!(faded > 10, "{name}: only {faded} column comets to take away");
+                // At a stride of 0 the column comets are the only comets, which shows that the
+                // test for a comet above catches nothing else on the chart.
+                assert_eq!(comets, faded, "{name}: {comets} comets, {faded} of them faded");
+            }
+
+            let off = distant_view_pass_with_comets(&metric, &bob, signals, t, false);
+            assert!(faded_strokes(&off).is_empty(), "{name}: a faded comet with the comets off");
+            assert_eq!(off.iter().filter(|s| is_comet(s)).count(), 0, "{name}: a comet with Off");
+            assert_eq!(off.len(), on.len() - comets, "{name}: Off takes away the comets alone");
+            println!("{name}: {comets} comet shapes on, {meshes} of them meshes; none off");
+        }
     }
 
     #[test]
@@ -6816,6 +6911,7 @@ mod canvas_tests {
                 1.0,
                 SignalViews { alice: &field, bob: &silent },
                 false,
+                true,
             );
         });
         let mut shapes = Vec::new();
@@ -6842,9 +6938,9 @@ mod canvas_tests {
     }
 
     /// Bob dropped from r = 4.5M and Alice on the prograde ISCO at a = 0.90, both transmitting with
-    /// "Ray comets" at `stride` from the first step on, carried 5 M of coordinate time: two fields
-    /// of the kind the global chart strokes its comets for, Bob's first as the chart paints them.
-    /// At a stride of one the pair is over `PARALLEL_COMETS`.
+    /// the ray comets at `stride` from the first step on, carried 5 M of coordinate time: two
+    /// fields of the kind the global chart strokes its comets for, Bob's first as the chart paints
+    /// them. At a stride of one the pair is over `PARALLEL_COMETS`.
     fn comet_pair(stride: usize) -> (KerrSchild, SignalField, SignalField) {
         use crate::physics::observer::{Release, WorldlineParams};
         let metric = KerrSchild::new(1.0, 0.90);
@@ -7286,6 +7382,7 @@ mod rest_frame_tests {
                 1.0,
                 SignalViews { alice: &silent, bob: &silent },
                 grid,
+                true,
             );
         });
         let mut shapes = Vec::new();

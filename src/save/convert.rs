@@ -23,7 +23,9 @@
 
 use std::collections::VecDeque;
 
-use crate::gui::controls::{AppControls, ObserverSettings, ReferenceFrame, StepGrain, StepMode};
+use crate::gui::controls::{
+    AppControls, ChartComets, ObserverSettings, ReferenceFrame, StepGrain, StepMode,
+};
 use crate::gui::spacetime_canvas::{BoxId, Canvas, Placement, SpacetimeCanvas, TelemetryBoxes};
 use crate::gui::spatial_canvas::SpatialCanvas;
 use crate::gui::volume_canvas::{Camera, VolumeCanvas};
@@ -341,7 +343,8 @@ fn pulse_from_v1(pulse: &v1::Pulse) -> Pulse {
         }),
         track_dt: pulse.track_dt.0,
         history: pulse.history.as_ref().map(history_from_v1),
-        // View state, not in the file: the next step gives the pulse a trail if "Ray comets" is on.
+        // View state, not in the file: the next step gives the pulse a trail if the Comets
+        // dropdown is at a stride.
         trail: None,
         prev: pulse.prev.as_ref().map(|mark| FrontMark {
             rays: mark
@@ -529,7 +532,8 @@ pub fn controls_to_v1(controls: &AppControls, metric: &KerrSchild) -> v1::Contro
         show_distant_clock_grid: controls.show_distant_clock_grid,
         font_scale: n(controls.font_scale),
         step_grain: Some(controls.step_grain.key().to_string()),
-        ray_comet_stride: controls.ray_comet_stride as u64,
+        ray_comet_stride: controls.comets.stride() as u64,
+        comets: Some(controls.comets.key().to_string()),
     }
 }
 
@@ -575,7 +579,16 @@ pub fn controls_from_v1(controls: &v1::Controls) -> AppControls {
         },
         show_distant_clock_grid: controls.show_distant_clock_grid,
         font_scale: controls.font_scale.f32(),
-        ray_comet_stride: controls.ray_comet_stride as usize,
+        // The key wins where the file has one this build knows, and otherwise the stride decides,
+        // as it did for every file from before the Off entry. See `v1::Controls::comets`.
+        comets: {
+            let stride = controls.ray_comet_stride as usize;
+            controls
+                .comets
+                .as_deref()
+                .and_then(|key| ChartComets::from_key(key, stride))
+                .unwrap_or(ChartComets::from_stride(stride))
+        },
         ..AppControls::default()
     }
 }

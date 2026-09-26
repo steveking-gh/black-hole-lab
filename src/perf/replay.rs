@@ -41,7 +41,7 @@ use std::time::Instant;
 use eframe::App;
 
 use crate::app::SpacetimeApp;
-use crate::gui::controls::{ReferenceFrame, StepMode};
+use crate::gui::controls::{ChartComets, ReferenceFrame, StepMode};
 use crate::perf::harness::{chunked_spread, median_of, percentile_of, relative_spread};
 use crate::perf::{headless_context, raw_input};
 use crate::physics::observer::{ObserverMode, Release};
@@ -160,16 +160,16 @@ pub(crate) fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             name: "isco-pair-1024x128-raycomets",
-            what: "`isco-pair-1024x128` with the panel's \"Ray comets\" diagnostic at every 8th \
-                   ray, so the (t, r) chart strokes some 13 000 ray comets a frame, one on every \
-                   8th of about 105 000 live rays, on top of its column comets. There to measure the chart's comets built and tessellated on \
-                   the mesh workers; the stride is view state and moves no fingerprint, so \
-                   `sim` would repeat `isco-pair-1024x128` to the bit",
+            what: "`isco-pair-1024x128` with the panel's Comets dropdown at 1 in 8, so the (t, r) \
+                   chart strokes some 13 000 ray comets a frame, one on every 8th of about \
+                   105 000 live rays, on top of its column comets. There to measure the chart's \
+                   comets built and tessellated on the mesh workers; the stride is view state and \
+                   moves no fingerprint, so `sim` would repeat `isco-pair-1024x128` to the bit",
             duration: 50.0,
             setup: |app| {
                 isco_pair(app, 128);
                 app.controls.rays_per_pulse = 1024;
-                app.controls.ray_comet_stride = 8;
+                app.controls.comets = ChartComets::Rays(8);
             },
             view: ReferenceFrame::DistantObserver,
             frame_only: true,

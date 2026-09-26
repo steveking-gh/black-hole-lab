@@ -18,7 +18,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;
 use crate::app::SpacetimeApp;
-use crate::gui::controls::{FileRequest, FileStatus, ReferenceFrame, StepGrain, StepMode};
+use crate::gui::controls::{
+    ChartComets, FileRequest, FileStatus, ReferenceFrame, StepGrain, StepMode,
+};
 use crate::gui::spacetime_canvas::{BoxId, Canvas, Placement};
 use crate::perf::replay::{FRAME_DT, app_for_fixtures, play_sim};
 use crate::physics::observer::{ObserverMode, Release, Who};
@@ -544,24 +546,59 @@ fn test_the_step_grain_comes_back_from_a_file_and_an_older_file_opens_at_the_def
 }
 
 #[test]
-fn test_the_ray_comets_setting_comes_back_from_a_file_and_an_older_file_opens_with_it_off() {
-    // "Ray comets" is an additive field: every stride the panel offers survives the text of a
-    // file, and a file from before the setting existed opens with it off.
+fn test_the_comets_setting_comes_back_from_a_file_and_an_older_file_opens_with_the_columns_on() {
+    // The Comets dropdown is two additive fields: the stride "Ray comets" always wrote, which
+    // keeps its meaning, and a key that says which entry the panel was on, the only way a file
+    // can say Off. Every entry the panel offers survives the text of a file.
     let metric = default_app().sim.metric;
-    for stride in crate::gui::controls::RAY_COMET_STRIDES {
-        let controls = AppControls { ray_comet_stride: stride, ..AppControls::default() };
+    for comets in ChartComets::ALL {
+        let controls = AppControls { comets, ..AppControls::default() };
         let written = convert::controls_to_v1(&controls, &metric);
+        assert_eq!(written.ray_comet_stride, comets.stride() as u64, "{comets:?}");
+        assert_eq!(written.comets.as_deref(), Some(comets.key()), "a slug, not a label");
         let text = serde_json::to_string(&written).expect("writable");
         let read: v1::Controls = serde_json::from_str(&text).expect("readable");
-        assert_eq!(convert::controls_from_v1(&read).ray_comet_stride, stride);
+        assert_eq!(convert::controls_from_v1(&read).comets, comets);
     }
-    assert_eq!(AppControls::default().ray_comet_stride, 0, "the panel opens with it off");
+    assert_eq!(
+        AppControls::default().comets,
+        ChartComets::Columns,
+        "the panel opens on the column comets alone, the picture every earlier build drew"
+    );
 
-    // The committed golden file predates the setting, so it is the real version-1 document
-    // without the field, and it opens with the setting off.
+    // A file from before the Off entry carries a stride and no key. A stride of 0 meant the
+    // column comets alone, because every build that wrote one drew them, and a stride of k meant
+    // the column comets with every k-th ray's comet over them.
+    let old = convert::controls_to_v1(&AppControls::default(), &metric);
+    for stride in [0, 32, 8, 2, 1, 5] {
+        let file = v1::Controls { ray_comet_stride: stride, ..old.clone() };
+        let mut json = serde_json::to_value(&file).expect("writable");
+        let fields = json.as_object_mut().expect("the panel is a JSON object");
+        assert!(fields.remove("comets").is_some(), "this build writes the key");
+        let read: v1::Controls = serde_json::from_value(json).expect("readable");
+        assert_eq!(read.comets, None, "an older file has no key at all");
+        let expected = if stride == 0 {
+            ChartComets::Columns
+        } else {
+            ChartComets::Rays(stride as usize)
+        };
+        assert_eq!(convert::controls_from_v1(&read).comets, expected, "stride {stride}");
+    }
+
+    // A slug from some later version falls back on the stride rather than refusing the file,
+    // and a "rays" key with no stride to draw reads as the column comets.
+    let sparkles = Some("sparkles".to_string());
+    let unknown = v1::Controls { comets: sparkles, ray_comet_stride: 8, ..old.clone() };
+    assert_eq!(convert::controls_from_v1(&unknown).comets, ChartComets::Rays(8));
+    let strideless = v1::Controls { comets: Some("rays".to_string()), ray_comet_stride: 0, ..old };
+    assert_eq!(convert::controls_from_v1(&strideless).comets, ChartComets::Columns);
+
+    // The committed golden file predates both fields, so it is the real version-1 document
+    // without them, and it opens with the column comets on.
     let golden = read_document(include_str!("golden/v1.json").as_bytes()).expect("the golden loads");
     assert_eq!(golden.controls.ray_comet_stride, 0, "the golden file carries no stride");
-    assert_eq!(convert::controls_from_v1(&golden.controls).ray_comet_stride, 0);
+    assert_eq!(golden.controls.comets, None, "the golden file carries no key");
+    assert_eq!(convert::controls_from_v1(&golden.controls).comets, ChartComets::Columns);
 }
 
 #[test]

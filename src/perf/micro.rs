@@ -38,7 +38,7 @@
 use std::time::Instant;
 
 use crate::app::SpacetimeApp;
-use crate::gui::controls::{ReferenceFrame, SignalViews};
+use crate::gui::controls::{ChartComets, ReferenceFrame, SignalViews};
 use crate::gui::spacetime_canvas::SpacetimeCanvas;
 use crate::gui::spatial_canvas::{FrontStyle, SpatialCanvas};
 use crate::gui::volume_canvas::{ConeRes, VolumeCanvas, build_past_cone};
@@ -507,6 +507,7 @@ pub(crate) fn benches(fx: &Fixtures) -> Vec<Bench<'_>> {
                         1.0,
                         SignalViews { alice: &fx.alice_field, bob: &fx.bob_field },
                         true,
+                        ChartComets::default().drawn(),
                     );
                 });
             }

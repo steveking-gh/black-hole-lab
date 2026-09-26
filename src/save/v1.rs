@@ -517,12 +517,25 @@ pub struct Controls {
     /// loads in point style, which is what every build before the box wrote in.
     #[serde(default)]
     pub decimal_is_comma: bool,
-    /// The "Ray comets" dropdown on the (t, r) chart: a comet on every k-th ray of every pulse,
-    /// with k this stride, and 0 for off. Additive: a file from before the setting carries no such
-    /// field and opens with it off. The trails the comets draw are view state and are not saved;
-    /// they rebuild as the run plays.
+    /// The stride of the ray comets on the (t, r) chart: a comet on every k-th ray of every pulse,
+    /// with k this stride, and 0 for none. Additive: a file from before the setting carries no such
+    /// field and reads as 0. The trails the comets draw are view state and are not saved; they
+    /// rebuild as the run plays.
+    ///
+    /// The field keeps the meaning it had when the panel's "Ray comets" dropdown wrote it, and
+    /// this build writes `gui::controls::ChartComets::stride` into it. Where `comets` below is
+    /// absent, this stride alone says which comets the chart draws: 0 is the column comets alone,
+    /// which every build before the Off entry drew, and k is the column comets with every k-th
+    /// ray's comet over them.
     #[serde(default)]
     pub ray_comet_stride: u64,
+    /// Which comets the (t, r) chart draws, as `gui::controls::ChartComets::key` spells it: "off",
+    /// "columns" or "rays", the stride of "rays" being `ray_comet_stride` above. Additive, and the
+    /// only way a file can say Off, which a stride of 0 cannot: 0 already meant the column comets.
+    /// A file from before the Off entry carries no key and reads by its stride alone; a slug this
+    /// build has never heard of reads the same way.
+    #[serde(default)]
+    pub comets: Option<String>,
 }
 
 /// `gui::controls::ObserverSettings`: one OBSERVER card.
