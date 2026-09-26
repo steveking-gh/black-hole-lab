@@ -1,0 +1,31 @@
+src/gui/spacetime_canvas.rs
+  s_7574c6e435256b::t_25f2916d984cd9 3883-3895,3900,4510-4517,4525
+  s_7574c6e435256b::t_da4d86517fe6d9 4434-4441,4460,4471,4480,4485
+  s_7574c6e435256b::t_f4dda460615e8d 18,3896-3899,4399-4433,4442-4459,4461-4470,4472-4479,4481-4484,4486-4498,4518-4524,4527-4535,4574,4577,4587,6209-6211
+  s_7574c6e435256b::t_91a55d9a602868 6202-6204,6207-6208,6212-6217,6219-6281
+  s_7574c6e435256b::t_ae59e0f22eb813 6205-6206
+  s_7574c6e435256b::t_32f57027bb23ad 6218
+  s_7574c6e435256b::t_dd61b284f569a4 6734
+  s_7574c6e435256b::t_459990b6b424cd 6201
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "922dc91678e0fa8035e02e529086979405841a4d",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_7574c6e435256b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c64472e-f33c-46d2-a23a-2df7e7202931",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
