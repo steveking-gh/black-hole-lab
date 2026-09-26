@@ -16,11 +16,20 @@ whenever Alice and Bob receive a signal from the other.
 The simulation takes pains to respect Einstein's equations of general
 relativity.  To the precision of the numerical integration, the effects shown in
 Black Hole Lab are really what the math of general relativity says will happen.
-In some cases, the calculations stop at a limit, such as 10 billion for the
-ratio of the distant clock to Alice and Bob's clock. While the predictions of
-general relativity have been proven correct countless times, physicists agree
-that general relativity *cannot* be the final word on black holes.  Nobody knows
-yet what would *actually* happen to Alice and Bob inside a black hole.
+We use the famous Kerr metric, which is an exact solution to Einstein's
+equations of general relativity for a rotating mass discovered in 1963 by Roy
+Kerr.  Sadly, his original article is paywalled, but brave readers can find a
+deeply mathematical introduction from Matt Visser
+[here](https://arxiv.org/pdf/0706.0622).
+
+In some cases, the simulation stops calculations at a pre-defined limit, such as
+10 billion for the ratio of the coordinate time to Alice and Bob's proper time.
+These limits are unphysical, but keep internal numerical errors under control.
+
+While the predictions of general relativity have been proven correct countless
+times, physicists agree that general relativity *cannot* be the final word on
+black holes.  *Nobody* can say what would *actually* happen to Alice and Bob
+inside a black hole.
 
 ## Starting Up
 
@@ -65,22 +74,25 @@ Your *frame of reference* (FoR) is your local reality where your experiments
 measure the speed of light as `c` in all directions.  Your FoR is the all
 important determinant of distance, time and the order of events.  For example,
 two stopwatches in different FoRs could measure the same event as taking a
-million years or a millisecond.  The universe has no preferred FoR, so neither
-stopwatch is more correct than the other.
+million years or a millisecond.  An established principle in physics is that the
+universe has no preferred FoR, so neither stopwatch is more correct than the
+other.
 
 ### Frame of Reference vs Chart
 
 Black Hole Lab shows several *charts* such as the `EQUATORIAL PLANE` view.  The
 difference between these charts and a proper FoR is that a chart does *not* show
-the speed of light as constant in all directions.  You'll see light traveling
-"upstream" against gravity as moving more slowly than light aimed "downstream"
-into the black hole.  These charts treat light akin to a sound wave, yet still
-respect the mathematical rigor of general relativity.
+the speed of light as constant in all directions.  You'll see light moving
+slower *upstream* against gravity than light aimed *downstream* into the black
+hole.  This artificial view is still mathematically rigorous and can help our
+understanding more than the surprising and unintuitive reality of a constant
+`c`.
 
 ### Coordinate Time vs Proper Time
 
 *Coordinate time* is the artificial "chart clock" used to step the mathematics
-of the simulation.  Fudging just slightly, one second of coordinate time is our common notion of one second.
+of the simulation.  Fudging just slightly, one second of coordinate time is our
+common notion of one second.
 
 *Proper time* is the time measured in an observer's FoR, e.g. Bob's wristwatch.
 
@@ -201,22 +213,23 @@ against the fast current of space pouring into the black hole. On the other
 hand, we notice that the `Tidal` force on Bob, aka the famous
 *spaghettification* effect, is only 0.00001 g/m, which would be unnoticeable.
 
-### Receiving Radio Signals
+### Sending and Receiving Radio Signals
 
-Bob and Alice record when they receive the other's radio signal.  Receiving a signal appears as a special tick mark on the observer's world line.
+Bob and Alice can optionally transmit a radio pulse and record when they receive
+the other's radio pulse.  Sending a pulse puts a small dot on the sender's world
+line.  Receiving a signal appears as a triangular tick mark in the sender's
+color on the receiver's world line.  In the picture below, Bob sent 11 pulses
+and Alice has so far received 3 of them.
 
 ![Signal Reception](assets/images/receiving_signal.png)
 
-In this `EQUATORIAL PLANE` view, we see 3 triangular tick marks on Alice's world line that mark exactly when she received the first 3 wavefronts that have already passed her in space.
-
 The observer FoR and global foliation views also show signal receptions.  Here's
-Alice's FoR.  We see 3 turquoise color wavefronts have passed Alice and are now
-in her past.  Several more are in her future.  Because this is an FoR, the waves
-move past Alice at the speed of light and appear as 45 degree angle lines by
-definition.
+Alice's FoR of the same simulation above.  We see 3 turquoise color wavefronts
+have passed Alice and are now in her past.  Several more are in her future.
+Because this is an FoR, the waves move past Alice at the speed of light and
+appear as 45 degree angle lines by definition.
 
 ![Alice Reception](assets/images/alice_receive_1.png)
-
 
 ### The Black Hole Ergosphere
 
@@ -234,16 +247,16 @@ More details:
 
 ### The Black Hole Event Horizon (Region II)
 
-Next inside the ergosphere is the cyan *event horizon*.  The event horizon
+Next inside the ergosphere is the purple *event horizon*.  The event horizon
 marks the boundary where the vacuum of space moves *into* the black hole faster
-than the speed of light.  This is the point of no return!  An object can cross
+than the speed of light.  This is the point of no return.  An object can cross
 the event horizon going in, but cannot cross back into *our* universe.  Crossing
 the event horizon puts you in what physicists call `region II` of the black
 hole.
 
 Note that general relativity says spinning black holes have *two* event
-horizons.  The horizon we're discussing here is the *outer horizon* that
-physicists give the shorthand name `r+`.
+horizons, one outer and one inner.  The horizon we're discussing here is the
+*outer horizon* that physicists give the shorthand name `r+`.
 
 To put it mildly, interesting things happen at the outer event horizon.  For
 example, immediately after crossing, the event horizon stops being a place below
@@ -251,7 +264,8 @@ you and becomes a moment in your past!  Inside, time itself (your future) points
 toward the middle of the black hole.  To get back out, you need rocket engines
 strong enough to prevent tomorrow from happening.
 
-Complicating matters, physicists debate whether general relativity is correct about the event horizon.  A future [Theory of
+Complicating matters, physicists debate whether general relativity is the proper
+theory of an event horizon.  A future [Theory of
 Everything](https://en.wikipedia.org/wiki/Theory_of_everything) could describe
 very different physics there. See
 [Fuzzballs](https://www.youtube.com/watch?v=351JCOvKcYw) and
