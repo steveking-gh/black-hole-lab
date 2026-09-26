@@ -1,0 +1,26 @@
+src/app.rs
+  s_8aa93072b73a6b::t_42ca9bbdd1b39e 507
+src/gui/spatial_canvas.rs
+  s_8aa93072b73a6b::t_2193829d4d2495 1114-1118,1134-1135
+src/gui/cauchy_effects.rs
+  s_8aa93072b73a6b::t_42ca9bbdd1b39e 61
+src/gui/theme.rs
+  s_8aa93072b73a6b::t_b915e04f4644ca 24-26
+  s_8aa93072b73a6b::t_42ca9bbdd1b39e 27-29,36-41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "3542c7b25f1855f602694bfe33ffd5ee17cd3372",
+  "prompts": {},
+  "sessions": {
+    "s_8aa93072b73a6b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "50fc83b7-c9fd-4cee-9aaa-b8e3131a67f9",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
