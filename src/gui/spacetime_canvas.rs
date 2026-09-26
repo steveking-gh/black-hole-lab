@@ -15,7 +15,7 @@ use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::geodesic::{proper_time_between, R_STOP};
 use crate::physics::local_frame::{ruler_distance_along, LocalFrame, SurfaceCharacter};
 use crate::physics::observer::{LocalRestFrame, LocalSpeed, Observer, ObserverMode, Who};
-use crate::physics::wavefront::{NullRay, Reception, SignalField, TRACK_COLUMNS, TrackPoint};
+use crate::physics::wavefront::{NullRay, Pulse, Reception, SignalField, TRACK_COLUMNS, TrackPoint};
 use egui::{epaint::PathShape, Color32, Pos2, Rect, Stroke, Vec2};
 use crate::physics::normal_coords::{
     HorizonBranch, RadialConstants, SurfaceSampling, affine_length_to_surface,
@@ -3880,17 +3880,24 @@ Tick Enable Observer on Alice's or Bob's card",
         }
 
         // 3. The focus observer's own light cone: 45 degrees through the origin, by construction.
-        // 3b. The other observer's transmission as a wave: every pulse is a crest, and a crest is
-        // a null surface, so through this plane it is a line at 45 degrees when the light travels
-        // wholly along the drawn leg and steeper when part of its motion leaves the plane - only
-        // the component along that leg is in the picture. The leg is the observer's own radial one
-        // (section 1b), so light arriving radially draws the 45-degree stroke and light that
-        // arrives round the hole leans steeper, by exactly the aberration that carries its motion
-        // out of the plane. The dot in section 4 is projected onto the same plane and shortened by
-        // the same amount, so the crest through an arrival and the dot it came from agree.
-        // A received crest passes through its arrival on the observer's
-        // own worldline, which is exact; one still in flight is placed by its nearest ray's
-        // current event, to first order. The spacing of the arrivals up the axis *is* the
+        // 3b. The other observer's transmission as a wave: every pulse is a crest, and the stroke
+        // drawn for a crest is the *ray* that reaches the observer, projected onto this plane. A
+        // ray moving wholly along the drawn leg is the 45-degree line; a ray with part of its
+        // motion out of the plane projects steeper, because only the component along that leg is
+        // in the picture. (The slice of the null *surface* through this plane is the other
+        // honest choice and comes out shallower - the point where an oblique crest meets the leg
+        // outruns the light - and the view does not draw that.) The leg is the observer's own
+        // radial one (section 1b), so light arriving radially draws the 45-degree stroke and light
+        // that arrives round the hole leans steeper, by exactly the aberration that carries its
+        // motion out of the plane. The dot in section 4 is the same projection, so the crest
+        // through an arrival and the dot it came from agree, and a pulse sent from the seen event
+        // runs down the thin ray from that dot.
+        // A received crest passes through its arrival on the observer's own worldline, which is
+        // exact; one still in flight is placed by the ray of the front that is heading for the
+        // observer - the ray whose straight continuation in the linearised chart reaches their
+        // worldline - at that ray's current event projected onto this plane, to first order. The
+        // two are the same projection, so a crest approaches along the line it arrives on and
+        // nothing turns or waits at the hand-over. The spacing of the arrivals up the axis *is* the
         // received period on the observer's own clock, and against the emitter's spacing it is
         // the frequency ratio without a formula. On the approach to r- the rungs crowd together
         // without limit: the infinite blueshift, drawn as crests. See `wave_crests`.
@@ -4389,6 +4396,106 @@ impl WaveCrests {
     }
 }
 
+/// The ray of a pulse that is heading for the focus observer, to first order in their chart.
+pub(crate) struct HeadingRay {
+    /// The ray's current event in the observer's local chart, (xi^0, xi^1, xi^2).
+    pub xi: [f64; 3],
+    /// The ray's coordinate slopes there.
+    pub dr_dt: f64,
+    pub dphi_dt: f64,
+}
+
+/// Which ray of a pulse's front is heading for the focus observer: the point of the front whose
+/// straight continuation in the observer's linearised chart passes through their worldline.
+///
+/// In the chart a ray's current event is xi and its direction is v, both through the tetrad's
+/// linear map, and the observer's own worldline is the xi^0 axis to first order. The ray's
+/// continuation xi + s v passes through that axis when its spatial part does, and the signed
+/// distance by which it misses is the cross product (xi^1 v^2 - xi^2 v^1) over the spatial speed.
+/// That miss changes sign between two neighbouring rays that straddle the observer, and the ray
+/// between them is interpolated linearly along the segment, as the reception test interpolates
+/// across the front. Only rays still approaching count - xi . v < 0 in the spatial part - since a
+/// ray that has already passed the observer's radius or azimuth would need to run backwards to
+/// reach them, and a segment whose two ends stand on opposite sides of the hole is not a piece of
+/// front the chart can speak for. Where several pieces of the front are heading for the observer,
+/// the one whose current event is nearest in the drawn plane is returned.
+///
+/// This is the ray the *received* crest will be drawn from once it crosses, up to the first-order
+/// error of a straight continuation, which is what makes a crest drawn from it approach along the
+/// line it arrives on. Everything about the choice is made in the same linear map the drawing
+/// uses, so aberration and frame dragging enter the choice exactly as they enter the picture.
+pub(crate) fn ray_heading_for(
+    frame: &LocalFrame,
+    focus: &Observer,
+    pulse: &Pulse,
+) -> Option<HeadingRay> {
+    use std::f64::consts::{PI, TAU};
+    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    // A live, approaching ray in the chart: its current event and the signed miss of its straight
+    // continuation against the observer's worldline.
+    #[derive(Clone, Copy)]
+    struct Placed {
+        xi: [f64; 3],
+        miss: f64,
+    }
+    let placed: Vec<Option<Placed>> = pulse
+        .rays
+        .iter()
+        .map(|ray: &NullRay| {
+            if !ray.alive() {
+                return None;
+            }
+            let dphi = wrap(ray.phi - focus.phi);
+            let xi = frame.to_local(&[ray.t - focus.t, ray.r - focus.r, dphi]);
+            let v = frame.vector_to_local(&[1.0, ray.dr_dt, ray.dphi_dt]);
+            let speed = v[1].hypot(v[2]);
+            if !(xi.iter().chain(v.iter()).all(|c| c.is_finite()) && speed > 0.0) {
+                return None;
+            }
+            let approaching = xi[1] * v[1] + xi[2] * v[2] < 0.0;
+            if !approaching {
+                return None;
+            }
+            let miss = (xi[1] * v[2] - xi[2] * v[1]) / speed;
+            Some(Placed { xi, miss })
+        })
+        .collect();
+    let n = placed.len();
+    let mut best: Option<(f64, HeadingRay)> = None;
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let (Some(a), Some(b)) = (placed[i], placed[j]) else {
+            continue;
+        };
+        // Half-open at both ends, so a miss of exactly zero belongs to one segment.
+        if !((a.miss <= 0.0 && b.miss > 0.0) || (a.miss > 0.0 && b.miss <= 0.0)) {
+            continue;
+        }
+        // A pair of rays standing on opposite sides of the hole straddles the observer in the
+        // wrapped azimuth without any front between them.
+        let (ra, rb) = (&pulse.rays[i], &pulse.rays[j]);
+        if wrap(ra.phi - rb.phi).abs() > PI * 0.5 {
+            continue;
+        }
+        let u = a.miss / (a.miss - b.miss);
+        if !(0.0..1.0).contains(&u) {
+            continue;
+        }
+        let lerp = |x: f64, y: f64| x + u * (y - x);
+        let xi = std::array::from_fn(|c| lerp(a.xi[c], b.xi[c]));
+        let candidate = HeadingRay {
+            xi,
+            dr_dt: lerp(ra.dr_dt, rb.dr_dt),
+            dphi_dt: lerp(ra.dphi_dt, rb.dphi_dt),
+        };
+        let distance = xi[1].hypot(xi[0]);
+        if best.as_ref().is_none_or(|(d, _)| distance < *d) {
+            best = Some((distance, candidate));
+        }
+    }
+    best.map(|(_, ray)| ray)
+}
+
 /// A transmission's pulses as wave crests in the focus observer's local chart.
 ///
 /// A train of pulses emitted at a fixed interval of the emitter's clock is a wave with the
@@ -4400,24 +4507,38 @@ impl WaveCrests {
 /// the limit of closely spaced pulses.
 ///
 /// A received crest is placed through its arrival on the observer's worldline, xi^1 = 0 at
-/// xi^0 = tau_arrival - tau_now, which is exact. Its direction is that of the pulse's ray
-/// nearest the observer in azimuth, pushed into the chart, and the push keeps the two components
-/// the plane holds and drops the third: light travelling along the drawn spacelike leg draws a 45
-/// degree line, and light crossing that leg draws a steeper one, since only the component of its
-/// motion along the leg is in the picture. The view's leg is the focus observer's own radial one,
-/// so a crest whose light arrives radially is the 45-degree case and every other crest leans
-/// steeper by the amount its motion points round the hole.
-/// A crest still in flight is placed by that ray's current event through the linearised chart,
-/// and only within twice `reach` M of the observer, the window the picture is framed to, which
+/// xi^0 = tau_arrival - tau_now, which is exact. Its direction is that of the ray that crossed
+/// them, interpolated across the front at the crossing, pushed into the chart, and the push keeps
+/// the two components the plane holds and drops the third: light travelling along the drawn
+/// spacelike leg draws a 45 degree line, and light crossing that leg draws a steeper one, since
+/// only the component of its motion along the leg is in the picture. The view's leg is the focus
+/// observer's own radial one, so a crest whose light arrives radially is the 45-degree case and
+/// every other crest leans steeper by the amount its motion points round the hole.
+///
+/// A crest still in flight is placed by the ray of the front that is heading for the observer,
+/// found by `ray_heading_for`: the ray whose straight continuation in the linearised chart passes
+/// through the observer's worldline, interpolated between the two rays that bracket it. The crest
+/// goes through that ray's current event projected onto the drawn plane, with that ray's
+/// projected direction, which is the same projection the arrival and the seen dot use, so the
+/// crest runs down the line it will arrive on and meets the received crest without a turn. Where
+/// more than one piece of the front is heading for the observer, the nearest is the crest. It is
+/// drawn only within twice `reach` M of the observer, the window the picture is framed to, which
 /// is the region the chart can speak for.
+///
+/// Two other placements were tried and are not this one. The ray nearest the observer in the
+/// drawn plane parked the crest at the observer's now as soon as any part of the loop reached
+/// their radius at any azimuth, and then swung it onto the crossing ray's direction at the
+/// arrival: a pause and a turn with no physics in either. The point where the front stands at
+/// the observer's own azimuth lies in the plane by construction, but it is the slice of the null
+/// surface rather than a ray, and it slides along the radial leg faster than light - the point
+/// where an oblique crest meets a line outruns the light - so a stroke through it at the ray's
+/// projected slope predicted every arrival late by a factor of the aberration.
 pub(crate) fn wave_crests(
     frame: &LocalFrame,
     focus: &Observer,
     field: &SignalField,
     reach: f64,
 ) -> WaveCrests {
-    use std::f64::consts::{PI, TAU};
-    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
     // The trace in the drawn plane of a crest moving with coordinate slopes (dr/dt, dphi/dt):
     // the null vector (1, dr/dt, dphi/dt) in the chart's components, projected onto (xi^1, xi^0).
     let direction = |dr_dt: f64, dphi_dt: f64| -> [f64; 2] {
@@ -4430,10 +4551,6 @@ pub(crate) fn wave_crests(
         [v[1] / len, v[0] / len]
     };
     let pulse_of = |index: usize| field.pulses.iter().find(|p| p.index == index);
-    // Where a ray's current event lands in the chart.
-    let place = |ray: &NullRay| -> [f64; 3] {
-        frame.to_local(&[ray.t - focus.t, ray.r - focus.r, wrap(ray.phi - focus.phi)])
-    };
 
     let mut received: Vec<&Reception> = field.receptions().collect();
     received.sort_by(|a, b| a.tau_receiver.total_cmp(&b.tau_receiver));
@@ -4454,18 +4571,10 @@ pub(crate) fn wave_crests(
         if received.iter().any(|r| r.pulse_index == pulse.index) {
             continue;
         }
-        // The point of the front nearest the observer in their own chart is where the crest
-        // will sweep over them, to first order: the ray whose current event lies closest.
-        let Some((ray, xi)) = pulse
-            .rays
-            .iter()
-            .filter(|ray| ray.alive())
-            .map(|ray| (ray, place(ray)))
-            .filter(|(_, xi)| xi.iter().all(|c| c.is_finite()))
-            .min_by(|(_, a), (_, b)| a[1].hypot(a[0]).total_cmp(&b[1].hypot(b[0])))
-        else {
+        let Some(heading) = ray_heading_for(frame, focus, pulse) else {
             continue;
         };
+        let xi = heading.xi;
         let distance = xi[1].hypot(xi[0]);
         if distance >= 2.0 * reach {
             continue;
@@ -4475,7 +4584,7 @@ pub(crate) fn wave_crests(
             Crest {
                 xi1: xi[1],
                 xi0: xi[0],
-                dir: direction(ray.dr_dt, ray.dphi_dt),
+                dir: direction(heading.dr_dt, heading.dphi_dt),
                 received: false,
                 latest: false,
             },
@@ -6090,6 +6199,87 @@ mod canvas_tests {
     }
 
     #[test]
+    fn test_a_crest_in_flight_approaches_along_the_line_it_arrives_on() {
+        // A spinning hole and a receiver standing off the emitter's azimuth, so the light that
+        // reaches Bob comes partly round the hole and its crest leans well past 45 degrees in his
+        // radial plane. The crest still in flight is placed by the ray of the front heading for
+        // Bob, the ray that will sweep over him, so on the frame before an arrival it has to
+        // point the way the received crest will point and to predict the arrival where the
+        // reception then puts it. Placing it by the ray nearest Bob in the drawn plane did
+        // neither: it parked at his now and swung round at the hand-over. Anchoring it where the
+        // front stands at his azimuth pointed the right way and predicted every arrival late by
+        // a factor of about four, the slice of the surface outrunning the ray.
+        use crate::physics::observer::{ObserverMode, WorldlineParams};
+        let metric = KerrSchild::new(1.0, 0.9);
+        let mut alice =
+            Observer::new_with_phi(&metric, "Alice", 0.0, 6.0, 0.0, 0.0, WorldlineParams::default());
+        alice.mode = ObserverMode::Static;
+        let mut bob =
+            Observer::new_with_phi(&metric, "Bob", 0.0, 4.5, 0.0, 0.3, WorldlineParams::default());
+        bob.mode = ObserverMode::Static;
+        let mut field = SignalField::default();
+        let dt = 0.1;
+        // (direction of the nearest crest in flight, its predicted arrival on Bob's clock, the
+        // lean of that crest off the vertical in degrees) on the last frame before each arrival.
+        let mut before: Option<([f64; 2], f64, f64)> = None;
+        let mut checked = 0usize;
+        let mut worst_turn = 0.0f64;
+        let mut worst_miss = 0.0f64;
+        let mut leans = Vec::new();
+        for i in 0..80 {
+            let t = ((i + 1) as f64) * dt;
+            alice.step(&metric, t, dt);
+            bob.step(&metric, t, dt);
+            field.advance(&metric, dt);
+            field.emit_if_due(&metric, &alice);
+            let heard = field.received_count();
+            field.detect_receptions(&metric, &bob);
+            let frame = LocalFrame::for_observer(&metric, bob.r, &bob.four_velocity(&metric));
+            let crests = wave_crests(&frame, &bob, &field, 10.0);
+            if field.received_count() > heard
+                && let Some((dir, predicted, lean)) = before.take()
+            {
+                let latest = crests.crests.iter().find(|c| c.latest).expect("a latest arrival");
+                let turn = (dir[0] * latest.dir[0] + dir[1] * latest.dir[1]).clamp(-1.0, 1.0);
+                let turn = turn.acos().to_degrees();
+                let arrival = field
+                    .receptions()
+                    .map(|r| r.tau_receiver)
+                    .fold(f64::NEG_INFINITY, f64::max);
+                let miss = (predicted - arrival).abs();
+                worst_turn = worst_turn.max(turn);
+                worst_miss = worst_miss.max(miss);
+                leans.push(lean);
+                checked += 1;
+            }
+            // The nearest crest in flight, which is the next to arrive, and where its stroke
+            // meets Bob's worldline: anchor + s dir with xi^1 = 0.
+            if let Some(next) = crests.crests.iter().find(|c| !c.received) {
+                assert!(next.dir[0] != 0.0, "a crest in flight moves in r: {:?}", next.dir);
+                let s = -next.xi1 / next.dir[0];
+                let hit = next.xi0 + s * next.dir[1];
+                let lean = next.dir[0].abs().atan2(next.dir[1]).to_degrees();
+                before = Some((next.dir, bob.tau + hit, lean));
+            }
+        }
+        println!(
+            "{checked} arrivals checked against the crest drawn the frame before: the stroke \
+             turned at most {worst_turn:.3} degrees at the hand-over and the predicted arrival \
+             missed by at most {worst_miss:.5} M of Bob's time; the crests leaned {leans:.1?} \
+             degrees off the vertical"
+        );
+        assert!(checked >= 3, "only {checked} arrivals to check");
+        assert!(worst_turn < 1.0, "the crest turned {worst_turn} degrees on arrival");
+        assert!(worst_miss < 0.01, "the crest predicted its arrival {worst_miss} M off");
+        // The lean is the physics: light coming round the hole projects steeper than 45 degrees,
+        // which is under 45 degrees off the vertical, and this light comes well round it.
+        assert!(
+            leans.iter().all(|lean| *lean < 40.0),
+            "an oblique crest leans less than a radial one: {leans:?}"
+        );
+    }
+
+    #[test]
     fn test_a_frequency_is_printed_with_its_si_prefix_at_four_significant_digits() {
         for (hz, want) in [
             (0.489, "489.0 mHz"),
@@ -6541,7 +6731,7 @@ mod canvas_tests {
         let live: Vec<TrackPoint> = field
             .pulses
             .iter()
-            .filter(|p| p.rays.iter().any(NullRay::alive))
+            .filter(|p| p.rays.iter().any(|ray| ray.alive()))
             .filter_map(|p| p.extent_track.last().copied())
             .collect();
         assert!(live.len() >= 10, "only {} of Bob's pulses still have a front", live.len());
