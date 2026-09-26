@@ -1111,7 +1111,11 @@ fn draw_ring_spin_arrow(painter: &egui::Painter, center: Pos2, ring_px: f32, spi
         return;
     }
     let radius = 0.60 * ring_px;
-    let width = (0.10 * ring_px).clamp(1.5, 4.0);
+    // Proportional to the ring, with only a floor for legibility: the arrow is the one mark that
+    // says which way the hole turns, and a shaft or a head held at a fixed size by an upper clamp
+    // swallowed the arc at one zoom and vanished into the disc at another. Sixteen hundredths of
+    // the ring is about five times the hairline the arrow used to be at the zooms it is read at.
+    let width = (0.16 * ring_px).max(1.5);
     let sense = spin.signum();
     let at = |theta: f64| -> Pos2 {
         center + Vec2::new((radius as f64 * theta.cos()) as f32, -(radius as f64 * theta.sin()) as f32)
@@ -1127,7 +1131,8 @@ fn draw_ring_spin_arrow(painter: &egui::Painter, center: Pos2, ring_px: f32, spi
     // (-sin theta, -cos theta) once the y flip is in, and the sense of travel multiplies it.
     let tangent = Vec2::new(-(end_theta.sin()) as f32, -(end_theta.cos()) as f32) * sense as f32;
     let normal = Vec2::new(-tangent.y, tangent.x);
-    let head = (0.34 * ring_px).clamp(4.0, 14.0);
+    // The head in proportion to the shaft it tips, so the two scale together.
+    let head = (2.2 * width).max(4.0);
     painter.add(egui::Shape::convex_polygon(
         vec![
             tip_end + tangent * head,

@@ -21,15 +21,24 @@ impl Theme {
     // view paints these as disjoint strips or bands, never one over another, so that each region
     // is the same colour over the same background everywhere.
     pub const ERGOSPHERE_FILL: Color32 = Color32::from_rgba_premultiplied(50, 40, 10, 45);
-    pub const REGION_II_FILL: Color32 = Color32::from_rgba_premultiplied(45, 15, 55, 60);
-    pub const REGION_III_FILL: Color32 = Color32::from_rgba_premultiplied(10, 50, 45, 60);
+    /// Region II, between the horizons: a violet a touch darker than it once was, so that the
+    /// outer horizon, now the lit version of the same violet, stands off it.
+    pub const REGION_II_FILL: Color32 = Color32::from_rgba_premultiplied(42, 14, 52, 60);
+    /// Region III, inside r-: a dark shade of `HORIZON_CAUCHY`, the magenta of the line that
+    /// bounds it, so the innermost region reads as belonging to the Cauchy horizon.
+    pub const REGION_III_FILL: Color32 = Color32::from_rgba_premultiplied(30, 0, 15, 60);
     pub const SINGULARITY_FILL: Color32 = Color32::from_rgba_premultiplied(80, 10, 20, 180);
     /// The spin arrow drawn inside the ring: `SINGULARITY_FILL` with its colour at 55% and the
     /// same alpha, so it reads as a shade of the disc it is drawn on rather than as a new colour.
     pub const SINGULARITY_SPIN: Color32 = Color32::from_rgba_premultiplied(44, 6, 11, 180);
 
     // Boundaries & Horizons
-    pub const HORIZON_OUTER: Color32 = Color32::from_rgb(0, 230, 255); // Cyan
+    /// The outer horizon: a luminous violet, the hue of `REGION_II_FILL` at full brightness, so
+    /// the line reads as the lit edge of the region it opens onto.
+    pub const HORIZON_OUTER: Color32 = Color32::from_rgb(190, 90, 255);
+    /// The headings' cyan: the title line and the telemetry heading, which used to borrow the
+    /// outer horizon's colour and keep the colour now that the horizon has moved on.
+    pub const HEADING: Color32 = Color32::from_rgb(0, 230, 255);
     pub const HORIZON_CAUCHY: Color32 = Color32::from_rgb(255, 0, 130); // Neon Pink / Magenta
     pub const ERGOSPHERE_LINE: Color32 = Color32::from_rgb(255, 180, 0); // Amber
     pub const SINGULARITY_LINE: Color32 = Color32::from_rgb(255, 40, 60); // Crimson
