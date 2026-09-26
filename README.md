@@ -98,7 +98,8 @@ common notion of one second.
 *Proper time* is the time measured in an observer's FoR, e.g. Bob's wristwatch.
 
 To get a sense of the difference, imagine Bob falling into the black hole while
-Alice observes from far away.  Let's compare Alice's proper time, Bob's proper time and the coordinate time.
+Alice observes from far away.  Let's compare Alice's proper time, Bob's proper
+time and the coordinate time.
 
 * In her proper time, Alice sees Bob slow as he nears the event horizon and his
   watch ticking ever more slowly.  Wait as she might, Alice never sees Bob cross
@@ -265,10 +266,6 @@ you and becomes a moment in your past!  Inside, time itself (your future) points
 toward the middle of the black hole.  To get back out, you need rocket engines
 strong enough to prevent tomorrow from happening.
 
-Here's Bob falling through the event horizon while transmitting his radio pulse.  Some of the pulse sent just outside the horizon will escape outward, but his next pulse just inside the horizon remains completely trapped and cannot return to our universe.
-
-[bob horizon 1](https://github.com/user-attachments/assets/cf6b8056-f693-4113-ac4e-6d056a30aa84)
-
 Complicating matters, physicists debate whether general relativity is the proper
 theory of an event horizon.  A future [Theory of
 Everything](https://en.wikipedia.org/wiki/Theory_of_everything) could describe
@@ -277,6 +274,39 @@ very different physics there. See
 [Firewalls](https://www.youtube.com/watch?v=4uQF9Egc-fM&t=14s) for example.
 Black Hole Lab, being a general relativity simulation, inherits the **smooth no
 drama** view.
+
+#### Transmissions Inside The Event Horizon Cannot Escape
+
+Here's a short video of Bob falling through the event horizon while transmitting
+his radio pulse.  Some of the pulse sent just outside the horizon will escape
+outward, but his next pulse just inside the horizon remains completely trapped
+and cannot return to our universe.
+
+[bob horizon 1](https://github.com/user-attachments/assets/cf6b8056-f693-4113-ac4e-6d056a30aa84)
+
+Let's look at this same horizon crossing from the 1D+1 chart.  Just as Bob
+crosses the horizon, his light cone tilts completely into the black hole.  Bob's
+entire future is *inside* the event horizon.  Notice the "comets" hugging the
+*now* line.  The comets are a projection of Bob's transmission pulses in the
+1D+1 chart.  Each pulse propagates in all directions, but different parts of the
+same pulse can end up in very different places.
+
+* Parts of the pulse emitted straight at the black hole hit the ring singularity.
+* Some parts of the pulse emitted prograde (in the direction of rotation)
+  accumulate in the prograde photon sphere, which results in the clump of
+  transmission comets you see to the right of Bob inside the ergosphere.
+* Some parts of the pulse emitted prograde asymptotically approach the far
+  branch of the inner horizon, which you can see on Bob's left.
+* Some parts of the pulse cross the inner horizon in finite coordinate time, but
+  do not hit the ring singularity and rise to asymptotically approach the inner
+  horizon from below.
+
+The simulation adds none of these effects by hand.  They emerge naturally from
+simulating the math of the Kerr solution to the equations of general relativity.
+
+Note that the control panel allows you to adjust transmissions to increase the
+density of simulation points in a transmission, the number of comets displayed
+and so on.
 
 ### The Black Hole Inner (Cauchy) Horizon
 
