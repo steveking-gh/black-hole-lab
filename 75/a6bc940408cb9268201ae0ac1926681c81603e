@@ -1,0 +1,41 @@
+src/gui/mesh_pool.rs
+  s_8aa93072b73a6b::t_c0e23c99894a68 56-57
+  s_8aa93072b73a6b::t_7d15119c105e6d 355-358
+  s_8aa93072b73a6b::t_ac6353df605b3d 154-156,158-159,161-165
+  s_8aa93072b73a6b::t_aedf35ac051db8 295-354,359-386
+  s_8aa93072b73a6b::t_1cc6052ddf47ce 55,58-64
+  s_8aa93072b73a6b::t_7a37d3c83e648d 230-233
+  s_8aa93072b73a6b::t_6251fac676f47a 214-229,234-240
+  s_8aa93072b73a6b::t_fc35268a99b882 294
+src/gui/spatial_canvas.rs
+  s_8aa93072b73a6b::t_aedf35ac051db8 4852,4861,4899
+  s_8aa93072b73a6b::t_7d15119c105e6d 2456
+src/gui/spacetime_canvas.rs
+  s_8aa93072b73a6b::t_e8e2113d0aa190 6843-6897,6903-6932,6934-6981
+  s_8aa93072b73a6b::t_6d5ae88f329150 6898-6902
+  s_8aa93072b73a6b::t_674c567a376405 2302,2306
+  s_8aa93072b73a6b::t_936d84183016af 2097-2107,2944,2946
+  s_8aa93072b73a6b::t_c46bb2d44e2560 6933
+  s_8aa93072b73a6b::t_0cc10929bd40e4 5,2087-2096,2108-2301,2303-2305,2307-2315,2938-2943,2945,2947-2949,2951
+  s_8aa93072b73a6b::t_0bcab76ca0a39f 2927-2937
+src/perf/replay.rs
+  s_8aa93072b73a6b::t_1df60b614f99a5 162-163,166-176
+  s_8aa93072b73a6b::t_c842bc7868cb38 164-165
+  s_8aa93072b73a6b::t_e45bc5a2f19a13 161
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "75a6bc940408cb9268201ae0ac1926681c81603e",
+  "prompts": {},
+  "sessions": {
+    "s_8aa93072b73a6b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "50fc83b7-c9fd-4cee-9aaa-b8e3131a67f9",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
