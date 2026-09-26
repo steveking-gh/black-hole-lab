@@ -1,0 +1,25 @@
+README.md
+  h_5b3f31968f5853 235-247,304-305,314-315,327-363
+  s_8aa93072b73a6b::t_02e42700dec8eb 303,306-307,313,321,364
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d53d97ed94499a56457cfcff0cee4e5170f48459",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_8aa93072b73a6b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "50fc83b7-c9fd-4cee-9aaa-b8e3131a67f9",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
