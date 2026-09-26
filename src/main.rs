@@ -24,6 +24,7 @@ mod app;
 mod gui;
 mod perf;
 mod physics;
+mod pool;
 mod save;
 mod stamp;
 mod version;

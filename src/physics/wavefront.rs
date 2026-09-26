@@ -3385,13 +3385,47 @@ impl SignalField {
     /// `NullRay::step` carries a dead ray forward on the clock without moving it, so every ray of
     /// the field reads the same t as the field itself and `step_back` can ask each of them the one
     /// question that matters: was this ray still alive dt ago?
+    ///
+    /// The pulses are stepped on the machine's spare threads as well as the caller's, a pulse a
+    /// job; see `advance_with`.
     pub fn advance(&mut self, metric: &KerrSchild, dt: f64) {
+        self.advance_with(metric, dt, crate::pool::spare_threads());
+    }
+
+    /// `advance`, on `workers` threads besides the caller's: zero for the caller alone.
+    ///
+    /// A pulse is a job. What a pulse does in a step - every ray stepped, then its extent track,
+    /// its ring history and its "Ray comets" trail read off where those rays now stand - reads the
+    /// metric, the step, the field's new clock, the shared raindrop and the comet stride, none of
+    /// which the step changes, and writes that pulse and nothing else; nothing carries from one
+    /// pulse to the next. The one field-level write, the count of rays the substep budget retired,
+    /// is a sum of integers and is added up after the join. So each pulse is stepped by exactly the
+    /// arithmetic the serial loop would do, on whichever thread takes it, and the field comes out
+    /// the same to the bit however many threads there are. The tests hold it to that.
+    ///
+    /// One job a pulse rather than one a chunk of pulses, because pulses differ in cost a
+    /// hundredfold - a ray closing on the ring takes about 7.7 us a step, a frozen or escaping one
+    /// about 0.2 us - and the pool's shared queue balances job by job: a chunk would tie a heavy
+    /// pulse's neighbours to its thread.
+    ///
+    /// The count is taken as given whatever the field's size, and there is no size below which a
+    /// field is kept on the caller. `run_jobs` starts no more threads than it has jobs for another
+    /// thread to take, so an empty field, or one of a single pulse, spawns nothing; beyond that the
+    /// spawn is paid on every field. A threshold would save it, about a third of a millisecond,
+    /// only on a field of a few pulses whose step is itself a fraction of that, and would buy a
+    /// second path through this function and a rule for how two fields divide the threads. One rule
+    /// is worth more. What the pool is worth, measured 2026-09-26 on sixteen cores: one played frame
+    /// of Alice's steady-state field at the panel's defaults, 64 wavefronts by 144 points, fell from
+    /// 1.72 ms to 0.51 ms forward and from 1.68 ms to 0.50 ms back (the quick gate's `field/advance`
+    /// and `field/step-back`), the simulation of a quick window from 2.36 ms a frame to 0.94, and at
+    /// 1024 points by 128 wavefronts with both observers transmitting a frame of simulation from
+    /// 27.5 ms to 6.2. The tests pass zero to get the serial reference.
+    pub(crate) fn advance_with(&mut self, metric: &KerrSchild, dt: f64, workers: usize) {
         if dt <= 0.0 {
             return;
         }
         self.t += dt;
         let t = self.t;
-        let mut exhausted = 0;
         // One instance of the raindrop congruence for the whole field, as `draw_signal_field`
         // builds one for the whole frame and for the same reason: `GeodesicState::derivatives`
         // reads only (E, L) off the state and takes the radius as an argument, so the radius it is
@@ -3399,23 +3433,21 @@ impl SignalField {
         // read it; constructing it is a handful of arithmetic against tens of thousands of ray
         // substeps, so it is not made conditional.
         let raindrop = GeodesicState::new_infall(metric, 0.0, 12.0, 1.0, 0.0);
-        for pulse in self.pulses.iter_mut() {
-            for ray in pulse.rays.iter_mut() {
-                if ray.step(metric, dt) == RayStep::BudgetExhausted {
-                    exhausted += 1;
-                }
-            }
-            // After the rays and never before: the extent is read off where they now stand, and so
-            // is the ring.
-            pulse.extend_track(metric, t);
-            pulse.extend_history(metric, t, &raindrop);
-            // The "Ray comets" trails, read off the rays after they have moved and never written
-            // back to them. Off, this is one comparison per pulse.
-            if self.ray_comet_stride > 0 {
-                let n = pulse.rays.len();
-                pulse.trail.get_or_insert_with(|| RayTrail::new(n)).record(&pulse.rays, t);
-            }
-        }
+        let stride = self.ray_comet_stride;
+        let exhausted: usize = if workers == 0 {
+            self.pulses
+                .iter_mut()
+                .map(|pulse| advance_pulse(pulse, metric, dt, t, &raindrop, stride))
+                .sum()
+        } else {
+            let raindrop = &raindrop;
+            let jobs: Vec<_> = self
+                .pulses
+                .iter_mut()
+                .map(|pulse| move || advance_pulse(pulse, metric, dt, t, raindrop, stride))
+                .collect();
+            crate::pool::run_jobs(jobs, workers).into_iter().sum()
+        };
         self.budget_exhausted += exhausted;
     }
 
@@ -3444,7 +3476,23 @@ impl SignalField {
     /// One thing does not come back. A pulse already evicted by the pulse cap is gone from
     /// the field, and no amount of stepping backwards restores it; the reversible window is the
     /// window the cap keeps.
+    ///
+    /// The pulses are rewound on the spare threads as well as the caller's, a pulse a job, for the
+    /// reasons `advance_with` gives; see `step_back_with`.
     pub fn step_back(&mut self, metric: &KerrSchild, dt: f64) {
+        self.step_back_with(metric, dt, crate::pool::spare_threads());
+    }
+
+    /// `step_back`, on `workers` threads besides the caller's: zero for the caller alone.
+    ///
+    /// The rewind of one pulse - its rays carried back, its track, history and receptions cut at
+    /// the target time, its trail emptied and its side mark dropped - reads the metric, dt and the
+    /// target time and writes that pulse alone, exactly as a step forward does, so the pulses are
+    /// jobs for `crate::pool::run_jobs` and the result is the serial one to the bit. What reads or
+    /// writes the field as a whole - the target time, the pulses emitted after it, the arrivals
+    /// unrecorded, `last_emit_tau` and `last_delivered` - is done on the caller, before the jobs or
+    /// after them.
+    pub(crate) fn step_back_with(&mut self, metric: &KerrSchild, dt: f64, workers: usize) {
         if dt <= 0.0 {
             return;
         }
@@ -3457,36 +3505,16 @@ impl SignalField {
         let target_t = if latest.is_finite() { latest } else { self.t } - dt;
 
         self.pulses.retain(|p| p.emitted_t <= target_t + 1e-12);
-        let mut exhausted = 0;
-        for pulse in self.pulses.iter_mut() {
-            for ray in pulse.rays.iter_mut() {
-                if ray.step_back(metric, dt) == RayStep::BudgetExhausted {
-                    exhausted += 1;
-                }
-            }
-            // A track is appended in order and thinned in place, so it is sorted in t and the
-            // points to keep are a prefix: `partition_point` finds where that prefix ends. The
-            // floor of one is the seed, the emission event, which is never cut away.
-            let keep =
-                pulse.extent_track.partition_point(|p| p.t <= target_t + 1e-9).max(1);
-            pulse.extent_track.truncate(keep);
-            // The history is cut on the same rule, by the same search, and with the same tolerance:
-            // a row recorded after the target was recorded off rays that have just been integrated
-            // back out of it, and the emission row is never cut away.
-            if let Some(history) = pulse.history.as_mut() {
-                let keep = history.rows.partition_point(|row| row.t <= target_t + 1e-9).max(1);
-                history.rows.truncate(keep);
-            }
-            pulse.receptions.retain(|rec| rec.t <= target_t);
-            // A trail is a view of the recent past and is not rewound: it is emptied, and the
-            // tails rebuild from here as the run plays on.
-            if let Some(trail) = pulse.trail.as_mut() {
-                trail.clear();
-            }
-            // A mark is a statement about where the front and the receiver were, and the rewind has
-            // just moved both: the priming pass takes a fresh one at the rewound state.
-            pulse.prev = None;
-        }
+        let exhausted: usize = if workers == 0 {
+            self.pulses.iter_mut().map(|pulse| step_back_pulse(pulse, metric, dt, target_t)).sum()
+        } else {
+            let jobs: Vec<_> = self
+                .pulses
+                .iter_mut()
+                .map(|pulse| move || step_back_pulse(pulse, metric, dt, target_t))
+                .collect();
+            crate::pool::run_jobs(jobs, workers).into_iter().sum()
+        };
         self.budget_exhausted += exhausted;
         self.heard.retain(|rec| rec.t <= target_t);
         // Pulses are emitted in order of the emitter's own clock and the retain above keeps a
@@ -3680,6 +3708,75 @@ impl SignalField {
     }
 }
 
+/// One pulse's part of `SignalField::advance_with`, returning how many of its rays the substep
+/// budget retired: every ray stepped by dt, then the pulse's extent track, ring history and "Ray
+/// comets" trail recorded at the field's new clock `t`, in that order.
+///
+/// It reads nothing of the field beyond what it is handed and writes nothing but the pulse, which
+/// is what lets `advance_with` hand pulses to different threads; see there. `stride` is the
+/// field's `ray_comet_stride`, copied, and `raindrop` the one instance of the raindrop congruence
+/// the whole field shares.
+fn advance_pulse(
+    pulse: &mut Pulse,
+    metric: &KerrSchild,
+    dt: f64,
+    t: f64,
+    raindrop: &GeodesicState,
+    stride: usize,
+) -> usize {
+    let mut exhausted = 0;
+    for ray in pulse.rays.iter_mut() {
+        if ray.step(metric, dt) == RayStep::BudgetExhausted {
+            exhausted += 1;
+        }
+    }
+    // After the rays and never before: the extent is read off where they now stand, and so is the
+    // ring.
+    pulse.extend_track(metric, t);
+    pulse.extend_history(metric, t, raindrop);
+    // The "Ray comets" trails, read off the rays after they have moved and never written back to
+    // them. Off, this is one comparison per pulse.
+    if stride > 0 {
+        let n = pulse.rays.len();
+        pulse.trail.get_or_insert_with(|| RayTrail::new(n)).record(&pulse.rays, t);
+    }
+    exhausted
+}
+
+/// One pulse's part of `SignalField::step_back_with`, returning how many of its rays the substep
+/// budget retired: every ray carried back by dt, and everything the pulse recorded after
+/// `target_t` undone. Like `advance_pulse` it writes this pulse and nothing else.
+fn step_back_pulse(pulse: &mut Pulse, metric: &KerrSchild, dt: f64, target_t: f64) -> usize {
+    let mut exhausted = 0;
+    for ray in pulse.rays.iter_mut() {
+        if ray.step_back(metric, dt) == RayStep::BudgetExhausted {
+            exhausted += 1;
+        }
+    }
+    // A track is appended in order and thinned in place, so it is sorted in t and the points to
+    // keep are a prefix: `partition_point` finds where that prefix ends. The floor of one is the
+    // seed, the emission event, which is never cut away.
+    let keep = pulse.extent_track.partition_point(|p| p.t <= target_t + 1e-9).max(1);
+    pulse.extent_track.truncate(keep);
+    // The history is cut on the same rule, by the same search, and with the same tolerance: a row
+    // recorded after the target was recorded off rays that have just been integrated back out of
+    // it, and the emission row is never cut away.
+    if let Some(history) = pulse.history.as_mut() {
+        let keep = history.rows.partition_point(|row| row.t <= target_t + 1e-9).max(1);
+        history.rows.truncate(keep);
+    }
+    pulse.receptions.retain(|rec| rec.t <= target_t);
+    // A trail is a view of the recent past and is not rewound: it is emptied, and the tails rebuild
+    // from here as the run plays on.
+    if let Some(trail) = pulse.trail.as_mut() {
+        trail.clear();
+    }
+    // A mark is a statement about where the front and the receiver were, and the rewind has just
+    // moved both: the priming pass takes a fresh one at the rewound state.
+    pulse.prev = None;
+    exhausted
+}
+
 /// The delivery of the newest pulse among these that has been received, or None if none has.
 fn newest_delivery(pulses: &VecDeque<Pulse>) -> Option<Delivery> {
     // Pulses are held in emission order, so the newest one that has been heard is the last one
@@ -3835,6 +3932,15 @@ impl SignalPair<'_> {
     /// of microseconds on Windows against milliseconds of ray integration. Each field does the same
     /// arithmetic whether the two run side by side or one after the other, so the threads change
     /// nothing in the physics.
+    ///
+    /// Inside each chain the field shares its own pulses out over the pool's spare threads
+    /// (`SignalField::advance`). Each chain asks for all of them: with both observers transmitting
+    /// that is two field threads and eight workers each on a machine of sixteen cores, one thread
+    /// over, and the spare threads of a field that has finished are simply back with the machine.
+    /// Dividing the threads between the two chains, half each, was tried and taken out: a chain
+    /// that finished first left its half idle while the other worked on, and the 1024-by-128 replay
+    /// with both observers transmitting ran at 9.0 ms a frame of simulation divided against 6.2
+    /// with each chain asking for all of them, and 27.5 on one thread a chain.
     pub fn advance(
         &mut self,
         metric: &KerrSchild,
@@ -8467,6 +8573,138 @@ mod tests {
             newest,
             "and so does the row that has just been pushed"
         );
+    }
+    /// A field of the ISCO pair's kind grown to hold every sort of pulse the pool will be handed,
+    /// and the receiver it has been listening to: Alice transmitting from the prograde ISCO of an
+    /// a = 0.9 hole and Bob half a radian round on the same orbit, played for 20 M. The perf
+    /// scenarios put Bob on the retrograde ISCO; here he rides with Alice, because on that orbit
+    /// her light reaches him every pulse or two and some pulse still in flight has always been
+    /// heard, which a rewind then has receptions to cut.
+    ///
+    /// By then the oldest of its pulses have rays on the ring (dead), rays frozen onto r- from
+    /// above, rays that crossed r- and climbed back, and rays on their way out, while the newest
+    /// are a few steps old; two of them are tagged and carry a ring history, the "Ray comets"
+    /// trail is on, Bob has heard some of them, and the cap has evicted some. So every hook of a
+    /// pulse's step and every cut of its rewind has something to act on. 256 rays a pulse rather
+    /// than the panel's thousand keeps the growing to a second or two, and changes nothing about
+    /// which paths are taken.
+    fn grown_isco_field() -> (KerrSchild, SignalField, Observer) {
+        let metric = KerrSchild::new(1.0, 0.9);
+        let observer = |name, prograde: bool, phi| {
+            let r = metric.isco(prograde);
+            let (energy, l_ang) = metric.circular_orbit(r, prograde).expect("an ISCO orbit");
+            let params =
+                WorldlineParams { energy, l_ang, outgoing: false, ..WorldlineParams::default() };
+            Observer::new_with_phi(&metric, name, 0.0, r, 0.0, phi, params)
+        };
+        let mut alice = observer("Alice", true, 0.0);
+        let mut bob = observer("Bob", true, 0.5);
+        let mut field = SignalField {
+            rays_per_pulse: 256,
+            max_pulses: 16,
+            interval_tau: 0.4,
+            ..SignalField::default()
+        };
+        field.set_ray_comet_stride(8);
+        assert!(field.emit_if_due(&metric, &alice), "the first pulse is due at once");
+        let dt = 0.1;
+        for i in 1..=200 {
+            let t = i as f64 * dt;
+            alice.step(&metric, t, dt);
+            bob.step(&metric, t, dt);
+            field.advance_with(&metric, dt, 0);
+            field.detect_receptions(&metric, &bob);
+            if field.emit_if_due(&metric, &alice) {
+                field.mark_newest(&metric, &bob);
+            }
+        }
+        let rays = || field.pulses.iter().flat_map(|p| p.rays.iter());
+        let rm = metric.inner_horizon();
+        assert!(rays().any(|ray| !ray.alive()), "some ray has died");
+        assert!(rays().any(|ray| ray.alive() && ray.frozen(&metric)), "some ray is frozen");
+        assert!(rays().any(|ray| ray.alive() && ray.r < rm), "some ray is inside r-");
+        assert!(rays().any(|ray| ray.alive() && ray.dr_dt > 0.0 && ray.r > 3.0), "some escape");
+        assert!(field.pulses.iter().any(|p| p.history.is_some()), "a tagged pulse is in flight");
+        assert!(field.pulses.iter().any(|p| !p.receptions.is_empty()), "Bob has heard a pulse");
+        assert!(field.dropped_in_flight > 0 || field.next_index > 16, "the cap has bitten");
+        (metric, field, bob)
+    }
+
+    /// Everything a field holds, as text that tells two fields apart if any bit of any float in
+    /// them differs: every ray's state, every track, history row, trail sample, reception and side
+    /// mark, and the field's own counters. `{:?}` prints an f64 as the shortest decimal that reads
+    /// back to the same bits, so equal text is equal floats, signed zeros included; the one thing
+    /// it cannot see is a NaN's payload, which nothing here reads.
+    fn every_bit(field: &SignalField) -> String {
+        format!("{field:?}")
+    }
+
+    #[test]
+    fn test_parallel_advance_equals_the_serial_one() {
+        // A pulse is a job on the pool, and a job does the arithmetic the serial loop does on
+        // whichever thread takes it, so the field has to come out the same to the bit however
+        // many threads there are - one worker, an odd number that does not divide the pulses, and
+        // more than the machine may have.
+        let (metric, grown, _) = grown_isco_field();
+        let dt = 1.0 / 60.0;
+        let mut serial = grown.clone();
+        for _ in 0..6 {
+            serial.advance_with(&metric, dt, 0);
+        }
+        assert_ne!(every_bit(&serial), every_bit(&grown), "the steps moved the field");
+        for workers in [1, 3, 8] {
+            let mut parallel = grown.clone();
+            for _ in 0..6 {
+                parallel.advance_with(&metric, dt, workers);
+            }
+            assert!(
+                every_bit(&parallel) == every_bit(&serial),
+                "{workers} workers: the parallel advance differs from the serial one"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parallel_step_back_equals_the_serial_one() {
+        // The same for a rewind, whose per-pulse part also cuts the track, the history and the
+        // receptions at the target time, empties the trail and drops the side mark. Rewound far
+        // enough that some reception is unrecorded and some ray revives, so those paths run.
+        let (metric, grown, _) = grown_isco_field();
+        let dt = 0.25;
+        let mut serial = grown.clone();
+        for _ in 0..4 {
+            serial.step_back_with(&metric, dt, 0);
+        }
+        let heard = |f: &SignalField| f.pulses.iter().map(|p| p.receptions.len()).sum::<usize>();
+        let dead = |f: &SignalField| {
+            f.pulses.iter().flat_map(|p| p.rays.iter()).filter(|r| !r.alive()).count()
+        };
+        assert!(heard(&serial) < heard(&grown), "the rewind unrecorded a reception");
+        assert!(dead(&serial) < dead(&grown), "the rewind revived a ray");
+        assert!(serial.pulses.iter().all(|p| p.prev.is_none()), "every side mark dropped");
+        for workers in [1, 3, 8] {
+            let mut parallel = grown.clone();
+            for _ in 0..4 {
+                parallel.step_back_with(&metric, dt, workers);
+            }
+            assert!(
+                every_bit(&parallel) == every_bit(&serial),
+                "{workers} workers: the parallel rewind differs from the serial one"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parallel_advance_is_deterministic() {
+        // Two runs on the pool take the pulses in different orders on different threads, and must
+        // still agree with each other to the bit.
+        let (metric, grown, _) = grown_isco_field();
+        let (mut first, mut second) = (grown.clone(), grown);
+        for _ in 0..6 {
+            first.advance_with(&metric, 1.0 / 60.0, 8);
+            second.advance_with(&metric, 1.0 / 60.0, 8);
+        }
+        assert!(every_bit(&first) == every_bit(&second), "two parallel advances differ");
     }
 }
 

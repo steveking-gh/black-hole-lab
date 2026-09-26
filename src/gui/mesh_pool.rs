@@ -39,18 +39,10 @@
 //! So circles, text, and every other shape this module has no reason to take on pass through
 //! untouched, in their place in the order, and egui tessellates them as before.
 //!
-//! The threads are scoped and spawned per frame. They borrow what they draw - a field of light
-//! several megabytes deep - straight from the caller, with no copy, no `'static` and no `unsafe`,
-//! and they are joined before the borrow ends. Spawning a handful costs about a third of a
-//! millisecond on Windows, against tens of milliseconds of work shared out.
-//!
-//! How a persistent pool would slot in: `build_meshes` is the only place that knows threads exist,
-//! and its signature - a list of jobs in, their results out in the same order - is what a pool
-//! would also offer, so the painters would not change. The jobs would. A pool's threads outlive the
-//! frame, so a job could no longer borrow the field; it would need its own snapshot of the fronts,
-//! about 16 bytes a ray, taken as each simulation thread finishes its own advance. That snapshot is
-//! also what would let the drawing of one transmission start while the other is still being
-//! stepped, which scoped threads joined after the whole step cannot do.
+//! The threads themselves are `crate::pool`'s, which the simulation's ray integration shares: see
+//! there for why they are scoped and spawned per call, how the jobs are shared out, and how a
+//! persistent pool would slot in. `build_meshes` is that fork-join with the painters' worker count,
+//! and the painters know nothing else about threads.
 //!
 //! Two painters are built on this: the equatorial view's fronts (`draw_signal_fields_parallel`)
 //! and the (t, r) chart's comets (`draw_comets_parallel`), whose "Ray comets" pass at All is a line
@@ -63,28 +55,14 @@
 //! volume's pulse surfaces and floor fronts. The volume's floor is not an affine projection, so its
 //! chunks want their own equality test before they are trusted.
 
-use std::sync::Mutex;
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use egui::epaint::{Mesh, TessellationOptions, Tessellator, TextureId};
 use egui::{Rect, Shape};
 
-/// Most threads `build_meshes` starts besides the one calling it.
-///
-/// Past about eight the jobs of one frame are too small for another thread to pay for its spawn,
-/// and the physics has two threads of its own that the next frame will want back.
-pub(crate) const MAX_MESH_WORKERS: usize = 8;
-
-/// How many threads `build_meshes` will start besides the one calling it: one fewer than the
-/// machine has, so the caller's share is not taken from it, and never more than
-/// `MAX_MESH_WORKERS`. Zero on a machine with one core, where every job runs on the caller.
+/// How many threads `build_meshes` will start besides the one calling it: all that
+/// `crate::pool::spare_threads` offers, which is one fewer than the machine has and never more
+/// than `crate::pool::MAX_WORKERS`. The painters size their runs by it.
 pub(crate) fn mesh_workers() -> usize {
-    static WORKERS: OnceLock<usize> = OnceLock::new();
-    *WORKERS.get_or_init(|| {
-        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
-        cores.saturating_sub(1).min(MAX_MESH_WORKERS)
-    })
+    crate::pool::spare_threads()
 }
 
 /// Everything a worker needs to tessellate a shape exactly as egui will at the end of this frame.
@@ -246,49 +224,15 @@ struct Run {
     out: Vec<Shape>,
 }
 
-/// Run every job and return what each returned, in the order the jobs were given.
-///
-/// Up to `mesh_workers` scoped threads are started and the calling thread works alongside them,
-/// every thread taking the next job not yet taken until none are left, so a heavy job holds up one
-/// thread and not a share of the rest. A panic in a job is carried back to the caller. With one
-/// job, or no thread to spare, the jobs simply run on the caller in order.
+/// Run every job and return what each returned, in the order the jobs were given, on
+/// `mesh_workers` threads besides the caller: `crate::pool::run_jobs`, which says how the jobs are
+/// shared out and why the order is kept.
 pub(crate) fn build_meshes<J, R>(jobs: Vec<J>) -> Vec<R>
 where
     J: FnOnce() -> R + Send,
     R: Send,
 {
-    let workers = mesh_workers().min(jobs.len().saturating_sub(1));
-    if workers == 0 {
-        return jobs.into_iter().map(|job| job()).collect();
-    }
-    let count = jobs.len();
-    let queue: Vec<Mutex<Option<J>>> = jobs.into_iter().map(|job| Mutex::new(Some(job))).collect();
-    let next = AtomicUsize::new(0);
-    let work = || {
-        let mut done = Vec::new();
-        loop {
-            let k = next.fetch_add(1, Ordering::Relaxed);
-            let Some(slot) = queue.get(k) else { break };
-            let job = slot
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take()
-                .expect("each job is taken by exactly one thread");
-            done.push((k, job()));
-        }
-        done
-    };
-    let mut done = std::thread::scope(|s| {
-        let threads: Vec<_> = (0..workers).map(|_| s.spawn(work)).collect();
-        let mut done = work();
-        for thread in threads {
-            done.extend(thread.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)));
-        }
-        done
-    });
-    done.sort_unstable_by_key(|(k, _)| *k);
-    debug_assert_eq!(done.len(), count, "every job ran once");
-    done.into_iter().map(|(_, result)| result).collect()
+    crate::pool::run_jobs(jobs, mesh_workers())
 }
 
 #[cfg(test)]
@@ -387,23 +331,6 @@ pub(crate) mod frames {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_results_come_back_in_job_order_whatever_thread_ran_them() {
-        // The jobs finish in a scrambled order - the early ones sleep longest - and the results
-        // must come back in the order the jobs were given all the same, since that order is the
-        // order the meshes are painted in.
-        let jobs: Vec<_> = (0..24u64)
-            .map(|k| {
-                move || {
-                    std::thread::sleep(std::time::Duration::from_micros((24 - k) * 50));
-                    k * k
-                }
-            })
-            .collect();
-        let got = build_meshes(jobs);
-        assert_eq!(got, (0..24u64).map(|k| k * k).collect::<Vec<_>>());
-    }
 
     #[test]
     fn test_a_run_egui_would_drop_as_a_mesh_goes_back_as_its_shapes() {
