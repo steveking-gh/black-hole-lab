@@ -1,0 +1,59 @@
+src/save/tests.rs
+  s_8aa93072b73a6b::t_8dbda0bdb79b26 21-23,549-552,554-555,557-558,561,563-573,580-589,592-594,596-597,600-601
+  s_8aa93072b73a6b::t_c8ac44aa9bb1b8 574-579
+  s_8aa93072b73a6b::t_01273214f12f14 590-591
+src/perf/replay.rs
+  s_8aa93072b73a6b::t_22168ef101d736 44
+  s_8aa93072b73a6b::t_c80eb870af44b8 172
+  s_8aa93072b73a6b::t_57a9becd56ff98 163-167
+src/perf/micro.rs
+  s_8aa93072b73a6b::t_94b3526bac238a 41,510
+src/save/convert.rs
+  s_8aa93072b73a6b::t_758f9cab4239db 26-28,346-347,535-536,582-591
+src/gui/controls.rs
+  s_8aa93072b73a6b::t_855e225d14d532 195-284
+  s_8aa93072b73a6b::t_e82b3d5e261375 712,715
+  s_8aa93072b73a6b::t_fc9188419068f1 475-476,478-485
+  s_8aa93072b73a6b::t_6c55380ef92448 713,1971-1974,1977-1978,1982-1983
+  s_8aa93072b73a6b::t_f1595eebc47c23 589
+src/app.rs
+  s_8aa93072b73a6b::t_83721632d28efa 383-388,696
+src/save/v1.rs
+  s_8aa93072b73a6b::t_758f9cab4239db 520-529,532-538
+src/gui/spacetime_canvas.rs
+  s_8aa93072b73a6b::t_8adaa17ff1321a 2924-2925,2927-2929,2931-2932,2934-2935
+  s_8aa93072b73a6b::t_001367730e93e9 2318-2323,2338,2452,2472
+  s_8aa93072b73a6b::t_98db53097c7358 1996,2109,2126,2199
+  s_8aa93072b73a6b::t_c8ac44aa9bb1b8 6415-6417,6420-6421,6425,6447,6699-6702,6705-6710,6718-6719,6721-6724,6728-6732,6734-6735,6737,6746-6750
+  s_8aa93072b73a6b::t_5e728a15f6ba3a 6471,6612-6615,6688
+  s_8aa93072b73a6b::t_3488e56ba6ea71 6711-6715,6717,6733,6736,6738-6745,6751
+  s_8aa93072b73a6b::t_01273214f12f14 6941-6943
+  s_8aa93072b73a6b::t_ce068fd4a9aaa7 2926,2955-2967
+  s_8aa93072b73a6b::t_403068d36d3bee 5774,6157,6407-6408,6418-6419,6422-6424,6426-6427,6449,6914,7385
+  s_8aa93072b73a6b::t_51eb717fed3470 2092-2094
+  s_8aa93072b73a6b::t_90cfd7b4356983 2937
+  s_8aa93072b73a6b::t_9449cb77371fff 6697-6698,6703-6704,6716,6720,6725-6727,6752-6754
+  s_8aa93072b73a6b::t_cb815b24457708 2938-2942
+  s_8aa93072b73a6b::t_eb4e0ad39a312d 2936,6414,6696
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d6bd6bdb47d53af6a51fa07a73dd3b6629ed44d1",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_8aa93072b73a6b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "50fc83b7-c9fd-4cee-9aaa-b8e3131a67f9",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
