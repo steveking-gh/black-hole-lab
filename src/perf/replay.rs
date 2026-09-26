@@ -159,6 +159,22 @@ pub(crate) fn scenarios() -> Vec<Scenario> {
             frame_only: false,
         },
         Scenario {
+            name: "isco-pair-1024x128-raycomets",
+            what: "`isco-pair-1024x128` with the panel's \"Ray comets\" diagnostic at every 8th \
+                   ray, so the (t, r) chart strokes some 13 000 ray comets a frame, one on every \
+                   8th of about 105 000 live rays, on top of its column comets. There to measure the chart's comets built and tessellated on \
+                   the mesh workers; the stride is view state and moves no fingerprint, so \
+                   `sim` would repeat `isco-pair-1024x128` to the bit",
+            duration: 50.0,
+            setup: |app| {
+                isco_pair(app, 128);
+                app.controls.rays_per_pulse = 1024;
+                app.controls.ray_comet_stride = 8;
+            },
+            view: ReferenceFrame::DistantObserver,
+            frame_only: true,
+        },
+        Scenario {
             name: "far-branch-freeze",
             what: "Bob released at r = 9 M with E = 1, L = 2.2 at a = 0.9, who freezes onto the far \
                    branch of r- at about t = 85 M. Played past that, so the frozen-observer paths - \

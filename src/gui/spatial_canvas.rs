@@ -2453,6 +2453,7 @@ pub(crate) fn draw_spatial_trail<F: Fn((f64, f64)) -> Pos2>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gui::mesh_pool::frames::{first_difference, tessellated_frame};
 
     /// The embedded radius of a chart point: |x + i y| = |(r + i a) e^{i phi}| = sqrt(r^2 + a^2),
     /// so a curve of constant r is a circle in the drawing and this is its radius.
@@ -4806,93 +4807,10 @@ mod tests {
         })
     }
 
-    /// One vertex exactly as the GPU is given it: position, texture coordinate and colour, the
-    /// floats as their bits so that equality is equality to the bit.
-    type RawVertex = [u32; 5];
-
-    /// One primitive of a tessellated frame: its clip rect as bits, its texture, its vertices and
-    /// its indices.
-    type RawPrimitive = ([u32; 4], egui::TextureId, Vec<RawVertex>, Vec<u32>);
-
     /// The equatorial canvas's own projection at `zoom` px/M with the hole at `centre`,
     /// arithmetic for arithmetic.
     fn canvas_projection(zoom: f32, centre: Pos2) -> impl Fn((f64, f64)) -> Pos2 + Sync {
         move |(x, y): (f64, f64)| centre + Vec2::new(x as f32 * zoom, -(y as f32) * zoom)
-    }
-
-    /// Whatever `paint` puts on a 400 px canvas, and the frame egui's own end-of-frame
-    /// tessellation makes of it.
-    fn tessellated_front_frame(
-        mut paint: impl FnMut(&egui::Ui, &egui::Painter),
-    ) -> Vec<RawPrimitive> {
-        let ctx = egui::Context::default();
-        ctx.set_fonts(egui::FontDefinitions::empty());
-        let mut output = ctx.run_ui(Default::default(), |ui| {
-            let (_, painter) =
-                ui.allocate_painter(egui::Vec2::new(400.0, 400.0), egui::Sense::hover());
-            paint(ui, &painter);
-        });
-        let shapes = std::mem::take(&mut output.shapes);
-        let primitives = ctx.tessellate(shapes, output.pixels_per_point);
-        output.drop_without_applying_deltas();
-        primitives
-            .into_iter()
-            .map(|clipped| {
-                let r = clipped.clip_rect;
-                let clip = [r.min.x, r.min.y, r.max.x, r.max.y].map(f32::to_bits);
-                match clipped.primitive {
-                    egui::epaint::Primitive::Mesh(mesh) => {
-                        let vertices = mesh
-                            .vertices
-                            .iter()
-                            .map(|v| {
-                                [
-                                    v.pos.x.to_bits(),
-                                    v.pos.y.to_bits(),
-                                    v.uv.x.to_bits(),
-                                    v.uv.y.to_bits(),
-                                    u32::from_le_bytes(v.color.to_array()),
-                                ]
-                            })
-                            .collect();
-                        (clip, mesh.texture_id, vertices, mesh.indices)
-                    }
-                    egui::epaint::Primitive::Callback(_) => {
-                        panic!("the fronts paint no callbacks")
-                    }
-                }
-            })
-            .collect()
-    }
-
-    /// The first difference between two tessellated frames, or None where they are the same to
-    /// the bit.
-    fn first_difference(serial: &[RawPrimitive], parallel: &[RawPrimitive]) -> Option<String> {
-        if serial.len() != parallel.len() {
-            return Some(format!("{} primitives against {}", serial.len(), parallel.len()));
-        }
-        for (p, (a, b)) in serial.iter().zip(parallel).enumerate() {
-            if a.0 != b.0 || a.1 != b.1 {
-                return Some(format!("primitive {p}: clip rect or texture differs"));
-            }
-            if a.2.len() != b.2.len() || a.3.len() != b.3.len() {
-                return Some(format!(
-                    "primitive {p}: {} vertices and {} indices against {} and {}",
-                    a.2.len(),
-                    a.3.len(),
-                    b.2.len(),
-                    b.3.len()
-                ));
-            }
-            if let Some(v) = (0..a.2.len()).find(|&v| a.2[v] != b.2[v]) {
-                let (x, y) = (a.2[v], b.2[v]);
-                return Some(format!("primitive {p}, vertex {v}: {x:?} against {y:?}"));
-            }
-            if let Some(i) = (0..a.3.len()).find(|&i| a.3[i] != b.3[i]) {
-                return Some(format!("primitive {p}, index {i}: {} against {}", a.3[i], b.3[i]));
-            }
-        }
-        None
     }
 
     /// The two fields as the canvas hands them to either painter: Bob's first, at the secondary
@@ -4931,7 +4849,7 @@ mod tests {
                 FrontStyle { arcs: false, hide_wound: false },
             ] {
                 let to_screen = canvas_projection(zoom, centre);
-                let serial = tessellated_front_frame(|_, painter| {
+                let serial = tessellated_frame(|_, painter| {
                     for (signal, colour, width) in fields {
                         let to_screen = &to_screen;
                         draw_signal_field(painter, metric, signal, colour, width, style, to_screen);
@@ -4940,7 +4858,7 @@ mod tests {
                 let vertices: usize = serial.iter().map(|p| p.2.len()).sum();
                 assert!(vertices > 0, "{zoom} px/M: the serial frame draws the fronts");
                 for chunks in [1, 2, 3, 8, 13] {
-                    let parallel = tessellated_front_frame(|ui, painter| {
+                    let parallel = tessellated_frame(|ui, painter| {
                         let setup = TessellationSetup::capture(ui.ctx());
                         drawn_again += draw_signal_fields_parallel(
                             painter, &setup, metric, fields, style, &to_screen, chunks,
@@ -4978,7 +4896,7 @@ mod tests {
         let style = FrontStyle { arcs: true, hide_wound: true };
         let to_screen = canvas_projection(48.0, Pos2::new(200.0, 200.0));
         let build = || {
-            tessellated_front_frame(|ui, painter| {
+            tessellated_frame(|ui, painter| {
                 let setup = TessellationSetup::capture(ui.ctx());
                 draw_signal_fields_parallel(painter, &setup, metric, fields, style, &to_screen, 13);
             })

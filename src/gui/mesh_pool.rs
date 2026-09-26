@@ -52,11 +52,16 @@
 //! also what would let the drawing of one transmission start while the other is still being
 //! stepped, which scoped threads joined after the whole step cannot do.
 //!
-//! Not yet built on this, and each the same pattern of shapes into a mesh per chunk of a field:
-//! the (t, r) chart's ray comets and role comets - the ray-comet pass at All with 1024 points is
-//! 130 000 fading lines - and the 2D+1 volume's pulse surfaces and floor fronts. The volume's floor
-//! is not an affine projection, so its chunks want their own equality test before they are
-//! trusted.
+//! Two painters are built on this: the equatorial view's fronts (`draw_signal_fields_parallel`)
+//! and the (t, r) chart's comets (`draw_comets_parallel`), whose "Ray comets" pass at All is a line
+//! a live ray, about 105 000 of them at 1024 points by 128 wavefronts. The comets are the simpler of the two, because nothing carries
+//! from one pulse's comets to the next, and the one with a colour callback: a column comet's fade
+//! is computed per vertex by whichever tessellator lays it down, which is why a worker's colours
+//! are egui's. Each has its own equality test.
+//!
+//! Not yet built on this, and the same pattern of shapes into a mesh per chunk of a field: the 2D+1
+//! volume's pulse surfaces and floor fronts. The volume's floor is not an affine projection, so its
+//! chunks want their own equality test before they are trusted.
 
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -146,9 +151,18 @@ impl MeshBuilder {
     /// nothing, which is also what egui would have made of it.
     ///
     /// `Shape::Vec` is flattened and `Shape::Noop` dropped: neither puts a vertex on the screen.
+    ///
+    /// A run's mesh is sized before it is filled, for the polylines standing at its head: see
+    /// `stroke_reserve`.
     pub(crate) fn tessellate(&mut self, shapes: impl IntoIterator<Item = Shape>) -> Vec<Shape> {
+        let shapes: Vec<Shape> = shapes.into_iter().collect();
+        let ahead = stroke_reserve(&shapes);
         let mut run = Run { mesh: Mesh::default(), shapes: Vec::new(), out: Vec::new() };
-        for shape in shapes {
+        for (shape, (vertices, indices)) in shapes.into_iter().zip(ahead) {
+            if run.mesh.is_empty() {
+                run.mesh.vertices.reserve(vertices);
+                run.mesh.indices.reserve(indices);
+            }
             self.take(shape, &mut run);
         }
         self.close(&mut run);
@@ -195,6 +209,33 @@ impl MeshBuilder {
         }
         run.shapes.clear();
     }
+}
+
+/// For each of `shapes`, the vertices and indices at most that the unbroken stretch of polylines
+/// starting there can tessellate to: nothing where a shape is not a polyline.
+///
+/// epaint strokes an open polyline wider than its feathering as four vertices a point and six
+/// triangles a segment, plus two at each end, which is 4 vertices and 18 indices a point with room
+/// to spare; a thinner one takes fewer. A run's mesh sized to that in one allocation is written
+/// once, where a mesh left to grow is copied on every doubling, and at the (t, r) chart's "Ray
+/// comets" pass - some 3.4 million vertices a frame at every 8th of 1024 rays - the copies and the
+/// fresh pages they touch were the larger part of the workers' tessellating (80 ms of thread time
+/// a frame against 57 sized). A polyline egui culls draws nothing and its share of the reservation
+/// is left untouched; the mesh itself is the same either way, only its capacity differs.
+fn stroke_reserve(shapes: &[Shape]) -> Vec<(usize, usize)> {
+    let mut ahead = vec![(0, 0); shapes.len()];
+    let mut stretch = (0, 0);
+    for (k, shape) in shapes.iter().enumerate().rev() {
+        stretch = match shape {
+            Shape::Path(path) => {
+                let points = path.points.len();
+                (stretch.0 + 4 * points, stretch.1 + 18 * points)
+            }
+            _ => (0, 0),
+        };
+        ahead[k] = stretch;
+    }
+    ahead
 }
 
 /// The run of shapes `MeshBuilder::tessellate` is gathering into one mesh, the shapes it was made
@@ -248,6 +289,99 @@ where
     done.sort_unstable_by_key(|(k, _)| *k);
     debug_assert_eq!(done.len(), count, "every job ran once");
     done.into_iter().map(|(_, result)| result).collect()
+}
+
+#[cfg(test)]
+pub(crate) mod frames {
+    //! The frame egui's own end-of-frame tessellation makes of a painter's work, as bits, and the
+    //! first difference between two such frames: what the painters built on `build_meshes` are
+    //! proved against, the serial frame to the parallel one.
+
+    /// One vertex exactly as the GPU is given it: position, texture coordinate and colour, the
+    /// floats as their bits so that equality is equality to the bit.
+    type RawVertex = [u32; 5];
+
+    /// One primitive of a tessellated frame: its clip rect as bits, its texture, its vertices and
+    /// its indices.
+    pub(crate) type RawPrimitive = ([u32; 4], egui::TextureId, Vec<RawVertex>, Vec<u32>);
+
+    /// Whatever `paint` puts on a 400 px canvas, and the frame egui's own end-of-frame
+    /// tessellation makes of it.
+    pub(crate) fn tessellated_frame(
+        mut paint: impl FnMut(&egui::Ui, &egui::Painter),
+    ) -> Vec<RawPrimitive> {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let (_, painter) =
+                ui.allocate_painter(egui::Vec2::new(400.0, 400.0), egui::Sense::hover());
+            paint(ui, &painter);
+        });
+        let shapes = std::mem::take(&mut output.shapes);
+        let primitives = ctx.tessellate(shapes, output.pixels_per_point);
+        output.drop_without_applying_deltas();
+        primitives
+            .into_iter()
+            .map(|clipped| {
+                let r = clipped.clip_rect;
+                let clip = [r.min.x, r.min.y, r.max.x, r.max.y].map(f32::to_bits);
+                match clipped.primitive {
+                    egui::epaint::Primitive::Mesh(mesh) => {
+                        let vertices = mesh
+                            .vertices
+                            .iter()
+                            .map(|v| {
+                                [
+                                    v.pos.x.to_bits(),
+                                    v.pos.y.to_bits(),
+                                    v.uv.x.to_bits(),
+                                    v.uv.y.to_bits(),
+                                    u32::from_le_bytes(v.color.to_array()),
+                                ]
+                            })
+                            .collect();
+                        (clip, mesh.texture_id, vertices, mesh.indices)
+                    }
+                    egui::epaint::Primitive::Callback(_) => {
+                        panic!("the painters these frames compare paint no callbacks")
+                    }
+                }
+            })
+            .collect()
+    }
+
+    /// The first difference between two tessellated frames, or None where they are the same to
+    /// the bit.
+    pub(crate) fn first_difference(
+        serial: &[RawPrimitive],
+        parallel: &[RawPrimitive],
+    ) -> Option<String> {
+        if serial.len() != parallel.len() {
+            return Some(format!("{} primitives against {}", serial.len(), parallel.len()));
+        }
+        for (p, (a, b)) in serial.iter().zip(parallel).enumerate() {
+            if a.0 != b.0 || a.1 != b.1 {
+                return Some(format!("primitive {p}: clip rect or texture differs"));
+            }
+            if a.2.len() != b.2.len() || a.3.len() != b.3.len() {
+                return Some(format!(
+                    "primitive {p}: {} vertices and {} indices against {} and {}",
+                    a.2.len(),
+                    a.3.len(),
+                    b.2.len(),
+                    b.3.len()
+                ));
+            }
+            if let Some(v) = (0..a.2.len()).find(|&v| a.2[v] != b.2[v]) {
+                let (x, y) = (a.2[v], b.2[v]);
+                return Some(format!("primitive {p}, vertex {v}: {x:?} against {y:?}"));
+            }
+            if let Some(i) = (0..a.3.len()).find(|&i| a.3[i] != b.3[i]) {
+                return Some(format!("primitive {p}, index {i}: {} against {}", a.3[i], b.3[i]));
+            }
+        }
+        None
+    }
 }
 
 #[cfg(test)]

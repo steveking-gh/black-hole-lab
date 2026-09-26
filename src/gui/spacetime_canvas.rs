@@ -2,6 +2,7 @@ use crate::gui::units::UnitLabels;
 use crate::gui::axis::{self, SECONDS_PER_YEAR};
 use crate::gui::beacon_colour::{self, Beacon};
 use crate::gui::controls::{impossible_mode_note, ReferenceFrame, SignalViews};
+use crate::gui::mesh_pool::{TessellationSetup, build_meshes, mesh_workers};
 use crate::gui::polyline::{SCREEN_SPACING, thin_to_pixels};
 use crate::gui::numbers;
 use crate::gui::ruler;
@@ -2083,6 +2084,235 @@ fn comet_tail(head_first: impl Iterator<Item = Pos2>, max_px: f32) -> Vec<Pos2> 
     tail
 }
 
+/// The fewest comets the global chart has to be about to draw, over both transmissions together,
+/// before it builds and tessellates them on several threads rather than on the calling one.
+///
+/// Below it the spawns cost more than the stroking they would share out. Both paths put the same
+/// triangles on the screen - see `draw_comets_parallel` - so where the line falls changes nothing
+/// that can be seen. At the panel's defaults, 64 pulses a field with "Ray comets" off, the chart
+/// draws about a thousand comets and stays on the calling thread; the diagnostic at every ray, or
+/// at every 8th ray of 1024, is over it many times.
+pub(crate) const PARALLEL_COMETS: usize = 4096;
+
+/// How many runs of pulses the global chart cuts each field into for every thread that draws its
+/// comets.
+///
+/// More than one, unlike the equatorial fronts, because a pulse's cost is its live rays and those
+/// differ by orders of magnitude from a pulse just sent to one nearly spent, so a run of one
+/// thread's share can hold most of the work of a field while its neighbour holds little; and more
+/// runs cost nothing else here, since no comet carries anything over from one run to the next. At
+/// every 8th of 1024 rays with nine threads, four runs a thread took the workers' wall time from
+/// 16 ms a frame to 11 against one.
+const COMET_RUNS_PER_THREAD: usize = 4;
+
+/// How many comets the global chart would draw for `fields` at most: every column of every pulse,
+/// and every k-th ray of every pulse where "Ray comets" is on.
+///
+/// An upper bound rather than a count - a spent pulse, a role with no ray and a head off the canvas
+/// all draw nothing, and finding that out is the drawing itself. It only chooses between the two
+/// paths, which draw the same picture, so it only has to be cheap and of the right size: one pass
+/// over the pulses, reading lengths.
+fn chart_comets(fields: &[(&SignalField, Color32)]) -> usize {
+    fields
+        .iter()
+        .map(|(field, _)| {
+            let stride = field.ray_comet_stride();
+            let rays = |rays: usize| if stride == 0 { 0 } else { rays.div_ceil(stride) };
+            field.pulses.iter().map(|pulse| TRACK_COLUMNS + rays(pulse.rays.len())).sum::<usize>()
+        })
+        .sum()
+}
+
+/// What `comet_shapes` makes of a run of pulses: the column comets, and the "Ray comets" that are
+/// painted over every column comet of the field.
+struct CometShapes {
+    columns: Vec<egui::Shape>,
+    rays: Vec<egui::Shape>,
+}
+
+/// The comets of the pulses `pulses` of `field` on the global chart, built without a painter: the
+/// pure half of `draw_comets`, which can therefore run on any thread.
+///
+/// `rect` is the chart's canvas and `to_screen_x`, `to_screen_y` its projection, radius across and
+/// coordinate time up. What is drawn, and why, is set out where the chart draws its comets, in
+/// `render_distant_observer`. `pulses` restricts the pulses drawn and nothing else: no comet reads
+/// anything off a pulse but its own rays and tracks, so a run of pulses draws exactly the comets
+/// the whole field draws for those pulses.
+fn comet_shapes<X: Fn(f64) -> f32, Y: Fn(f64) -> f32>(
+    metric: &KerrSchild,
+    field: &SignalField,
+    pulses: std::ops::Range<usize>,
+    colour: Color32,
+    rect: Rect,
+    to_screen_x: &X,
+    to_screen_y: &Y,
+) -> CometShapes {
+    let mut columns: Vec<egui::Shape> = Vec::new();
+    let mut rays: Vec<egui::Shape> = Vec::new();
+    let head_colour =
+        Color32::from_rgba_unmultiplied(colour.r(), colour.g(), colour.b(), Theme::COMET_HEAD_ALPHA);
+    // A tail reaches at most `COMET_TAIL_PX` from its head, so a head this far outside the
+    // canvas cannot put anything on it, and the whole pulse costs one rectangle test.
+    let reach = rect.expand(Theme::COMET_TAIL_PX);
+    for pulse in field.pulses.range(pulses.clone()) {
+        // This is the "has a live front" test as well as the reading: `track_point` is
+        // None exactly when no ray of the pulse is alive, since `radial_extent` returns
+        // None on an empty min/max, so a spent pulse is skipped here and nothing else has
+        // to ask.
+        let Some(now_point) = pulse.track_point(metric, field.t) else {
+            continue;
+        };
+        let Some(&newest) = pulse.extent_track.last() else {
+            continue;
+        };
+        let head_at = if field.t >= newest.t { now_point } else { newest };
+        for column in 0..TRACK_COLUMNS {
+            // A role the pulse lacks, or whose ray has died, has no head and no comet.
+            if head_at.column(column).is_nan() {
+                continue;
+            }
+            let at = |p: &TrackPoint| Pos2::new(to_screen_x(p.column(column)), to_screen_y(p.t));
+            let head = at(&head_at);
+            if !reach.contains(head) {
+                continue;
+            }
+            // The head leads the recorded track walked backwards. When the newest point of
+            // the track is the head - the usual case while a run plays in steps at or over
+            // the recording cadence - `comet_tail` drops it as a point no further than
+            // `SCREEN_SPACING` from the one already kept, so the duplicate costs a vertex
+            // that is never emitted rather than a zero-length first segment. A NaN in the
+            // column ends the tail: the edges never carry one, and a role's column carries
+            // one only where that role had no live ray, which is not a place to draw.
+            let track = pulse
+                .extent_track
+                .iter()
+                .rev()
+                .take_while(|p| !p.column(column).is_nan())
+                .map(at);
+            let tail = comet_tail(std::iter::once(head).chain(track), Theme::COMET_TAIL_PX);
+            if tail.len() < 2 {
+                continue;
+            }
+            columns.push(fading_line(tail, head, Theme::COMET_TAIL_PX, COMET_WIDTH, head_colour));
+        }
+    }
+    // The "Ray comets" diagnostic. See the last paragraph above the chart's comets in
+    // `render_distant_observer`.
+    let stride = field.ray_comet_stride();
+    if stride == 0 {
+        return CometShapes { columns, rays };
+    }
+    let now = to_screen_y(field.t);
+    for pulse in field.pulses.range(pulses) {
+        let Some(trail) = pulse.trail.as_ref() else {
+            continue;
+        };
+        let comets_per_pulse = pulse.rays.len().div_ceil(stride).max(1);
+        let alpha = (1200 / comets_per_pulse).clamp(RAY_COMET_ALPHA_FLOOR, 80) as u8;
+        let ray_colour = Color32::from_rgba_unmultiplied(colour.r(), colour.g(), colour.b(), alpha);
+        for (i, ray) in pulse.rays.iter().enumerate().step_by(stride) {
+            if !ray.alive() {
+                continue;
+            }
+            let head = Pos2::new(to_screen_x(ray.r), now);
+            if !reach.contains(head) {
+                continue;
+            }
+            let samples = trail
+                .newest_first(i)
+                .skip_while(|&(t, _)| t > field.t)
+                .take_while(|&(_, r)| !r.is_nan())
+                .map(|(t, r)| Pos2::new(to_screen_x(f64::from(r)), to_screen_y(t)));
+            let tail = comet_tail(std::iter::once(head).chain(samples), Theme::COMET_TAIL_PX);
+            if tail.len() < 2 {
+                continue;
+            }
+            // One flat colour along the whole tail, not `fading_line`: see
+            // `RAY_COMET_ALPHA_FLOOR` for why a ray comet must not fade.
+            let stroke = Stroke::new(COMET_WIDTH, ray_colour);
+            rays.push(egui::Shape::Path(PathShape::line(tail, stroke)));
+        }
+    }
+    CometShapes { columns, rays }
+}
+
+/// Paint the comets of one transmission on the global chart: every column comet of every pulse,
+/// then every ray comet of every pulse.
+///
+/// This is the serial painter, and the definition of the picture: `draw_comets_parallel` draws the
+/// chart's heavy fields on several threads, and what it hands egui is proved to tessellate to
+/// exactly what this does.
+fn draw_comets<X: Fn(f64) -> f32, Y: Fn(f64) -> f32>(
+    painter: &egui::Painter,
+    metric: &KerrSchild,
+    (field, colour): (&SignalField, Color32),
+    rect: Rect,
+    to_screen_x: &X,
+    to_screen_y: &Y,
+) {
+    let comets =
+        comet_shapes(metric, field, 0..field.pulses.len(), colour, rect, to_screen_x, to_screen_y);
+    painter.extend(comets.columns);
+    painter.extend(comets.rays);
+}
+
+/// Paint the comets of both transmissions, Bob's then Alice's as `fields` gives them, exactly as
+/// two calls of `draw_comets` would - the same triangles, in the same order - with the building and
+/// the tessellating shared out over threads.
+///
+/// Each field is cut into `chunks` runs of consecutive pulses, and every run is a job for
+/// `mesh_pool::build_meshes`, which builds its comets with `comet_shapes` and tessellates them into
+/// meshes on whatever thread takes it. The painter is only touched here, on the calling thread,
+/// once every job is in: per field, the column comets of every run in order and then the ray
+/// comets of every run in order, which is the order the serial painter strokes them in - every ray
+/// comet of a field over every column comet of it. A comet reads nothing off a pulse but its own
+/// rays and tracks, so unlike the equatorial fronts nothing carries from one run to the next and
+/// no run is ever drawn again.
+///
+/// A column comet's fade is a colour callback that egui's tessellator calls once per vertex. Here
+/// a worker's tessellator calls it instead, the same function of the same vertex, so the colours
+/// come out the same to the bit.
+#[allow(clippy::too_many_arguments)]
+fn draw_comets_parallel<X: Fn(f64) -> f32 + Sync, Y: Fn(f64) -> f32 + Sync>(
+    painter: &egui::Painter,
+    setup: &TessellationSetup,
+    metric: &KerrSchild,
+    fields: [(&SignalField, Color32); 2],
+    rect: Rect,
+    to_screen_x: &X,
+    to_screen_y: &Y,
+    chunks: usize,
+) {
+    let clip = painter.clip_rect();
+    // Each field's runs, as (field, pulses), in the order they are painted.
+    let mut runs: Vec<(usize, std::ops::Range<usize>)> = Vec::new();
+    for (f, (field, _)) in fields.iter().enumerate() {
+        let n = field.pulses.len();
+        let per = n.div_ceil(chunks.clamp(1, n.max(1))).max(1);
+        runs.extend((0..n).step_by(per).map(|start| (f, start..(start + per).min(n))));
+    }
+    let jobs: Vec<_> = runs
+        .iter()
+        .map(|(f, pulses)| {
+            let ((field, colour), pulses) = (fields[*f], pulses.clone());
+            move || {
+                let comets =
+                    comet_shapes(metric, field, pulses, colour, rect, to_screen_x, to_screen_y);
+                let mut builder = setup.builder(clip);
+                (builder.tessellate(comets.columns), builder.tessellate(comets.rays))
+            }
+        })
+        .collect();
+    let mut drawn = build_meshes(jobs).into_iter();
+    for f in 0..fields.len() {
+        let field_runs = runs.iter().filter(|(field, _)| *field == f).count();
+        let (columns, rays): (Vec<Vec<egui::Shape>>, Vec<Vec<egui::Shape>>) =
+            drawn.by_ref().take(field_runs).unzip();
+        painter.extend(columns.into_iter().flatten());
+        painter.extend(rays.into_iter().flatten());
+    }
+}
+
 impl SpacetimeCanvas {
     /// Render the 1D+1 spacetime canvas: the (t, r) foliation chart, or an observer's rest frame.
     #[allow(clippy::too_many_arguments)]
@@ -2694,107 +2924,31 @@ Tick Enable Observer on Alice's or Bob's card",
         // bright only where many rays stand together, as the column comets are on r-. The column
         // comets are drawn first and unchanged. Off, the field keeps no trails and this pass is
         // skipped whole.
-        let draw_comets = |field: &SignalField, colour: Color32| {
-            let head_colour = Color32::from_rgba_unmultiplied(
-                colour.r(),
-                colour.g(),
-                colour.b(),
-                Theme::COMET_HEAD_ALPHA,
-            );
-            // A tail reaches at most `COMET_TAIL_PX` from its head, so a head this far outside the
-            // canvas cannot put anything on it, and the whole pulse costs one rectangle test.
-            let reach = rect.expand(Theme::COMET_TAIL_PX);
-            for pulse in field.pulses.iter() {
-                // This is the "has a live front" test as well as the reading: `track_point` is
-                // None exactly when no ray of the pulse is alive, since `radial_extent` returns
-                // None on an empty min/max, so a spent pulse is skipped here and nothing else has
-                // to ask.
-                let Some(now_point) = pulse.track_point(metric, field.t) else {
-                    continue;
-                };
-                let Some(&newest) = pulse.extent_track.last() else {
-                    continue;
-                };
-                let head_at = if field.t >= newest.t { now_point } else { newest };
-                for column in 0..TRACK_COLUMNS {
-                    // A role the pulse lacks, or whose ray has died, has no head and no comet.
-                    if head_at.column(column).is_nan() {
-                        continue;
-                    }
-                    let at = |p: &TrackPoint| {
-                        Pos2::new(to_screen_x(p.column(column)), to_screen_y(p.t))
-                    };
-                    let head = at(&head_at);
-                    if !reach.contains(head) {
-                        continue;
-                    }
-                    // The head leads the recorded track walked backwards. When the newest point of
-                    // the track is the head - the usual case while a run plays in steps at or over
-                    // the recording cadence - `comet_tail` drops it as a point no further than
-                    // `SCREEN_SPACING` from the one already kept, so the duplicate costs a vertex
-                    // that is never emitted rather than a zero-length first segment. A NaN in the
-                    // column ends the tail: the edges never carry one, and a role's column carries
-                    // one only where that role had no live ray, which is not a place to draw.
-                    let track = pulse
-                        .extent_track
-                        .iter()
-                        .rev()
-                        .take_while(|p| !p.column(column).is_nan())
-                        .map(at);
-                    let tail =
-                        comet_tail(std::iter::once(head).chain(track), Theme::COMET_TAIL_PX);
-                    if tail.len() < 2 {
-                        continue;
-                    }
-                    painter.add(fading_line(
-                        tail,
-                        head,
-                        Theme::COMET_TAIL_PX,
-                        COMET_WIDTH,
-                        head_colour,
-                    ));
-                }
+        //
+        // Bob's comets go down first and Alice's over them, as her fronts lie over his on the
+        // equatorial view. A chart with `PARALLEL_COMETS` or more to draw - the diagnostic on at
+        // any fine stride - builds and tessellates them on several threads, a lighter one on this
+        // thread alone, and both ways put the same triangles on the screen; see
+        // `draw_comets_parallel`. The meshes the threads hand back are tessellated for this
+        // painter as it stands, so a painter egui would tint or move after the fact - faded out,
+        // or on a transformed layer, neither of which this chart ever is - is left to the serial
+        // path. The tessellation setup is read off the context here and again by the equatorial
+        // view when both draw heavy fields in one frame: three reads of the context, which is
+        // cheaper than passing it between the two canvases.
+        let fields = [(signals.bob, Theme::BOB_COLOR), (signals.alice, Theme::ALICE_COLOR)];
+        if chart_comets(&fields) >= PARALLEL_COMETS
+            && painter.opacity() >= 1.0
+            && ui.ctx().layer_transform_to_global(painter.layer_id()).is_none()
+        {
+            let setup = TessellationSetup::capture(ui.ctx());
+            let runs = COMET_RUNS_PER_THREAD * (mesh_workers() + 1);
+            let (x, y) = (&to_screen_x, &to_screen_y);
+            draw_comets_parallel(painter, &setup, metric, fields, rect, x, y, runs);
+        } else {
+            for field in fields {
+                draw_comets(painter, metric, field, rect, &to_screen_x, &to_screen_y);
             }
-            // The "Ray comets" diagnostic. See the paragraph above `draw_comets`.
-            let stride = field.ray_comet_stride();
-            if stride == 0 {
-                return;
-            }
-            let now = to_screen_y(field.t);
-            for pulse in field.pulses.iter() {
-                let Some(trail) = pulse.trail.as_ref() else {
-                    continue;
-                };
-                let comets_per_pulse = pulse.rays.len().div_ceil(stride).max(1);
-                let alpha = (1200 / comets_per_pulse).clamp(RAY_COMET_ALPHA_FLOOR, 80) as u8;
-                let ray_colour =
-                    Color32::from_rgba_unmultiplied(colour.r(), colour.g(), colour.b(), alpha);
-                for (i, ray) in pulse.rays.iter().enumerate().step_by(stride) {
-                    if !ray.alive() {
-                        continue;
-                    }
-                    let head = Pos2::new(to_screen_x(ray.r), now);
-                    if !reach.contains(head) {
-                        continue;
-                    }
-                    let samples = trail
-                        .newest_first(i)
-                        .skip_while(|&(t, _)| t > field.t)
-                        .take_while(|&(_, r)| !r.is_nan())
-                        .map(|(t, r)| Pos2::new(to_screen_x(f64::from(r)), to_screen_y(t)));
-                    let tail =
-                        comet_tail(std::iter::once(head).chain(samples), Theme::COMET_TAIL_PX);
-                    if tail.len() < 2 {
-                        continue;
-                    }
-                    // One flat colour along the whole tail, not `fading_line`: see
-                    // `RAY_COMET_ALPHA_FLOOR` for why a ray comet must not fade.
-                    painter.add(PathShape::line(tail, Stroke::new(COMET_WIDTH, ray_colour)));
-                }
-            }
-        };
-        draw_comets(signals.bob, Theme::BOB_COLOR);
-        draw_comets(signals.alice, Theme::ALICE_COLOR);
+        }
 
         // Alice Worldline & Marker. The info boxes are registered last, below, so that a drag on
         // a box beats the canvas's own pan response instead of panning the diagram.
@@ -6685,6 +6839,145 @@ mod canvas_tests {
             assert!(bright > 0, "a crest lit at its future end");
             assert_eq!(dark, 0, "and run out at its past end, {bright} against {dark}");
         }
+    }
+
+    /// Bob dropped from r = 4.5M and Alice on the prograde ISCO at a = 0.90, both transmitting with
+    /// "Ray comets" at `stride` from the first step on, carried 5 M of coordinate time: two fields
+    /// of the kind the global chart strokes its comets for, Bob's first as the chart paints them.
+    /// At a stride of one the pair is over `PARALLEL_COMETS`.
+    fn comet_pair(stride: usize) -> (KerrSchild, SignalField, SignalField) {
+        use crate::physics::observer::{Release, WorldlineParams};
+        let metric = KerrSchild::new(1.0, 0.90);
+        let mut bob =
+            Observer::new_with_phi(&metric, "Bob", 0.0, 4.5, 0.0, 0.0, WorldlineParams::default());
+        let r = metric.isco(true);
+        let (energy, l_ang) = metric.circular_orbit(r, true).expect("an ISCO here");
+        let release = Release::CircularPrograde;
+        let params = WorldlineParams { energy, l_ang, outgoing: false, release };
+        let mut alice = Observer::new_with_phi(&metric, "Alice", 0.0, r, 0.0, 0.0, params);
+        let (mut bob_field, mut alice_field) = (SignalField::default(), SignalField::default());
+        let dt = 0.1;
+        for (who, field) in [(&mut bob, &mut bob_field), (&mut alice, &mut alice_field)] {
+            field.set_ray_comet_stride(stride);
+            for i in 0..50 {
+                let t = ((i + 1) as f64) * dt;
+                who.step(&metric, t, dt);
+                field.advance(&metric, dt);
+                field.emit_if_due(&metric, who);
+            }
+        }
+        (metric, bob_field, alice_field)
+    }
+
+    /// The global chart's projection onto `rect`, arithmetic for arithmetic: radius across from
+    /// `r_offset` over `max_r`, and coordinate time up from `t_min` to `t_max`.
+    fn chart_projection(
+        rect: Rect,
+        (r_offset, max_r): (f64, f64),
+        (t_min, t_max): (f64, f64),
+    ) -> (impl Fn(f64) -> f32 + Sync, impl Fn(f64) -> f32 + Sync) {
+        let to_screen_x = move |r: f64| -> f32 {
+            let frac = ((r - r_offset) / max_r) as f32;
+            rect.left() + frac * rect.width()
+        };
+        let to_screen_y = move |t: f64| -> f32 {
+            let frac = ((t - t_min) / (t_max - t_min)) as f32;
+            rect.bottom() - frac * rect.height()
+        };
+        (to_screen_x, to_screen_y)
+    }
+
+    #[test]
+    fn test_parallel_comet_meshes_equal_the_serial_ones() {
+        // The promise `draw_comets_parallel` makes: whatever it hands egui tessellates to exactly
+        // the frame two calls of `draw_comets` do - the same primitives, the same vertices to the
+        // bit in position, texture coordinate and colour, the same indices in the same order. It
+        // is checked at the end of egui's own tessellation, as the fronts' promise is, so every
+        // cull egui makes and every colour the fade's callback hands back is inside what is
+        // compared. Both fields of a falling Bob and an orbiting Alice are painted, with "Ray
+        // comets" off, at every 8th ray and at every ray, each field cut into anything from one run
+        // to a run for every pulse, over two views: the chart's opening window, with every head on
+        // the canvas; and a narrow window on the inner radii and the last 2 M, in which some heads
+        // lie past the canvas's edge within a tail's reach of it, so a comet is cut by the clip
+        // rect, and others lie beyond that reach and are never built.
+        use crate::gui::mesh_pool::frames::{first_difference, tessellated_frame};
+        for stride in [0, 8, 1] {
+            let (metric, bob, alice) = comet_pair(stride);
+            assert_eq!(bob.t, alice.t, "both fields stand on one clock");
+            let now = bob.t;
+            let fields = [(&bob, Theme::BOB_COLOR), (&alice, Theme::ALICE_COLOR)];
+            if stride == 1 {
+                assert!(chart_comets(&fields) >= PARALLEL_COMETS, "{}", chart_comets(&fields));
+            }
+            let opening = ((0.0, 5.5), (now - 9.8, now + 4.2));
+            let narrow = ((1.2, 0.8), (now - 1.4, now + 0.6));
+            let mut drawn = Vec::new();
+            for (view, (r_window, t_window)) in [("opening", opening), ("narrow", narrow)] {
+                let (mut comets, mut straddling) = (0, 0);
+                let serial = tessellated_frame(|_, painter| {
+                    let rect = painter.clip_rect();
+                    let (x, y) = chart_projection(rect, r_window, t_window);
+                    for (field, colour) in fields {
+                        let all = 0..field.pulses.len();
+                        let shapes = comet_shapes(&metric, field, all, colour, rect, &x, &y);
+                        for shape in shapes.columns.iter().chain(&shapes.rays) {
+                            let egui::Shape::Path(path) = shape else { unreachable!() };
+                            comets += 1;
+                            straddling += usize::from(!rect.contains(path.points[0]));
+                        }
+                        draw_comets(painter, &metric, (field, colour), rect, &x, &y);
+                    }
+                });
+                let vertices: usize = serial.iter().map(|p| p.2.len()).sum();
+                assert!(vertices > 0, "stride {stride}, {view} view: the serial frame draws comets");
+                for chunks in [1, 3, 8, 13, 64] {
+                    let parallel = tessellated_frame(|ui, painter| {
+                        let rect = painter.clip_rect();
+                        let (x, y) = chart_projection(rect, r_window, t_window);
+                        let setup = TessellationSetup::capture(ui.ctx());
+                        draw_comets_parallel(
+                            painter, &setup, &metric, fields, rect, &x, &y, chunks,
+                        );
+                    });
+                    if let Some(difference) = first_difference(&serial, &parallel) {
+                        panic!("stride {stride}, {view} view, {chunks} runs a field: {difference}");
+                    }
+                }
+                println!(
+                    "stride {stride}, {view} view: {comets} comets, {straddling} of them headed \
+                     off the canvas, {vertices} vertices the same to the bit at every count of runs"
+                );
+                drawn.push((comets, straddling));
+            }
+            let [(opening_comets, _), (narrow_comets, narrow_straddling)] = drawn[..] else {
+                unreachable!()
+            };
+            assert!(
+                narrow_comets > 0 && narrow_comets < opening_comets,
+                "stride {stride}: the narrow view leaves some heads beyond a tail's reach"
+            );
+            assert!(narrow_straddling > 0, "stride {stride}: and cuts some comets at its edge");
+        }
+    }
+
+    #[test]
+    fn test_parallel_comet_meshes_are_deterministic() {
+        // Whichever thread takes whichever run, and in whatever order they finish, the same frame
+        // comes out: two builds of the same fields at the most runs a field is cut into here are
+        // the same to the bit.
+        use crate::gui::mesh_pool::frames::{first_difference, tessellated_frame};
+        let (metric, bob, alice) = comet_pair(1);
+        let fields = [(&bob, Theme::BOB_COLOR), (&alice, Theme::ALICE_COLOR)];
+        let build = || {
+            tessellated_frame(|ui, painter| {
+                let rect = painter.clip_rect();
+                let (x, y) = chart_projection(rect, (0.0, 5.5), (bob.t - 9.8, bob.t + 4.2));
+                let setup = TessellationSetup::capture(ui.ctx());
+                draw_comets_parallel(painter, &setup, &metric, fields, rect, &x, &y, 13);
+            })
+        };
+        let (first, second) = (build(), build());
+        assert_eq!(first_difference(&first, &second), None);
     }
 }
 
