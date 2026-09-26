@@ -1,4 +1,3 @@
-
 ![GPL licensed](https://img.shields.io/badge/license-GPL-blue.svg)
 
 # BLACK HOLE LAB IS WORK IN PROGRESS
@@ -284,7 +283,11 @@ and cannot return to our universe.
 
 [bob horizon 1](https://github.com/user-attachments/assets/cf6b8056-f693-4113-ac4e-6d056a30aa84)
 
-Let's look at this same horizon crossing from the 1D+1 chart.  Just as Bob
+Let's look at this same horizon crossing from the 1D+1 chart.
+
+[bob horizon 2](https://github.com/user-attachments/assets/a0dc92db-b3ac-4dfa-b37a-fbbecd4fb825)
+
+Just as Bob
 crosses the horizon, his light cone tilts completely into the black hole.  Bob's
 entire future is *inside* the event horizon.  Notice the "comets" hugging the
 *now* line.  The comets are a projection of Bob's transmission pulses in the
