@@ -232,6 +232,19 @@ appear as 45 degree angle lines by definition.
 
 ![Alice Reception](assets/images/alice_receive_1.png)
 
+### Simulation Settings
+
+![simulation settings](assets/images/simulation_settings.png)
+
+The simulation settings allow you to adjust the step size at which Black Hole
+Lab calculates the next iteration of the physics.  Each control has an extensive
+hover tip.
+
+One issue of particular importance: the simulation *cannot* track every photon
+of every transmission ever sent from Alice and Bob.  The **Wavefronts kept**
+slider sets the number of pulses tracked before discarding the oldest.  The
+**Wavefront points** slider set the number of "photons" tracked per pulse.
+
 ### The Black Hole Ergosphere
 
 The outermost yellow region of the black hole is the *ergosphere*.  A spinning
@@ -287,29 +300,67 @@ Let's look at this same horizon crossing from the 1D+1 chart.
 
 [bob horizon 2](https://github.com/user-attachments/assets/a0dc92db-b3ac-4dfa-b37a-fbbecd4fb825)
 
-Just as Bob
-crosses the horizon, his light cone tilts completely into the black hole.  Bob's
-entire future is *inside* the event horizon.  Notice the "comets" hugging the
-*now* line.  The comets are a projection of Bob's transmission pulses in the
-1D+1 chart.  Each pulse propagates in all directions, but different parts of the
-same pulse can end up in very different places.
+Just as Bob crosses the horizon, his light cone tilts completely into the black
+hole.  Bob's entire future is *inside* the event horizon.  Notice the "comets"
+hugging the *now* line.  The comets are a projection of Bob's transmission
+pulses in the 1D+1 chart.  Each pulse propagates in all directions, but
+different parts of the same pulse can end up in very different places.
 
 * Parts of the pulse emitted straight at the black hole hit the ring singularity.
 * Some parts of the pulse emitted prograde (in the direction of rotation)
   accumulate in the prograde photon sphere, which results in the clump of
   transmission comets you see to the right of Bob inside the ergosphere.
-* Some parts of the pulse emitted prograde asymptotically approach the far
-  branch of the inner horizon, which you can see on Bob's left.
+* Some parts of the pulse emitted prograde asymptotically approach the the inner
+  horizon, which you can see on Bob's left.  These photons contribute to the
+  "infinite blueshift" at the inner horizon.
 * Some parts of the pulse cross the inner horizon in finite coordinate time, but
   do not hit the ring singularity and rise to asymptotically approach the inner
   horizon from below.
 
 The simulation adds none of these effects by hand.  They emerge naturally from
-simulating the math of the Kerr solution to the equations of general relativity.
+simulating the Kerr solution to the equations of general relativity.
 
 Note that the control panel allows you to adjust transmissions to increase the
 density of simulation points in a transmission, the number of comets displayed
 and so on.
+
+#### Can Bob See His Feet As He Falls Into the Black Hole?
+
+Suppose Bob is free-falling feet first into the black hole.  If even light
+cannot escape the exact boundary of the event horizon, then could Bob see his
+own feet just as he crosses?  The answer is yes!  In general relativity, Bob
+cannot perform *any* physics experiment in his own frame of reference to tell
+him he's crossing an event horizon!  But how is this possible since none of the
+light reflecting off Bob's feet can climb out of the black hole to reach his
+eyes?
+
+The key is to consider Bob's frame of reference in free-fall vs. the event
+horizon, which is a *global property* of the black hole relative to the outside
+universe.  Bob's FoR moves *with* the space flowing into the black hole and he
+measures light moving at constant `c` in all directions aboard his ship.  *There
+is no event horizon in Bob's FoR*.  From a global perspective, we could say
+that Bob's eyes rushed across the horizon to meet the trapped photons from his
+feet.  To put it more strongly, all of Bob's *physics* rushed across the
+horizon.
+
+Black hole lab can show that nothing strange happens in Bob's FoR as he crosses
+the horizon.  She won't like it, but we'll use Alice as a stand-in for Bob's
+feet.  We start with Alice positioned just below Bob as his "feet" then let them
+fall together through the event horizon. You can load this setup in
+`demos/near_fall.bhl`.
+
+Alice and Bob are close enough to nearly share a FoR and Alice's radio pulses
+are equivalent to the light reflecting of Bob's feet.  The `EQUATORIAL PLANE`
+view shows Bob continuing to receive Alice's transmissions without interruption
+as the move across the horizon.
+
+[Bob feet equatorial]()
+
+In Bob's 1D+1 FoR view, likewise see him receiving Alice's transmissions at the
+speed of light.
+
+[Bob feet 1d1]()
+
 
 ### The Black Hole Inner (Cauchy) Horizon
 
