@@ -264,6 +264,10 @@ you and becomes a moment in your past!  Inside, time itself (your future) points
 toward the middle of the black hole.  To get back out, you need rocket engines
 strong enough to prevent tomorrow from happening.
 
+Here's Bob falling through the event horizon while transmitting his radio pulse.  Some of the pulse sent just outside the horizon will escape outward, but his next pulse just inside the horizon remains completely trapped and cannot return to our universe.
+
+[bob horizon 1](assets/videos/bob_xmit_outer_horizon.mp4)
+
 Complicating matters, physicists debate whether general relativity is the proper
 theory of an event horizon.  A future [Theory of
 Everything](https://en.wikipedia.org/wiki/Theory_of_everything) could describe
