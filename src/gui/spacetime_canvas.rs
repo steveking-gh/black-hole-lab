@@ -6,6 +6,7 @@ use crate::gui::mesh_pool::{TessellationSetup, build_meshes, mesh_workers};
 use crate::gui::polyline::{SCREEN_SPACING, thin_to_pixels};
 use crate::gui::numbers;
 use crate::gui::ruler;
+use crate::gui::spatial_canvas::draw_reception_tick;
 use crate::gui::theme::Theme;
 use crate::physics::as_seen::{
     as_seen, as_seen_youngest, younger_image, AsSeen, AsSeenSeed, NoImage, WorldlineSource,
@@ -3902,8 +3903,10 @@ Tick Enable Observer on Alice's or Bob's card",
         let crests = wave_crests(&frame, focus_obs, sender_field, self.frame_max_r);
         // A crest is drawn as a stroke through its anchor a third of the canvas long, not across
         // the whole plane: near the worldline the placement is exact and far from it the chart is
-        // only first order, and a stroke that ends says so. The older arrivals keep their dot on
-        // the worldline and lose their stroke, so the rungs stay countable as they crowd.
+        // only first order, and a stroke that ends says so. The older arrivals keep their mark on
+        // the worldline and lose their stroke, so the rungs stay countable as they crowd. The mark
+        // is the same triangle the equatorial view puts on a trail for an arrival, in the sender's
+        // colour, so one glyph means "heard" on every canvas.
         let half_len = 0.3 * rect.height().min(rect.width());
         let received_total = crests.crests.iter().filter(|c| c.received).count();
         let mut received_seen = 0usize;
@@ -3948,7 +3951,7 @@ Tick Enable Observer on Alice's or Bob's card",
                 ));
             }
             if crest.received && rect.contains(anchor) {
-                painter.circle_filled(anchor, 2.5, crest_colour);
+                draw_reception_tick(painter, anchor, crest_colour);
             }
         }
         // The readout: the two frequencies in hertz, on the two clocks that measure them, and
