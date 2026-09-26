@@ -354,13 +354,12 @@ are equivalent to the light reflecting of Bob's feet.  The `EQUATORIAL PLANE`
 view shows Bob continuing to receive Alice's transmissions without interruption
 as the move across the horizon.
 
-[Bob feet equatorial]()
+[Bob feet equatorial](https://github.com/user-attachments/assets/4f4046f4-51cd-4b34-97f2-5f8fa198ee34)
 
 In Bob's 1D+1 FoR view, likewise see him receiving Alice's transmissions at the
 speed of light.
 
-[Bob feet 1d1]()
-
+[Bob feet 1d1](https://github.com/user-attachments/assets/15223301-369c-403b-8a39-76a3f1357a47)
 
 ### The Black Hole Inner (Cauchy) Horizon
 
