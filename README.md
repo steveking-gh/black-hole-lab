@@ -1,7 +1,4 @@
 
-
-https://github.com/user-attachments/assets/cf6b8056-f693-4113-ac4e-6d056a30aa84
-
 ![GPL licensed](https://img.shields.io/badge/license-GPL-blue.svg)
 
 # BLACK HOLE LAB IS WORK IN PROGRESS
@@ -270,7 +267,10 @@ strong enough to prevent tomorrow from happening.
 
 Here's Bob falling through the event horizon while transmitting his radio pulse.  Some of the pulse sent just outside the horizon will escape outward, but his next pulse just inside the horizon remains completely trapped and cannot return to our universe.
 
-[bob horizon 1](assets/videos/bob_xmit_outer_horizon.mp4)
+
+
+
+[bob horizon 1]([assets/videos/bob_xmit_outer_horizon.mp4](https://github.com/user-attachments/assets/cf6b8056-f693-4113-ac4e-6d056a30aa84))
 
 Complicating matters, physicists debate whether general relativity is the proper
 theory of an event horizon.  A future [Theory of
