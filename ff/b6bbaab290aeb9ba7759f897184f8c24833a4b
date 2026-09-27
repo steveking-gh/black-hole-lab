@@ -1,0 +1,63 @@
+sky/kerr-sky/tests/oracle.rs
+  s_fa4e4937427d8c::t_00e578658e39ee 1-14,16-69,73-74,83,89-96,101-109,112-126
+  s_fa4e4937427d8c::t_a5f6309b70fb3f 15,70-72,75-82,84-88,97-100,110-111
+sky/kerr-sky/tests/data/offplane_oracle.rs
+  s_fa4e4937427d8c::t_4be8d37601e612 1-42,47-49
+  s_fa4e4937427d8c::t_600d64a1516e6e 43-46
+sky/kerr-sky/src/ray.rs
+  s_fa4e4937427d8c::t_a8edad7f5205bb 206,648,657,695,698,708
+  s_fa4e4937427d8c::t_4b2893534cf1d0 204-205
+  s_fa4e4937427d8c::t_78b99f50f0dfe4 117
+  s_fa4e4937427d8c::t_8900512117be74 1-116,118-203,207-647,649-656,658-694,696-697,699-707,709-855
+sky/kerr-sky/Cargo.toml
+  s_fa4e4937427d8c::t_a25b468f99eed8 1-20
+sky/kerr-sky/src/metric.rs
+  s_fa4e4937427d8c::t_62c338e40151ee 1-758
+sky/kerr-sky/src/frame.rs
+  s_fa4e4937427d8c::t_62c338e40151ee 1-245
+sky/Cargo.toml
+  s_fa4e4937427d8c::t_00878d3601a640 16-22
+  s_fa4e4937427d8c::t_84f35e72bff488 25
+sky/kerr-sky/scripts/offplane_oracle.py
+  s_fa4e4937427d8c::t_600d64a1516e6e 1-160
+sky/kerr-sky/src/observer.rs
+  s_fa4e4937427d8c::t_62c338e40151ee 1-748
+sky/kerr-sky/tests/validation.rs
+  s_fa4e4937427d8c::t_a8edad7f5205bb 43,55
+  s_fa4e4937427d8c::t_5606e8222f85fb 1-10,15-26,32-40,49-54,56-112,115-152,163-180,189-212,214-247,252-276,281-295,301-338,343-350,356-381,389-430,439-467,473-527,536-572,577-589,595-616,620-649,656-676,682-686,701-702,707-715,721,725-729,734-747,760-785,790-793
+  s_fa4e4937427d8c::t_a5f6309b70fb3f 11-14,27-31,41-42,44-48,113-114,153-162,181-188,213,248-251,277-280,296-300,339-342,351-355,382-388,431-438,468-472,528-535,573-576,590-594,617-619,650-655,677-681,687-700,703-706,716-720,722-724,730-733,748-759,786-789
+sky/kerr-sky/tests/precision.rs
+  s_fa4e4937427d8c::t_5606e8222f85fb 1-44,50-86,92-105,109-123,131-138,143-147,154-172,185-193,201-205,208-218,223-312,317-326,332,338,344,350-352
+  s_fa4e4937427d8c::t_a5f6309b70fb3f 45-49,87-91,106-108,124-130,139-142,148-153,173-184,194-200,206-207,219-222,313-316,327-331,333-337,339-343,345-349
+sky/kerr-sky/tests/measure.rs
+  s_fa4e4937427d8c::t_ab985ff60f1e09 1-79,83-99,105-119,129-147,151,155-156,160-171,176-177
+  s_fa4e4937427d8c::t_a8edad7f5205bb 149,153
+  s_fa4e4937427d8c::t_a5f6309b70fb3f 80-82,100-104,120-128,148,150,152,154,157-159,172-175
+sky/kerr-sky/src/lib.rs
+  s_fa4e4937427d8c::t_c4ce0bf7617a1d 26-34
+  s_fa4e4937427d8c::t_879d4afcda4e47 1-25,35-43
+  s_fa4e4937427d8c::t_a5f6309b70fb3f 44
+sky/Cargo.lock
+  s_fa4e4937427d8c::t_c825e55834f2b0 118-124
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ffb6bbaab290aeb9ba7759f897184f8c24833a4b",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_fa4e4937427d8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c3c93472-9aee-43ec-8624-e30a21d0ed6f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
