@@ -103,7 +103,7 @@ fn sample_frame(width: u32, height: u32, index: u32, turn: f64, shift: f32) -> F
     let bottom = height - 1;
     for i in [width / 2 - 1, width / 2] {
         let k = grid.offset(i, bottom);
-        frame.fate[k] = fate::PAST_HORIZON;
+        frame.fate[k] = fate::DARK;
         frame.direction[0][k] = f32::from_bits(0x7fc0_0002);
         frame.direction[1][k] = f32::from_bits(0xffc0_0003);
         frame.direction[2][k] = f32::from_bits(0x7f80_0004);
@@ -584,7 +584,7 @@ fn test_this_build_still_reads_the_committed_version_1_bundle() {
         "{d:?}"
     );
     let k = |i, j| first.grid().offset(i, j);
-    assert_eq!(first.fate[k(3, 3)], fate::PAST_HORIZON);
+    assert_eq!(first.fate[k(3, 3)], fate::DARK);
     assert_eq!(first.winding[k(3, 3)], -1);
     assert_eq!(first.shift[k(3, 3)].to_bits(), 0x7fc0_0005);
     assert_eq!(first.fate[k(0, 3)], fate::UNRESOLVED);

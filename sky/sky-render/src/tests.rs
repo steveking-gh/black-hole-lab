@@ -346,7 +346,7 @@ fn test_shadow_is_black_unresolved_is_the_marker_and_the_shadow_edge_uses_only_s
     };
     for j in 3..5 {
         for i in 6..10 {
-            set(i, j, fate::PAST_HORIZON);
+            set(i, j, fate::DARK);
         }
     }
     set(2, 2, fate::UNRESOLVED);

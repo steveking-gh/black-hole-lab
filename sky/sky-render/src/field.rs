@@ -69,7 +69,7 @@ impl RayField {
         let nearest = t.index[t.nearest()];
         match self.fate[nearest] {
             fate::FAR_SKY => {}
-            fate::PAST_HORIZON => return Ray::Shadow,
+            fate::DARK => return Ray::Shadow,
             _ => return Ray::Unresolved,
         }
         let mut d = [0.0f64; 3];

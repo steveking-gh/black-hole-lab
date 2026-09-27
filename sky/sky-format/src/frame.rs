@@ -50,8 +50,10 @@ pub mod fate {
     pub const UNRESOLVED: u8 = 0;
     /// The ray reached the distant sky: its direction and shift are meaningful.
     pub const FAR_SKY: u8 = 1;
-    /// The ray came out of the past horizon: it is part of the shadow.
-    pub const PAST_HORIZON: u8 = 2;
+    /// The ray did not come from the far sky: traced backward it closes on r = r+ and never leaves
+    /// it. Seen from outside the hole that is the past horizon and the shadow; seen from between
+    /// the horizons it may be the other branch of r+. Drawn black either way.
+    pub const DARK: u8 = 2;
 }
 
 /// How a chunk's payload is stored.

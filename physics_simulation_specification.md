@@ -16,8 +16,8 @@ A *tracer* is a program that follows light rays backward in time from the observ
 moment of the watch it chooses a set of directions on the observer's sky, and for each direction it
 records where on the distant sky the light came from, how much the light's frequency changed on
 the way, and whether the light came from the distant sky at all. Some light does not: a ray
-traced backward can end on the black hole's horizon, and that part of the sky is the hole's
-shadow.
+traced backward can close on the black hole's horizon instead, and that part of the observer's
+sky is dark. Seen from outside the hole, the dark part is the hole's shadow.
 
 A *renderer* is a program that turns those records and a map of the stars into a 360-degree video.
 The renderer knows no physics. Everything it needs is in the bundle.
@@ -251,8 +251,24 @@ The *fate* of a ray says what the ray reached when traced backward. It is one by
 |---|---|---|
 | 0 | unresolved | The tracer gave up before the ray reached anything. |
 | 1 | far sky | The ray reached the far sky. |
-| 2 | past horizon | The ray came out of the black hole's past horizon: it is part of the shadow. |
+| 2 | dark | The ray did not come from the far sky. Traced backward it closes on the horizon `r = r+` and never leaves it. A renderer draws it black. |
 | 3 to 255 | | Reserved. A reader treats a reserved code as unresolved. |
+
+Fate 2 covers two cases, which look the same to a renderer and differ in where the observer is:
+
+- **The observer is outside the hole.** The ray came out of the hole's *past horizon*. These rays
+  are the hole's shadow.
+- **The observer is between the horizons.** The ray may have come through the other branch of
+  `r = r+`: the one that light from our far sky never crosses. In the eternal black hole of the
+  textbooks, a second exterior region lies beyond that branch. In a black hole made by the collapse
+  of a star there is no such region, and that direction shows the collapsed star, its light
+  redshifted without limit. Either way the light is not from the far sky of the bundle, and the
+  bundle records it as dark.
+
+A ray's constants of motion tell the two apart from light that did come from the far sky. With `E`
+the ray's energy, `L_z` its angular momentum about the spin axis and `Omega_H = a / (r+^2 + a^2)`
+the horizon's angular velocity, light that crossed `r = r+` inward from our exterior has
+`E - Omega_H L_z >= 0`. A ray seen from between the horizons with `E - Omega_H L_z < 0` has fate 2.
 
 `d` and `g` are meaningful only for fate 1. For every other fate a writer **must** store NaN in all
 three components of `d` and in `g`. A writer **may** use the NaN's payload bits for its own

@@ -4,3 +4,6 @@
 # The script, its README and checksums.sha256 stay tracked.
 /maps/*.exr
 /maps/*.part
+
+# Python bytecode left by the oracle scripts.
+__pycache__/

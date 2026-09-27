@@ -45,6 +45,14 @@ cargo run --release -p sky-render -- --bundle ../../bundles/turn \
 
 Each program prints its options with `--help`. `sky-render` needs `ffmpeg` on the `PATH`.
 
+**Do not run `cargo fmt --all` here.** `--all` follows path dependencies out of this workspace:
+it reformats `../crates/kerr-equatorial` and `../crates/readout`, and through their workspace the
+app's own source. Format the crates of this workspace by name:
+
+```sh
+cargo fmt -p sky-format -p sky-testgen -p sky-render -p kerr-sky -p sky-trace
+```
+
 ## Why a separate workspace
 
 Cargo builds the members of a workspace together. Sharing the app's workspace would let these
