@@ -1,0 +1,27 @@
+physics_simulation_specification.md
+  s_fa4e4937427d8c::t_438f60b79698a1 142-145,148-155,159-160,162-164,166-168
+  s_fa4e4937427d8c::t_405d65fbec33a9 1-83,85,89-92,107-141,146-147,156-158,161,165,169-618,621-727
+  s_fa4e4937427d8c::t_35e696b8ece25e 84,86-88,93-106
+  s_fa4e4937427d8c::t_6ab80215328900 619-620
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d13c931579ae7419c84b1c3f9cb547033598cb0c",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_fa4e4937427d8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c3c93472-9aee-43ec-8624-e30a21d0ed6f",
+        "model": "unknown"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
