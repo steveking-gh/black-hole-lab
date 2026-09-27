@@ -15,7 +15,7 @@ pub struct MapImage {
 ///
 /// NASA's maps store B, G and R as half floats, ZIP-compressed, in DECREASING_Y line order; the
 /// reader places each line by its y coordinate, so the stored order does not matter, and row 0
-/// is the top of the image (assets/sky/README.md). A value that is not a finite number is read as
+/// is the top of the image (sky/maps/README.md). A value that is not a finite number is read as
 /// black, so that a damaged texel cannot spread NaN through the pyramid built from it; the maps
 /// hold values in [0, 1] and negative values are kept as they are, since the maps have none.
 pub fn read_map(path: &Path) -> Result<MapImage, String> {

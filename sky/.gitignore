@@ -1,0 +1,6 @@
+/target
+
+# NASA star maps, fetched on demand by maps/fetch-sky.ps1 and never committed.
+# The script, its README and checksums.sha256 stay tracked.
+/maps/*.exr
+/maps/*.part

@@ -8,8 +8,8 @@ license = "GPL-3.0-or-later"
 # it cannot reach into the app, and `cargo doc` renders it as the library it is. Both are default
 # members so that a bare `cargo test` still runs every test there is.
 [workspace]
-members = [".", "crates/kerr-equatorial", "crates/readout", "crates/sky-format", "crates/sky-testgen", "crates/sky-render"]
-default-members = [".", "crates/kerr-equatorial", "crates/readout", "crates/sky-format", "crates/sky-testgen", "crates/sky-render"]
+members = [".", "crates/kerr-equatorial", "crates/readout"]
+default-members = [".", "crates/kerr-equatorial", "crates/readout"]
 
 [dependencies]
 kerr-equatorial = { path = "crates/kerr-equatorial" }

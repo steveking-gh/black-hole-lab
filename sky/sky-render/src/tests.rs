@@ -502,7 +502,7 @@ fn test_the_galactic_preset_over_a_celestial_map_reads_where_the_sky_readme_pred
         ),
     ];
     for (name, d, ra, dec) in cases {
-        // assets/sky/README.md: longitude = 180 - (i + 0.5) 360 / W, so u = W (180 - RA) / 360,
+        // sky/maps/README.md: longitude = 180 - (i + 0.5) 360 / W, so u = W (180 - RA) / 360,
         // with RA taken into (-180, 180]; latitude = 90 - (j + 0.5) 180 / H.
         let ra = if ra > 180.0 { ra - 360.0 } else { ra };
         let (u, v) = (
@@ -547,7 +547,7 @@ fn test_the_galactic_preset_over_a_galactic_map_is_the_identity_to_rounding() {
 #[test]
 fn test_the_map_frame_is_read_from_nasas_file_names() {
     assert_eq!(
-        MapFrame::from_file_name(Path::new("assets/sky/starmap_2020_8k_gal.exr")),
+        MapFrame::from_file_name(Path::new("sky/maps/starmap_2020_8k_gal.exr")),
         MapFrame::Galactic
     );
     assert_eq!(

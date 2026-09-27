@@ -60,7 +60,7 @@ use timeline::{Pick, Timeline};
 use values::Series;
 
 /// NASA's credit line, which any published video made from the Deep Star Maps must carry
-/// (assets/sky/README.md, "Credit").
+/// (sky/maps/README.md, "Credit").
 const CREDIT: &str = "NASA/Goddard Space Flight Center Scientific Visualization Studio. \
 Gaia DR2: ESA/Gaia/DPAC. Constellation figures based on those developed for the IAU by Alan \
 MacRobert of Sky and Telescope magazine (Roger Sinnott and Rick Fienberg).";

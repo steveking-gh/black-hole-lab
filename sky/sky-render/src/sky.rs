@@ -4,7 +4,7 @@
 //! # Where a direction lands
 //!
 //! A map is equirectangular in its own frame, celestial (ICRS) or galactic, with longitude
-//! increasing to the left (assets/sky/README.md). A unit direction (x, y, z) in the map's frame
+//! increasing to the left (sky/maps/README.md). A unit direction (x, y, z) in the map's frame
 //! lands at the frame coordinates
 //!
 //!     u = W (0.5 - atan2(y, x) / 2 pi)

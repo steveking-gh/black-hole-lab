@@ -1,12 +1,12 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-    Downloads one of NASA's Deep Star Maps 2020 into assets/sky/ and verifies its SHA-256.
+    Downloads one of NASA's Deep Star Maps 2020 into sky/maps/ and verifies its SHA-256.
 
 .DESCRIPTION
     The maps come from the NASA Goddard Scientific Visualization Studio, entry 4851
     (https://svs.gsfc.nasa.gov/4851). They are OpenEXR files, too large to keep in git, so this
-    script fetches them on demand. See assets/sky/README.md for what the maps contain, their
+    script fetches them on demand. See sky/maps/README.md for what the maps contain, their
     geometry, and the credit line that any published video must carry.
 
     The script downloads to a temporary name ending in ".part" and renames the file only after
@@ -36,11 +36,11 @@
     Allows the 32k and 64k sizes, which are between 1.2 GB and 4.1 GB each.
 
 .EXAMPLE
-    pwsh assets/sky/fetch-sky.ps1
+    pwsh sky/maps/fetch-sky.ps1
     Fetches starmap_2020_8k_gal.exr, the default.
 
 .EXAMPLE
-    pwsh assets/sky/fetch-sky.ps1 -Product milkyway -Coordinates celestial -Size 4k
+    pwsh sky/maps/fetch-sky.ps1 -Product milkyway -Coordinates celestial -Size 4k
 #>
 [CmdletBinding()]
 param(

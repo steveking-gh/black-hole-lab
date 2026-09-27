@@ -1,0 +1,18 @@
+# The sky pipeline: everything that turns an observer's view near a black hole into a 360-degree
+# video. It is a workspace of its own, beside Black Hole Lab's and not inside it, so that nothing
+# here can change the app: not its manifest, not its lock file, not which features its dependencies
+# are built with, not what `cargo run` or `cargo test` mean at the repository root. The app's
+# workspace does not list these crates and these crates do not list the app.
+#
+# It was not always so. The first three crates were members of the app's workspace for a day, and
+# two more binaries among its default members left `cargo run` unable to choose one, which broke
+# the app's `cargo perf-check` and `cargo perf-baseline` aliases. A binary crate does not go into
+# the app's workspace.
+#
+# What is shared is read-only: the geometry core and the number formatter in ../crates are path
+# dependencies of crates here, built into this workspace's own target directory.
+#
+# Run cargo from this directory: `cargo test` here tests every crate of the pipeline.
+[workspace]
+resolver = "3"
+members = ["sky-format", "sky-testgen", "sky-render"]

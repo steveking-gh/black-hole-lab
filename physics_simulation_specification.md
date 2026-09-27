@@ -4,7 +4,7 @@ This document defines the sky bundle: the files that pass from a program that tr
 black hole to a program that renders what an observer sees. It is normative. The words **must**,
 **must not** and **may** state requirements on writers and readers; everything else explains.
 
-The Rust crate `crates/sky-format` implements this document. Where the crate and this document
+The Rust crate `sky/sky-format` implements this document. Where the crate and this document
 disagree, this document is right and the crate has a bug.
 
 ## 1. Purpose
@@ -581,7 +581,7 @@ A frame file **must not** hold two chunks with the same known tag.
 | 0 | raw | The uncompressed payload itself. `S` equals the uncompressed length. |
 | 1 | deflate | A raw DEFLATE stream (RFC 1951), with no zlib or gzip wrapper, that inflates to exactly the uncompressed length. |
 
-A writer **may** choose either codec for each chunk. The library in `crates/sky-format` deflates each
+A writer **may** choose either codec for each chunk. The library in `sky/sky-format` deflates each
 chunk at level 1 and stores it raw when deflating does not make it shorter.
 
 A reader **must** refuse a frame in which a chunk with a known tag uses a codec not in this table. A

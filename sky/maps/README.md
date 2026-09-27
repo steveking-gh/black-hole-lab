@@ -67,9 +67,9 @@ constellation boundaries and a coordinate grid. The script does not fetch them.
 From the repository root, in PowerShell 7 or any shell that can run `pwsh`:
 
 ```sh
-pwsh assets/sky/fetch-sky.ps1                                    # starmap, galactic, 8k
-pwsh assets/sky/fetch-sky.ps1 -Product milkyway -Coordinates celestial -Size 4k
-pwsh assets/sky/fetch-sky.ps1 -Size 32k -Force
+pwsh sky/maps/fetch-sky.ps1                                    # starmap, galactic, 8k
+pwsh sky/maps/fetch-sky.ps1 -Product milkyway -Coordinates celestial -Size 4k
+pwsh sky/maps/fetch-sky.ps1 -Size 32k -Force
 ```
 
 The script needs PowerShell 7 and `curl.exe`, and nothing else. It works as follows:

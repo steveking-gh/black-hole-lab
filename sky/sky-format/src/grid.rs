@@ -21,7 +21,7 @@
 //! right, v from 0 at the top edge to H at the bottom, and the centre of pixel (i, j) is at
 //! (i + 0.5, j + 0.5). So the same two functions serve a writer that wants the direction of pixel
 //! (3, 1) and a renderer that wants the place in the frame under a direction it is about to
-//! interpolate at. They are the coordinates the star maps are described in (assets/sky/README.md),
+//! interpolate at. They are the coordinates the star maps are described in (sky/maps/README.md),
 //! and a second convention with the centres on the integers would be a half-pixel error waiting
 //! for whoever carried a number from one to the other.
 

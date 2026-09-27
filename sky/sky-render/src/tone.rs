@@ -14,7 +14,7 @@
 //!
 //! # Exposure
 //!
-//! The maps carry no absolute scale, and their values scale with pixel area (assets/sky/README.md,
+//! The maps carry no absolute scale, and their values scale with pixel area (sky/maps/README.md,
 //! "Colour and values"): doubling the map's width quarters the values, as if each texel held the
 //! light falling in it. The default gain is 2.5 stops for a map 8192 wide and two stops more for
 //! every doubling of the width:

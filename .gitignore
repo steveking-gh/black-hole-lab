@@ -1,6 +1,1 @@
 /target
-
-# NASA star maps, fetched on demand by assets/sky/fetch-sky.ps1 and never committed.
-# The script, its README and checksums.sha256 stay tracked.
-/assets/sky/*.exr
-/assets/sky/*.part

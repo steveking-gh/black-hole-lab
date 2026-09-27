@@ -25,7 +25,7 @@ unavailable while it depends on nalgebra and winit. GPLv3 is the earliest GPL th
 
 ## Rust crates
 
-The dependency graph resolved for all target platforms holds 401 crate versions, 364 distinct
+The dependency graph resolved for all target platforms holds 397 crate versions, 360 distinct
 crates, grouped below by the licence each one declares in its published manifest. An `OR` is the
 crate offering a choice; an `AND` is it requiring both.
 
@@ -45,29 +45,29 @@ incompatible with GPLv3; that branch is not the one taken.
 **Unicode-3.0** (18)
 : `icu_collections`, `icu_locale_core`, `icu_normalizer`, `icu_normalizer_data`, `icu_properties`, `icu_properties_data`, `icu_provider`, `litemap`, `potential_utf`, `tinystr`, `writeable`, `yoke`, `yoke-derive`, `zerofrom`, `zerofrom-derive`, `zerotrie`, `zerovec`, `zerovec-derive`
 
-**MIT/Apache-2.0** (15)
-: `bit_field`, `bitflags`, `downcast-rs`, `foreign-types`, `foreign-types-macros`, `foreign-types-shared`, `guillotiere`, `khronos-egl`, `matrixmultiply`, `plain`, `quick-error`, `rawpointer`, `scoped-tls`, `siphasher`, `type-map`
-
 **Apache-2.0** (14)
 : `ab_glyph`, `ab_glyph_rasterizer`, `accesskit_winit`, `approx`, `codespan-reporting`, `gethostname`, `glutin_wgl_sys`, `nalgebra`, `nalgebra-macros`, `owned_ttf_parser`, `simba`, `spirv`, `unicode-general-category`, `winit`
+
+**MIT/Apache-2.0** (14)
+: `bitflags`, `downcast-rs`, `foreign-types`, `foreign-types-macros`, `foreign-types-shared`, `guillotiere`, `khronos-egl`, `matrixmultiply`, `plain`, `quick-error`, `rawpointer`, `scoped-tls`, `siphasher`, `type-map`
 
 **Zlib OR Apache-2.0 OR MIT** (10)
 : `bytemuck`, `bytemuck_derive`, `objc2-app-kit`, `objc2-core-foundation`, `objc2-core-graphics`, `objc2-metal`, `objc2-quartz-core`, `objc2-ui-kit`, `safe_arch`, `wide`
 
-**MIT OR Apache-2.0 OR Zlib** (7)
-: `cursor-icon`, `glow`, `raw-window-handle`, `xkeysym`, `zune-core`, `zune-inflate`, `zune-jpeg`
+**MIT OR Apache-2.0 OR Zlib** (6)
+: `cursor-icon`, `glow`, `raw-window-handle`, `xkeysym`, `zune-core`, `zune-jpeg`
 
 **Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT** (4)
 : `linux-raw-sys`, `rustix`, `wasip2`, `wit-bindgen`
-
-**BSD-3-Clause** (4)
-: `exr`, `lebe`, `tiny-skia`, `tiny-skia-path`
 
 **Apache-2.0/MIT** (2)
 : `pollster`, `rustc-hash`
 
 **BSD-2-Clause OR Apache-2.0 OR MIT** (2)
 : `zerocopy`, `zerocopy-derive`
+
+**BSD-3-Clause** (2)
+: `tiny-skia`, `tiny-skia-path`
 
 **BSD-3-Clause OR Apache-2.0** (2)
 : `moxcms`, `pxfm`
@@ -148,25 +148,6 @@ interface gets the glyphs its buttons and headings are drawn with — ⏮ (U+23E
 ➖ (U+2796), ➕ (U+2795), 📏 (U+1F4CF), 📐 (U+1F4D0), 🔤 (U+1F524) among many others — and none of
 those code points exists in Atkinson Hyperlegible or DejaVu Sans. Building with
 `default-features = false` to exclude the set would leave those labels blank.
-
-## Star maps
-
-The sky renderer draws its star background from NASA's Deep Star Maps 2020, made by the NASA
-Goddard Space Flight Center Scientific Visualization Studio (<https://svs.gsfc.nasa.gov/4851>).
-The maps are **not distributed with Black Hole Lab** and are not in this repository. Each user
-downloads them from NASA with `assets/sky/fetch-sky.ps1`, which verifies them against
-`assets/sky/checksums.sha256`; `assets/sky/README.md` describes them.
-
-| Maps | Source | Terms |
-| --- | --- | --- |
-| `starmap_2020_*.exr`, `milkyway_2020_*.exr` (celestial and galactic, 4k to 64k) | NASA SVS entry 4851, built from Hipparcos-2, Tycho-2, Gaia DR2 and UCAC3 | NASA's reproduction guidelines, <https://www.nasa.gov/multimedia/guidelines/index.html>, with the credit line below |
-
-Any video or image published with these maps must carry NASA's credit line, as the SVS page
-gives it:
-
-> NASA/Goddard Space Flight Center Scientific Visualization Studio. Gaia DR2: ESA/Gaia/DPAC.
-> Constellation figures based on those developed for the IAU by Alan MacRobert of Sky and
-> Telescope magazine (Roger Sinnott and Rick Fienberg).
 
 ## Regenerating this list
 
