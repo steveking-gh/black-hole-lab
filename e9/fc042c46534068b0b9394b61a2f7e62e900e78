@@ -1,0 +1,82 @@
+crates/sky-format/src/tests.rs
+  s_fa4e4937427d8c::t_761906df936aec 131-135,148-153,178-180,237-240,281-284,288,291,297-304,320-323,344-347,384-387,389-392,425-428,450-454,457-466,476-480,505-518,520-524,530-534,567-571,582-585,600-607,610-613,675-678
+  s_fa4e4937427d8c::t_a1872c0dba2074 202
+  s_fa4e4937427d8c::t_8cd2e377ff2e55 487
+  s_fa4e4937427d8c::t_284619f0153a7a 1-130,136-147,154-177,181-201,203-236,241-258,264-265,267,270-280,292-296,305-319,324-343,348-383,388,393-424,429-449,455-456,467-475,481-486,488-504,519,525-529,535-566,572-581,586-599,608-609,614-674,679-684
+  s_fa4e4937427d8c::t_59e613e9420db5 259-263,266,268-269
+  s_fa4e4937427d8c::t_442469e53313ea 285-287,289-290
+crates/sky-format/src/grid.rs
+  s_fa4e4937427d8c::t_bbc9877b174637 59-63,67-70,79,82,84-88,95-97
+  s_fa4e4937427d8c::t_c57c0f83d6b189 1-19,27-58,64-66,71-78,80-81,83,89-94,98-99
+  s_fa4e4937427d8c::t_ad2d106d455d2f 20-26
+crates/sky-format/src/num.rs
+  s_fa4e4937427d8c::t_3f1451cc6b574c 1-103
+crates/sky-format/src/lib.rs
+  s_fa4e4937427d8c::t_761906df936aec 36
+  s_fa4e4937427d8c::t_54d00c0c0617aa 1-35,37-54
+crates/sky-format/Cargo.toml
+  s_fa4e4937427d8c::t_6c51bce796f00f 1-22
+crates/sky-format/src/manifest.rs
+  s_fa4e4937427d8c::t_559dff2b9b7e7f 490-491,499
+  s_fa4e4937427d8c::t_eb9196d15eba15 1-180,185-189,195-312,319-392,397-489,500-530
+  s_fa4e4937427d8c::t_6a12ad69f3b711 181-184
+  s_fa4e4937427d8c::t_1f7c913273daa7 193-194
+  s_fa4e4937427d8c::t_ca63a5d3f656c5 190-192
+  s_fa4e4937427d8c::t_761906df936aec 393-396,492-498
+  s_fa4e4937427d8c::t_6ea52760bc62d8 313-318
+crates/sky-format/src/bundle.rs
+  s_fa4e4937427d8c::t_677d1a4e26d3a5 126-129
+  s_fa4e4937427d8c::t_a6765a80775258 1-27,29-98,100-115,117-119,124-125,130-133,146-147,149-236,238-292
+  s_fa4e4937427d8c::t_bd4bf7ec32f092 28
+  s_fa4e4937427d8c::t_f8866dce93bf96 134-138,143-145
+  s_fa4e4937427d8c::t_a4316bdec3c3ed 99,148,237
+  s_fa4e4937427d8c::t_225743e6902857 116,120-123
+  s_fa4e4937427d8c::t_761906df936aec 139-142
+crates/sky-format/golden/v1/manifest.json
+  s_fa4e4937427d8c::t_07b77890c1296b 1-94
+Cargo.toml
+  s_fa4e4937427d8c::t_3260d6b2880e32 11-12
+crates/sky-format/src/error.rs
+  s_fa4e4937427d8c::t_3993f7bb278cfe 1-74,84-102,106-124,129-199
+  s_fa4e4937427d8c::t_56b0de4216aa90 103-105
+  s_fa4e4937427d8c::t_25aeedf5185bd9 125-128
+  s_fa4e4937427d8c::t_564f703a71b49c 75-83
+crates/sky-format/src/frame.rs
+  s_fa4e4937427d8c::t_761906df936aec 249-251,476
+  s_fa4e4937427d8c::t_6b1f3926c3be9e 1-180,182-248,252-448,453-464,469-475,477-534,538-548
+  s_fa4e4937427d8c::t_c6bf12b2dcab44 465-468
+  s_fa4e4937427d8c::t_1837a77fa40217 449-452
+  s_fa4e4937427d8c::t_d5eb4fa1346020 181
+  s_fa4e4937427d8c::t_26d99757e3ca88 535-537
+Cargo.lock
+  s_09694d765db59e::t_a4b1d4c3101921 2983-2991
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e9fc042c46534068b0b9394b61a2f7e62e900e78",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_09694d765db59e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-adea2c86158a7b86e",
+        "model": "unknown"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    },
+    "s_fa4e4937427d8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c3c93472-9aee-43ec-8624-e30a21d0ed6f",
+        "model": "unknown"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
