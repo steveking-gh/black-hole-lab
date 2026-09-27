@@ -1,0 +1,55 @@
+crates/sky-render/src/values.rs
+  s_fa4e4937427d8c::t_6cd74daf9800d7 53
+  s_fa4e4937427d8c::t_2a17f3cbed4000 1-52,54-116
+crates/sky-render/src/overlay.rs
+  s_fa4e4937427d8c::t_2693a46625f527 1-215
+crates/sky-render/src/main.rs
+  s_fa4e4937427d8c::t_3bc8c17cbc6edb 18-21,23-25,31,34-35,39,42,46-47,56,60,162-189,279-284,332-336,383-384,387
+crates/sky-render/src/panel.rs
+  s_fa4e4937427d8c::t_a37baf67f802de 1-319
+crates/sky-render/src/text.rs
+  s_fa4e4937427d8c::t_5fa08cdf54c07f 1-110,112-136
+  s_fa4e4937427d8c::t_3bc8c17cbc6edb 111
+crates/sky-render/src/tests_readouts.rs
+  s_fa4e4937427d8c::t_3bc8c17cbc6edb 61-65,141-143,177-180,235-238,244-251,259-260,294-302,320-324,331-332,380-383,438-439,448-451,475-479,565-572,577-581
+  s_fa4e4937427d8c::t_2fc7a5bc7548d5 1-60,66-140,144-176,181-234,239-243,252-258,261-293,303-319,325-330,333-379,384-437,440-447,452-474,480-564,573-576,582-588,591,600,602,605
+  s_fa4e4937427d8c::t_f27f450815892c 589-590,592-599,601,603-604
+crates/sky-render/Cargo.toml
+  s_fa4e4937427d8c::t_b9ff7b18e38d56 21-26
+crates/sky-render/src/layout.rs
+  s_fa4e4937427d8c::t_3bc8c17cbc6edb 1-168
+crates/sky-render/src/cli.rs
+  s_fa4e4937427d8c::t_a52795c1007fb0 10,40-50,54-57,79-85,112-116,181-196,199-202,234-241
+  s_fa4e4937427d8c::t_10c3d1fce134f7 197-198
+Cargo.lock
+  s_b43265089f1866::t_22dd8a44634178 3022,3025
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "249b850d825711e0a19fcb8b68127f7e015037bc",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_b43265089f1866": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a00996178feb62f3d",
+        "model": "unknown"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    },
+    "s_fa4e4937427d8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c3c93472-9aee-43ec-8624-e30a21d0ed6f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
