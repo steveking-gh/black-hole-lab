@@ -13,6 +13,13 @@
 # dependencies of crates here, built into this workspace's own target directory.
 #
 # Run cargo from this directory: `cargo test` here tests every crate of the pipeline.
+#
+# NEVER run `cargo fmt --all` here. `--all` follows path dependencies, so it reformats
+# ../crates/kerr-equatorial and ../crates/readout, and through their workspace the app's own
+# source: forty-one files of the app, the one time it was done. Format one crate at a time, with
+# `cargo fmt -p <crate>`, or every crate of this workspace and nothing else with
+#
+#     cargo fmt -p sky-format -p sky-testgen -p sky-render -p kerr-sky -p sky-trace
 [workspace]
 resolver = "3"
-members = ["sky-format", "sky-testgen", "sky-render", "sky-trace"]
+members = ["sky-format", "sky-testgen", "sky-render", "kerr-sky", "sky-trace"]

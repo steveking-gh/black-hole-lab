@@ -1,0 +1,20 @@
+[package]
+name = "kerr-sky"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "Light rays in Kerr spacetime off the equatorial plane, traced backward from an equatorial observer's eye: where on the far sky each direction's light came from, its shift, and the hole's shadow"
+# Not for crates.io. It is the physics of the sky pipeline and its API is whatever that pipeline
+# needs; see the same note on kerr-equatorial.
+publish = false
+
+# The doc comments set their formulae as indented blocks, which rustdoc takes for Rust and tries to
+# compile. Nothing here is a doctest.
+[lib]
+doctest = false
+
+[dependencies]
+# Used read-only, for everything that has to agree with Black Hole Lab: the equatorial chart and
+# its embedding, the metric the pull-back test holds this crate to, the observer's tetrad, and the
+# timelike geodesic equation the equatorial rays are checked against.
+kerr-equatorial = { path = "../../crates/kerr-equatorial" }
