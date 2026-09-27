@@ -35,10 +35,14 @@
 //!
 //!     x = cos(psi) e1 + sin(psi) e2,     y = -sin(psi) e1 + cos(psi) e2,
 //!
-//! (`Tetrad::turned`, exact at any boost). psi = 0 faces outward, psi = pi faces the hole, psi = pi/2
-//! faces prograde. [`Triad::towards`] turns x onto the rest-space direction of any vector the caller
-//! names instead - the observer's motion relative to some frame, or a gyroscope's axis carried
-//! from the last frame. Which of these a film uses is the caller's decision.
+//! (`Tetrad::turned`, exact at any boost). psi = 0 faces along the rest-space part of the chart's
+//! d/dr, psi = pi against it, psi = pi/2 along the prograde leg. That is "outward" and "toward the
+//! hole" only loosely: d/dr is taken at fixed Kerr-Schild t and phi, so its rest-space part depends
+//! on the chart's slicing, and for a static observer at 6 M around a = 0.9 M it is turned 10.4
+//! degrees from the gradient of r, which does not. [`Triad::towards`] turns x onto the rest-space
+//! direction of any vector the caller names instead - minus the gradient of r, which is how
+//! `sky-trace` faces the hole; the observer's motion relative to some frame; or a gyroscope's axis
+//! carried from the last frame. Which of these a film uses is the caller's decision.
 //!
 //! # What a direction on the sky means
 //!
@@ -309,8 +313,10 @@ impl Reference {
 }
 
 impl Triad {
-    /// The triad with z along the spin axis and x turned from the observer's outward radial leg by
-    /// `heading` toward the prograde leg: 0 faces outward, pi faces the hole.
+    /// The triad with z along the spin axis and x turned from the observer's radial leg (the
+    /// rest-space part of the chart's d/dr) by `heading` toward the prograde leg. Heading 0 is
+    /// outward and pi inward only as far as that leg is radial: see the module's note on headings,
+    /// and use [`Triad::towards`] with minus the gradient of r to face the hole.
     pub fn new(kerr: &Kerr, observer: &Observer, heading: f64) -> Self {
         let (s, c) = heading.sin_cos();
         let tetrad = Self::tetrad(kerr, observer).turned(c, s);

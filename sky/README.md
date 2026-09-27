@@ -11,6 +11,7 @@ depend on anything here, and nothing here can change how the app builds or runs.
 | `sky-format` | library | Reads and writes a *sky bundle*, the files that pass from a tracer to the renderer |
 | `sky-testgen` | program | Writes sky bundles for flat-space test cases whose right answer is known |
 | `kerr-sky` | library | Traces light backward through Kerr spacetime, off the equatorial plane |
+| `sky-trace` | program | Follows an observer from a Black Hole Lab save, or a hovering one, and writes the sky bundle of what the observer sees |
 | `sky-render` | program | Turns a sky bundle and a star map into a 360-degree AV1 video |
 | `maps` | data | The script that downloads NASA's star maps, and their description |
 
@@ -20,14 +21,15 @@ root.
 ## How the parts connect
 
 ```text
-sky-testgen  ─┐
-              ├─►  sky bundle  ─►  sky-render  ─►  video.mp4
-(a tracer)   ─┘                        ▲
-                                   star map
+              sky-testgen  ─┐
+                            ├─►  sky bundle  ─►  sky-render  ─►  video.mp4
+save.bhl  ─►  sky-trace    ─┘                        ▲
+                                                 star map
 ```
 
-A *tracer* is any program that writes a sky bundle. `sky-testgen` is one, for flat space. The
-tracer for Kerr spacetime is built on `kerr-sky`.
+A *tracer* is any program that writes a sky bundle. `sky-testgen` is one, for flat space.
+`sky-trace` is the one for Kerr spacetime: it reads a save of Black Hole Lab, follows the chosen
+observer forward from the saved moment, and traces the light with `kerr-sky`.
 
 ## Running it
 

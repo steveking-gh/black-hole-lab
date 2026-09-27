@@ -280,6 +280,7 @@ version = "0.1.0"
 dependencies = [
  "flate2",
  "kerr-equatorial",
+ "kerr-sky",
  "serde",
  "serde_json",
  "sky-format",

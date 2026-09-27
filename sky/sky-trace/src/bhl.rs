@@ -86,6 +86,10 @@ pub struct Save {
     pub saved_at_utc: String,
     /// The note the user gave the save; empty is normal.
     pub note: String,
+    /// The save's `state_hash`: the app's fingerprint of the run, in hex, which the app checks on
+    /// load. Carried into a bundle's manifest so that the bundle names the state it was filmed
+    /// from. Empty if the file has none.
+    pub state_hash: String,
     pub hole: Hole,
     /// The simulation clock at the saved moment: the chart's coordinate time t, in M.
     pub clock: f64,
@@ -299,6 +303,8 @@ struct Document {
     saved_at_utc: String,
     #[serde(default)]
     note: String,
+    #[serde(default)]
+    state_hash: String,
     sim: Sim,
 }
 
@@ -371,6 +377,7 @@ impl Document {
             written_by: self.written_by.map(|w| (w.app_version, w.git)),
             saved_at_utc: self.saved_at_utc,
             note: self.note,
+            state_hash: self.state_hash,
             hole: Hole {
                 m: self.sim.metric.m.0,
                 a: self.sim.metric.a.0,

@@ -13,6 +13,8 @@ doctest = false
 
 [dependencies]
 kerr-equatorial = { path = "../../crates/kerr-equatorial" }
+# The light: every ray of a frame traced backward from the observer's event to its fate.
+kerr-sky = { path = "../kerr-sky" }
 sky-format = { path = "../sky-format" }
 # The versions sky-format already uses, so the lock file gains no entry. flate2 opens a gzipped
 # save; serde and serde_json read the part of it this program needs.
