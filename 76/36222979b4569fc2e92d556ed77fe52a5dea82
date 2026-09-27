@@ -1,0 +1,56 @@
+sky/sky-render/src/sky.rs
+  s_fa4e4937427d8c::t_f2183bf5a51618 66-79
+sky/sky-render/src/load.rs
+  s_fa4e4937427d8c::t_f2183bf5a51618 2-7,11,18-19,42,46-48,63-70,74-84
+sky/sky-render/src/render.rs
+  s_fa4e4937427d8c::t_cb7dfbf86e5183 11-29,32,34,37,63-64,75,95,99-106,118,128,149,152-154,174-192,196,200-206,212-213,216,219,221,223-237,242-245,247-253,256-262
+  s_fa4e4937427d8c::t_1a8eec9690621c 254-255
+sky/sky-render/src/main.rs
+  s_fa4e4937427d8c::t_0e1f49ef53870d 51
+  s_fa4e4937427d8c::t_2a7159618e6dd9 52,344
+  s_fa4e4937427d8c::t_9a087d916aed7b 14-15,19-20,42,61,65,199,214,221-230,239-246,254-267,330,333-334,336,366-378,380,448-450
+sky/sky-render/src/tally.rs
+  s_fa4e4937427d8c::t_5d77be1e9d8f28 1-75,82-149
+  s_fa4e4937427d8c::t_2a7159618e6dd9 76-81
+sky/sky-render/src/cli.rs
+  s_fa4e4937427d8c::t_b7fb0db3bfe1dc 23-25,36-44,63-66,88-90,123-126,155,157-160,191-210,271-272
+sky/sky-render/src/tone.rs
+  s_fa4e4937427d8c::t_aa812a1b849f05 73-85,88-91
+  s_fa4e4937427d8c::t_b8041530c7b624 86-87,153-154
+  s_fa4e4937427d8c::t_b811154c0ba36d 42-62
+sky/sky-render/src/field.rs
+  s_fa4e4937427d8c::t_f016ee8eb06688 24-50,57,59-96,105-125,129-130,142-144,147-159,169-171,185-219,222-225,227-259,264-273,275-309,321-324,342-345,348-349,356,364-366,371,377-402,406-416
+  s_fa4e4937427d8c::t_33befe780ebca2 51-56,58,97-104,226
+  s_fa4e4937427d8c::t_1a8eec9690621c 220-221
+  s_fa4e4937427d8c::t_2a7159618e6dd9 260-263
+sky/sky-render/src/timeline.rs
+  s_fa4e4937427d8c::t_907e7e17275c03 68-74
+  s_fa4e4937427d8c::t_ab9e8c5da08983 7-16
+sky/sky-render/src/tests.rs
+  s_fa4e4937427d8c::t_2a4b6a845ed4b6 127
+sky/sky-render/src/tests_marking.rs
+  s_fa4e4937427d8c::t_79a747fca0fe35 1-84,90-194,200-235,241-417,422-429,434-436,447-471,476-513,518-556,561-607,615-622,629-643,648-650,657
+  s_fa4e4937427d8c::t_1a8eec9690621c 608-614
+  s_fa4e4937427d8c::t_2a7159618e6dd9 85-89,195-199,236-240,418-421,430-433,437-446,472-475,514-517,557-560,623-628,644-647,651-656
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "7636222979b4569fc2e92d556ed77fe52a5dea82",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_fa4e4937427d8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c3c93472-9aee-43ec-8624-e30a21d0ed6f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
