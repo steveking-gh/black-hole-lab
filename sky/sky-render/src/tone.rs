@@ -39,6 +39,27 @@
 //! comes out about 0.2 stops brighter than the 8k one; `--exposure` is there for the eye to
 //! correct that. The rule knows nothing of the `milkyway` product, whose background is 1.65 to 2
 //! times brighter than `starmap`'s and so wants roughly one stop less.
+//!
+//! # Where a colour here could be produced without being known
+//!
+//! - *g^4 beyond f32's range* ([`shade`]). It was formed in f64 and cast to f32, and for g above
+//!   about 10^9.6 the cast is infinite; infinity times a texel of zero is NaN, which the encoder
+//!   then wrote as black. Now: a texel of zero is black whatever g is, a positive texel under an
+//!   enormous g is clipped white, and a shift so small that g^4 underflows is black. All three are
+//!   right, not merely plausible: the light is exactly zero, beyond any display, or under half a
+//!   code. `--exposure` is limited to 100 stops either way so that the gain is itself a positive
+//!   finite f32 and cannot supply the other half of an infinity times zero.
+//! - *Clipping at 1* ([`Encoder::encode`]). A display limit, not an unknown: a clipped pixel is
+//!   known to be at least that bright. Channels clip separately, so a very bright coloured pixel
+//!   drifts toward white, as it does in any photograph.
+//! - *NaN encoded as 0* ([`Encoder::encode`]). Unreachable from the renderer: map texels are
+//!   finite (`crate::load`), the rip-map's weights are finite and positive, and shifts are finite
+//!   and not negative (`crate::field`), so the light is finite or, by overflow, infinite. The
+//!   rule stays as a guard for direct callers; the renderer checks for NaN before encoding and
+//!   would draw such a pixel as unresolved.
+//! - *The colour of shifted light*. Only the brightness follows g; the hue is the map's. This is
+//!   wrong wherever g is far from 1, it is known and described at [`shade`], and marking it would
+//!   mark every pixel of a moving observer's sky. It waits for a spectral model.
 
 /// The default exposure, in stops, for a map `width` texels wide.
 pub fn default_exposure_stops(width: usize) -> f64 {
@@ -49,6 +70,25 @@ pub fn default_exposure_stops(width: usize) -> f64 {
 /// `g`, under the exposure `gain`. Not clipped.
 pub fn shade(rgb: [f32; 3], g: f64, gain: f32) -> [f32; 3] {
     let scale = (g * g * g * g) as f32 * gain;
+    // The common case, in the arithmetic the renderer has always used. A scale that is not a
+    // positive finite f32 comes from a shift beyond f32's range: g^4 is infinite in f32 for g
+    // above about 10^9.6 (near an inner horizon that is physical) and zero below about 10^-11.2.
+    // An infinite scale times a texel of exactly zero is NaN, which would be drawn as black by
+    // accident and not by right; so those cases are formed in f64, with a zero texel zero
+    // whatever the shift (no light, blueshifted, is still no light).
+    if !(scale.is_finite() && scale > 0.0) {
+        let factor = g * g * g * g * f64::from(gain);
+        return rgb.map(|c| {
+            if c == 0.0 {
+                0.0
+            } else {
+                // Overflow gives an infinity, which the encoder clips to white: the light is
+                // then beyond any display, as it should be. In f64 the factor is zero only for g
+                // below 10^-81, which leaves nothing a display could show.
+                (f64::from(c) * factor) as f32
+            }
+        });
+    }
     // ---- COLOUR SHIFT GOES HERE --------------------------------------------------------------
     // The g^4 above is the bolometric factor, the same for every channel. The full effect of a
     // shift also moves the spectrum: I_nu,observed(nu) = g^3 I_nu,map(nu / g), so a star of
@@ -110,8 +150,8 @@ impl Encoder {
 }
 
 /// A colour given as six hex digits (`RRGGBB`, with or without a leading `#`), sRGB-encoded, as
-/// 16-bit codes. The flat colour of unresolved rays is given this way and written as it is: it is
-/// a marker, not light, so no exposure touches it.
+/// 16-bit codes. The marker colours (of unresolved rays and of under-sampled pixels) are given
+/// this way and written as they are: they are markers, not light, so no exposure touches them.
 pub fn parse_hex_colour(text: &str) -> Option<[u16; 3]> {
     let hex = text.strip_prefix('#').unwrap_or(text);
     if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {

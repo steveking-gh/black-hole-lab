@@ -11,10 +11,13 @@
 //!
 //! - `timeline`: which bundle frames each video frame shows;
 //! - `bilinear` and `field`: the ray at any output pixel, from the bundle's coarser grid, across
-//!   the seam and over the poles, respecting each ray's fate;
+//!   the seam and over the poles, respecting each ray's fate, and marking where the rays are too
+//!   far apart to say where the light came from;
 //! - `sky`: the rotation into the map's frame, and the filtered map lookup (a rip-map);
 //! - `tone`: the shift's g^4, the exposure, clipping and the sRGB curve;
 //! - `render`: the frame, row bands on scoped threads;
+//! - `tally`: how many pixels were drawn unresolved, under-sampled and dark, and the sentence that
+//!   explains a marker colour;
 //! - `mp4`: the spherical-video tag, appended to the finished file;
 //! - `values`: each read-out's value at a video frame, and how it is written;
 //! - `panel`: where a read-out panel sits on the sphere, and which pixels show it;
@@ -36,6 +39,7 @@ mod panel;
 mod parallel;
 mod render;
 mod sky;
+mod tally;
 mod text;
 mod timeline;
 mod tone;
@@ -43,6 +47,8 @@ mod values;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_marking;
 #[cfg(test)]
 mod tests_readouts;
 
@@ -52,10 +58,11 @@ use std::time::{Duration, Instant};
 
 use cli::{Options, Request, USAGE};
 use encode::{Encoding, Ffmpeg};
-use field::RayField;
+use field::{Judge, RayField};
 use overlay::Overlay;
 use render::{Fields, Look, Scene, Size};
 use sky::{MapFrame, SkyMap};
+use tally::FilmTally;
 use timeline::{Pick, Timeline};
 use values::Series;
 
@@ -189,6 +196,7 @@ fn run(o: &Options) -> Result<(), String> {
 
     let clock = Instant::now();
     let image = load::read_map(&o.sky)?;
+    let image_damaged = image.damaged;
     let read_seconds = clock.elapsed().as_secs_f64();
     let clock = Instant::now();
     let sky = SkyMap::new(image.width, image.height, image.texels, o.threads);
@@ -203,12 +211,23 @@ fn run(o: &Options) -> Result<(), String> {
     let look = Look {
         gain: 2f64.powf(stops) as f32,
         unresolved: o.unresolved,
+        undersampled: o.undersampled,
         encoder: tone::Encoder::new(),
     };
     let size = Size {
         width: o.width,
         height: o.height,
     };
+    // What a ray grid resolves depends on how finely the video samples it and on the finest
+    // detail the map holds (`field`, "Where interpolation does not know the answer").
+    let judge = o.mark_undersampled.then(|| Judge {
+        pixels_per_ray: (
+            size.width as f64 / manifest.grid.width as f64,
+            size.height as f64 / manifest.grid.height as f64,
+        ),
+        texel: (2.0 * std::f64::consts::PI / sky.width() as f64)
+            .min(std::f64::consts::PI / sky.height() as f64),
+    });
     println!(
         "bundle {}: {} frames on a {} x {} grid, far sky {:?}",
         o.bundle.display(),
@@ -217,12 +236,34 @@ fn run(o: &Options) -> Result<(), String> {
         manifest.grid.height,
         manifest.far_sky.name
     );
+    let listed = manifest.frames.len();
+    if complete.len() < listed {
+        println!(
+            "{} of the {listed} frames the manifest lists are not complete; the video \
+             interpolates across them",
+            listed - complete.len()
+        );
+    }
     println!(
         "map {}: {} x {} {}, read in {read_seconds:.1} s, rip-map built in {pyramid_seconds:.1} s",
         o.sky.display(),
         sky.width(),
         sky.height(),
         map_frame.name()
+    );
+    if image_damaged > 0 {
+        println!(
+            "the map has {image_damaged} texel(s) whose value is not a finite number; they are \
+             read as black"
+        );
+    }
+    println!(
+        "under-sampled pixels: {}",
+        if o.mark_undersampled {
+            format!("marked in {}", tally::colour_name(o.undersampled))
+        } else {
+            "interpolated (--undersampled interpolate)".into()
+        }
     );
     println!(
         "video: {} x {}, {} fps, frames {}..{} of {total}, exposure {stops:+.2} stops, {} threads",
@@ -286,9 +327,13 @@ fn run(o: &Options) -> Result<(), String> {
     let loop_started = Instant::now();
     let count = range.end - range.start;
     let mut sent = 0u64;
+    let mut counts = FilmTally::default();
     for k in range.clone() {
         let pick = timeline.pick(k);
+        // Before the first complete bundle frame there are no rays for this moment at all.
+        let before = timeline.before_first(k);
         let wanted: Vec<usize> = match pick {
+            _ if before => Vec::new(),
             Pick::One(a) => vec![a],
             Pick::Two(a, b, _) => vec![a, b],
         };
@@ -296,15 +341,11 @@ fn run(o: &Options) -> Result<(), String> {
         loaded.retain(|(p, _)| wanted.contains(p));
         for &p in &wanted {
             if !loaded.iter().any(|(q, _)| *q == p) {
-                loaded.push((p, load::read_field(&bundle, complete[p])?));
+                loaded.push((p, load::read_field(&bundle, complete[p], judge, o.threads)?));
             }
         }
         load_time += clock.elapsed();
         let field = |p: usize| &loaded.iter().find(|(q, _)| *q == p).expect("loaded").1;
-        let fields = match pick {
-            Pick::One(a) => Fields::One(field(a)),
-            Pick::Two(a, b, w) => Fields::Two(field(a), field(b), w),
-        };
 
         let clock = Instant::now();
         let mut pixels = match returned.try_recv() {
@@ -322,12 +363,21 @@ fn run(o: &Options) -> Result<(), String> {
         wait_time += clock.elapsed();
 
         let clock = Instant::now();
-        let scene = Scene {
-            fields,
-            rotation,
-            sky: &sky,
+        let tally = if before {
+            render::fill_unresolved(size, &look, &mut pixels)
+        } else {
+            let fields = match pick {
+                Pick::One(a) => Fields::One(field(a)),
+                Pick::Two(a, b, w) => Fields::Two(field(a), field(b), w),
+            };
+            let scene = Scene {
+                fields,
+                rotation,
+                sky: &sky,
+            };
+            render::render(&scene, size, &look, o.threads, &mut pixels)
         };
-        render::render(&scene, size, &look, o.threads, &mut pixels);
+        counts.add(k, tally);
         render_time += clock.elapsed();
         if let Some(overlay) = &mut overlay {
             let clock = Instant::now();
@@ -395,6 +445,9 @@ fn run(o: &Options) -> Result<(), String> {
         },
         started.elapsed().as_secs_f64()
     );
+    for line in counts.report(o.unresolved, o.undersampled, o.mark_undersampled) {
+        println!("{line}");
+    }
     if sent < count {
         return Err(format!("stopped after {sent} of {count} frames"));
     }

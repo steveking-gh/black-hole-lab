@@ -20,8 +20,9 @@ usage: sky-render --bundle <dir> --sky <map.exr> --out <video.mp4> [options]
   --sky <map.exr>            the star map, an equirectangular OpenEXR file
   --out <video.mp4>          the video to write, tagged as a 360-degree equirectangular video
   --size <W>x<H>             the video's size; W must be twice H (default 8192x4096)
-  --exposure <stops>         the exposure as a power of two (default: 2.5 stops for a map 8192
-                             wide, two more for every doubling of the map's width)
+  --exposure <stops>         the exposure as a power of two, at most 100 either way (default:
+                             2.5 stops for a map 8192 wide, two more for every doubling of the
+                             map's width)
   --encoder svt|nvenc|aom|none
                              SVT-AV1 on the CPU (default), NVIDIA's AV1 encoder, or libaom;
                              none renders without encoding (with --keep-frames, or for timing)
@@ -32,7 +33,15 @@ usage: sky-render --bundle <dir> --sky <map.exr> --out <video.mp4> [options]
   --map-frame celestial|galactic
                              the map's coordinates (default: galactic if the file name has _gal)
   --unresolved-colour <RRGGBB>
-                             the flat colour of rays the tracer did not resolve (default FF00FF)
+                             the flat colour of rays the tracer did not resolve (default FF0000)
+  --undersampled mark|interpolate
+                             where the bundle's rays are too far apart to say which part of the
+                             sky the light came from (beside a black hole's dark region, where
+                             light has circled the hole): mark those pixels (default), or
+                             interpolate them as if the rays did say
+  --undersampled-colour <RRGGBB>
+                             the flat colour of such pixels (default FF0000, as unresolved rays,
+                             so that everything the program does not know is one colour)
   --threads <n>              render threads (default: all)
   --frames <a>..<b>          render only video frames a to b - 1 (a.. and ..b also work)
   --keep-frames <dir>        also write each frame as a 16-bit PNG into <dir>
@@ -50,6 +59,10 @@ read-outs (the bundle's numbers, the observer's stopwatch first, drawn on the sk
   --decimal-comma            write the decimal mark as a comma, as the app's own setting does
   --help                     this text
 ";
+
+/// The largest `--exposure` either way, in stops: the gain 2^stops is then a positive finite f32
+/// (2^100 is 1.3e30; f32 reaches 3.4e38), which `crate::tone::shade` relies on.
+const MAX_EXPOSURE_STOPS: f64 = 100.0;
 
 /// The largest `--readout-size`, in degrees: a line of text a sixth of the way up the sky is
 /// already more than anyone needs to read it.
@@ -72,6 +85,9 @@ pub struct Options {
     pub ffmpeg: PathBuf,
     pub map_frame: Option<MapFrame>,
     pub unresolved: [u16; 3],
+    /// `--undersampled mark` (true, the default) or `interpolate`.
+    pub mark_undersampled: bool,
+    pub undersampled: [u16; 3],
     pub threads: usize,
     pub frames: Option<Range<u64>>,
     pub keep_frames: Option<PathBuf>,
@@ -104,7 +120,10 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
     let mut preset = None;
     let mut ffmpeg = PathBuf::from("ffmpeg");
     let mut map_frame = None;
-    let mut unresolved = [65_535, 0, 65_535];
+    // Bright red for both markers: whatever the program does not know is one colour by default.
+    let mut unresolved = [65_535, 0, 0];
+    let mut mark_undersampled = true;
+    let mut undersampled = [65_535, 0, 0];
     let mut threads = std::thread::available_parallelism().map_or(1, |n| n.get());
     let mut frames = None;
     let mut keep_frames = None;
@@ -133,9 +152,12 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
                 exposure = Some(
                     text.parse::<f64>()
                         .ok()
-                        .filter(|s| s.is_finite())
+                        .filter(|s| s.is_finite() && s.abs() <= MAX_EXPOSURE_STOPS)
                         .ok_or_else(|| {
-                            format!("--exposure takes a number of stops, not {text:?}")
+                            format!(
+                                "--exposure takes a number of stops, at most \
+                                 {MAX_EXPOSURE_STOPS} either way, not {text:?}"
+                            )
                         })?,
                 );
             }
@@ -166,7 +188,26 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
             "--unresolved-colour" => {
                 let text = value()?;
                 unresolved = parse_hex_colour(text).ok_or_else(|| {
-                    format!("--unresolved-colour takes six hex digits such as FF00FF, not {text:?}")
+                    format!("--unresolved-colour takes six hex digits such as FF0000, not {text:?}")
+                })?;
+            }
+            "--undersampled" => {
+                mark_undersampled = match value()? {
+                    "mark" => true,
+                    "interpolate" => false,
+                    other => {
+                        return Err(format!(
+                            "--undersampled is mark or interpolate, not {other:?}"
+                        ));
+                    }
+                };
+            }
+            "--undersampled-colour" => {
+                let text = value()?;
+                undersampled = parse_hex_colour(text).ok_or_else(|| {
+                    format!(
+                        "--undersampled-colour takes six hex digits such as FF0000, not {text:?}"
+                    )
                 })?;
             }
             "--threads" => {
@@ -227,6 +268,8 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
         ffmpeg,
         map_frame,
         unresolved,
+        mark_undersampled,
+        undersampled,
         threads,
         frames,
         keep_frames,

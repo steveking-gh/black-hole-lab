@@ -124,6 +124,7 @@ fn look(gain: f32) -> Look {
     Look {
         gain,
         unresolved: [65_535, 0, 65_535],
+        undersampled: [0, 65_535, 0],
         encoder: Encoder::new(),
     }
 }

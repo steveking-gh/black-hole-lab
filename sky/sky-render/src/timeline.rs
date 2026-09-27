@@ -4,6 +4,16 @@
 //! puts that at stopwatch time `k / fps * proper_time_per_video_second`. The stopwatch counts from
 //! frame 0 of the bundle. The bundle's frames need not be evenly spaced and need not fall on video
 //! frames, so each video frame is placed between the two bundle frames around it.
+//!
+//! # Holding the ends
+//!
+//! Before the first bundle frame and after the last, `pick` holds the nearest frame. After the
+//! last it never matters: the video ends at the last bundle frame (`video_frames`), so a video
+//! frame is at most a rounding error past it, and on it. Before the first it matters when the
+//! stopwatch's origin, frame 0, is listed but not yet complete (a bundle still being written, or
+//! damaged): the opening video frames would then show the sky of a later moment under an earlier
+//! stopwatch, which is plausible and false. The renderer asks [`Timeline::before_first`] and draws
+//! such a frame wholly in the unresolved colour instead: the bundle has no rays for that moment.
 
 /// What one video frame is made of: positions in the list of bundle frames being played, not
 /// frame indices.
@@ -53,6 +63,13 @@ impl Timeline {
         let frames = last / self.proper_time_per_video_second * self.frames_per_second;
         // A last frame at 2.9999999999 video frames' worth of time is meant to be at 3.
         (frames * (1.0 + 1e-9)).floor() as u64 + 1
+    }
+
+    /// Whether video frame `k` falls before the first bundle frame, by more than a millionth of a
+    /// video frame's worth of time (rounding is not a moment of its own).
+    pub fn before_first(&self, k: u64) -> bool {
+        let step = self.proper_time_per_video_second / self.frames_per_second;
+        self.stopwatch(k) < self.times[0] - 1e-6 * step
     }
 
     /// The bundle frames video frame `k` is made of.

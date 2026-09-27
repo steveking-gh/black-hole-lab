@@ -1,14 +1,22 @@
 //! Reading the inputs from disk: the star map, and the bundle frames the video needs.
+//!
+//! One fallback lives here: a map texel that is not a finite number is read as black. That is
+//! plausible, not known; a damaged texel's light is simply missing. It keeps a NaN from spreading
+//! through every level of the rip-map built from it, which would spoil far more than the one
+//! texel. NASA's maps have no such texel; any other map's are counted, and the run says how many
+//! there were, so that a black speck in the video can be traced to its cause.
 
 use std::path::Path;
 
-use crate::field::RayField;
+use crate::field::{Judge, RayField};
 
 /// A star map read from an OpenEXR file: linear RGB, row by row from the top.
 pub struct MapImage {
     pub width: usize,
     pub height: usize,
     pub texels: Vec<[f32; 3]>,
+    /// How many texels held a value that is not a finite number, read as black.
+    pub damaged: usize,
 }
 
 /// Reads the R, G and B channels of an OpenEXR file's first layer as linear light.
@@ -31,9 +39,13 @@ pub fn read_map(path: &Path) -> Result<MapImage, String> {
                 width: size.width(),
                 height: size.height(),
                 texels: vec![[0.0; 3]; size.width() * size.height()],
+                damaged: 0,
             },
             |map: &mut MapImage, at: Vec2<usize>, (r, g, b): (f32, f32, f32)| {
                 let finite = |c: f32| if c.is_finite() { c } else { 0.0 };
+                if ![r, g, b].iter().all(|c| c.is_finite()) {
+                    map.damaged += 1;
+                }
                 map.texels[at.y() * map.width + at.x()] = [finite(r), finite(g), finite(b)];
             },
         )
@@ -48,10 +60,26 @@ pub fn read_map(path: &Path) -> Result<MapImage, String> {
     Ok(map)
 }
 
-/// Reads bundle frame `index` and prepares it for sampling.
-pub fn read_field(bundle: &sky_format::BundleReader, index: u32) -> Result<RayField, String> {
+/// Reads bundle frame `index` and prepares it for sampling, judged as `judge` says when there is
+/// one (`--undersampled mark`), on `threads` threads.
+pub fn read_field(
+    bundle: &sky_format::BundleReader,
+    index: u32,
+    judge: Option<Judge>,
+    threads: usize,
+) -> Result<RayField, String> {
     let frame = bundle
         .read_frame(index)
         .map_err(|e| format!("could not read frame {index} of the bundle: {e}"))?;
-    Ok(RayField::from_frame(&frame))
+    Ok(prepare(&frame, judge, threads))
+}
+
+/// A frame prepared for sampling, judged when there is a judge: exactly what the renderer draws
+/// from, for tests that build frames in memory.
+pub fn prepare(frame: &sky_format::Frame, judge: Option<Judge>, threads: usize) -> RayField {
+    let mut field = RayField::from_frame(frame);
+    if let Some(judge) = judge {
+        field.judge(judge, threads);
+    }
+    field
 }

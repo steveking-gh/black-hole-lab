@@ -63,6 +63,20 @@
 //! sin(b_top) - sin(b_bottom), so that a level's value near a pole is the mean of the sky it
 //! covers and not over-weighted toward the pole. Reading a level uses the pole and seam rules of
 //! `crate::bilinear`.
+//!
+//! # Fallbacks in the footprint, and what each gives
+//!
+//! - *A missing neighbour* (not sky) gives a step of zero along that axis, so the patch is
+//!   measured by the other neighbour alone, or taken as one texel with neither. That is a sharper
+//!   read than the truth wherever the pixel's patch is larger than a texel: plausible, not known.
+//!   `crate::render` supplies the other-side neighbour where it can (left for right; above for
+//!   below, when judged) and, when judged, marks a pixel with no sky neighbour along an axis as
+//!   under-sampled rather than read it one texel wide. Unjudged, the old rule stands.
+//! - *Spans that are not finite* fall back to the whole map. Unreachable: a far-sky direction is
+//!   a finite unit vector (`crate::field`), so `place` gives finite coordinates and their
+//!   differences are finite. The guard stays so that a defect elsewhere cannot index out of range.
+//! - *Spans larger than the map* are clamped to it. Right: a patch wider than the map at its
+//!   latitude covers all of it, and the coarsest level is the mean of what it covers.
 
 use std::f64::consts::PI;
 
