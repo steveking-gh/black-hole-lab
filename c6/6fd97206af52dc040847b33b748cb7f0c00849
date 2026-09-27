@@ -1,0 +1,77 @@
+crates/sky-render/src/tone.rs
+  s_fa4e4937427d8c::t_d989048edfa596 19-20,22,24-37
+  s_fa4e4937427d8c::t_903d3f9bcac63b 45
+  s_fa4e4937427d8c::t_eb7ee6704bff62 1-18,21,23,38-44,46-122
+crates/sky-render/src/encode.rs
+  s_fa4e4937427d8c::t_eb7ee6704bff62 1-186,189-339
+  s_fa4e4937427d8c::t_501468aebe8875 187-188
+crates/sky-render/Cargo.toml
+  s_fa4e4937427d8c::t_9c9697945d68c1 14-16
+  s_fa4e4937427d8c::t_9cfe666fb72119 11-13,17-20
+crates/sky-render/src/load.rs
+  s_fa4e4937427d8c::t_a7758dab025ed2 1-57
+crates/sky-render/src/sky.rs
+  s_fa4e4937427d8c::t_ec7dcbf71e9532 257,278-286,298-300
+  s_fa4e4937427d8c::t_38693db69de649 216,402,430
+  s_fa4e4937427d8c::t_eb7ee6704bff62 1-138,141-144,149-215,217-256,258-277,287-297,301-324,326-339,344-401,403-429,431-443
+  s_fa4e4937427d8c::t_5464c9b60afd1d 139-140,145-148,325,340-343
+crates/sky-render/src/timeline.rs
+  s_fa4e4937427d8c::t_35f260852448f1 1-90
+crates/sky-render/src/field.rs
+  s_fa4e4937427d8c::t_99fa3deec892f8 1-21,23-133
+  s_fa4e4937427d8c::t_2f3e38a2a0a185 22
+crates/sky-render/src/cli.rs
+  s_fa4e4937427d8c::t_63715e6724e1ce 1-21,23-108,112-210,221-225
+  s_fa4e4937427d8c::t_9177d4b6ad6bd0 109-111,211-220
+  s_fa4e4937427d8c::t_ec35d43c7d2754 22
+crates/sky-render/src/tests.rs
+  s_fa4e4937427d8c::t_786bb61af2e7a7 435-438
+  s_fa4e4937427d8c::t_eb7ee6704bff62 1-434,439-937
+crates/sky-render/src/bilinear.rs
+  s_fa4e4937427d8c::t_5464c9b60afd1d 1-100
+crates/sky-render/src/main.rs
+  s_fa4e4937427d8c::t_90ede82e5335e0 55-61
+  s_fa4e4937427d8c::t_9177d4b6ad6bd0 154-156,315-317
+  s_fa4e4937427d8c::t_627941d6eac988 1-54,62-153,157-314,320-370
+  s_fa4e4937427d8c::t_f32d0d2c49629c 318-319
+crates/sky-render/src/render.rs
+  s_fa4e4937427d8c::t_d6cfc0101d1055 1-192
+THIRD-PARTY-NOTICES.md
+  s_fa4e4937427d8c::t_38dddcd0b0f75b 28,48-50,57-58,63-65
+crates/sky-render/src/parallel.rs
+  s_fa4e4937427d8c::t_9177d4b6ad6bd0 1-43
+crates/sky-render/src/mp4.rs
+  s_fa4e4937427d8c::t_9177d4b6ad6bd0 128-133,136-137,144-147,149-152,154-157,202-207,212-213
+  s_fa4e4937427d8c::t_7bdc298766120e 1-127,134-135,138-143,148,153,158-201,208-211,214-217
+Cargo.lock
+  s_8565a36175ec1f::t_d99a5f23ba25e4 444-449,1049-1062,1712-1717,3022-3023,4563-4571
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c66fd97206af52dc040847b33b748cb7f0c00849",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_8565a36175ec1f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-ab105f204f0c9d86a",
+        "model": "unknown"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    },
+    "s_fa4e4937427d8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c3c93472-9aee-43ec-8624-e30a21d0ed6f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
