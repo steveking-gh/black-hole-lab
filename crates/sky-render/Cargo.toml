@@ -8,3 +8,13 @@ publish = false
 
 [dependencies]
 sky-format = { path = "../sky-format" }
+# The OpenEXR reader for NASA's star maps (half-float B, G, R, ZIP-compressed scanlines). `image`
+# is already in the tree, but built without its EXR decoder, which is this crate anyway. Default
+# features off: they add `rayon-core` for parallel decompression, and a map is read once per run.
+# Pinned to 1.74.0 because 1.74.2 depends on `pulp` (SIMD, with five crates of its own), which a
+# one-off read of a map does not need; with this pin the tree gains exactly four crates (exr, lebe,
+# bit_field, zune-inflate) and reuses the half, smallvec and miniz_oxide it already has.
+exr = { version = "=1.74.0", default-features = false }
+# Writes the 16-bit PNG masters of `--keep-frames`. The version the GUI toolkit already brings, so
+# the lock file gains no entry.
+png = "0.18"

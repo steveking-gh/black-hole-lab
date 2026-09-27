@@ -25,7 +25,7 @@ unavailable while it depends on nalgebra and winit. GPLv3 is the earliest GPL th
 
 ## Rust crates
 
-The dependency graph resolved for all target platforms holds 397 crate versions, 360 distinct
+The dependency graph resolved for all target platforms holds 401 crate versions, 364 distinct
 crates, grouped below by the licence each one declares in its published manifest. An `OR` is the
 crate offering a choice; an `AND` is it requiring both.
 
@@ -45,29 +45,29 @@ incompatible with GPLv3; that branch is not the one taken.
 **Unicode-3.0** (18)
 : `icu_collections`, `icu_locale_core`, `icu_normalizer`, `icu_normalizer_data`, `icu_properties`, `icu_properties_data`, `icu_provider`, `litemap`, `potential_utf`, `tinystr`, `writeable`, `yoke`, `yoke-derive`, `zerofrom`, `zerofrom-derive`, `zerotrie`, `zerovec`, `zerovec-derive`
 
+**MIT/Apache-2.0** (15)
+: `bit_field`, `bitflags`, `downcast-rs`, `foreign-types`, `foreign-types-macros`, `foreign-types-shared`, `guillotiere`, `khronos-egl`, `matrixmultiply`, `plain`, `quick-error`, `rawpointer`, `scoped-tls`, `siphasher`, `type-map`
+
 **Apache-2.0** (14)
 : `ab_glyph`, `ab_glyph_rasterizer`, `accesskit_winit`, `approx`, `codespan-reporting`, `gethostname`, `glutin_wgl_sys`, `nalgebra`, `nalgebra-macros`, `owned_ttf_parser`, `simba`, `spirv`, `unicode-general-category`, `winit`
-
-**MIT/Apache-2.0** (14)
-: `bitflags`, `downcast-rs`, `foreign-types`, `foreign-types-macros`, `foreign-types-shared`, `guillotiere`, `khronos-egl`, `matrixmultiply`, `plain`, `quick-error`, `rawpointer`, `scoped-tls`, `siphasher`, `type-map`
 
 **Zlib OR Apache-2.0 OR MIT** (10)
 : `bytemuck`, `bytemuck_derive`, `objc2-app-kit`, `objc2-core-foundation`, `objc2-core-graphics`, `objc2-metal`, `objc2-quartz-core`, `objc2-ui-kit`, `safe_arch`, `wide`
 
-**MIT OR Apache-2.0 OR Zlib** (6)
-: `cursor-icon`, `glow`, `raw-window-handle`, `xkeysym`, `zune-core`, `zune-jpeg`
+**MIT OR Apache-2.0 OR Zlib** (7)
+: `cursor-icon`, `glow`, `raw-window-handle`, `xkeysym`, `zune-core`, `zune-inflate`, `zune-jpeg`
 
 **Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT** (4)
 : `linux-raw-sys`, `rustix`, `wasip2`, `wit-bindgen`
+
+**BSD-3-Clause** (4)
+: `exr`, `lebe`, `tiny-skia`, `tiny-skia-path`
 
 **Apache-2.0/MIT** (2)
 : `pollster`, `rustc-hash`
 
 **BSD-2-Clause OR Apache-2.0 OR MIT** (2)
 : `zerocopy`, `zerocopy-derive`
-
-**BSD-3-Clause** (2)
-: `tiny-skia`, `tiny-skia-path`
 
 **BSD-3-Clause OR Apache-2.0** (2)
 : `moxcms`, `pxfm`
