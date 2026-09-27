@@ -324,15 +324,15 @@ Note that the control panel allows you to adjust transmissions to increase the
 density of simulation points in a transmission, the number of comets displayed
 and so on.
 
-#### Can Bob See His Feet As He Falls Into the Black Hole?
+#### Can Bob See His Feet?
 
 Suppose Bob is free-falling feet first into the black hole.  If even light
 cannot escape the exact boundary of the event horizon, then could Bob see his
-own feet just as he crosses?  The answer is yes!  In general relativity, Bob
-cannot perform *any* physics experiment in his own frame of reference to tell
-him he's crossing an event horizon!  But how is this possible since none of the
-light reflecting off Bob's feet can climb out of the black hole to reach his
-eyes?
+own feet just as he crosses?  The answer is yes!  Not only will Bob see his
+feet, but he cannot perform *any* physics experiment in his own frame of
+reference to tell him he's crossing an event horizon!  But how is this possible
+since none of the light reflecting off Bob's feet can climb out of the black
+hole to reach his eyes?
 
 The key is to consider Bob's frame of reference in free-fall vs. the event
 horizon, which is a *global property* of the black hole relative to the outside
@@ -349,17 +349,36 @@ feet.  We start with Alice positioned just below Bob as his "feet" then let them
 fall together through the event horizon. You can load this setup in
 `demos/near_fall.bhl`.
 
-Alice and Bob are close enough to nearly share a FoR and Alice's radio pulses
-are equivalent to the light reflecting of Bob's feet.  The `EQUATORIAL PLANE`
-view shows Bob continuing to receive Alice's transmissions without interruption
-as the move across the horizon.
+Alice and Bob are close enough to nearly share a frame of reference and Alice's
+radio pulses are equivalent to the light reflecting of Bob's feet.  The
+`EQUATORIAL PLANE` view shows Bob continuing to receive Alice's transmissions
+(triangle shaped tick) without interruption as the move across the horizon.
 
 [Bob feet equatorial](https://github.com/user-attachments/assets/4f4046f4-51cd-4b34-97f2-5f8fa198ee34)
 
-In Bob's 1D+1 FoR view, likewise see him receiving Alice's transmissions at the
-speed of light.
+In Bob's 1D+1 FoR view, we likewise see him receiving Alice's transmissions.
 
 [Bob feet 1d1](https://github.com/user-attachments/assets/15223301-369c-403b-8a39-76a3f1357a47)
+
+In Bob's FoR above, note the orange circle of Alice appears in Bob's past light
+cone.  Here's a zoomed-in view:
+
+![Bob feet Alice past 1d1](assets/images/bob_feet_alice_past.png)
+
+Let's unpack the information in this view:
+
+* Alice appears about 475ms in Bob's past as measured by Bob's watch.  That is
+  the light travel time to Bob as *he sees her*.
+* Since Bob's only sees the light reflected off Alice, her inbound light moving
+  at `c`, would naturally appear somewhere at perfect 45 degrees on Bob's *three
+  dimensional* light cone.  However, the 1D+1 view compresses 3 space dimensions
+  to just a single space dimension radial to the black hole. The image projects
+  Alice using this triangulation style to indicate how far out of the radial
+  dimension she sits relative to Bob.
+* Similarly to Alice's location, the incoming transmission lines appear off the
+  45 degree line.  This is again a projection to 1D+1 issue, not that Bob see
+  the light passing him at less than `c`.
+
 
 ### The Black Hole Inner (Cauchy) Horizon
 
