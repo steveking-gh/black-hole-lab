@@ -182,11 +182,3 @@ pub fn shades(scene: &Scene, size: Size, gain: f32, threads: usize) -> Vec<Shade
 /// 256 bands balance 16 threads well, and the extra row of rays each band finds (for the footprint
 /// of its last row) adds a sixteenth to the cost of finding rays, 3 % of the frame's.
 const BAND_ROWS: usize = 16;
-
-// ---- READ-OUTS GO HERE ---------------------------------------------------------------------------
-/// Paints the read-outs (the stopwatch first, then the others the manifest declares) onto a
-/// finished, tone-mapped frame, before it is written. Not implemented: step 5 of the plan fills
-/// this in, with text pre-distorted on the sphere so that it reads flat in the viewer. `stopwatch`
-/// is the time the frame shows, in the bundle's time unit.
-pub fn paint_readouts(_frame: &mut [u16], _size: Size, _stopwatch: f64) {}
-// --------------------------------------------------------------------------------------------------

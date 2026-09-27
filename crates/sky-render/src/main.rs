@@ -15,24 +15,36 @@
 //! - `sky`: the rotation into the map's frame, and the filtered map lookup (a rip-map);
 //! - `tone`: the shift's g^4, the exposure, clipping and the sRGB curve;
 //! - `render`: the frame, row bands on scoped threads;
-//! - `mp4`: the spherical-video tag, appended to the finished file.
+//! - `mp4`: the spherical-video tag, appended to the finished file;
+//! - `values`: each read-out's value at a video frame, and how it is written;
+//! - `panel`: where a read-out panel sits on the sphere, and which pixels show it;
+//! - `layout`: where each character of a panel goes, with digits that do not jitter.
 //!
-//! The I/O is in `load` (the EXR map and the bundle's frames), `encode` (ffmpeg and PNG) and here.
+//! `text` rasterises the app's typefaces and `overlay` composites the panels over a finished
+//! frame. The I/O is in `load` (the EXR map and the bundle's frames), `encode` (ffmpeg and PNG)
+//! and here.
 
 mod bilinear;
 mod cli;
 mod encode;
 mod field;
+mod layout;
 mod load;
 mod mp4;
+mod overlay;
+mod panel;
 mod parallel;
 mod render;
 mod sky;
+mod text;
 mod timeline;
 mod tone;
+mod values;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_readouts;
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -41,9 +53,11 @@ use std::time::{Duration, Instant};
 use cli::{Options, Request, USAGE};
 use encode::{Encoding, Ffmpeg};
 use field::RayField;
+use overlay::Overlay;
 use render::{Fields, Look, Scene, Size};
 use sky::{MapFrame, SkyMap};
 use timeline::{Pick, Timeline};
+use values::Series;
 
 /// NASA's credit line, which any published video made from the Deep Star Maps must carry
 /// (assets/sky/README.md, "Credit").
@@ -145,6 +159,34 @@ fn run(o: &Options) -> Result<(), String> {
         ));
     }
 
+    // The read-outs are set up before the map is read, so that a panel the command line cannot
+    // place is refused at once and not after the map's half-minute.
+    let series = Series::new(
+        &manifest.readouts,
+        &complete
+            .iter()
+            .map(|&i| &entry(i).readouts)
+            .collect::<Vec<_>>(),
+    );
+    let mut overlay = Overlay::for_run(
+        o,
+        &series,
+        [
+            timeline.stopwatch(range.start),
+            timeline.stopwatch(range.end - 1),
+        ],
+    )?;
+
+    match &overlay {
+        Some(_) => println!(
+            "read-outs: {} line(s) on {} panel(s), each line {} degrees high",
+            series.lines.len(),
+            o.readout_at.len(),
+            o.readout_size
+        ),
+        None => println!("read-outs: off"),
+    }
+
     let clock = Instant::now();
     let image = load::read_map(&o.sky)?;
     let read_seconds = clock.elapsed().as_secs_f64();
@@ -234,8 +276,12 @@ fn run(o: &Options) -> Result<(), String> {
 
     let mut loaded: Vec<(usize, RayField)> = Vec::new();
     let mut allocated = 0;
-    let (mut render_time, mut wait_time, mut load_time) =
-        (Duration::ZERO, Duration::ZERO, Duration::ZERO);
+    let (mut render_time, mut wait_time, mut load_time, mut readout_time) = (
+        Duration::ZERO,
+        Duration::ZERO,
+        Duration::ZERO,
+        Duration::ZERO,
+    );
     let mut last_report = Instant::now();
     let loop_started = Instant::now();
     let count = range.end - range.start;
@@ -282,8 +328,12 @@ fn run(o: &Options) -> Result<(), String> {
             sky: &sky,
         };
         render::render(&scene, size, &look, o.threads, &mut pixels);
-        render::paint_readouts(&mut pixels, size, timeline.stopwatch(k));
         render_time += clock.elapsed();
+        if let Some(overlay) = &mut overlay {
+            let clock = Instant::now();
+            overlay.paint(&mut pixels, &series.at(pick, timeline.stopwatch(k)));
+            readout_time += clock.elapsed();
+        }
 
         if to_writer.send(Finished { k, pixels }).is_err() {
             break;
@@ -330,10 +380,11 @@ fn run(o: &Options) -> Result<(), String> {
     let per_frame = |d: Duration| d.as_secs_f64() / sent.max(1) as f64 * 1000.0;
     println!(
         "{sent} frames in {loop_seconds:.1} s: {:.2} frames/s. Per frame: rendering {:.0} ms, \
-         loading bundle frames {:.0} ms, waiting for the encoder {:.0} ms; the writer spent {:.0} \
-         ms handing each frame to ffmpeg{}. Whole run {:.1} s.",
+         read-outs {:.2} ms, loading bundle frames {:.0} ms, waiting for the encoder {:.0} ms; the \
+         writer spent {:.0} ms handing each frame to ffmpeg{}. Whole run {:.1} s.",
         sent as f64 / loop_seconds,
         per_frame(render_time),
+        per_frame(readout_time),
         per_frame(load_time),
         per_frame(wait_time),
         per_frame(writer_times.encode),

@@ -7,6 +7,7 @@ use std::ops::Range;
 use std::path::PathBuf;
 
 use crate::encode::Codec;
+use crate::panel::Placement;
 use crate::sky::MapFrame;
 use crate::tone::parse_hex_colour;
 
@@ -36,8 +37,23 @@ usage: sky-render --bundle <dir> --sky <map.exr> --out <video.mp4> [options]
   --frames <a>..<b>          render only video frames a to b - 1 (a.. and ..b also work)
   --keep-frames <dir>        also write each frame as a 16-bit PNG into <dir>
   --overwrite                replace --out if it exists
+
+read-outs (the bundle's numbers, the observer's stopwatch first, drawn on the sky):
+  --readouts on|off          draw them (default on); off leaves the sky exactly as without them
+  --readout-at <heading>,<elevation>
+                             where a panel is centred, in degrees: heading to the viewer's right
+                             of the opening view (90 is a quarter turn right, 180 behind),
+                             elevation up from the horizon, at most 70 either way. Repeat for more
+                             panels, all showing the same numbers (default: one at 0,-30, below
+                             the opening view)
+  --readout-size <degrees>   the height of one line of text, as an angle (default 2)
+  --decimal-comma            write the decimal mark as a comma, as the app's own setting does
   --help                     this text
 ";
+
+/// The largest `--readout-size`, in degrees: a line of text a sixth of the way up the sky is
+/// already more than anyone needs to read it.
+const MAX_READOUT_SIZE: f64 = 15.0;
 
 /// Everything the command line says.
 #[derive(Debug, Clone, PartialEq)]
@@ -60,6 +76,13 @@ pub struct Options {
     pub frames: Option<Range<u64>>,
     pub keep_frames: Option<PathBuf>,
     pub overwrite: bool,
+    /// `--readouts off` makes this false.
+    pub readouts: bool,
+    /// Where the read-out panels go; never empty.
+    pub readout_at: Vec<Placement>,
+    /// The height of a line of read-out text, in degrees.
+    pub readout_size: f64,
+    pub decimal_comma: bool,
 }
 
 /// What the command line asks for.
@@ -86,6 +109,11 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
     let mut frames = None;
     let mut keep_frames = None;
     let mut overwrite = false;
+    let mut readouts = true;
+    // The first --readout-at replaces the default panel, and each after it adds one.
+    let mut readout_at: Vec<Placement> = Vec::new();
+    let mut readout_size = 2.0;
+    let mut decimal_comma = false;
 
     let mut rest = args.iter();
     while let Some(flag) = rest.next() {
@@ -150,6 +178,28 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
             "--frames" => frames = Some(parse_range(value()?)?),
             "--keep-frames" => keep_frames = Some(PathBuf::from(value()?)),
             "--overwrite" => overwrite = true,
+            "--readouts" => {
+                readouts = match value()? {
+                    "on" => true,
+                    "off" => false,
+                    other => return Err(format!("--readouts is on or off, not {other:?}")),
+                };
+            }
+            "--readout-at" => readout_at.push(Placement::parse(value()?)?),
+            "--readout-size" => {
+                let text = value()?;
+                readout_size = text
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|s| s.is_finite() && *s > 0.0 && *s <= MAX_READOUT_SIZE)
+                    .ok_or_else(|| {
+                        format!(
+                            "--readout-size is the height of a line of text in degrees, more than \
+                             0 and at most {MAX_READOUT_SIZE}, not {text:?}"
+                        )
+                    })?;
+            }
+            "--decimal-comma" => decimal_comma = true,
             other => return Err(format!("{other:?} is not an option; see --help")),
         }
     }
@@ -181,6 +231,14 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
         frames,
         keep_frames,
         overwrite,
+        readouts,
+        readout_at: if readout_at.is_empty() {
+            vec![Placement::DEFAULT]
+        } else {
+            readout_at
+        },
+        readout_size,
+        decimal_comma,
     })))
 }
 
