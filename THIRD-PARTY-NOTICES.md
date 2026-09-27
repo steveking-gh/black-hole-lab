@@ -149,6 +149,25 @@ interface gets the glyphs its buttons and headings are drawn with — ⏮ (U+23E
 those code points exists in Atkinson Hyperlegible or DejaVu Sans. Building with
 `default-features = false` to exclude the set would leave those labels blank.
 
+## Star maps
+
+The sky renderer draws its star background from NASA's Deep Star Maps 2020, made by the NASA
+Goddard Space Flight Center Scientific Visualization Studio (<https://svs.gsfc.nasa.gov/4851>).
+The maps are **not distributed with Black Hole Lab** and are not in this repository. Each user
+downloads them from NASA with `assets/sky/fetch-sky.ps1`, which verifies them against
+`assets/sky/checksums.sha256`; `assets/sky/README.md` describes them.
+
+| Maps | Source | Terms |
+| --- | --- | --- |
+| `starmap_2020_*.exr`, `milkyway_2020_*.exr` (celestial and galactic, 4k to 64k) | NASA SVS entry 4851, built from Hipparcos-2, Tycho-2, Gaia DR2 and UCAC3 | NASA's reproduction guidelines, <https://www.nasa.gov/multimedia/guidelines/index.html>, with the credit line below |
+
+Any video or image published with these maps must carry NASA's credit line, as the SVS page
+gives it:
+
+> NASA/Goddard Space Flight Center Scientific Visualization Studio. Gaia DR2: ESA/Gaia/DPAC.
+> Constellation figures based on those developed for the IAU by Alan MacRobert of Sky and
+> Telescope magazine (Roger Sinnott and Rick Fienberg).
+
 ## Regenerating this list
 
 The crate names and licences above are read from the resolved graph and the published manifests,
