@@ -1429,7 +1429,7 @@ type DrawnSurface<'a> = (f64, BoxId, &'a str, Color32, f32, Color32, bool);
 /// Hover tip for the static limit's and the ring's boxes, whose two lines read the drawn line
 /// rather than integrating anything.
 /// The hover text of the signal box in an observer's frame.
-pub const SIGNAL_BOX_TIP: &str = "The other observer's transmission, read as a wave at this worldline. Their pulses are the crests, drawn as null strokes through the arrivals on the worldline. Each stroke is the arriving ray projected onto this plane, and a ray whose light comes partly round the hole projects steeper than 45°, because only the radial part of its motion lies in the picture. The nearest crest still on its way carries the same construction the other observer's dot carries, with the crest's coming arrival on this worldline as the vertex: the faint mark is where the crest's ray would stand now if its light moved in this plane, on the 45° line down from that arrival at the distance the light has still to travel; the dashed tie from the crest to the mark measures how much the projection has shortened the crest's radial offset; and the faint 45° line from the mark up to the arrival stands in for the light cone of that arrival. As the crest closes in, the vertex slides down to now and the construction becomes the dot's. The receive frequency is one over the proper time between the last two arrivals of consecutive pulses, on this observer's own clock; the transmit frequency is one over the proper time between those two emissions, on the sender's clock; and the blueshift is the ratio of the two - a ratio of two measured intervals, not a formula. On the approach to r- the arrivals crowd together without limit, and the blueshift runs away with them.
+pub const SIGNAL_BOX_TIP: &str = "The other observer's transmission, read as a wave at this worldline. Their pulses are the crests, drawn as null strokes through the arrivals on the worldline. The receive frequency is one over the proper time between the last two arrivals of consecutive pulses, on this observer's own clock; the transmit frequency is one over the proper time between those two emissions, on the sender's clock; and the blueshift is the ratio of the two - a ratio of two measured intervals, not a formula. On the approach to r- the arrivals crowd together without limit, and the blueshift runs away with them.
 
 An \"Incomplete\" line means the Wavefronts kept cap has evicted pulses that could still have arrived, so this box is reading a trimmed run: arrivals are missing, and a receive frequency measured across the gap they left is wrong rather than merely coarse. The count is how many went. Raise Wavefronts kept to stop losing them - the evicted ones do not come back, so a run that matters wants the cap raised before it starts. The count is exact for a receiver who stays outside r+ and a floor for one who crosses, since a crosser also meets the frozen arcs standing on r-, which this test treats as already past arriving.";
 
@@ -3961,48 +3961,6 @@ Tick Enable Observer on Alice's or Bob's card",
                 draw_reception_tick(painter, anchor, crest_colour);
             }
         }
-        // What the projection costs the nearest crest still on its way, drawn exactly as section 4
-        // draws it for the dot, with the crest's arrival as the vertex instead of the observer's
-        // now. The crest's ray will meet the worldline at H, and its current event A lies on the
-        // past light cone of H; the canvas holds A's projection, which sits inside that cone by
-        // the part of the offset that points round the hole. So: the mark is where A would stand
-        // had the light moved in this plane, on H's past cone at A's own height and at the
-        // horizontal distance lambda that the light has still to travel; the dashed tie from A to
-        // the mark is lambda (1 - |n^1|), the same length the dot's tie measures; and the faint
-        // 45-degree leg from the mark up to H stands in for the cone of H, which nothing else
-        // draws. The solid line from A to H is the crest stroke itself. As the crest closes in, H
-        // slides down to the observer's now and this construction becomes the dot's. One crest
-        // only, the next to arrive, so the cone stays readable.
-        if let Some(next) = crests.crests.iter().find(|c| !c.received)
-            && let Some(arrival) = crest_arrival(next)
-        {
-            let anchor = to_screen(next.xi1, next.xi0);
-            let mark = to_screen(next.xi1.signum() * arrival.lambda, next.xi0);
-            let vertex = to_screen(0.0, arrival.hit);
-            let faint = crest_colour.gamma_multiply(SEEN_MARK_ALPHA);
-            if [anchor.x, anchor.y, mark.x, vertex.y].iter().all(|c| c.is_finite())
-                && (mark.x - anchor.x).abs() >= SEEN_TIE_MIN_PX
-            {
-                let stroke = Stroke::new(1.0, faint);
-                if rect.contains(mark) {
-                    clipped.circle_filled(mark, SEEN_MARK_RADIUS, faint);
-                }
-                for piece in clip_polyline_to_rect(
-                    &[[anchor.x as f64, anchor.y as f64], [mark.x as f64, mark.y as f64]],
-                    rect,
-                ) {
-                    for dash in egui::Shape::dashed_line(&piece, stroke, 4.0, 3.0) {
-                        clipped.add(dash);
-                    }
-                }
-                for piece in clip_polyline_to_rect(
-                    &[[mark.x as f64, mark.y as f64], [vertex.x as f64, vertex.y as f64]],
-                    rect,
-                ) {
-                    clipped.add(egui::Shape::line(piece, stroke));
-                }
-            }
-        }
         // The readout: the two frequencies in hertz, on the two clocks that measure them, and
         // their ratio. The periods are proper times in M; a second of a clock is M of it times
         // t_g / M, the same conversion the distant clock's labels use. Where no consecutive pair
@@ -4436,34 +4394,6 @@ impl WaveCrests {
             _ => None,
         }
     }
-}
-
-/// Where a crest still in flight will meet the focus observer's worldline, and how far its light
-/// has still to travel: the two numbers the dot's construction in section 4 of
-/// `render_observer_frame` reads off `AsSeen` as the arrival event and lambda.
-pub(crate) struct CrestArrival {
-    /// xi^0 of the arrival on the worldline, where the projected stroke meets xi^1 = 0.
-    pub hit: f64,
-    /// The light-travel distance left, which is also the time left on the observer's clock:
-    /// the crest's current event lies on the past cone of the arrival at this distance. Never
-    /// less than the projected radial offset |xi^1|, since a projected ray is never shallower
-    /// than 45 degrees, and the excess is what the motion round the hole costs.
-    pub lambda: f64,
-}
-
-/// See `CrestArrival`. None for a received crest, whose anchor is already the arrival, and for
-/// a crest whose stroke does not reach the worldline ahead of it.
-pub(crate) fn crest_arrival(crest: &Crest) -> Option<CrestArrival> {
-    if crest.received || crest.dir[0] == 0.0 {
-        return None;
-    }
-    let s = -crest.xi1 / crest.dir[0];
-    if !s.is_finite() || s <= 0.0 {
-        return None;
-    }
-    let hit = crest.xi0 + s * crest.dir[1];
-    let lambda = hit - crest.xi0;
-    (hit.is_finite() && lambda >= 0.0).then_some(CrestArrival { hit, lambda })
 }
 
 /// The ray of a pulse that is heading for the focus observer, to first order in their chart.
@@ -6325,18 +6255,11 @@ mod canvas_tests {
             // The nearest crest in flight, which is the next to arrive, and where its stroke
             // meets Bob's worldline: anchor + s dir with xi^1 = 0.
             if let Some(next) = crests.crests.iter().find(|c| !c.received) {
-                let arrival =
-                    crest_arrival(next).expect("a crest heading for Bob meets his worldline");
-                // The tie the view draws: the crest's projected event sits inside the arrival's
-                // past cone, by the part of its offset that points round the hole.
-                assert!(
-                    arrival.lambda > next.xi1.abs(),
-                    "an oblique crest stands inside the cone of its arrival: lambda {} > |xi1| {}",
-                    arrival.lambda,
-                    next.xi1.abs()
-                );
+                assert!(next.dir[0] != 0.0, "a crest in flight moves in r: {:?}", next.dir);
+                let s = -next.xi1 / next.dir[0];
+                let hit = next.xi0 + s * next.dir[1];
                 let lean = next.dir[0].abs().atan2(next.dir[1]).to_degrees();
-                before = Some((next.dir, bob.tau + arrival.hit, lean));
+                before = Some((next.dir, bob.tau + hit, lean));
             }
         }
         println!(
