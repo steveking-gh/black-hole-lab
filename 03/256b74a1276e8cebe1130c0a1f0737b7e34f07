@@ -1,0 +1,56 @@
+sky/sky-render/src/tone.rs
+  s_fa4e4937427d8c::t_390ae2e3bfd7ed 1-122
+sky/README.md
+  s_fa4e4937427d8c::t_21940d021821a0 1-63
+physics_simulation_specification.md
+  s_fa4e4937427d8c::t_390ae2e3bfd7ed 7,584
+Cargo.toml
+  s_fa4e4937427d8c::t_0b5f92d8f8dc01 11-12
+sky/sky-render/src/tests.rs
+  s_fa4e4937427d8c::t_390ae2e3bfd7ed 1-937
+sky/THIRD-PARTY-NOTICES.md
+  s_fa4e4937427d8c::t_d36a4b192115db 1-71
+sky/maps/fetch-sky.ps1
+  s_fa4e4937427d8c::t_390ae2e3bfd7ed 1-184
+sky/sky-render/src/sky.rs
+  s_fa4e4937427d8c::t_390ae2e3bfd7ed 1-443
+sky/Cargo.toml
+  s_fa4e4937427d8c::t_a9362e755c173c 1-18
+sky/sky-format/src/grid.rs
+  s_fa4e4937427d8c::t_390ae2e3bfd7ed 1-99
+sky/sky-render/Cargo.toml
+  s_fa4e4937427d8c::t_ba132fe4ee0107 1-26
+sky/maps/README.md
+  s_fa4e4937427d8c::t_390ae2e3bfd7ed 1-340
+sky/sky-render/src/load.rs
+  s_fa4e4937427d8c::t_390ae2e3bfd7ed 1-57
+sky/sky-render/src/main.rs
+  s_fa4e4937427d8c::t_390ae2e3bfd7ed 1-421
+sky/.gitignore
+  s_fa4e4937427d8c::t_5c51439c94f23e 1-6
+THIRD-PARTY-NOTICES.md
+  s_fa4e4937427d8c::t_0b5f92d8f8dc01 28,51-53,57-58,69-71
+sky/Cargo.lock
+  s_fa4e4937427d8c::t_9b36831244a9e9 1-342
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "03256b74a1276e8cebe1130c0a1f0737b7e34f07",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_fa4e4937427d8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c3c93472-9aee-43ec-8624-e30a21d0ed6f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
