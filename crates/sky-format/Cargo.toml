@@ -1,0 +1,22 @@
+[package]
+name = "sky-format"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "The sky bundle: where on the distant celestial sphere the light an observer sees came from, frame by frame, as a manifest and a directory of chunked frame files"
+# Not for crates.io: the format is the contract between two programs of this workspace, and the
+# document that defines it (physics_simulation_specification.md) lives at the workspace root.
+publish = false
+
+# The doc comments set their formulae as indented blocks, which rustdoc would take for Rust and try
+# to compile. Nothing here is a doctest.
+[lib]
+doctest = false
+
+[dependencies]
+# The versions the root Cargo.toml already uses, so the lock file gains no entry.
+flate2 = "1.1"
+serde = { version = "1.0.229", features = ["derive"] }
+# `float_roundtrip` is what makes a manifest's numbers come back to the bit: without it serde_json's
+# parser takes a fast path that can land an ulp away from the decimal it was given.
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }

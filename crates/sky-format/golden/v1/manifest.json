@@ -1,0 +1,94 @@
+{
+  "format": "black-hole-lab-sky",
+  "version": 1,
+  "writer": {
+    "program": "sky-format golden generator",
+    "version": "0.1.0"
+  },
+  "source": {
+    "kind": "flat-space test",
+    "name": "golden"
+  },
+  "geometry": {
+    "kind": "flat"
+  },
+  "time_unit": {
+    "name": "s",
+    "seconds": 1.0
+  },
+  "grid": {
+    "projection": "equirectangular",
+    "width": 8,
+    "height": 4,
+    "pole": "observer-z",
+    "heading_zero": "observer-x",
+    "pixel_centres": "half-integer"
+  },
+  "far_sky": {
+    "name": "galactic",
+    "axes_in_icrs": {
+      "x": [
+        -0.0548755604162154,
+        -0.873437090234885,
+        -0.4838350155487132
+      ],
+      "y": [
+        0.4941094278755837,
+        -0.4448296299600112,
+        0.746982244497219
+      ],
+      "z": [
+        -0.8676661490190047,
+        -0.1980763734312015,
+        0.4559837761750669
+      ]
+    }
+  },
+  "playback": {
+    "frames_per_second": 30.0,
+    "proper_time_per_video_second": 1.0
+  },
+  "readouts": [
+    {
+      "id": "stopwatch",
+      "label": "Stopwatch",
+      "unit": "s",
+      "decimals": 2
+    },
+    {
+      "id": "peak_shift",
+      "label": "Peak shift",
+      "unit": "",
+      "decimals": 3
+    }
+  ],
+  "labels": [
+    {
+      "id": 0,
+      "text": "Test star"
+    }
+  ],
+  "frames_planned": 2,
+  "frames": [
+    {
+      "index": 0,
+      "proper_time": 10.0,
+      "file": "frames/000000.skyframe",
+      "bytes": 336,
+      "readouts": {
+        "peak_shift": "inf",
+        "stopwatch": 0.0
+      }
+    },
+    {
+      "index": 1,
+      "proper_time": 10.5,
+      "file": "frames/000001.skyframe",
+      "bytes": 398,
+      "readouts": {
+        "peak_shift": 1.5,
+        "stopwatch": 0.5
+      }
+    }
+  ]
+}
