@@ -1,0 +1,10 @@
+[package]
+name = "sky-testgen"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "Writes sky bundles for flat-space test cases, so the renderer can be proved on skies whose right answer is known"
+publish = false
+
+[dependencies]
+sky-format = { path = "../sky-format" }

@@ -1,0 +1,10 @@
+[package]
+name = "sky-render"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "Renders a sky bundle over a star map into a 360-degree AV1 video"
+publish = false
+
+[dependencies]
+sky-format = { path = "../sky-format" }

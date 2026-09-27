@@ -2990,6 +2990,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sky-render"
+version = "0.1.0"
+dependencies = [
+ "sky-format",
+]
+
+[[package]]
+name = "sky-testgen"
+version = "0.1.0"
+dependencies = [
+ "sky-format",
+]
+
+[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
