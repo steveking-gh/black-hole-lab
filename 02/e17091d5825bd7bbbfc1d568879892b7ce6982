@@ -1,0 +1,67 @@
+crates/sky-testgen/Cargo.toml
+  s_fa4e4937427d8c::t_fc2560f4458e71 1-10
+crates/sky-testgen/src/cases.rs
+  s_fa4e4937427d8c::t_f4cf5ceccd8183 113
+  s_fa4e4937427d8c::t_23174a4bc8fce9 1-112,114-161
+Cargo.toml
+  s_fa4e4937427d8c::t_fc2560f4458e71 11-12
+crates/sky-testgen/src/tests.rs
+  s_fa4e4937427d8c::t_06ec4149f941dd 1-217,223-382,384
+  s_fa4e4937427d8c::t_b97ad1c119c259 218-222
+  s_fa4e4937427d8c::t_4ee24574cc3ee9 383
+  s_fa4e4937427d8c::t_0969c58c40a4b2 385-387
+  s_a39909f32d2931::t_fe5a830b1fcd68 388-481
+crates/sky-testgen/src/main.rs
+  s_fa4e4937427d8c::t_f67d66194e7f8b 159-165,168-169
+  s_fa4e4937427d8c::t_d8836294cff9a9 252
+  s_fa4e4937427d8c::t_909978783b34f2 1-158,166-167,170-194,196-251,253
+  s_fa4e4937427d8c::t_4003ee59206ddd 195
+  s_fa4e4937427d8c::t_7a374c6d2e584e 254-256
+crates/sky-render/src/main.rs
+  s_fa4e4937427d8c::t_fc2560f4458e71 1
+crates/sky-render/Cargo.toml
+  s_fa4e4937427d8c::t_fc2560f4458e71 1-10
+crates/sky-testgen/src/args.rs
+  s_fa4e4937427d8c::t_d050da0681ed03 1-282
+  s_fa4e4937427d8c::t_c750b825f009ba 283-285
+  s_8565a36175ec1f::t_22b4a206005125 286-290
+Cargo.lock
+  s_8565a36175ec1f::t_db7982fe63a6fc 2992-3005
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "02e17091d5825bd7bbbfc1d568879892b7ce6982",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_8565a36175ec1f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-ab105f204f0c9d86a",
+        "model": "unknown"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    },
+    "s_a39909f32d2931": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a824197d4057b04ed",
+        "model": "unknown"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    },
+    "s_fa4e4937427d8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c3c93472-9aee-43ec-8624-e30a21d0ed6f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
