@@ -1,0 +1,24 @@
+[package]
+name = "sky-trace"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "Follows an observer from a Black Hole Lab save and writes what the observer sees of the sky as a sky bundle"
+publish = false
+
+# The doc comments set their formulae as indented blocks, which rustdoc would take for Rust and try
+# to compile. Nothing here is a doctest.
+[lib]
+doctest = false
+
+[dependencies]
+kerr-equatorial = { path = "../../crates/kerr-equatorial" }
+sky-format = { path = "../sky-format" }
+# The versions sky-format already uses, so the lock file gains no entry. flate2 opens a gzipped
+# save; serde and serde_json read the part of it this program needs.
+flate2 = "1.1"
+serde = { version = "1.0.229", features = ["derive"] }
+# `float_roundtrip` makes a saved number come back as the f64 the app wrote, to the bit: without
+# it serde_json's parser takes a fast path that can land an ulp away, and the worldline would be
+# continued from a neighbouring state rather than the saved one.
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }

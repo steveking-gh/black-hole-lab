@@ -15,4 +15,4 @@
 # Run cargo from this directory: `cargo test` here tests every crate of the pipeline.
 [workspace]
 resolver = "3"
-members = ["sky-format", "sky-testgen", "sky-render"]
+members = ["sky-format", "sky-testgen", "sky-render", "sky-trace"]
