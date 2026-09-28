@@ -1,0 +1,33 @@
+src/gui/controls.rs
+  s_fa4e4937427d8c::t_a74806a733ef03 907,913
+src/look_around.rs
+  s_fa4e4937427d8c::t_16e609177c9198 180
+  s_fa4e4937427d8c::t_5642ab5a068759 38
+  s_fa4e4937427d8c::t_7a1a59438c4e62 15-17
+  s_fa4e4937427d8c::t_9d237c097f2037 358,360
+  s_fa4e4937427d8c::t_406c3be7e32baf 152
+  s_fa4e4937427d8c::t_51a860774e7c1e 73-75
+src/look_around/tests.rs
+  s_fa4e4937427d8c::t_46b4f79cbcf1f2 223,226,270,278-279,315
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "074d6a55283a13fe2082f388cccfd8657e900665",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_fa4e4937427d8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c3c93472-9aee-43ec-8624-e30a21d0ed6f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
