@@ -1,4 +1,4 @@
-//! A run: find the pieces, trace, render, put the files in place, say what was made.
+//! A run: find the pieces, trace, render, put the photograph in place, say what was made.
 //!
 //! The two programs run as child processes, found beside this one: `sky-render` has no library to
 //! call, and a child can be stopped with everything it started, which is what the app does to this
@@ -19,6 +19,7 @@ use std::time::{Instant, SystemTime};
 use crate::args::{self, Options, Request};
 use crate::find::{self, Names, Pieces, Search};
 use crate::names;
+use crate::open::{self, ViewerSearch};
 use crate::save;
 use crate::scratch::{self, Scratch};
 
@@ -28,26 +29,29 @@ use crate::scratch::{self, Scratch};
 #[cfg(windows)]
 pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-/// The size of the video and the photograph: 8K equirectangular, the size of the owner's approved
-/// films and `sky-render`'s own default, stated here so that the count of red pixels can be put as
-/// a share of the picture.
-pub const VIDEO_SIZE: (u64, u64) = (8192, 4096);
-
-/// How many times a second `sky-render` repeats a still's picture (its `--hold-rate` default).
-const HOLD_RATE: f64 = 0.5;
+/// The size of the photograph: 8K equirectangular, the size of the owner's approved films and
+/// `sky-render`'s own default, stated here so that the count of red pixels can be put as a share
+/// of the picture.
+pub const PHOTO_SIZE: (u64, u64) = (8192, 4096);
 
 /// What tracing one ray costs, in seconds of one thread, measured on the owner's machine: 13 µs at
 /// the saved moment of demos/near_fall.bhl, 23 µs later in the fall, where more of the light has
 /// circled the hole. The estimate a user is given spans the two.
 const RAY_COST: (f64, f64) = (13e-6, 23e-6);
 
-/// What rendering a still costs on the owner's machine at 8192 x 4096: about 4.3 s to read the map,
-/// draw the picture, finish the file and write the photograph, and 0.15 s for each time the
-/// encoder is handed the held picture (30 times for the minute's hold). Encoding is 2.6 s of the
-/// fixed part.
-const RENDER_FIXED: f64 = 4.3;
-const ENCODE_FIXED: f64 = 2.6;
-const ENCODE_PER_REPEAT: f64 = 0.15;
+/// What rendering the photograph costs on the owner's machine at 8192 x 4096, by the wall clock:
+/// 4.1 to 4.3 s. Measured 2026-09-27 on demos/near_fall.bhl, Bob at the saved moment traced on
+/// the default 4096 x 2048 grid, with `sky-render --photo view.jpg --encoder none --still
+/// --readouts panel` and the arguments this program adds, six renders; of that, 0.6 s reads the
+/// map, 1.9 s builds its rip-map and the blackbody model's tables, 0.3 s loads the bundle, 0.7 s
+/// draws the picture and 0.4 s has ffmpeg write the JPEG. Those six were without
+/// `--readout-at dark`; with it, the same day, Alice's and Bob's views of that save each rendered
+/// in 4.2 s, of which placing the panel in the dark region is 0.1 s. (The render used to encode a
+/// video held for a minute as well, which took it to 8.8 s.)
+const RENDER_COST: f64 = 4.2;
+
+/// What drawing is left after the renderer says it has drawn the picture: ffmpeg writing the JPEG.
+const WRITE_COST: f64 = 0.4;
 
 /// Where this program is and what surrounds it: everything [`cli`] would otherwise read from the
 /// process.
@@ -60,6 +64,10 @@ pub struct Environment {
     pub sky_env: Option<OsString>,
     /// `BLACK_HOLE_LAB_VIEWS`.
     pub views_env: Option<OsString>,
+    /// `BLACK_HOLE_LAB_VIEWER`.
+    pub viewer_env: Option<OsString>,
+    /// Where VLC would be, in the order to try (`open::vlc_places`).
+    pub vlc: Vec<PathBuf>,
     pub videos: Option<PathBuf>,
     pub home: Option<PathBuf>,
     /// The system's temporary directory, inside which [`scratch::ROOT`] is kept.
@@ -81,6 +89,8 @@ impl Environment {
             path: std::env::var_os("PATH"),
             sky_env: std::env::var_os(find::SKY_MAP_ENV),
             views_env: std::env::var_os(names::VIEWS_ENV),
+            viewer_env: std::env::var_os(open::VIEWER_ENV),
+            vlc: open::vlc_places_here(),
             videos: names::videos_folder(home.as_deref()),
             home,
             temp: std::env::temp_dir(),
@@ -128,8 +138,9 @@ impl Say<'_> {
     }
 }
 
-/// The program: parses `args`, runs, writes progress and the video's path to `out` and a failure's
-/// one sentence to `err`, and returns the exit code. Nothing reaches `err` on a run that succeeds.
+/// The program: parses `args`, runs, writes progress and the photograph's path to `out` and a
+/// failure's one sentence to `err`, and returns the exit code. Nothing reaches `err` on a run that
+/// succeeds.
 pub fn cli(args: &[OsString], env: &Environment, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     let options = match args::parse(args) {
         Ok(Request::Help) => {
@@ -145,9 +156,9 @@ pub fn cli(args: &[OsString], env: &Environment, out: &mut dyn Write, err: &mut 
     };
     let mut say = Say { out };
     match look(&options, env, &mut say) {
-        Ok(video) => {
+        Ok(photo) => {
             // The contract's last line: the full path, and nothing else on it.
-            say.line(&video.display().to_string());
+            say.line(&photo.display().to_string());
             0
         }
         Err(failure) => {
@@ -158,7 +169,7 @@ pub fn cli(args: &[OsString], env: &Environment, out: &mut dyn Write, err: &mut 
     }
 }
 
-/// Makes the view, and returns the video's full path.
+/// Makes the view, and returns the photograph's full path.
 pub fn look(o: &Options, env: &Environment, say: &mut Say) -> Result<PathBuf, Failure> {
     let started = Instant::now();
     let made_at = SystemTime::now();
@@ -223,7 +234,7 @@ pub fn look(o: &Options, env: &Environment, say: &mut Say) -> Result<PathBuf, Fa
     if o.keep && bundle.is_dir() {
         let kept_stem = match &result {
             Ok(placed) => placed
-                .video
+                .photo
                 .file_stem()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_else(|| stem.clone()),
@@ -247,24 +258,37 @@ pub fn look(o: &Options, env: &Environment, say: &mut Say) -> Result<PathBuf, Fa
     let placed = result?;
 
     say.line(&format!(
-        "Made {who}'s view in {} seconds: the video, and beside it a 360-degree photograph of the \
-         same name ending .jpg.",
+        "Made {who}'s view in {} seconds: a 360-degree photograph.",
         number(started.elapsed().as_secs_f64(), 1, comma)
     ));
     if o.open {
-        crate::open::open(&placed.video).map_err(|e| {
+        // Chosen only now, after the work: a viewer named wrongly costs the user the opening and
+        // not the view, which is made and in its place, and the sentence says where.
+        let search = ViewerSearch {
+            flag: o.viewer.clone(),
+            env: env.viewer_env.clone(),
+            vlc: env.vlc.clone(),
+        };
+        let viewer = open::choose(&search).map_err(|why| {
             Failure::Failed(format!(
-                "Made {who}'s view at {}, but could not hand it to the system's video player \
-                 ({e}); open the file yourself.",
-                placed.video.display()
+                "Made {who}'s view at {}, but {why}.",
+                placed.photo.display()
             ))
         })?;
-        say.line("Handed the video to the system's video player.");
+        open::open(&viewer, &placed.photo).map_err(|e| {
+            Failure::Failed(format!(
+                "Made {who}'s view at {}, but could not start {} to show it ({e}); open the file \
+                 yourself.",
+                placed.photo.display(),
+                open::viewer_name(&viewer)
+            ))
+        })?;
+        say.line(&open::opened_sentence(&viewer));
     }
-    Ok(placed.video)
+    Ok(placed.photo)
 }
 
-/// Trace, render, and put the two files in place; everything that happens inside the scratch
+/// Trace, render, and put the photograph in place; everything that happens inside the scratch
 /// directory.
 #[allow(clippy::too_many_arguments)]
 fn make(
@@ -315,24 +339,23 @@ fn make(
         number(clock.elapsed().as_secs_f64(), 1, comma)
     ));
 
-    // Render.
-    let video = scratch.dir().join("view.mkv");
+    // Render: the photograph alone. `--encoder none` makes no video, `--still` draws the one
+    // traced frame, `--readouts panel` paints the read-outs into the picture (a photograph has no
+    // subtitle track to carry them), and `--readout-at dark` puts that panel inside the hole's
+    // dark region, where it hides none of the sky, or below the opening view when the dark region
+    // is too small to hold it.
     let photo = scratch.dir().join("view.jpg");
-    let repeats = (o.hold * HOLD_RATE).ceil().max(1.0);
     say.line(&format!(
-        "Rendering {who}'s view over the star map at {} x {}, as a video held for {} seconds and \
-         as a photograph; this takes about {}.",
-        VIDEO_SIZE.0,
-        VIDEO_SIZE.1,
-        number(o.hold, 0, comma),
-        seconds(RENDER_FIXED + ENCODE_PER_REPEAT * repeats)
+        "Rendering {who}'s view over the star map as a 360-degree photograph of {} x {} pixels; \
+         this takes about {}.",
+        PHOTO_SIZE.0,
+        PHOTO_SIZE.1,
+        seconds(RENDER_COST)
     ));
     let clock = Instant::now();
-    // In this order so that the tests' stand-in scripts find the three paths they act on as their
-    // second, fourth and sixth arguments: `cmd` numbers only nine.
+    // In this order so that the tests' stand-in scripts find the two paths they act on as their
+    // second and fourth arguments: `cmd` numbers only nine.
     let mut render_args: Vec<OsString> = vec![
-        "--out".into(),
-        video.clone().into(),
         "--photo".into(),
         photo.clone().into(),
         "--bundle".into(),
@@ -342,12 +365,14 @@ fn make(
         "--ffmpeg".into(),
         pieces.ffmpeg.clone().into(),
         "--size".into(),
-        format!("{}x{}", VIDEO_SIZE.0, VIDEO_SIZE.1).into(),
+        format!("{}x{}", PHOTO_SIZE.0, PHOTO_SIZE.1).into(),
+        "--encoder".into(),
+        "none".into(),
         "--still".into(),
-        "--hold".into(),
-        o.hold.to_string().into(),
         "--readouts".into(),
-        "overlay".into(),
+        "panel".into(),
+        "--readout-at".into(),
+        "dark".into(),
     ];
     if let Some(stops) = o.exposure {
         render_args.extend(["--exposure".into(), stops.to_string().into()]);
@@ -355,17 +380,19 @@ fn make(
     if comma {
         render_args.push("--decimal-comma".into());
     }
-    let mut tally = None;
+    let (mut tally, mut readouts) = (None, None);
     let rendered = run_child(&pieces.render, &render_args, |line| {
         if line.starts_with("map ") {
             say.line(&format!("Read the star map; drawing {who}'s view."));
         } else if line.starts_with("frame ") {
             say.line(&format!(
-                "Drew {who}'s view; encoding the video, which takes about {}.",
-                seconds(ENCODE_FIXED + ENCODE_PER_REPEAT * repeats)
+                "Drew {who}'s view; writing the photograph, which takes about {}.",
+                seconds(WRITE_COST)
             ));
         } else if let Some(counts) = parse_tally(line) {
             tally = Some(counts);
+        } else if let Some(sentence) = readout_sentence(line, comma) {
+            readouts = Some(sentence);
         }
     })
     .map_err(|e| {
@@ -381,7 +408,7 @@ fn make(
             full_stop(&complaint(&rendered, "sky-render: ", "sky-render"))
         )));
     }
-    if !video.is_file() || !photo.is_file() {
+    if !photo.is_file() {
         return Err(Failure::Failed(format!(
             "sky-render finished without writing {who}'s view; build the sky tools again with \
              cargo build --release in the sky directory."
@@ -392,13 +419,16 @@ fn make(
         number(clock.elapsed().as_secs_f64(), 1, comma)
     ));
 
-    let placed = names::place(&video, &photo, out_dir, stem).map_err(|e| {
+    let placed = names::place(&photo, out_dir, stem).map_err(|e| {
         Failure::Failed(format!(
             "Could not put {who}'s view in {} ({e}); check that the disk has room and that the \
              directory can be written to.",
             out_dir.display()
         ))
     })?;
+    if let Some(sentence) = readouts {
+        say.line(&sentence);
+    }
     if let Some(sentence) = tally.and_then(|t| red_sentence(t, comma)) {
         say.line(&sentence);
     }
@@ -579,7 +609,7 @@ pub fn red_sentence(t: Tally, comma: bool) -> Option<String> {
     if total == 0 {
         return None;
     }
-    let share = percent(total, VIDEO_SIZE.0 * VIDEO_SIZE.1, comma);
+    let share = percent(total, PHOTO_SIZE.0 * PHOTO_SIZE.1, comma);
     let edge = "along the edge of the dark region, where the traced rays are too far apart to say \
                 which part of the sky the light came from";
     let lost = "where the tracer could not follow the light back to where it came from";
@@ -598,6 +628,69 @@ pub fn red_sentence(t: Tally, comma: bool) -> Option<String> {
             t.undersampled, t.unresolved
         ),
     })
+}
+
+/// The one sentence that says where the read-outs are in the photograph, from the renderer's line
+/// saying where it painted them, or `None` for any other line.
+///
+/// `sky-render` says one of
+///
+/// ```text
+/// read-outs: N line(s) on a panel inside the dark region, centred H degrees right of the opening view and E degrees up, each line S degrees high
+/// read-outs: N line(s) on a panel below the opening view, because <reason>
+/// ```
+///
+/// and the person reading the app's card wants to know where to look, not how many lines there
+/// are or how high. The reading is lenient: the line is recognised by its two key phrases, the
+/// angles are added where they read as numbers and left out where they do not, and a line with
+/// neither phrase - the renderer's other read-out lines, or a wording this program was not written
+/// for - is passed over in silence rather than guessed at.
+pub fn readout_sentence(line: &str, comma: bool) -> Option<String> {
+    let said = line.strip_prefix("read-outs:")?.trim();
+    const WHAT: &str = "The watch, radius and distant clock are written";
+    if let Some(at) = said.find("inside the dark region") {
+        let rest = &said[at..];
+        let angle = |before: &str| -> Option<f64> {
+            let end = rest.find(before)?;
+            let number = rest[..end].rsplit(' ').next()?;
+            number
+                .replace(',', ".")
+                .replace('\u{2212}', "-")
+                .parse::<f64>()
+                .ok()
+                .filter(|x| x.is_finite())
+        };
+        let whole = |x: f64| number(x.abs(), 0, comma);
+        let place = match (angle(" degrees right"), angle(" degrees up")) {
+            (Some(h), Some(e)) => {
+                let across = match whole(h).as_str() {
+                    "0" => "in line with the opening view".to_string(),
+                    n => format!(
+                        "{n} degrees {} of the opening view",
+                        if h < 0.0 { "left" } else { "right" }
+                    ),
+                };
+                let up = match whole(e).as_str() {
+                    "0" => String::new(),
+                    n => format!(" and {n} degrees {}", if e < 0.0 { "down" } else { "up" }),
+                };
+                format!(", {across}{up}")
+            }
+            _ => String::new(),
+        };
+        return Some(format!("{WHAT} inside the dark region of the hole{place}."));
+    }
+    if let Some(at) = said.find("below the opening view") {
+        let reason = said[at..]
+            .split_once("because ")
+            .map(|(_, why)| why.trim())
+            .filter(|why| !why.is_empty());
+        return Some(match reason {
+            Some(why) => full_stop(&format!("{WHAT} below the opening view, because {why}")),
+            None => format!("{WHAT} below the opening view."),
+        });
+    }
+    None
 }
 
 /// `n` of `of` as a percentage to three significant figures, as `sky-render` writes it.

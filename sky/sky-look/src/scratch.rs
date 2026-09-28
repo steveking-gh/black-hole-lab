@@ -1,5 +1,5 @@
-//! The one place this program keeps what it makes on the way: the traced bundle, and the video and
-//! photograph before they are given their names.
+//! The one place this program keeps what it makes on the way: the traced bundle, and the
+//! photograph before it is given its name.
 //!
 //! Every run works in a directory of its own, `run-<ms>-<pid>-<n>`, inside [`ROOT`] in the
 //! system's temporary directory: the start time in milliseconds, the process id and a counter make
@@ -11,8 +11,8 @@
 //! Windows - cannot delete anything, so whatever it had made stays in its directory under
 //! [`ROOT`], and nowhere else. The next run clears [`ROOT`] of whatever is older than [`STALE`]
 //! before it starts; an hour, because no run takes that long (a press is answered in under half a
-//! minute, and even the longest `--hold` encodes in minutes), so that a directory that old cannot
-//! belong to a run still going, of this copy of the app or another.
+//! minute, and even the finest grid the tracer takes is traced in minutes), so that a directory
+//! that old cannot belong to a run still going, of this copy of the app or another.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -102,7 +102,7 @@ pub fn clear_stale(root: &Path, now: SystemTime) {
     }
 }
 
-/// `path` with `suffix` added to its whole name: `a.mkv` and `.partial` make `a.mkv.partial`.
+/// `path` with `suffix` added to its whole name: `a.jpg` and `.partial` make `a.jpg.partial`.
 pub fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(suffix);

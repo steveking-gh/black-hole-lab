@@ -1,9 +1,9 @@
-//! Where the finished files go and what they are called.
+//! Where the finished photograph goes and what it is called.
 //!
-//! A view's files are named
+//! A view is named
 //!
 //! ```text
-//! 2026-09-27 21.35.03.456 UTC Bob at tau 12.345 M.mkv
+//! 2026-09-27 21.35.03.456 UTC Bob at tau 12.345 M.jpg
 //! ```
 //!
 //! the moment the view was made, then whose it is and the reading of that observer's watch (the
@@ -29,6 +29,11 @@ const MAX_NAME: usize = 40;
 
 /// The directory the views go into: `--out-dir`, else [`VIEWS_ENV`], else [`VIEWS_DIR`] in the
 /// Videos folder if there is one, else in the home directory.
+///
+/// A photograph in the Videos folder wants a reason, and the reason is history: until 2026-09-27
+/// a view was a video held still for a minute, with the photograph beside it, and the owner's
+/// earlier views are in this directory. Moving the new ones to the Pictures folder would split one
+/// collection of views, named to sort by the time they were made, into two places.
 pub fn out_dir(
     flag: Option<&Path>,
     env: Option<&std::ffi::OsStr>,
@@ -53,11 +58,11 @@ pub fn out_dir(
     }
 }
 
-/// The name of a view's files, without the extension: when, whose, and the watch's reading.
+/// The name of a view's file, without the extension: when, whose, and the watch's reading.
 ///
 /// `tau` is left out when the save did not say it (the tracer, which reads the save properly, has
 /// by then accepted it, so this is a save this program's lighter reading did not follow). The
-/// reading is written as the video's read-outs write the stopwatch, to three decimals, with the
+/// reading is written as the photograph's read-outs write the watch, to three decimals, with the
 /// decimal mark the app was set to.
 pub fn stem(when: SystemTime, who: &str, tau: Option<f64>, comma: bool) -> String {
     let mut name = format!("{} {}", utc_stamp(when), safe_name(who));
@@ -130,24 +135,22 @@ pub fn safe_name(who: &str) -> String {
     }
 }
 
-/// The files of one view, where they ended up.
+/// The file of one view, where it ended up.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placed {
-    pub video: PathBuf,
     pub photo: PathBuf,
 }
 
-/// Moves a finished video and photograph from the scratch directory into `dir`, named `stem` and
-/// its extensions, or `stem (2)` and so on when either name is taken: a file already there is
-/// never written over.
+/// Moves a finished photograph from the scratch directory into `dir`, named `stem.jpg`, or
+/// `stem (2).jpg` and so on when that name is taken: a file already there is never written over.
 ///
-/// Each file arrives whole or not at all. Within one volume a file is hard-linked to its new name,
+/// The file arrives whole or not at all. Within one volume it is hard-linked to its new name,
 /// which fails if the name is taken, and so claims the name and writes the file in one step with
 /// no moment at which another run could take it too; the scratch directory's link is deleted with
 /// the scratch directory. Across volumes (an output directory on another drive) the file is copied
 /// under a `.partial` name and renamed when it is whole, and the one thing a run stopped then can
 /// leave in the output directory is that `.partial` file.
-pub fn place(video: &Path, photo: &Path, dir: &Path, stem: &str) -> std::io::Result<Placed> {
+pub fn place(photo: &Path, dir: &Path, stem: &str) -> std::io::Result<Placed> {
     for n in 1..=1000u32 {
         let name = if n == 1 {
             stem.to_string()
@@ -155,28 +158,15 @@ pub fn place(video: &Path, photo: &Path, dir: &Path, stem: &str) -> std::io::Res
             format!("{stem} ({n})")
         };
         let placed = Placed {
-            video: dir.join(format!("{name}.mkv")),
             photo: dir.join(format!("{name}.jpg")),
         };
-        if placed.video.exists() || placed.photo.exists() {
+        if placed.photo.exists() {
             continue;
         }
-        // The photograph first, so that the video - the file the app is told about - is the last
-        // to arrive, and a name whose video is there has its photograph beside it.
         match claim(photo, &placed.photo) {
-            Ok(()) => {}
+            Ok(()) => return Ok(placed),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),
-        }
-        match claim(video, &placed.video) {
-            Ok(()) => return Ok(placed),
-            Err(e) => {
-                let _ = std::fs::remove_file(&placed.photo);
-                if e.kind() == std::io::ErrorKind::AlreadyExists {
-                    continue;
-                }
-                return Err(e);
-            }
         }
     }
     Err(std::io::Error::other(format!(

@@ -4,7 +4,7 @@
 //! each stand-in is a script the test writes into a scratch directory of its own - a batch file on
 //! Windows, a shell script elsewhere - which records the arguments it was given, does what the
 //! real program would do to the disk (the tracer makes its bundle; the renderer checks that the
-//! bundle is there and writes the video and the photograph), and then does what the test tells it:
+//! bundle is there and writes the photograph), and then does what the test tells it:
 //! print a line, complain on standard error, exit with a chosen code. A script rather than a test
 //! binary because `cmd.exe` and `sh` are on every machine these tests run on, and a binary would
 //! have to be built for the purpose.
@@ -99,30 +99,28 @@ fn tracer_work() -> Vec<&'static str> {
     }
 }
 
-/// What the renderer stand-in does to the disk: refuses if the bundle (its sixth argument) is not
-/// there, and writes the video and the photograph (its second and fourth).
+/// What the renderer stand-in does to the disk: refuses if the bundle (its fourth argument) is
+/// not there, and writes the photograph (its second).
 fn renderer_work() -> Vec<&'static str> {
     if cfg!(windows) {
         vec![
-            "if not exist \"%~6\\manifest.json\" exit 9",
-            ">\"%~2\" echo a video",
-            ">\"%~4\" echo a photograph",
+            "if not exist \"%~4\\manifest.json\" exit 9",
+            ">\"%~2\" echo a photograph",
         ]
     } else {
         vec![
-            "[ -f \"$6/manifest.json\" ] || exit 9",
-            "echo 'a video' > \"$2\"",
-            "echo 'a photograph' > \"$4\"",
+            "[ -f \"$4/manifest.json\" ] || exit 9",
+            "echo 'a photograph' > \"$2\"",
         ]
     }
 }
 
 /// What a real renderer says on a run that works, near enough.
 const RENDERER_SAYS: [&str; 6] = [
-    "read-outs: 3 line(s) as a subtitle track at the bottom right of the screen",
+    "read-outs: 4 line(s) on a panel inside the dark region, centred 180 degrees right of the opening view and -20 degrees up, each line 2 degrees high",
     "map C:\\maps\\starmap_2020_8k_gal.exr: 8192 x 4096 galactic, read in 0.6 s",
-    "frame 0 (1/1), 2.76 frames/s, 0:00 left",
-    "wrote the video (6.7 MB), tagged as a 360-degree equirectangular video",
+    "frame 0 (1/1), 1.00 frames/s, 0:00 left",
+    "wrote view.jpg (7.3 MB), a JPEG marked as a 360-degree photograph, in 0.4 s",
     "pixels drawn over the 1 frame(s): unresolved 0 (0 %), under-sampled 16888 (0.0503 %), dark 20422816 (60.9 %)",
     "A published video made from NASA's star maps must carry this credit:",
 ];
@@ -181,6 +179,8 @@ impl Case {
             path: None,
             sky_env: None,
             views_env: None,
+            viewer_env: None,
+            vlc: Vec::new(),
             videos: None,
             home: None,
             temp: self.temp.clone(),
@@ -305,25 +305,43 @@ fn test_a_view_that_is_made_ends_with_its_path_says_nothing_on_standard_error_an
         "the red is explained: {out}"
     );
 
-    // The last line is the path, whole, of a file that is there, with the photograph beside it.
-    let video = PathBuf::from(last);
-    assert!(video.is_absolute() && video.is_file(), "{last}");
-    assert_eq!(video.parent(), Some(case.out.as_path()));
-    let name = video
+    // Where the read-outs went, in a sentence of this program's own.
+    assert!(
+        progress.contains(
+            &"The watch, radius and distant clock are written inside the dark region of the hole, \
+              180 degrees right of the opening view and 20 degrees down."
+        ),
+        "{out}"
+    );
+    assert!(
+        progress.iter().any(
+            |l| l.starts_with("Made Bob's view in ") && l.ends_with("a 360-degree photograph.")
+        ),
+        "{out}"
+    );
+    assert!(!out.contains("video"), "nothing is said of a video: {out}");
+
+    // The last line is the path, whole, of the photograph, which is there and alone.
+    let photo = PathBuf::from(last);
+    assert!(photo.is_absolute() && photo.is_file(), "{last}");
+    assert_eq!(photo.parent(), Some(case.out.as_path()));
+    let name = photo
         .file_name()
         .expect("a name")
         .to_string_lossy()
         .into_owned();
-    assert!(name.ends_with(" UTC Bob at tau 1.500 M.mkv"), "{name}");
-    assert!(
-        video.with_extension("jpg").is_file(),
-        "the photograph is beside it"
+    assert!(name.ends_with(" UTC Bob at tau 1.500 M.jpg"), "{name}");
+    assert_eq!(
+        std::fs::read_to_string(&photo)
+            .expect("the photograph")
+            .trim(),
+        "a photograph",
+        "the file the renderer wrote"
     );
     assert_eq!(
-        case.views().len(),
-        2,
-        "the video and the photograph, nothing else: {:?}",
-        case.views()
+        case.views(),
+        std::slice::from_ref(&photo),
+        "the photograph, nothing else"
     );
 
     // What the two programs were asked for.
@@ -332,15 +350,20 @@ fn test_a_view_that_is_made_ends_with_its_path_says_nothing_on_standard_error_an
         assert!(traced.contains(word), "{traced}");
     }
     let rendered = case.args_of("sky-render").expect("the renderer ran");
+    assert!(rendered.starts_with("--photo "), "{rendered}");
     for word in [
+        "view.jpg",
+        "--encoder none",
         "--still",
-        "--hold 60",
-        "--readouts overlay",
+        "--readouts panel",
+        "--readout-at dark",
         "--size 8192x4096",
     ] {
         assert!(rendered.contains(word), "{rendered}");
     }
-    assert!(!rendered.contains("--decimal-comma"), "{rendered}");
+    for word in ["--decimal-comma", "--hold", "--out ", "overlay"] {
+        assert!(!rendered.contains(word), "{word}: {rendered}");
+    }
 
     assert_eq!(
         case.left_over(),
@@ -416,7 +439,8 @@ fn test_a_failure_of_the_renderer_comes_through_as_code_1_and_leaves_nothing_beh
     case.renderer(&[
         Step::Say("read-outs: 3 line(s)"),
         Step::Complain(
-            "sky-render: ffmpeg stopped while encoding: There is not enough space on the disk",
+            "sky-render: ffmpeg stopped while writing the photograph: There is not enough space \
+             on the disk",
         ),
         Step::Exit(1),
     ]);
@@ -425,8 +449,8 @@ fn test_a_failure_of_the_renderer_comes_through_as_code_1_and_leaves_nothing_beh
     assert_eq!(code, 1, "out: {out}\nerr: {err}");
     assert_eq!(
         err,
-        "sky-render could not make Bob's view: ffmpeg stopped while encoding: There is not enough \
-         space on the disk.\n"
+        "sky-render could not make Bob's view: ffmpeg stopped while writing the photograph: There \
+         is not enough space on the disk.\n"
     );
     assert_sentences(&out.lines().collect::<Vec<_>>());
     assert_eq!(case.views(), Vec::<PathBuf>::new(), "no files are made");
@@ -463,16 +487,17 @@ fn test_a_missing_piece_stops_the_run_before_anything_is_started_or_written() {
 }
 
 #[test]
-fn test_keep_moves_the_bundle_beside_the_video_and_says_where() {
+fn test_keep_moves_the_bundle_beside_the_photograph_and_says_where() {
     let case = Case::new("keep", SAVE);
     case.tracer(&[Step::Exit(0)]);
     case.renderer(&[Step::Exit(0)]);
     let (code, out, err) = case.run(&["--keep"]);
     assert_eq!((code, err.as_str()), (0, ""), "{out}");
-    let video = PathBuf::from(out.lines().last().expect("a path"));
+    let photo = PathBuf::from(out.lines().last().expect("a path"));
+    assert!(photo.is_file(), "{out}");
     let kept = case.out.join(format!(
         "{} bundle",
-        video.file_stem().expect("a stem").to_string_lossy()
+        photo.file_stem().expect("a stem").to_string_lossy()
     ));
     assert!(
         kept.join("manifest.json").is_file(),
@@ -513,8 +538,79 @@ fn test_a_save_set_to_the_decimal_comma_gets_comma_read_outs_and_names() {
         out.lines()
             .last()
             .expect("a path")
-            .ends_with("Bob at tau 1,500 M.mkv"),
+            .ends_with("Bob at tau 1,500 M.jpg"),
         "{out}"
     );
     assert!(out.contains("(0,0503 % of the picture)"), "{out}");
+}
+
+#[test]
+fn test_a_viewer_named_wrongly_fails_the_opening_and_says_where_the_view_that_was_made_is() {
+    let case = Case::new("no-viewer", SAVE);
+    case.tracer(&[Step::Exit(0)]);
+    case.renderer(&[Step::Exit(0)]);
+    let nowhere = case.root.join("nowhere").join(program("viewer"));
+    let nowhere_text = nowhere.display().to_string();
+    let (code, out, err) = case.run(&["--open", "--viewer", &nowhere_text]);
+    assert_eq!(code, 1, "out: {out}\nerr: {err}");
+    assert_eq!(err.lines().count(), 1, "{err}");
+    let photo = case.views().pop().expect("the photograph was made");
+    assert_eq!(case.views().len(), 1);
+    assert!(
+        err.starts_with(&format!(
+            "Made Bob's view at {}, but --viewer names ",
+            photo.display()
+        )) && err.contains(&nowhere_text)
+            && err.contains("no program there")
+            && err.trim_end().ends_with('.'),
+        "{err}"
+    );
+    assert_sentences(&out.lines().collect::<Vec<_>>());
+    assert!(!out.contains("Opened"), "nothing was opened: {out}");
+}
+
+#[test]
+fn test_open_starts_the_named_viewer_on_the_photograph_and_names_the_program() {
+    // The viewer is a stand-in that records what it was given. Named `vlc`, so that it is also
+    // given the option that keeps VLC's picture up. It is not waited for, so the test waits for
+    // what it records.
+    let case = Case::new("viewer", SAVE);
+    case.tracer(&[Step::Exit(0)]);
+    case.renderer(&[Step::Exit(0)]);
+    stand_in(&case.tools, "vlc", &[], &[Step::Exit(0)]);
+    let viewer = case.tools.join(program("vlc"));
+    let viewer_text = viewer.display().to_string();
+    let (code, out, err) = case.run(&["--open", "--viewer", &viewer_text]);
+    assert_eq!((code, err.as_str()), (0, ""), "{out}");
+    let lines: Vec<&str> = out.lines().collect();
+    let (last, progress) = lines.split_last().expect("some output");
+    assert_sentences(progress);
+    assert_eq!(
+        progress.last().copied(),
+        Some(
+            format!(
+                "Opened the photograph in {viewer_text}, the viewer --viewer names; drag with the \
+                 mouse to look in every direction."
+            )
+            .as_str()
+        ),
+        "{out}"
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let given = loop {
+        if let Some(given) = case.args_of("vlc").filter(|g| g.ends_with('\n')) {
+            break given;
+        }
+        assert!(std::time::Instant::now() < deadline, "the viewer never ran");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    // The option, then the photograph's path as one argument. The standard library quotes every
+    // argument it hands a batch file, which is what the stand-in is on Windows; a program such as
+    // VLC reads the quotes away.
+    let expected = if cfg!(windows) {
+        format!("\"--image-duration=-1\" \"{last}\"")
+    } else {
+        format!("--image-duration=-1 {last}")
+    };
+    assert_eq!(given.trim(), expected);
 }

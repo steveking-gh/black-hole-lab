@@ -1,6 +1,7 @@
-//! The pure parts: the search for the pieces, the names of the files, the clearing of old
-//! intermediates, the reading of the save and of the renderer's counts. Each against files made for
-//! the test in a scratch directory of its own, and none needing the real tools.
+//! The pure parts: the search for the pieces, the name and place of the photograph, the clearing
+//! of old intermediates, the reading of the save and of the renderer's lines, the choice of viewer
+//! and the command that starts the viewer. Each against files made for the test in a scratch
+//! directory of its own, and none needing the real tools or starting a viewer.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -10,7 +11,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::args::{self, Request, Who};
 use crate::find::{self, FETCH_SCRIPT, Names, SKY_MAP, SKY_MAP_ENV, Search};
 use crate::names;
-use crate::run::{Tally, parse_tally, red_sentence};
+use crate::open::{self, Viewer};
+use crate::run::{Tally, parse_tally, readout_sentence, red_sentence};
 use crate::save;
 use crate::scratch::{self, STALE};
 
@@ -312,36 +314,36 @@ fn test_two_presses_in_one_second_make_two_files_and_neither_writes_over_the_oth
     let out = root.join("views");
     std::fs::create_dir_all(&out).expect("the views directory");
     let stem = names::stem(a, "Bob", Some(0.0), false);
+    // An earlier view's video in the same directory, as the owner's are: a photograph is one file,
+    // and placing one neither needs nor touches anything else there.
+    let old_video = out.join(format!("{stem}.mkv"));
+    std::fs::write(&old_video, "an earlier video").expect("an earlier view");
     let mut placed = Vec::new();
     for press in ["first", "second", "third"] {
         let work = root.join(press);
         std::fs::create_dir_all(&work).expect("a working directory");
-        let (video, photo) = (work.join("view.mkv"), work.join("view.jpg"));
-        std::fs::write(&video, format!("{press} video")).expect("a video");
+        let photo = work.join("view.jpg");
         std::fs::write(&photo, format!("{press} photo")).expect("a photo");
-        placed.push((
-            press,
-            names::place(&video, &photo, &out, &stem).expect("placed"),
-        ));
+        placed.push((press, names::place(&photo, &out, &stem).expect("placed")));
     }
-    for (press, files) in &placed {
+    for (press, file) in &placed {
         assert_eq!(
-            std::fs::read_to_string(&files.video).expect("the video"),
-            format!("{press} video")
-        );
-        assert_eq!(
-            std::fs::read_to_string(&files.photo).expect("the photo"),
+            std::fs::read_to_string(&file.photo).expect("the photo"),
             format!("{press} photo")
         );
-        assert_eq!(
-            files.video.file_stem(),
-            files.photo.file_stem(),
-            "one name for both files"
-        );
     }
-    assert_eq!(placed[0].1.video, out.join(format!("{stem}.mkv")));
-    assert_eq!(placed[1].1.video, out.join(format!("{stem} (2).mkv")));
-    assert_eq!(std::fs::read_dir(&out).expect("the views").count(), 6);
+    assert_eq!(placed[0].1.photo, out.join(format!("{stem}.jpg")));
+    assert_eq!(placed[1].1.photo, out.join(format!("{stem} (2).jpg")));
+    assert_eq!(placed[2].1.photo, out.join(format!("{stem} (3).jpg")));
+    assert_eq!(
+        std::fs::read_to_string(&old_video).expect("the earlier view"),
+        "an earlier video"
+    );
+    assert_eq!(
+        std::fs::read_dir(&out).expect("the views").count(),
+        4,
+        "three photographs and the earlier video, one file a press"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -378,7 +380,7 @@ fn test_any_observer_name_makes_a_file_name_windows_accepts() {
             stem.len()
         );
         // And the system agrees: the file can be made, and is found again under that name.
-        let file = root.join(format!("{stem}.mkv"));
+        let file = root.join(format!("{stem}.jpg"));
         std::fs::write(&file, b"").unwrap_or_else(|e| panic!("{given:?} made {stem:?}: {e}"));
         assert!(
             std::fs::read_dir(&root)
@@ -468,7 +470,7 @@ fn test_clearing_deletes_what_is_older_than_an_hour_in_its_own_directory_and_not
     // directory, a young file.
     let old_run = root.join("run-1-2-0");
     touch(&old_run.join("bundle/frames/000000.skyframe"));
-    touch(&old_run.join("view.mkv.partial"));
+    touch(&old_run.join("view.jpg.partial"));
     backdate(&old_run, old);
     let old_file = root.join("stray.tmp");
     touch(&old_file);
@@ -485,7 +487,7 @@ fn test_clearing_deletes_what_is_older_than_an_hour_in_its_own_directory_and_not
     touch(&beside);
     backdate(&beside, old);
     let target = temp.join("elsewhere");
-    touch(&target.join("precious.mkv"));
+    touch(&target.join("precious.jpg"));
     backdate(&target, old);
     let link = root.join("link-out");
     #[cfg(windows)]
@@ -517,7 +519,7 @@ fn test_clearing_deletes_what_is_older_than_an_hour_in_its_own_directory_and_not
     assert!(root.is_dir(), "the directory itself stays");
     assert!(beside.is_file(), "nothing beside the directory is touched");
     assert!(
-        target.join("precious.mkv").is_file(),
+        target.join("precious.jpg").is_file(),
         "nothing a link points to is touched"
     );
     let _ = std::fs::remove_dir_all(&temp);
@@ -667,9 +669,14 @@ fn test_the_command_line_needs_a_save_and_an_observer_and_refuses_what_the_tools
         panic!("a look")
     };
     assert_eq!(
-        (o.who, o.open, o.keep, o.grid, o.hold),
-        (Who::Alice, true, false, args::DEFAULT_GRID, 60.0)
+        (o.who, o.open, o.keep, o.grid, o.viewer.as_deref()),
+        (Who::Alice, true, false, args::DEFAULT_GRID, None)
     );
+    let Ok(Request::Look(o)) = parse(r"x.bhl --observer bob --open --viewer C:\tools\viewer.exe")
+    else {
+        panic!("a look with a viewer")
+    };
+    assert_eq!(o.viewer, Some(PathBuf::from(r"C:\tools\viewer.exe")));
     assert_eq!(parse("--help"), Ok(Request::Help));
     for (line, words) in [
         ("--observer bob", "No save"),
@@ -677,9 +684,18 @@ fn test_the_command_line_needs_a_save_and_an_observer_and_refuses_what_the_tools
         ("x.bhl --observer carol", "no observer"),
         ("x.bhl --observer bob --grid 100x100", "twice as wide"),
         ("x.bhl --observer bob --grid 32768x16384", "more rays"),
-        ("x.bhl --observer bob --hold 0", "--hold"),
         ("x.bhl --observer bob --exposure nan", "--exposure"),
         ("x.bhl --observer bob --fast", "no option --fast"),
+        // The held video is gone, and its option with it: refused as any unknown option is.
+        (
+            "x.bhl --observer bob --hold 60",
+            "There is no option --hold;",
+        ),
+        ("x.bhl --observer bob --viewer", "--viewer needs a value"),
+        (
+            "x.bhl --observer bob --viewer a --viewer b",
+            "--viewer is given twice",
+        ),
         ("x.bhl y.bhl --observer bob", "Two saves"),
     ] {
         let why = parse(line).expect_err(line);
@@ -687,11 +703,303 @@ fn test_the_command_line_needs_a_save_and_an_observer_and_refuses_what_the_tools
     }
 }
 
+#[test]
+fn test_the_renderers_line_on_the_read_outs_becomes_one_sentence_saying_where_they_are() {
+    let inside = "read-outs: 4 line(s) on a panel inside the dark region, centred 180 degrees right \
+                  of the opening view and -20 degrees up, each line 2 degrees high";
+    assert_eq!(
+        readout_sentence(inside, false).as_deref(),
+        Some(
+            "The watch, radius and distant clock are written inside the dark region of the hole, \
+             180 degrees right of the opening view and 20 degrees down."
+        )
+    );
+    let ahead = "read-outs: 4 line(s) on a panel inside the dark region, centred -0.2 degrees \
+                 right of the opening view and 0.3 degrees up, each line 2 degrees high";
+    assert_eq!(
+        readout_sentence(ahead, false).as_deref(),
+        Some(
+            "The watch, radius and distant clock are written inside the dark region of the hole, \
+             in line with the opening view."
+        )
+    );
+    let left = "read-outs: 3 line(s) on a panel inside the dark region, centred −35.6 degrees right \
+                of the opening view and 12 degrees up, each line 1.5 degrees high";
+    assert!(
+        readout_sentence(left, false)
+            .expect("a sentence")
+            .ends_with("hole, 36 degrees left of the opening view and 12 degrees up."),
+        "{:?}",
+        readout_sentence(left, false)
+    );
+    // Angles that do not read as numbers are left out, and the place is still said.
+    let odd = "read-outs: 4 line(s) on a panel inside the dark region, somewhere";
+    assert_eq!(
+        readout_sentence(odd, false).as_deref(),
+        Some("The watch, radius and distant clock are written inside the dark region of the hole.")
+    );
+    let below = "read-outs: 4 line(s) on a panel below the opening view, because the dark region \
+                 is 3 degrees across and the panel needs 9";
+    assert_eq!(
+        readout_sentence(below, false).as_deref(),
+        Some(
+            "The watch, radius and distant clock are written below the opening view, because the \
+             dark region is 3 degrees across and the panel needs 9."
+        )
+    );
+    assert_eq!(
+        readout_sentence(
+            "read-outs: 4 line(s) on a panel below the opening view",
+            false
+        )
+        .as_deref(),
+        Some("The watch, radius and distant clock are written below the opening view.")
+    );
+    // Any other line, the renderer's older read-out lines included, says nothing.
+    for line in [
+        "read-outs: 4 line(s) on 1 panel(s) painted on the sky, each line 2 degrees high",
+        "read-outs: off",
+        "map C:\\maps\\starmap_2020_8k_gal.exr: 8192 x 4096 galactic, read in 0.6 s",
+        "the region inside the dark region is dark",
+    ] {
+        assert_eq!(readout_sentence(line, false), None, "{line}");
+    }
+}
+
+/// A layout for the choice of viewer: a named program, one the variable names, and VLC where its
+/// installer and the two Program Files directories would put it.
+#[cfg(windows)]
+struct Viewers {
+    root: PathBuf,
+    flag: PathBuf,
+    env: PathBuf,
+    registered: PathBuf,
+    program_files: PathBuf,
+    program_files_x86: PathBuf,
+}
+
+#[cfg(windows)]
+impl Viewers {
+    fn new(what: &str) -> Self {
+        let root = scratch_dir(what);
+        Self {
+            flag: root.join("tools/viewer.exe"),
+            env: root.join("from-env/other.exe"),
+            registered: root.join("Custom/VLC"),
+            program_files: root.join("Program Files"),
+            program_files_x86: root.join("Program Files (x86)"),
+            root,
+        }
+    }
+
+    fn search(&self, flag: bool, env: Option<&Path>) -> open::ViewerSearch {
+        open::ViewerSearch {
+            flag: flag.then(|| self.flag.clone()),
+            env: env.map(|e| e.as_os_str().to_owned()),
+            vlc: open::vlc_places(
+                std::slice::from_ref(&self.registered),
+                &[self.program_files.clone(), self.program_files_x86.clone()],
+                None,
+            ),
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for Viewers {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
 #[cfg(windows)]
 #[test]
-fn test_the_video_is_opened_by_the_shells_start_with_an_empty_title_and_the_path_in_a_variable() {
-    let video = Path::new(r"C:\a b\100% & more ^ (x)!.mkv");
-    let command = crate::open::command(video);
+fn test_the_viewer_is_the_one_named_then_vlc_where_it_installs_then_the_systems_default() {
+    let v = Viewers::new("viewer");
+    let registered_vlc = v.registered.join("vlc.exe");
+    let x86_vlc = v.program_files_x86.join(r"VideoLAN\VLC\vlc.exe");
+    let x64_vlc = v.program_files.join(r"VideoLAN\VLC\vlc.exe");
+    let choose = |flag: bool, env: Option<&Path>| open::choose(&v.search(flag, env));
+
+    // Nothing named and no VLC: the system's default.
+    assert_eq!(choose(false, None), Ok(Viewer::Default));
+    // VLC in the 32-bit Program Files, then in the 64-bit one, which comes first, then where the
+    // registry says, which comes before both.
+    touch(&x86_vlc);
+    assert_eq!(choose(false, None), Ok(Viewer::Vlc(x86_vlc.clone())));
+    touch(&x64_vlc);
+    assert_eq!(choose(false, None), Ok(Viewer::Vlc(x64_vlc.clone())));
+    touch(&registered_vlc);
+    assert_eq!(choose(false, None), Ok(Viewer::Vlc(registered_vlc.clone())));
+    // A directory named like the program is not the program.
+    let decoy = Viewers::new("decoy");
+    std::fs::create_dir_all(decoy.program_files.join(r"VideoLAN\VLC\vlc.exe")).expect("a decoy");
+    assert_eq!(
+        open::choose(&decoy.search(false, None)),
+        Ok(Viewer::Default)
+    );
+
+    // The variable comes before VLC, and a variable set to nothing is a variable not set.
+    touch(&v.env);
+    assert_eq!(
+        choose(false, Some(&v.env)),
+        Ok(Viewer::Named {
+            program: v.env.clone(),
+            by: open::VIEWER_ENV
+        })
+    );
+    assert_eq!(
+        choose(false, Some(Path::new(""))),
+        Ok(Viewer::Vlc(registered_vlc.clone()))
+    );
+    // And --viewer comes before the variable.
+    touch(&v.flag);
+    assert_eq!(
+        choose(true, Some(&v.env)),
+        Ok(Viewer::Named {
+            program: v.flag.clone(),
+            by: "--viewer"
+        })
+    );
+
+    // A named program that is not there is reported, and not passed over for VLC, which is there.
+    let nowhere = v.root.join("nowhere/viewer.exe");
+    let why = open::choose(&open::ViewerSearch {
+        flag: Some(nowhere.clone()),
+        ..v.search(false, Some(&v.env))
+    })
+    .expect_err("--viewer names nothing");
+    assert!(
+        why.starts_with("--viewer names")
+            && why.contains(&nowhere.display().to_string())
+            && why.contains("no program there")
+            && why.contains("full path"),
+        "{why}"
+    );
+    let why = choose(false, Some(&nowhere)).expect_err("the variable names nothing");
+    assert!(
+        why.starts_with(open::VIEWER_ENV) && why.contains("no program there"),
+        "{why}"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn test_vlc_is_looked_for_where_the_registry_says_then_in_each_program_files_directory() {
+    let places = open::vlc_places(
+        &[PathBuf::from(r"D:\Apps\VLC")],
+        &[
+            PathBuf::from(r"C:\Program Files"),
+            PathBuf::from(r"C:\Program Files (x86)"),
+        ],
+        Some(std::ffi::OsStr::new(r"C:\bin")),
+    );
+    assert_eq!(
+        places,
+        [
+            PathBuf::from(r"D:\Apps\VLC\vlc.exe"),
+            PathBuf::from(r"C:\Program Files\VideoLAN\VLC\vlc.exe"),
+            PathBuf::from(r"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe"),
+        ],
+        "and not on the PATH, where Windows' VLC does not put itself"
+    );
+    assert_eq!(open::vlc_places(&[], &[], None), Vec::<PathBuf>::new());
+}
+
+/// A photograph's path with every character the Windows shell reads as syntax in it.
+const AWKWARD: &str = r"C:\a b\100% & more ^ (x)!.jpg";
+
+#[test]
+fn test_vlc_is_started_directly_on_the_photograph_with_one_option_to_keep_the_picture_up() {
+    let photo = Path::new(AWKWARD);
+    let vlc = PathBuf::from(r"C:\Program Files\VideoLAN\VLC\vlc.exe");
+    let args_of = |command: &std::process::Command| -> Vec<std::ffi::OsString> {
+        command.get_args().map(|a| a.to_owned()).collect()
+    };
+    let command = open::command(&Viewer::Vlc(vlc.clone()), photo);
+    assert_eq!(
+        command.get_program(),
+        vlc.as_os_str(),
+        "no shell in between"
+    );
+    assert_eq!(
+        args_of(&command),
+        [
+            std::ffi::OsString::from("--image-duration=-1"),
+            photo.as_os_str().to_owned()
+        ],
+        "the option, then the path as one argument, whole"
+    );
+    assert_eq!(command.get_envs().count(), 0);
+
+    // A viewer named outright is given the path and nothing else, unless its file is VLC's.
+    let other = PathBuf::from(r"C:\tools\pano viewer.exe");
+    let named = open::command(
+        &Viewer::Named {
+            program: other.clone(),
+            by: "--viewer",
+        },
+        photo,
+    );
+    assert_eq!(named.get_program(), other.as_os_str());
+    assert_eq!(args_of(&named), [photo.as_os_str().to_owned()]);
+    let named_vlc = open::command(
+        &Viewer::Named {
+            program: PathBuf::from(r"E:\portable\VLC.EXE"),
+            by: open::VIEWER_ENV,
+        },
+        photo,
+    );
+    assert_eq!(
+        args_of(&named_vlc),
+        [
+            std::ffi::OsString::from("--image-duration=-1"),
+            photo.as_os_str().to_owned()
+        ]
+    );
+}
+
+#[test]
+fn test_the_sentence_after_opening_names_the_program_and_the_default_warns_of_a_flat_picture() {
+    let vlc = PathBuf::from(r"C:\Program Files\VideoLAN\VLC\vlc.exe");
+    let said = open::opened_sentence(&Viewer::Vlc(vlc.clone()));
+    assert_eq!(
+        said,
+        format!(
+            "Opened the photograph in VLC ({}); drag with the mouse to look in every direction.",
+            vlc.display()
+        )
+    );
+    let named = open::opened_sentence(&Viewer::Named {
+        program: PathBuf::from(r"C:\tools\viewer.exe"),
+        by: "--viewer",
+    });
+    assert_eq!(
+        named,
+        r"Opened the photograph in C:\tools\viewer.exe, the viewer --viewer names."
+    );
+    let default = open::opened_sentence(&Viewer::Default);
+    assert!(
+        default.contains("the program the system opens .jpg files with")
+            && default.contains("may show the photograph flat")
+            && default.contains("VLC pans a 360-degree photograph"),
+        "{default}"
+    );
+    for sentence in [said, named, default] {
+        assert!(
+            sentence.starts_with("Opened") && sentence.ends_with('.'),
+            "{sentence}"
+        );
+        assert_eq!(sentence.lines().count(), 1);
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn test_the_systems_default_is_reached_by_the_shells_start_with_an_empty_title_and_the_path_in_a_variable()
+ {
+    let photo = Path::new(AWKWARD);
+    let command = open::command(&Viewer::Default, photo);
     let args: Vec<_> = command
         .get_args()
         .map(|a| a.to_string_lossy().into_owned())
@@ -705,7 +1013,7 @@ fn test_the_video_is_opened_by_the_shells_start_with_an_empty_title_and_the_path
         envs,
         [(
             std::ffi::OsStr::new("BLACK_HOLE_LAB_VIEW"),
-            Some(video.as_os_str())
+            Some(photo.as_os_str())
         )]
     );
 
@@ -713,10 +1021,24 @@ fn test_the_video_is_opened_by_the_shells_start_with_an_empty_title_and_the_path
     // inside its quotes, however many characters in it are the shell's syntax.
     use std::os::windows::process::CommandExt;
     let echoed = std::process::Command::new("cmd")
-        .env("BLACK_HOLE_LAB_VIEW", video)
+        .env("BLACK_HOLE_LAB_VIEW", photo)
         .raw_arg(r#"/D /V:OFF /C echo "" "%BLACK_HOLE_LAB_VIEW%""#)
         .output()
         .expect("cmd runs");
     let said = String::from_utf8_lossy(&echoed.stdout);
-    assert_eq!(said.trim_end(), format!(r#""" "{}""#, video.display()));
+    assert_eq!(said.trim_end(), format!(r#""" "{}""#, photo.display()));
+}
+
+#[cfg(windows)]
+#[test]
+fn test_the_registry_answer_for_vlc_is_a_directory_or_nothing() {
+    // Whatever this machine has installed: the read either finds nothing or names absolute
+    // directories, and never panics or returns a string cut short at the wrong length.
+    let found = open::registered_vlc();
+    eprintln!("VLC's InstallDir in the registry: {found:?}");
+    assert!(found.len() <= 2, "{found:?}");
+    for dir in &found {
+        assert!(dir.is_absolute(), "{}", dir.display());
+        assert!(!dir.as_os_str().to_string_lossy().contains('\0'));
+    }
 }

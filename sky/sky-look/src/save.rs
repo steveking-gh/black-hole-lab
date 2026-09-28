@@ -18,8 +18,8 @@ pub struct Facts {
     pub name: Option<String>,
     /// The observer's proper time at the saved moment, in M.
     pub tau: Option<f64>,
-    /// The app's "Decimal is comma" setting, which the read-outs on the video and the numbers in
-    /// this program's sentences follow. False in a save that predates the setting, as the app
+    /// The app's "Decimal is comma" setting, which the read-outs on the photograph and the numbers
+    /// in this program's sentences follow. False in a save that predates the setting, as the app
     /// itself reads one.
     pub comma: bool,
 }

@@ -12,30 +12,38 @@ use std::path::PathBuf;
 
 /// What `--help` prints.
 pub const HELP: &str = "\
-sky-look: makes a 360-degree view of the whole sky as one observer of a Black Hole Lab save sees
-it at the saved moment, as a video held still for a minute and as a 360-degree photograph. It runs
-sky-trace and then sky-render, and is what the app's Look Around button starts.
+sky-look: makes a 360-degree photograph of the whole sky as one observer of a Black Hole Lab save
+sees it at the saved moment. It runs sky-trace and then sky-render, and is what the app's Look
+Around button starts. The observer's watch, radius and distant clock are written on a panel
+inside the black hole's dark region, where they hide none of the sky, or below the opening view
+when the dark region is too small to hold them.
 
 USAGE
     sky-look <file.bhl> --observer bob|alice [options]
 
     <file.bhl>              The save. It is read and never changed.
     --observer bob|alice    Whose view. Required.
-    --open                  Open the video in the system's default player when it is made.
-    --out-dir <dir>         Where the video and the photograph go. Default: the directory the
-                            environment variable BLACK_HOLE_LAB_VIEWS names, else a directory
-                            named \"Black Hole Lab views\" in the user's Videos folder, else in the
+    --open                  Open the photograph when it is made: in the program --viewer names,
+                            else in the one the environment variable BLACK_HOLE_LAB_VIEWER
+                            names, else in VLC if it is installed, else in the program the
+                            system opens .jpg files with, which may show the photograph flat
+                            where VLC lets you drag to look round.
+    --viewer <program>      The full path of the program --open starts on the photograph.
+    --out-dir <dir>         Where the photograph goes. Default: the directory the environment
+                            variable BLACK_HOLE_LAB_VIEWS names, else a directory named
+                            \"Black Hole Lab views\" in the user's Videos folder, else in the
                             user's home directory.
     --grid <W>x<H>          The rays traced, in columns and rows; W must be twice H. Default
                             4096x2048. Fewer rays are quicker and widen the red rim round the
                             dark region, where the rays are too far apart to say where the light
                             came from.
-    --hold <seconds>        How long the video lasts. Default 60.
     --exposure <stops>      The exposure, passed to sky-render. Default: sky-render's.
-    --keep                  Keep the traced sky bundle, beside the video, and say where it is.
+    --keep                  Keep the traced sky bundle, beside the photograph, and say where it
+                            is.
     --tools <dir>           The directory holding sky-trace and sky-render. Default: this
                             program's own directory.
-    --ffmpeg <path>         The ffmpeg sky-render runs. Default: ffmpeg on the PATH.
+    --ffmpeg <path>         The ffmpeg sky-render writes the photograph with. Default: ffmpeg
+                            on the PATH.
     --sky <map.exr>         The star map. Default: the file the environment variable
                             BLACK_HOLE_LAB_SKY_MAP names, else maps/starmap_2020_8k_gal.exr in
                             the nearest sky directory at or above this program's directory.
@@ -43,11 +51,11 @@ USAGE
 
 OUTPUT
     Progress, one sentence a line, on standard output; the last line of a run that succeeds is
-    the video's full path. A refusal of the moment (the observer inside the inner horizon, being
-    dragged, at the ring, not in the save) exits with code 2 and one sentence on standard error;
-    any other failure exits with code 1 and one sentence on standard error.
+    the photograph's full path. A refusal of the moment (the observer inside the inner horizon,
+    being dragged, at the ring, not in the save) exits with code 2 and one sentence on standard
+    error; any other failure exits with code 1 and one sentence on standard error.
 
-    The files are named by the time they were made (UTC), the observer, and the reading of the
+    The photograph is named by the time it was made (UTC), the observer, and the reading of the
     observer's watch (proper time, in M) at the saved moment. Intermediate files are kept in a
     directory of this program's own under the system's temporary directory, and deleted at the
     end of every run; what a run that was stopped left there is deleted by the first run an hour
@@ -57,26 +65,24 @@ OUTPUT
 /// The ray grid when `--grid` is not given. Measured 2026-09-27 on the owner's machine (16
 /// threads), on demos/near_fall.bhl, Bob at the saved moment and at later moments of his fall:
 ///
-/// | grid        | trace          | trace memory | render | render memory | red rim at 8192 x 4096 |
-/// | ----------- | -------------- | ------------ | ------ | ------------- | ---------------------- |
-/// | 1024 x 512  | 0.5 s          | 26 MB        | 8.9 s  | 1.9 GB        | 4 to 13 px, median 12  |
-/// | 2048 x 1024 | 1.8 to 2.8 s   | 131 MB       | 8.7 s  | 2.0 GB        | 2 to 6 px, median 4    |
-/// | 4096 x 2048 | 7.0 to 12 s    | 508 MB       | 8.8 s  | 2.1 GB        | 2 to 3 px, median 2    |
+/// | grid        | trace          | trace memory | render       | render memory | red rim at 8192 x 4096 |
+/// | ----------- | -------------- | ------------ | ------------ | ------------- | ---------------------- |
+/// | 1024 x 512  | 0.5 s          | 26 MB        | 3.8 to 4.0 s | 4.0 GB        | 4 to 13 px, median 12  |
+/// | 2048 x 1024 | 1.8 to 2.8 s   | 131 MB       | 3.9 to 4.0 s | 4.0 GB        | 2 to 6 px, median 4    |
+/// | 4096 x 2048 | 7.0 to 12 s    | 508 MB       | 4.1 to 4.3 s | 4.2 GB        | 2 to 3 px, median 2    |
 ///
-/// The render's cost is the encoding of the held picture and does not depend on the grid; the
-/// trace's grows with the number of rays, and more with the depth of the fall (the later moments
-/// cost 1.6 times the first). The finest grid is answered in 16 to 21 s in all, which is the
-/// twenty seconds the owner allowed a press; its rim is a quarter of the coarsest grid's width.
+/// The render columns are of the photograph alone (`--encoder none --still --photo`), measured
+/// again on the evening of 2026-09-27 at the saved moment, three renders a grid, by the wall clock
+/// and the peak working set; the render then also wrote a video held for a minute, which cost
+/// 8.7 to 8.9 s. Most of the render's memory is the star map's rip-map and the blackbody model's
+/// tables, which do not depend on the grid. The trace grows with the number of rays, and more with
+/// the depth of the fall (the later moments cost 1.6 times the first). The finest grid is answered
+/// in 11 to 16 s in all, inside the twenty seconds the owner allowed a press, and its rim is a
+/// quarter of the coarsest grid's width.
 pub const DEFAULT_GRID: (u32, u32) = (4096, 2048);
 
 /// The most rays `sky-trace` will trace in one frame: 16384 x 8192.
 const MAX_RAYS: u64 = 16384 * 8192;
-
-/// The held video's length when `--hold` is not given, as `sky-render`'s own default.
-pub const DEFAULT_HOLD_SECONDS: f64 = 60.0;
-
-/// The longest `--hold` `sky-render` accepts.
-const MAX_HOLD_SECONDS: f64 = 3600.0;
 
 /// The largest `--exposure` either way that `sky-render` accepts.
 const MAX_EXPOSURE_STOPS: f64 = 100.0;
@@ -116,12 +122,12 @@ pub struct Options {
     pub out_dir: Option<PathBuf>,
     /// Columns and rows of rays, W = 2 H.
     pub grid: (u32, u32),
-    /// Seconds the held video lasts; more than 0 and at most an hour.
-    pub hold: f64,
     pub exposure: Option<f64>,
     pub tools: Option<PathBuf>,
     pub ffmpeg: Option<PathBuf>,
     pub sky: Option<PathBuf>,
+    /// `--viewer <program>`: what `--open` starts on the photograph, ahead of every other choice.
+    pub viewer: Option<PathBuf>,
 }
 
 /// What the command line asks for.
@@ -136,11 +142,11 @@ const VALUED: [&str; 8] = [
     "--observer",
     "--out-dir",
     "--grid",
-    "--hold",
     "--exposure",
     "--tools",
     "--ffmpeg",
     "--sky",
+    "--viewer",
 ];
 
 /// Reads the command line, without the program's own name.
@@ -215,20 +221,6 @@ pub fn parse(args: &[OsString]) -> Result<Request, String> {
         None => DEFAULT_GRID,
         Some(text) => parse_grid(text)?,
     };
-    let hold = match value("--hold") {
-        None => DEFAULT_HOLD_SECONDS,
-        Some(text) => text
-            .trim()
-            .parse::<f64>()
-            .ok()
-            .filter(|s| s.is_finite() && *s > 0.0 && *s <= MAX_HOLD_SECONDS)
-            .ok_or_else(|| {
-                format!(
-                    "--hold is how many seconds the video lasts, more than 0 and at most \
-                     {MAX_HOLD_SECONDS}, not {text:?}."
-                )
-            })?,
-    };
     let exposure = match value("--exposure") {
         None => None,
         Some(text) => Some(
@@ -251,11 +243,11 @@ pub fn parse(args: &[OsString]) -> Result<Request, String> {
         keep,
         out_dir: value("--out-dir").map(PathBuf::from),
         grid,
-        hold,
         exposure,
         tools: value("--tools").map(PathBuf::from),
         ffmpeg: value("--ffmpeg").map(PathBuf::from),
         sky: value("--sky").map(PathBuf::from),
+        viewer: value("--viewer").map(PathBuf::from),
     })))
 }
 

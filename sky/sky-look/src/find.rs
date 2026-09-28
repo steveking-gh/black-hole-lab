@@ -134,7 +134,7 @@ fn ffmpeg(search: &Search, names: &Names) -> Result<PathBuf, String> {
         .find(|candidate| candidate.is_file())
         .ok_or_else(|| {
             format!(
-                "{} was not found on the PATH, and sky-render needs it to encode the video; \
+                "{} was not found on the PATH, and sky-render needs it to write the photograph; \
                  install ffmpeg (on Windows: winget install Gyan.FFmpeg), or name it with \
                  --ffmpeg <path>.",
                 names.ffmpeg
