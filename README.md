@@ -398,7 +398,7 @@ The inner horizon has two *branches*, so to speak, which we'll call *left* and
 *right*.  There is nothing physical implied by these names, they simply take inspiration
 from the Penrose diagram for a rotating black hole:
 
-[Penrose Diagram](assets/images/penrose_1_plain_no_text.svg)
+<img src="./assets/images/penrose_1_plain_no_text.svg" width="400">
 
 If you have high angular momentum, you'll encounter the *right* branch
 where the inner horizon profoundly compresses incoming time.  With low angular
