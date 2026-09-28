@@ -352,7 +352,7 @@ fall together through the event horizon. You can load this setup in
 Alice and Bob are close enough to nearly share a frame of reference and Alice's
 radio pulses are equivalent to the light reflecting of Bob's feet.  The
 `EQUATORIAL PLANE` view shows Bob continuing to receive Alice's transmissions
-(triangle shaped tick) without interruption as the move across the horizon.
+(triangle shaped ticks) without interruption as the move across the horizon.
 
 [Bob feet equatorial](https://github.com/user-attachments/assets/4f4046f4-51cd-4b34-97f2-5f8fa198ee34)
 
@@ -369,48 +369,83 @@ Let's unpack the information in this view:
 
 * Alice appears about 475ms in Bob's past as measured by Bob's watch.  That is
   the light travel time to Bob as *he sees her*.
+
 * Since Bob's only sees the light reflected off Alice, her inbound light moving
   at `c`, would naturally appear somewhere at perfect 45 degrees on Bob's *three
   dimensional* light cone.  However, the 1D+1 view compresses 3 space dimensions
   to just a single space dimension radial to the black hole. The image projects
   Alice using this triangulation style to indicate how far out of the radial
   dimension she sits relative to Bob.
-* Similarly to Alice's location, the incoming transmission lines appear off the
-  45 degree line.  This is again a projection to 1D+1 issue, not that Bob see
-  the light passing him at less than `c`.
+
+* Similarly to the "protractor view" of Alice's location, the incoming
+  transmission lines appear off the 45 degree line and on the line from Alice to
+  Bob.  This is the same projection to 1D+1 issue and Bob sees the transmission
+  passing him at `c`.
+
+### The Black Hole Inner Horizon
+
+The next magenta colored ring inside the event horizon is the inner horizon.
+This horizon exists in spinning black holes, which is probably every real black
+hole in our universe.  Physicists use the shorthand name `r_` for the inner
+horizon.  If the outer horizon is strange, the inner horizon is bizarre.
+
+First, the inner horizon is the boundary where the arrow of time stops pointing
+spacially inward and tilts back to point into the future.  Like the outer
+horizon, the inner horizon can be either a moment in time or a place in space
+depending on which side you find yourself.
+
+The inner horizon has two *branches*, so to speak, which we'll call *left* and
+*right*.  There is nothing physical implied by these names, they simply take inspiration
+from the Penrose diagram for a rotating black hole:
+
+[Penrose Diagram](assets/images/penrose_1_plain_no_text.svg)
+
+If you have high angular momentum, you'll encounter the *right* branch
+where the inner horizon profoundly compresses incoming time.  With low angular
+momentum, you fall through the *left* branch of the horizon.  The two branches
+result in quite different fates!  Unfortunately, you would probably be fried in
+a bath of extremely energetic photons physicists call **infinite blueshift** in
+both cases.
+
+Our understanding of the physics at the inner horizon is much less clear than at
+the outer event horizon.  In our real universe, crossing the outer horizon may
+very well be a *smooth no drama* experience.  In contrast, crossing the inner
+horizon, if such a thing is even possible, would be packed with excitement and
+not the good kind.  For reference, this paper assesses the survivability of a
+real physical object crossing the Cauchy horizon with a nod to the hit movie
+*Interstellar*. [Physical objects approaching the Cauchy horizon of a rapidly
+rotating Kerr black hole](https://arxiv.org/abs/1610.04355), Mallary, Khanna,
+Burko, 2018. Interestingly, the paper finds that the stress from spacetime
+curvature on a real physical object passing through the Cauchy horizon might not
+be catastrophic.
+
+As before, Black Hole Lab let's our Kerr metric solution to general relativity
+be the only word on the physics.
+
+#### The *right branch* of the Inner Horizon
+
+General relativity predicts extraordinary effects as one approaches the inner
+horizon, so let's examine this case in detail.  We'll start with an approach to
+the *right branch*.
+
+If Bob enters the *outer* event horizon with enough prograde angular momentum,
+he will asymptotically approach the *right branch* of the *inner* horizon.  The
+simulation, which runs on coordinate time, shows Bob circling forever, getting
+slightly closer to `r_` each trip around the inside of the black hole.  Not just
+Bob, but any light that enters the black hole at the right angle will also
+approach the *right branch* and circle forever.
+
+However, in Bob's FoR, his watch says he crosses the inner horizon quickly.
 
 
-### The Black Hole Inner (Cauchy) Horizon
+ However, in Bob's frame of
+reference, his own watch says he quickly passes through the inner horizon.
+Recall that when passing through the *outer* horizon, Alice watching from
+outside the black hole sees Bob taking an infinite amount of time to cross.
+However, in coordinate time *and* in Bob's proper time, he crosses the *outer*
+horizon quickly.
 
-The next magenta colored ring inside the event horizon is the Cauchy or inner
-horizon.  This horizon exists in spinning black holes, which is probably every
-real black hole in our universe.  Physicists use the shorthand name `r_` for the
-inner horizon. If the outer horizon is strange, the inner horizon is bizarre.  A
-few of the more mind-boggling aspects to think about:
 
-* The inner horizon is the boundary where the arrow of time stops pointing
-  strictly inward and tilts back to point into the future like normal space.
-
-* Like the outer horizon, the inner horizon can be either a moment in time or a
-  place in space depending on which side you find yourself.
-
-* The inner horizon has two *branches*, so to speak, which we'll call *near* and
-  *far*. If you have high angular momentum, you'll encounter the *far* branch
-  where the inner horizon profoundly compresses incoming time.  As you get
-  close, the outside universe appears to run ever faster relative to your clock.
-  In general relativity, this effect grows exponentially and without bound!
-  Unfortunately for you, this time compression effect also gives incoming light
-  an unbounded energy boost. Physicists refer to this phenomenon as "infinite
-  blueshift". You fry in a bath of future light boosted to extreme energy.
-
-  With low angular momentum, you fall through the *near* branch of the horizon.
-  In this case, you don't linger from the outside universe's perspective.  You
-  will unfortunately be fried by the "infinite blueshift" of light emitted from
-  everything that fell in before you on this path.
-
-Our understanding of the physics at this layer is even less clear than at the
-outer event horizon.  As before, Black Hole Lab let's general relativity be the
-only word on the physics.
 
 ### The Ring Singularity
 

@@ -61,7 +61,7 @@
 //! observer's Lorentz factor gamma relative to any well-conditioned frame, and in the directions
 //! where the light is blueshifted most relative to that frame the answer is of size 1 / gamma: the
 //! sum loses (u^t)^2 1e-16 of its relative precision. For most observers that is nothing. For one
-//! freezing onto the far branch of r- - E - Omega_- L < 0, followed by the app to u^t = 1e10 - it
+//! freezing onto the right branch of r- - E - Omega_- L < 0, followed by the app to u^t = 1e10 - it
 //! is everything, and it is worst exactly where the far sky crowds, in the direction of motion.
 //! (`tests/precision.rs` measures it: see the report there.)
 //!
@@ -150,8 +150,8 @@ impl Observer {
     /// An observer, checked: finite, at r > r-, and with a unit future-directed timelike u.
     ///
     /// The unit check carries the rounding floor of g(u, u), which is ~1e-16 |u|^2: an observer
-    /// whose u^t has run away (the app follows worldlines to u^t = 1e10 on the approach to the far
-    /// branch of r-) is not refused for rounding.
+    /// whose u^t has run away (the app follows worldlines to u^t = 1e10 on the approach to the
+    /// right branch of r-) is not refused for rounding.
     pub fn new(kerr: &Kerr, r: f64, phi: f64, u: [f64; 3]) -> Result<Self, ScopeError> {
         if !(r.is_finite() && phi.is_finite() && u.iter().all(|c| c.is_finite())) {
             return Err(ScopeError::NotFinite);

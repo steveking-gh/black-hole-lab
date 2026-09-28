@@ -256,7 +256,7 @@ impl LocalFrame {
     /// -n_0^2 + n_1^2 + n_2^2 < 0; dropping n_2^2 >= 0 only strengthens it, leaving
     /// |slope| = |n_1| / n_0 < 1. The lines are always flatter than 45 degrees, they never turn
     /// null at a horizon the way the surfaces r = const do, and they pile up on the worldline
-    /// exactly when u^t runs away - which is what happens on the way to the far branch of r-,
+    /// exactly when u^t runs away - which is what happens on the way to the right branch of r-,
     /// where u^t grows like exp(kappa_- t), so infinitely many of the distant clock's slices are
     /// crossed in a finite amount of the observer's own time.
     ///
@@ -763,7 +763,7 @@ mod tests {
         while t < t_end && bob.r > 1e-3 {
             t += dt;
             // The app's free-falling observer steps its geodesic under exactly this gate: settled
-            // on the far branch of r- the state is held, and so is one that has reached the ring.
+            // on the right branch of r- the state is held, and so is one that has reached the ring.
             if !bob.stalled && bob.r > R_STOP {
                 bob.step_coord_time(metric, dt);
             }
@@ -844,7 +844,7 @@ mod tests {
         }
 
         // The worldline the grid is really about: E = 1, L = 2.2 at a = 0.90 has E - Omega_- L < 0,
-        // so it is bound for the far branch of r- and its u^t runs away like exp(kappa_- t). The
+        // so it is bound for the right branch of r- and its u^t runs away like exp(kappa_- t). The
         // exactness of the crossing has to survive u^t in the thousands, which is where a formula
         // that had leaned on the dropped n_2 would show up.
         let metric = KerrSchild::new(1.0, 0.90);
@@ -870,7 +870,7 @@ mod tests {
         // chart's Killing time, cross the observer's worldline dt / u^t of their own proper time
         // apart, so the spacing of the grid *is* 1 / u^t.
         //
-        // Bound for the far branch of r- (E - Omega_- L < 0, here E = 1 and L = 2.2 at a = 0.90),
+        // Bound for the right branch of r- (E - Omega_- L < 0, here E = 1 and L = 2.2 at a = 0.90),
         // the worldline never reaches r-: it settles onto it asymptotically, and an outgoing
         // principal null ray closes on r- like exp(-kappa_- t), so u^t grows like exp(+kappa_- t)
         // and the spacing collapses like exp(-kappa_- t). Over the last 10 M of the walk that is a
@@ -898,7 +898,7 @@ mod tests {
         let ratio = s45 / s35;
         let predicted = (-kappa * (t45 - t35)).exp();
         println!(
-            "L = 2.2 (far branch of r- = {:.4}): at t = {t35:.1}, r = {r35:.6}, one dt = {dt} of \
+            "L = 2.2 (right branch of r- = {:.4}): at t = {t35:.1}, r = {r35:.6}, one dt = {dt} of \
              distant time is {s35:.4e} M of proper time; at t = {t45:.1}, r = {r45:.6}, it is \
              {s45:.4e} M. Ratio {ratio:.4e} vs exp(-kappa_- * {:.1}) = {predicted:.4e} \
              (kappa_- = {kappa:.6}), off by {:.1}%",
@@ -906,14 +906,14 @@ mod tests {
             t45 - t35,
             100.0 * (ratio / predicted - 1.0).abs()
         );
-        assert!(r45 > metric.inner_horizon(), "the far branch is never crossed");
+        assert!(r45 > metric.inner_horizon(), "the right branch is never crossed");
         assert!(
             (ratio / predicted - 1.0).abs() < 0.30,
             "the pile-up rate must be kappa_-: ratio {ratio:.4e} vs exp(-kappa_- Delta t) = {predicted:.4e}"
         );
 
         // The L = 0 raindrop is the control. E - Omega_- L = 1 > 0, so it crosses r+ and then the
-        // near branch of r- in finite coordinate time with u^t finite the whole way: nothing piles
+        // left branch of r- in finite coordinate time with u^t finite the whole way: nothing piles
         // up, the grid keeps very nearly the same step, and the view through both horizons is calm.
         let rain = walk(&metric, 0.0, dt, 60.0);
         let through = rain
@@ -947,7 +947,7 @@ mod tests {
         );
         assert!(
             hi / lo < 3.0,
-            "nothing piles up on the way through r+ and the near branch of r-: factor {}",
+            "nothing piles up on the way through r+ and the left branch of r-: factor {}",
             hi / lo
         );
     }

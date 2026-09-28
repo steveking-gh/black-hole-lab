@@ -26,7 +26,7 @@ pub fn inner(metric: &KerrSchild, r: f64, a: &[f64; 3], b: &[f64; 3]) -> f64 {
 /// the null directions are the light through the event, not a choice of frame - so a boosted
 /// tetrad returns the same closed curve; what the tetrad decides is only where along the rim the
 /// n samples fall, since aberration bunches them towards the boost. That is why the caller picks
-/// the frame: at u^t ~ 1e10, on the approach to the far branch of r-, the observer's own frame
+/// the frame: at u^t ~ 1e10, on the approach to the right branch of r-, the observer's own frame
 /// crowds every sample into one point of the rim and leaves the rest of the curve undrawn.
 // The volume view now routes its generators through `Chart::direction`, which is this same
 // composition applied one null vector at a time, so nothing outside the tests calls this; it is
@@ -87,7 +87,7 @@ impl Tetrad {
     /// Both steps are taken in the closed forms worked out below rather than by evaluating the
     /// formulae above term by term. They are the same vectors to a rounding for an observer whose
     /// u^mu is of order 1, and they are the difference between a frame and a NaN for one whose
-    /// u^t has run away: a worldline settling onto the far branch of r- is carried out to
+    /// u^t has run away: a worldline settling onto the right branch of r- is carried out to
     /// `geodesic::U_T_STALL` = 1e10, and written literally this construction loses every digit of
     /// g(v1, v1) by u^t ~ 1e8 (v1's components are of size u_r u^t while g(v1, v1) is only u_r^2,
     /// a cancellation of sixteen orders) and every digit of the *direction* of v2 at the same
@@ -99,7 +99,7 @@ impl Tetrad {
         // g(u, u) is a sum of terms of size |u|^2, so double precision alone can only deliver it
         // to ~1e-16 |u|^2 however exact the 4-velocity is. The check has to carry that factor or
         // it fires on a perfectly good worldline whose u^t has run away, which is what happens on
-        // the approach to the far branch of r-: `geodesic::U_T_STALL` follows u^t out to 1e10
+        // the approach to the right branch of r-: `geodesic::U_T_STALL` follows u^t out to 1e10
         // there, where (u^t)^2 is 1e20 and the rounding floor of this very expression is 1e4. The
         // 1e-6 is what it is checking everywhere else, where |u| is of order 1.
         debug_assert!(
@@ -182,7 +182,7 @@ impl Tetrad {
         // g(u, u) is a sum of terms of size |u|^2, so double precision alone can only deliver it
         // to ~1e-16 |u|^2 however exact the 4-velocity is. The check has to carry that factor or
         // it fires on a perfectly good worldline whose u^t has run away, which is what happens on
-        // the approach to the far branch of r-: `geodesic::U_T_STALL` follows u^t out to 1e10
+        // the approach to the right branch of r-: `geodesic::U_T_STALL` follows u^t out to 1e10
         // there, where (u^t)^2 is 1e20 and the rounding floor of this very expression is 1e4. The
         // 1e-6 is what it is checking everywhere else, where |u| is of order 1.
         debug_assert!(
@@ -251,7 +251,7 @@ impl Tetrad {
         // flipping when it came out negative, which is the same answer wherever the determinant
         // can be computed - but it is a cancellation of products of components of size |u|^2 down
         // to a number of order 1, so its rounding floor is ~1e-16 |u|^2, and past u^t ~ 1e8 the
-        // sign it returns is noise. With `geodesic::U_T_STALL` carrying a worldline onto the far
+        // sign it returns is noise. With `geodesic::U_T_STALL` carrying a worldline onto the right
         // branch of r- out to u^t = 1e10, that noise reversed e1 end for end between one step and
         // the next and mirrored every surface in the observer's frame view - precisely the failure
         // the dual was introduced to remove, arriving by another route. Taking the sign from the
@@ -310,7 +310,7 @@ impl Tetrad {
     /// a frame boosted to u^t those components are of size u^t, so the sum is delivered to a
     /// rounding of 1e-16 (u^t)^2 whatever the vectors are: a component of order one is good to
     /// 1e-4 at u^t = 1e6, to 1e-2 at 1e7, and is noise by 1e8. Measured on the rest-frame view
-    /// with Bob freezing onto the far branch of r- and the plane's angle held fixed, the drawn
+    /// with Bob freezing onto the right branch of r- and the plane's angle held fixed, the drawn
     /// trace of r- was steady to 1e6 and then drifted through a percent, five per cent and finally
     /// the whole quadrant, with the frame itself - which has no such cancellation in it - exact
     /// throughout.
@@ -560,7 +560,7 @@ mod tests {
     #[test]
     fn test_axial_e1_does_not_reverse_where_d_r_falls_into_the_plane_of_e0_and_e2() {
         // The worldline that showed the flip: E = 1, L = 2 at a = 0.90, released from r = 4.5.
-        // E - Omega_- L < 0, so it heads for the far branch of r_- and never crosses the drawn one;
+        // E - Omega_- L < 0, so it heads for the right branch of r_- and never crosses the drawn one;
         // on the way, between the horizons near r = 1.09, the coordinate direction d_r passes
         // through span(e0, e2). With e1 taken as the normalised rest-space projection of d_r, its
         // sign reference vanished there and e1 reversed between two consecutive steps, mirroring
@@ -580,7 +580,7 @@ mod tests {
         let (r_plus, r_minus) = (metric.outer_horizon(), metric.inner_horizon());
         let mut bob = GeodesicState::new_with_direction(&metric, 0.0, 4.5, 1.0, 2.0, false);
         // The app's free-falling observer steps its geodesic under exactly this gate: settled on
-        // the far branch of r- the state is held, and so is one that has reached the ring.
+        // the right branch of r- the state is held, and so is one that has reached the ring.
         let step = |bob: &mut GeodesicState, dt: f64| {
             if !bob.stalled && bob.r > R_STOP {
                 bob.step_coord_time(&metric, dt);

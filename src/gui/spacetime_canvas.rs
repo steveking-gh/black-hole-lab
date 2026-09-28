@@ -96,11 +96,11 @@ Two constructions share this canvas, and the canvas does not pretend otherwise.
 
 Exact, in Riemann normal coordinates. The view draws each surface r = const — the horizons, the static limit, the ring singularity — as the curve that surface really is: the point of a surface at chart angle ψ sits at the affine length of the geodesic that leaves the focus observer's event in the direction ψ, inside the drawn plane, and arrives on that surface. Where the curve meets the now-axis is the ruler distance the horizon box prints, and the two agree because the two are the same integral, both of them taken along the radial leg this canvas draws. The other observer's dot is exact in the same coordinates and then projected: the emission event sits at ξ = λ(−1, n¹, n²), the canvas holds the first two of those three numbers, and so the dot lies inside the 45° past cone by exactly the part of the offset that points round the hole. The dot reaches the cone when the light arrives in this plane, and the faint mark on the cone beside it is where the dot would have landed if it had.
 
-A horizon is two surfaces, and the curve says which. The heavy stroke is the branch the focus observer's own future turns on, and the light stroke of the same colour is the other branch. For r₊ that heavy branch is the future horizon, the same one for everybody, and the light stroke is the past horizon that nothing crosses. For r₋ the two swap according to who is standing here: a geodesic with E − Ω₋L < 0, where Ω₋ = a/(r₋² + a²) is the dragging rate on r₋, freezes onto the far branch and the view draws that far branch heavy; a geodesic with E − Ω₋L > 0 goes through the other branch instead, and the view draws the branch it crosses heavy. Read E and L off your own box and check the sign. An observer on no geodesic at all — a hovering observer, a marker under the mouse — reaches neither branch while the engine burns, and the view keeps the far branch heavy for them by convention; the horizon's own box says as much. The two branches meet at a corner, and that corner is the bifurcation, where the arriving geodesic runs tangent to the horizon rather than through it. Each horizon's box names the branches on the canvas.
+A horizon is two surfaces, and the curve says which. The heavy stroke is the branch the focus observer's own future turns on, and the light stroke of the same colour is the other branch. For r₊ that heavy branch is the future horizon, the same one for everybody, and the light stroke is the past horizon that nothing crosses. For r₋ the two swap according to who is standing here: a geodesic with E − Ω₋L < 0, where Ω₋ = a/(r₋² + a²) is the dragging rate on r₋, freezes onto the right branch and the view draws that right branch heavy; a geodesic with E − Ω₋L > 0 goes through the other branch instead, and the view draws the branch it crosses heavy. Read E and L off your own box and check the sign. An observer on no geodesic at all — a hovering observer, a marker under the mouse — reaches neither branch while the engine burns, and the view keeps the right branch heavy for them by convention; the horizon's own box says as much. The two branches meet at a corner, and that corner is the bifurcation, where the arriving geodesic runs tangent to the horizon rather than through it. Each horizon's box names the branches on the canvas.
 
 First order in the tilt, exact in the crossing. The distant clock's grid lines — the surfaces t = const — come through the linear map as straight lines, and so do the signal crests. A grid line's tilt is that first-order one: exact at the focus observer's own event, where the drawn line touches the worldline, and linearised away from it. Where the line crosses the worldline is not first order. The view walks the focus observer's own worldline to find each crossing — forward with the same integrator that steps the run, backward along the trail the run has already drawn — and puts the line through the proper time that observer really reads there.
 
-The two answers part company without bound on the way to the far branch of r₋, where dt/dτ grows like exp(κ₋t). The first-order spacing dt/u^t marches on down the canvas at a fixed pitch and takes the grid straight past r₋, which says that the observer outlives t = ∞; the true crossings saturate at the proper time the observer has left, so infinitely many of the distant clock's readings pile into the band just above r₋. Lines the worldline meets only past the stall — where the integration of that approach stops, because the chart can no longer resolve r − r₋ — the view draws not at all.
+The two answers part company without bound on the way to the right branch of r₋, where dt/dτ grows like exp(κ₋t). The first-order spacing dt/u^t marches on down the canvas at a fixed pitch and takes the grid straight past r₋, which says that the observer outlives t = ∞; the true crossings saturate at the proper time the observer has left, so infinitely many of the distant clock's readings pile into the band just above r₋. Lines the worldline meets only past the stall — where the integration of that approach stops, because the chart can no longer resolve r − r₋ — the view draws not at all.
 
 One warning about which distant clock the grid is counting. These slices are the surfaces t = const of the app's own chart, the ingoing Kerr-Schild one, and the label on a slice reads that t in seconds: the time a clock at rest far from the hole keeps, since far away the chart's t and that clock's own reading run together. How much distant time one gap stands for survives the choice of chart — the ingoing t and a Boyer–Lindquist t march along the one Killing vector ∂_t, so five minutes of grid is five minutes of the far clock either way. Two other things do not survive it: which slice passes through your own event, and the dt/dτ the head of the canvas prints. The two times differ by a function of the radius alone, t = t_BL + ∫ (2Mr/Δ) dr, and two things follow from that. Which events count as simultaneous with yours differs, because the two families of slices cut each other wherever dr ≠ 0: the line the canvas draws through your event is the ingoing chart's answer and never the other one's, whatever you are doing. And dt/dτ differs by exactly (2Mr/Δ)(dr/dτ), which is nothing at all while you hold r and runs away as you cross r₊ — that term is the whole difference between a horizon crossing at a finite reading and one that takes until t = ∞. The app charts in the ingoing coordinates for exactly that reason, and this grid inherits the choice.";
 
@@ -112,7 +112,7 @@ One warning about which distant clock the grid is counting. These slices are the
 pub const MIN_GRID_PX: f32 = 28.0;
 
 /// Tightest window the rest-frame view will open to, in M of the local chart's xi. The gap an
-/// observer freezing onto the far branch of r- has left when `geodesic::U_T_STALL` stops the
+/// observer freezing onto the right branch of r- has left when `geodesic::U_T_STALL` stops the
 /// worldline is about 1e-10 M, and r - r- is resolved in f64 down to an ulp of r, about 1e-16 M,
 /// so a floor of 1e-12 M leaves the whole of the approach the integrator can be trusted for on the
 /// zoomable side of it while staying four decades clear of the arithmetic's own floor.
@@ -130,7 +130,7 @@ const YOUNGEST_CHECK_INTERVAL: f64 = 1.0;
 /// observer's own radial plane (section 1b of `render_observer_frame`) the limit reaches the other
 /// observer's image and nothing else. The tetrad is good at any boost:
 /// `Tetrad::from_four_velocity_axial` is built in closed forms with no cancellation in them, and
-/// measured with Bob freezing onto the far branch of r- with the frame built live, the drawn r-
+/// measured with Bob freezing onto the right branch of r- with the frame built live, the drawn r-
 /// trace crossed his own worldline at exactly the proper time the horizon box quotes at every
 /// decade of u^t out to 1e9, and its slope beside him held steady for as long as the run lasted.
 /// What fails is the line of sight. Aberration at a boost of u^t crowds the whole sky into a cone
@@ -199,7 +199,7 @@ pub(crate) const COARSE_ZOOM_STEPS: i32 = 20;
 pub const KEEP_SURFACE_FRAMED_TIP: &str =
 "Re-derive the rest-frame view's zoom every frame, so that the next surface the observer meets - the outer horizon, the Cauchy horizon, or the ring - stays on the canvas.
 
-A surface r = const crosses the observer's own time axis at the affine length of the observer's own worldline from here to the crossing, which for a worldline is the proper time the observer has left before reaching that surface. The framing follows that one number - the same number the drawn curve crosses the axis at, so the framing and the picture agree - and that is why the framing needs no special case for the last moments. On the approach to the far branch of r-, where the gap closes like exp(-kappa_- t) while the observer's remaining proper time shrinks alongside, following that number is the only way to watch both at once.
+A surface r = const crosses the observer's own time axis at the affine length of the observer's own worldline from here to the crossing, which for a worldline is the proper time the observer has left before reaching that surface. The framing follows that one number - the same number the drawn curve crosses the axis at, so the framing and the picture agree - and that is why the framing needs no special case for the last moments. On the approach to the right branch of r-, where the gap closes like exp(-kappa_- t) while the observer's remaining proper time shrinks alongside, following that number is the only way to watch both at once.
 
 The zoom only ever tightens the view. Any turn of the wheel switches this setting off.";
 
@@ -256,7 +256,7 @@ pub struct GridStep {
 /// "Beside the observer" is the whole of the claim, and the view no longer makes a larger one.
 /// `step_m / u^t` is the first-order spacing, exact only at the event the rung is chosen at;
 /// `clock_grid_crossings` walks the worldline to find where each slice is really crossed, and on
-/// the approach to the far branch of r- those crossings close up above the observer and open out
+/// the approach to the right branch of r- those crossings close up above the observer and open out
 /// below, because u^t is growing. So this rung sets the pitch of the grid at the observer's own
 /// now, which is where a reader measures it, and the lines above that now crowd together as they
 /// climb - which is the picture of infinitely many of the distant clock's readings fitting inside
@@ -266,7 +266,7 @@ pub struct GridStep {
 /// hole's mass and on nothing else, so it is fixed for a whole fall and changes only when the user
 /// turns the wheel: the grid is a ruler on the observer's watch, at a constant pixel pitch, and it
 /// never needs a mid-fall change of unit. What runs away instead is what each line is worth on the
-/// distant clock - as an observer falls toward the far branch of r- their u^t grows like
+/// distant clock - as an observer falls toward the right branch of r- their u^t grows like
 /// exp(kappa_- t), and `step_m` grows with it, continuously and without bound, which is what the
 /// line labels and the head of the canvas report.
 ///
@@ -333,7 +333,7 @@ const CLOCK_GRID_CHUNK_M: f64 = 0.05;
 /// The march normally ends long before this: it stops at the last slice the canvas has room for, at
 /// the observer's own clock passing the top of the canvas, at the ring, or at the stall. Measured
 /// on the worldline this whole construction is for - Bob at E = 1, L = 2.2 on an a = 0.90 hole,
-/// freezing onto the far branch of r- - on a 900 x 700 canvas with the automatic framing on, a
+/// freezing onto the right branch of r- - on a 900 x 700 canvas with the automatic framing on, a
 /// whole rebuild costs 0.72 ms at u^t = 1e2, 1e4 and 1e6, 0.40 ms at 1e8 and 0.20 ms at 1e9, and
 /// the grid comes out complete at every one of them. A raindrop out at r = 17 M costs 39 us. The
 /// framed window asks for about twenty slices ahead and reaching the furthest of them takes some
@@ -385,7 +385,7 @@ struct ClockGridKey {
 /// This is the one number the view draws each slice through, and it is not `dt / u^t`.
 /// `LocalFrame::surface_t_const` is a first-order chart: its intercept is the rate dt/dtau *at the
 /// observer's own event*, carried out to a finite dt as if that rate never changed. Along a
-/// worldline freezing onto the far branch of r- the rate changes without bound - u^t grows like
+/// worldline freezing onto the right branch of r- the rate changes without bound - u^t grows like
 /// exp(kappa_- t) - so the true intercepts tau_k = integral dt / u^t saturate at the proper time
 /// the observer has left, and infinitely many slices pile into the band below r- while the
 /// first-order estimate marches linearly past it. Drawn from the estimate the grid said that the
@@ -481,7 +481,7 @@ fn trail_tau_at(obs: &Observer, u_t_now: f64, t_target: f64) -> Option<f64> {
 /// Slices the copy never reaches are not reported, and the view draws nothing for them. Four things
 /// stop it: the ring, where the worldline ends; the observer's own clock passing `reach`, the top
 /// of the canvas, after which every later slice is off the picture anyway; the chunk budget; and
-/// `geodesic::U_T_STALL`, where the integration of a worldline freezing onto the far branch of r-
+/// `geodesic::U_T_STALL`, where the integration of a worldline freezing onto the right branch of r-
 /// is abandoned because the chart can no longer resolve r - r-. The last of those is the one to be
 /// careful about: t runs to infinity on that branch, so the worldline really does meet every one of
 /// the distant clock's slices before it reaches r-, and the slices past the stall are slices this
@@ -1489,11 +1489,11 @@ Ruler Distance — defined as the arclength of the spacelike geodesic that leave
 
 Time — the proper time on your own watch between here and the crossing, ∫ r² dr / √R with R = r⁴(dr/dτ)², integrated along the worldline your E and L put you on. R is a square and never changes sign, which is why a horizon has a time even where that horizon has no distance, while the distance integral carries a √Δ that goes imaginary throughout Region II.
 
-“(frozen)” — the tag on a time to the far branch of r₋ for a worldline that settles onto that branch instead of crossing it. Your own watch reads a finite proper time to the horizon and the box prints it; the chart's t runs to infinity on the way there, so dt/dτ grows without bound, and the integrator abandons the worldline at dt/dτ = 1e10 rather than chasing a limit double precision cannot reach. So the number is what your watch really has left, and the run stops a little short of spending it.
+“(frozen)” — the tag on a time to the right branch of r₋ for a worldline that settles onto that branch instead of crossing it. Your own watch reads a finite proper time to the horizon and the box prints it; the chart's t runs to infinity on the way there, so dt/dτ grows without bound, and the integrator abandons the worldline at dt/dτ = 1e10 rather than chasing a limit double precision cannot reach. So the number is what your watch really has left, and the run stops a little short of spending it.
 
 “beyond r₊” — the path from here to r₋ would have to cross Region II, so no spacelike curve in your rest space reaches r₋ and the integral has nothing to return. r₋ does not lie on your worldline yet either, and whether r₋ ever will depends on what you do next.
 
-heavy / light — a horizon is two surfaces, and on the rest-frame view this line says which of them the canvas holds. The heavy stroke is the branch your own future turns on, and the light stroke of the same colour is the other branch. For r₊ the heavy one is the future horizon, and the light one is the past horizon, which no worldline crosses and which your past light cone merely runs down onto. For r₋ the choice is yours rather than the hole's: your geodesic settles onto the far branch for ever when E − Ω₋L < 0, with Ω₋ = a/(r₋² + a²) the dragging rate on r₋, and goes through the other branch when E − Ω₋L > 0, so the view draws whichever of the two your own E and L send you to in the heavy stroke and the other in the light one. Your own box prints that E and that L, so you can check the sign for yourself. Hold a radius, or let the mouse drag your marker, and you are on no geodesic at all: your future turns on neither branch while the engine burns, and the view falls back on the far branch, which is the Cauchy horizon this app is about and the one branch no worldline ever goes through. That fallback is a convention and not a reading of your worldline — cut the engine and the E and L you carry decide the answer, and for a drop from rest they decide it the other way. Where both appear the curve has a corner between them. That corner is the bifurcation — defined as the one direction whose geodesic arrives tangent to the horizon rather than through it — and it is geometry rather than a kink in the drawing: at that direction the quantity P(r_H) = E(r_H² + a²) − aL of the arriving geodesic passes through zero, which is exactly the test that decides which crossings this chart has.";
+heavy / light — a horizon is two surfaces, and on the rest-frame view this line says which of them the canvas holds. The heavy stroke is the branch your own future turns on, and the light stroke of the same colour is the other branch. For r₊ the heavy one is the future horizon, and the light one is the past horizon, which no worldline crosses and which your past light cone merely runs down onto. For r₋ the choice is yours rather than the hole's: your geodesic settles onto the right branch for ever when E − Ω₋L < 0, with Ω₋ = a/(r₋² + a²) the dragging rate on r₋, and goes through the other branch when E − Ω₋L > 0, so the view draws whichever of the two your own E and L send you to in the heavy stroke and the other in the light one. Your own box prints that E and that L, so you can check the sign for yourself. Hold a radius, or let the mouse drag your marker, and you are on no geodesic at all: your future turns on neither branch while the engine burns, and the view falls back on the right branch, which is the Cauchy horizon this app is about and the one branch no worldline ever goes through. That fallback is a convention and not a reading of your worldline — cut the engine and the E and L you carry decide the answer, and for a drop from rest they decide it the other way. Where both appear the curve has a corner between them. That corner is the bifurcation — defined as the one direction whose geodesic arrives tangent to the horizon rather than through it — and it is geometry rather than a kink in the drawing: at that direction the quantity P(r_H) = E(r_H² + a²) − aL of the arriving geodesic passes through zero, which is exactly the test that decides which crossings this chart has.";
 
 /// Hover tip for the static limit's box on the (t, r) chart, which quotes a radius and nothing
 /// that depends on an observer.
@@ -1768,7 +1768,7 @@ fn telemetry_lines(
     };
 
     let shift_tag = if nu_ratio > 1.0 { "blueshift" } else { "redshift" };
-    // The ratio is proportional to u^t near the far branch of r- - exactly u^t r-^2/(r-^2 + a^2)
+    // The ratio is proportional to u^t near the right branch of r- - exactly u^t r-^2/(r-^2 + a^2)
     // in the limit - and `geodesic::U_T_STALL` follows the worldline out to u^t = 1e10, so the
     // top of its range is where `numbers` turns to an exponent.
     let nu_str = if nu_ratio < 0.01 {
@@ -1824,7 +1824,7 @@ fn telemetry_lines(
     if let Some(constants_str) = constants_str {
         lines.push(TelemetryLine { text: constants_str, color: Theme::TEXT_MUTED, is_title: false, bold: false });
     }
-    // A worldline frozen on the far branch of r- has not stopped: it is riding the horizon's own
+    // A worldline frozen on the right branch of r- has not stopped: it is riding the horizon's own
     // null generator, so on the equatorial view its marker creeps round the r- circle at Omega_-
     // and in the volume it is a helix on the r- pipe, while the radius and the observer's own
     // clock stand still. Drawn, that is exactly what an ordinary orbit looks like, and this is the
@@ -3115,7 +3115,7 @@ Tick Enable Observer on Alice's or Bob's card",
     /// which for a timelike tangent is the proper time the observer has left before reaching it,
     /// and is the same number the drawn curve crosses the axis at. The smallest of those is the
     /// surface they are about to meet: the ring for a raindrop, r+ for anyone still outside it, r-
-    /// for a worldline with E - Omega_- L < 0 freezing onto the far branch.
+    /// for a worldline with E - Omega_- L < 0 freezing onto the right branch.
     ///
     /// `affine_length_to_surface` answers `None` for a surface the observer's own worldline does
     /// not set out towards, which is the whole of the test for "ahead": a static observer reaches
@@ -3366,7 +3366,7 @@ Tick Enable Observer on Alice's or Bob's card",
         // observer's event, which is where the drawn line touches the worldline; the crossing is
         // exact, because dt / u^t - the first-order intercept the view used to place the whole
         // line by - is only the rate at the observer's event carried out as though it never
-        // changed, and on the approach to the far branch of r- it changes without bound. See
+        // changed, and on the approach to the right branch of r- it changes without bound. See
         // `ClockGridCrossings`.
         //
         // `scale` is the pixel scale of the drawn plane: points per M of xi. The physical second
@@ -3690,7 +3690,7 @@ Tick Enable Observer on Alice's or Bob's card",
             // A horizon is two surfaces and the sweep meets both, so the drawing says which is
             // which. The branch drawn in the full stroke is the one *this* observer's own future
             // turns on: the future horizon for r+, which is the same branch for everybody, and for
-            // r- whichever branch the focus observer's own E and L send them to - the far branch
+            // r- whichever branch the focus observer's own E and L send them to - the right branch
             // they freeze on where E - Omega_- L < 0, the crossing branch they go through where it
             // is positive. The other branch is drawn in a light stroke of the same colour. Same
             // colour because the two are the same surface r = const and a reader hunting for r-
@@ -4756,18 +4756,18 @@ fn clip_polyline_to_rect(points: &[[f64; 2]], rect: Rect) -> Vec<Vec<Pos2>> {
 /// crosses r- in this chart exactly when P(r-) = E(r-^2 + a^2) - aL is positive, which is
 /// E - Omega_- L > 0 with Omega_- = a/(r-^2 + a^2) (`RadialConstants::crosses_in_chart` derives
 /// the test from the regularity of the chart, and `GeodesicState` freezes a worldline on the same
-/// sign). So a worldline with E - Omega_- L < 0 settles onto the far branch for ever and that far
+/// sign). So a worldline with E - Omega_- L < 0 settles onto the right branch for ever, and that
 /// branch is the one its future turns on; a worldline with E - Omega_- L > 0 goes through the
-/// crossing branch instead, and the far branch is then something it only ever sees beside it. The
+/// crossing branch instead, and the right branch is then something it only ever sees beside it. The
 /// heavy stroke follows the observer's own sign, taken from the E and L of the geodesic they are
 /// on - the same two numbers their own box prints.
 ///
 /// Where the focus observer is on no geodesic at all - a hovering observer, a marker the user is
 /// dragging - their own future turns on neither branch, since they are not going to r- while they
-/// hold station, and the far branch keeps the heavy stroke as a convention. It is declared as one
+/// hold station, and the right branch keeps the heavy stroke as a convention. It is declared as one
 /// in `HORIZON_BOX_TIP` rather than dressed up as a reading: the hold they are on carries an E and
 /// an L all the same, and for a drop from rest those would send them through the *other* branch.
-/// The far branch is the one the app is about and the one no worldline ever goes through, which is
+/// The right branch is the one the app is about and the one no worldline ever goes through, which is
 /// what makes it the fallback worth having.
 fn branch_in_full_stroke(
     metric: &KerrSchild,
@@ -4801,7 +4801,7 @@ fn branch_name(outer: bool, branch: HorizonBranch) -> &'static str {
         (true, HorizonBranch::Crossing) => "the future horizon",
         (true, HorizonBranch::Asymptotic) => "the past horizon",
         (false, HorizonBranch::Crossing) => "the branch an infaller crosses",
-        (false, HorizonBranch::Asymptotic) => "the far branch",
+        (false, HorizonBranch::Asymptotic) => "the right branch",
     }
 }
 
@@ -4908,7 +4908,7 @@ fn beacon_nm(who: Who) -> f64 {
 /// whole solve. `release_t` is pulled back to the emission time where the light left before the
 /// release, so that `four_velocity` recognises the geodesic as standing on the snapshot's own event
 /// instead of falling back to the closed form at that radius. And `stalled` is set from the watch:
-/// a worldline frozen on the far branch of r- holds its proper time at the value it froze with, so
+/// a worldline frozen on the right branch of r- holds its proper time at the value it froze with, so
 /// an emission event carrying that same reading is one from the frozen stretch and an earlier one
 /// is not.
 fn seen_snapshot(other: &Observer, seen: &AsSeen) -> Observer {
@@ -5118,7 +5118,7 @@ fn loose_number(x: f64) -> String {
 fn no_image_reason(why: NoImage, focus_name: &str, other_name: &str) -> String {
     match why {
         NoImage::FocusFrozen => format!(
-            "{focus_name} has frozen on the far branch of r₋: aberration has closed every \
+            "{focus_name} has frozen on the right branch of r₋: aberration has closed every \
              direction onto one point, and no picture of anything survives that"
         ),
         NoImage::FocusEnded => {
@@ -5717,10 +5717,10 @@ mod canvas_tests {
 
         let px_per_m = 100.0f32;
         let secs = TEN_SOLAR_SECONDS_PER_M;
-        // 2. Twenty decades of u^t - the whole runaway, from a raindrop outside the hole to the far
-        //    branch of r- - and the observer's own step between two lines never changes. This is the
-        //    property the rule exists for: the grid is a fixed ruler on their watch, so it never
-        //    needs a change of unit mid-fall and the lines never breathe.
+        // 2. Twenty decades of u^t - the whole runaway, from a raindrop outside the hole to the
+        //    right branch of r- - and the observer's own step between two lines never changes. This
+        //    is the property the rule exists for: the grid is a fixed ruler on their watch, so it
+        //    never needs a change of unit mid-fall and the lines never breathe.
         let at_rest = distant_clock_grid_step(1.0, px_per_m, secs, 1.0);
         let mut worst_gap = f64::INFINITY;
         let mut widest_gap = 0.0f64;
@@ -5816,7 +5816,7 @@ mod canvas_tests {
         );
 
         // The bottom of the ladder is what the approach to r- needs. When `geodesic::U_T_STALL`
-        // stops a worldline freezing onto the far branch it has about 1e-10 M of r left, which for
+        // stops a worldline freezing onto the right branch it has about 1e-10 M of r left, which for
         // a ten solar-mass hole is a couple of femtoseconds of the faller's own time; the automatic
         // framing puts that on the canvas at around 1.8e12 points per M, and the rung wanted there
         // is under one femtosecond. A ladder stopping at the microsecond would answer with a single
@@ -6073,7 +6073,7 @@ mod canvas_tests {
         );
 
         // 3. The case it exists for. E = 1, L = 2.2 at a = 0.90 has E - Omega_- L < 0, so this
-        //    worldline never crosses r-: it freezes onto the far branch, and `geodesic::U_T_STALL`
+        //    worldline never crosses r-: it freezes onto the right branch, and `geodesic::U_T_STALL`
         //    stops it with the gap at about 1e-10 M. The framing is asked for no special case and
         //    given none - the same expression that wanted 5.5 M at r = 4.5 wants a window nine
         //    decades below that here - and at the scale it asks for, the clock ladder's own rule
@@ -6522,7 +6522,7 @@ mod canvas_tests {
     #[test]
     fn test_a_frozen_observers_box_carries_the_glide_in_bold_white() {
         // The one line of an info box that is a state rather than a reading: while a worldline is
-        // frozen on the far branch of r- the box says so, in bold and in white, and while it is
+        // frozen on the right branch of r- the box says so, in bold and in white, and while it is
         // falling the box says nothing of the kind. It lives in the box rather than floating at
         // the marker, so it goes where the box goes and nothing in either picture paints over it.
         let metric = KerrSchild::new(1.0, 0.90);
@@ -7897,7 +7897,7 @@ mod rest_frame_tests {
 
     #[test]
     fn test_the_picture_is_held_while_the_observers_clock_stands_still() {
-        // The user's report: Bob freezing onto the far branch of r- with Alice's image deep in
+        // The user's report: Bob freezing onto the right branch of r- with Alice's image deep in
         // redshift, and on one frame in three the box read "Alice: no image". Past u^t ~ 1e7 the
         // solver cannot resolve his frame, but his clock is moving under 1e-8 M a frame, so the
         // picture at his event is the picture it was: the view holds it and says so.
@@ -8551,7 +8551,7 @@ mod rest_frame_tests {
     fn test_the_heavy_branch_of_r_minus_follows_the_observers_own_e_and_l() {
         // The rule the heavy stroke and both hover tips claim: the heavy branch is the one *this*
         // observer's own future turns on, which for r- depends on the sign of E - Omega_- L and so
-        // on who is standing here. The view used to draw the far branch heavy for everybody, which
+        // on who is standing here. The view used to draw the right branch heavy for everybody, which
         // told a raindrop - who goes straight through r- - that the branch they never meet is the
         // one their future turns on.
         let metric = KerrSchild::new(1.0, 0.90);
@@ -8587,7 +8587,7 @@ mod rest_frame_tests {
             "a raindrop goes through r-"
         );
         // The prograde ISCO carries enough angular momentum to reverse the sign - E = 0.844 against
-        // Omega_- L = 1.675 - so that plunge freezes on the far branch instead.
+        // Omega_- L = 1.675 - so that plunge freezes on the right branch instead.
         assert!(
             sign_of(&isco).expect("the orbiter is on a geodesic") < 0.0,
             "the ISCO plunge must have E - Omega_- L < 0"
@@ -8595,9 +8595,9 @@ mod rest_frame_tests {
         assert_eq!(
             branch_in_full_stroke(&metric, &isco, rm, true),
             Some(HorizonBranch::Asymptotic),
-            "the ISCO plunge freezes on the far branch"
+            "the ISCO plunge freezes on the right branch"
         );
-        // Not free-falling, so there is no sign to read and the far branch keeps the heavy stroke
+        // Not free-falling, so there is no sign to read and the right branch keeps the heavy stroke
         // by convention. The hovering observer's own release state would answer the other way -
         // E = 0.866 with L = 0 is a crossing - which is exactly why the gate is the mode and not
         // the mere presence of a geodesic state.
@@ -8809,7 +8809,7 @@ mod rest_frame_tests {
 
     #[test]
     fn test_the_distant_clock_grid_crosses_the_worldline_at_the_proper_time_it_really_does() {
-        // The defect: on the far branch of r- the grid marched straight past the horizon and drew
+        // The defect: on the right branch of r- the grid marched straight past the horizon and drew
         // the focus observer outliving t = infinity. Each slice used to be placed by
         // `LocalFrame::surface_t_const`, whose intercept dt / u^t is the rate at the observer's own
         // event carried out as though it never changed; along this worldline u^t grows like

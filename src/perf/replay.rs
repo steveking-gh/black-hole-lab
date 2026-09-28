@@ -224,7 +224,7 @@ fn isco_pair(app: &mut SpacetimeApp, max_pulses: usize) {
     drop_observers(app);
 }
 
-/// Bob on the one worldline that freezes onto the far branch of r-, with Alice out of the run.
+/// Bob on the one worldline that freezes onto the right branch of r-, with Alice out of the run.
 ///
 /// E = 1 and L = 2.2 is `Observer::frozen_bob`'s worldline, stated here the way a card states one:
 /// released from infinity (which is what E = 1 means) at r = 9 M with that angular momentum.

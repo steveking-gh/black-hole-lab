@@ -27,7 +27,7 @@
 //!
 //! **What this tier cannot answer.** Everything about how cost changes over a run: the per-10-M
 //! series it prints covers a few M and is flat by construction. Cost growth, the cap of 128, the
-//! default-infall layout and the far-branch freeze are the full suite's, and an idea that might
+//! default-infall layout and the right-branch freeze are the full suite's, and an idea that might
 //! change the shape of a run rather than the price of a frame has to be measured there.
 
 use std::path::{Path, PathBuf};

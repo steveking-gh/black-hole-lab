@@ -192,7 +192,7 @@ impl KerrSchild {
     /// r-^2 + a^2 = 2 M r-, so this is equally a / (2 M r-), the inner twin of the familiar
     /// Omega_+ = a / (2 M r+); the same chi is what `inner_surface_gravity` takes kappa_- from.
     ///
-    /// It is therefore the rate at which everything that asymptotes to the far branch of r- ends
+    /// It is therefore the rate at which everything that asymptotes to the right branch of r- ends
     /// up co-rotating. A ray with E - Omega_- L < 0 never crosses that branch and winds onto it at
     /// Omega_- (`wavefront::NullRay::frozen`), and so does a timelike worldline with the same sign:
     /// neither can cross a surface whose own generators it is settling onto.

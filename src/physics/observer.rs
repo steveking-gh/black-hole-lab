@@ -599,7 +599,7 @@ impl Observer {
         self.r <= R_STOP || self.is_frozen()
     }
 
-    /// Has this worldline frozen onto the far branch of the Cauchy horizon?
+    /// Has this worldline frozen onto the right branch of the Cauchy horizon?
     ///
     /// The E - Omega_- L < 0 case: the worldline asymptotes to r- as r - r- ~ exp(-kappa_- t),
     /// reaching it at infinite coordinate time and at a finite proper time it never gets to spend,
@@ -611,7 +611,7 @@ impl Observer {
         self.geodesic.map(|geo| geo.stalled).unwrap_or(false)
     }
 
-    /// Bob on the one worldline that freezes onto the far branch of r-, run there: E = 1,
+    /// Bob on the one worldline that freezes onto the right branch of r-, run there: E = 1,
     /// L = 2.2 at a = 0.90, released at r = 9 M and stepped at dt = 0.25 M until `is_frozen`.
     ///
     /// These constants have E - Omega_- L < 0, so he never crosses r-. He asymptotes to it with
@@ -876,7 +876,7 @@ impl Observer {
     ///
     /// That cancellation is a diagnostic of the integrator, not a reading of the observer's
     /// accelerometer, and the two part company where the stencil cannot follow: on a worldline
-    /// bound for the far branch of r-, u^t has a pole at r-, the two terms are each of order
+    /// bound for the right branch of r-, u^t has a pole at r-, the two terms are each of order
     /// (u^t)^2, and the truncation error of a difference taken across a pole is unbounded. The
     /// accelerometer of an observer in free fall is `accelerometer_geom`, which is zero there by
     /// definition; this residual is what the tests check.
@@ -927,7 +927,7 @@ impl Observer {
     /// An observer in free fall is on a geodesic - that is what the mode means, and it is the
     /// geodesic equation the integrator is stepping - so the reading is exactly zero, and not the
     /// finite-difference residual of `four_acceleration`, which is a check on the integrator
-    /// rather than a measurement and blows up on the approach to the far branch of r-. Every
+    /// rather than a measurement and blows up on the approach to the right branch of r-. Every
     /// other mode is held on its worldline by thrust, and the reading is that thrust; so is a
     /// free-faller still waiting for release, who is being held at fixed r until then and
     /// reports the static worldline's 4-velocity (see `four_velocity`).
@@ -2996,7 +2996,7 @@ mod tests {
 
     #[test]
     fn test_a_free_faller_reads_zero_thrust_where_the_residual_check_cannot_follow() {
-        // Bob with E = 1, L = 2 at a = 0.90 heads for the far branch of r-: u^t grows like
+        // Bob with E = 1, L = 2 at a = 0.90 heads for the right branch of r-: u^t grows like
         // 1/(r - r-) on the way, and the finite difference behind `four_acceleration` is then a
         // derivative taken across a pole, which no stencil survives. It used to print thousands
         // of g of thrust on a worldline that has none. The accelerometer is zero for a geodesic
@@ -3076,7 +3076,7 @@ mod tests {
 
     #[test]
     fn test_a_frozen_worldline_winds_at_omega_minus_on_the_cauchy_horizon() {
-        // A worldline that has frozen onto the far branch of r- has stopped falling, not stopped
+        // A worldline that has frozen onto the right branch of r- has stopped falling, not stopped
         // moving. The surface it has settled onto is null, and its generators are the orbits of
         // chi = d_t + Omega_- d_phi, so an observer carried along one of them holds r and tau and
         // winds in phi at exactly Omega_- per unit t. Anything else would drift him across the

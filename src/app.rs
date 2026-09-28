@@ -2374,7 +2374,7 @@ mod tests {
         assert_eq!(controls.step_of(&metric, Some(&bob), None, 0.1), step.dt);
 
         // The frozen worldline is where the honest answer has to be refused. Bob asymptoting to
-        // the far branch of r₋ has u^t of order 1e10, so one tick of his watch is more of the
+        // the right branch of r₋ has u^t of order 1e10, so one tick of his watch is more of the
         // outside future than any integrator here can step through, and the cap bites instead.
         let frozen = Observer::frozen_bob(&metric);
         let stalled = controls.watch_step(&metric, Some(&frozen), None, 0.1);

@@ -560,7 +560,7 @@ impl Worldline {
                     }
                 }
                 // r- first: a worldline that has crossed it has left this phase's scope whatever
-                // it did next. A freeze onto the far branch of r- stays above r- (about 7e-10 M
+                // it did next. A freeze onto the right branch of r- stays above r- (about 7e-10 M
                 // above it when the core declares the stall) and is reported as the freeze.
                 if r_minus > 0.0 && geo.r <= r_minus {
                     return Err(End::InnerHorizon { tau, r_minus });

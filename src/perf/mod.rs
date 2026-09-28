@@ -75,7 +75,7 @@
 //! **What only the full suite has.** Cost growth over a run: a quick window is a few M at a plateau
 //! and its per-10-M series is flat by construction, while a scenario replay is thirty to a hundred M
 //! from t = 0 and shows the climb. The cap of 128 wavefronts. The `default-infall` layout. The
-//! far-branch freeze, with its u^t of order 1e10. And best-of-several runs, which is a stronger
+//! right-branch freeze, with its u^t of order 1e10. And best-of-several runs, which is a stronger
 //! noise figure than one window's chunk medians. An idea that could change the *shape* of a run
 //! rather than the price of a frame is measured there, not here.
 //!
@@ -443,7 +443,7 @@ The everyday check, about ten seconds:
   sequence. --save always writes the first measurement, never a mixture.
 
   Only the full suite has: cost growth over a run, the cap of 128 wavefronts, the
-  default-infall layout, the far-branch freeze, and best-of-several runs. An idea that could
+  default-infall layout, the right-branch freeze, and best-of-several runs. An idea that could
   change the shape of a run rather than the price of a frame belongs there.
 
 The A/B workflow, for an idea worth nine minutes:

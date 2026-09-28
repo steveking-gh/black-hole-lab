@@ -10,7 +10,7 @@ pub struct CauchyEffects;
 /// Format the measured shift of ingoing principal null light, nu_obs / nu_inf = -k.u.
 /// Two decimals while the ratio is a number a reader can hold in their head, four significant
 /// digits below a hundredth, and `numbers`' rule for where either end becomes an exponent: the
-/// shift is proportional to u^t on the approach to the far branch of r-, where
+/// shift is proportional to u^t on the approach to the right branch of r-, where
 /// `geodesic::U_T_STALL` follows the worldline out to u^t = 1e10.
 fn fmt_nu(ratio: f64) -> String {
     if ratio < 0.01 { numbers::small(ratio) } else { numbers::fixed(ratio, 2) }

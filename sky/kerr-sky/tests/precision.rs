@@ -1,4 +1,4 @@
-//! Is f64 enough? The observer who freezes onto the far branch of the inner horizon.
+//! Is f64 enough? The observer who freezes onto the right branch of the inner horizon.
 //!
 //! An observer with E - Omega_- L < 0 - E = 1, L = 2.2 M at a = 0.9 M, released from 4.5 M, the
 //! worldline `kerr_equatorial`'s own tests walk - never crosses r-: in this chart u^t grows like

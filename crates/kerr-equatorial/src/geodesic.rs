@@ -38,7 +38,7 @@ const R_FLOOR: f64 = 0.01;
 /// u^t past which the worldline is declared frozen: a hundredfold below the largest u^t at which
 /// the integration was *measured* to still be faithful.
 ///
-/// Why there is a ceiling at all. A worldline heading for the far branch of the Cauchy horizon -
+/// Why there is a ceiling at all. A worldline heading for the right branch of the Cauchy horizon -
 /// an outgoing approach to r- from below, or an ingoing one with E - Omega_- L < 0 - has
 /// t -> infinity at finite proper time, so u^t = dt/dtau diverges: the ingoing Kerr-Schild chart
 /// does not cover that crossing, and the integrator has to be told where to stop following it.
@@ -484,7 +484,7 @@ impl GeodesicState {
         // worldline is left self-consistent at its own (t, r, phi, tau, u), the observer's clock
         // is set from `geo.t` rather than from the simulation clock (see `Observer::advance`), so
         // it lags the clock by the shortfall instead of teleporting, and the next call carries on
-        // from there. It does not bind on the way to the far branch of r-: there the substep
+        // from there. It does not bind on the way to the right branch of r-: there the substep
         // settles at 0.008 r ~ 0.0045 M, which is 23 substeps for the app's dt = 0.1 M and would
         // need a single call of 45 M of coordinate time to reach 10_000 (the test asserts that
         // every 0.1 M call completes in full, all the way to the stall).
@@ -1180,7 +1180,7 @@ mod tests {
         assert!(refused.u[1] < 0.0, "an outgoing start at r- must fall back to ingoing: {:?}", refused.u);
     }
 
-    /// One decade of the walk onto the far branch of r-, kept so that the choice of `U_T_STALL`
+    /// One decade of the walk onto the right branch of r-, kept so that the choice of `U_T_STALL`
     /// can be read off the table at the end rather than asserted a step at a time.
     struct Decade {
         u_t: f64,
@@ -1271,7 +1271,7 @@ mod tests {
                     "a dt = {dt} step must complete in one call, guard and all, at t = {}",
                     geo.t
                 );
-                assert!(gap > 0.0, "the far branch is approached from outside: r - r- = {gap}");
+                assert!(gap > 0.0, "the right branch is approached from outside: r - r- = {gap}");
                 assert!(
                     norm_err < 1e-9 * (1.0 + ut * ut),
                     "|g(u,u) + 1| = {norm_err} at u^t = {ut}, t = {}",

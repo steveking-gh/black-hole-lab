@@ -393,7 +393,7 @@ pub struct AsSeenSeed {
 /// the recorded data, never a numerical shrug.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoImage {
-    /// The focus observer has settled onto the far branch of the Cauchy horizon. Their u^t has run
+    /// The focus observer has settled onto the right branch of the Cauchy horizon. Their u^t has run
     /// out to `geodesic::U_T_STALL`, so their frame is aberrated into a single point and there is
     /// no drawable picture of anything in it; the app declares the worldline over there too.
     FocusFrozen,
@@ -568,7 +568,7 @@ pub fn as_seen_youngest(
 ///
 /// The slack on the first guard is `EMISSION_SLACK`, which has to sit above the solve's own
 /// resolution and not at it. It was 1e-6 M, and that is where a frozen image jitters: once the
-/// focus observer is freezing onto the far branch of r- their picture stops changing - Alice's
+/// focus observer is freezing onto the right branch of r- their picture stops changing - Alice's
 /// emission event sat at t = 4.87435 M frame after frame - and the converged emission time
 /// came back 1e-6 to 6e-6 M *earlier* than the seed's from one frame to the next, pure
 /// rounding. The guard refused every one of those honest frames, the cold march could not do
@@ -1280,7 +1280,7 @@ impl<'a> Solver<'a> {
     /// coordinate velocity moves by about `ALPHA_STEP`.
     ///
     /// The angle is measured in the focus observer's own frame, and that frame can be boosted
-    /// out of all proportion: an observer freezing onto the far branch of r- has u^t in the
+    /// out of all proportion: an observer freezing onto the right branch of r- has u^t in the
     /// hundreds of thousands, and aberration then folds almost the whole of their sky into one
     /// direction, so a fixed step of 1e-6 in the angle moves the ray's actual direction by 1e-12
     /// on the folded side and the difference of two residuals over it is integration noise. The
@@ -1709,7 +1709,7 @@ impl<'a> OtherWorldline<'a> {
     /// both ends, so the rescaling does nothing there and only removes the interpolation's own
     /// second-order drift in between.
     ///
-    /// A worldline frozen on the far branch of r- is carried, not interpolated. `advance` holds
+    /// A worldline frozen on the right branch of r- is carried, not interpolated. `advance` holds
     /// its r and its watch and slides its azimuth along the horizon's own generators at Omega_-,
     /// and that is what is reproduced here; interpolating a u^t of 1e10 would be interpolating
     /// arithmetic rather than a worldline.
@@ -2448,7 +2448,7 @@ mod tests {
         // ready for.
         let metric = KerrSchild::new(1.0, 0.90);
 
-        // A focus observer settled on the far branch of r-. Their u^t has run out to 1e10, so
+        // A focus observer settled on the right branch of r-. Their u^t has run out to 1e10, so
         // every direction in their frame is aberrated into one point and there is no drawable
         // picture of anything; the app already treats that worldline as over.
         let mut frozen = Observer::new_with_phi(
@@ -2510,7 +2510,7 @@ mod tests {
         // every frame of her descent is solved and checked: the ray carries a finite positive
         // shift, the arrival direction is a unit vector, and the emission event is in her past.
         //
-        // Light from above crosses r+ and then the near branch of r- quite happily in this chart -
+        // Light from above crosses r+ and then the left branch of r- quite happily in this chart -
         // that is what a horizon-penetrating chart is for - so there is nothing special about the
         // interior except that nobody can hold station in it.
         let metric = KerrSchild::new(1.0, 0.90);
@@ -2936,7 +2936,7 @@ mod tests {
 
     #[test]
     fn test_a_frozen_picture_is_not_refused_for_jittering_backwards_by_rounding() {
-        // Bob on the one worldline that freezes onto the far branch of r- (E = 1, L = 2.2 at
+        // Bob on the one worldline that freezes onto the right branch of r- (E = 1, L = 2.2 at
         // a = 0.90), watching Alice's raindrop fall in ahead of him. Once his u^t passes 1e5 his
         // clock all but stops and the picture with it: Alice's emission event stood at
         // t = 4.87435 M for frame after frame while the solve's rounding moved it 1e-6 to 6e-6 M

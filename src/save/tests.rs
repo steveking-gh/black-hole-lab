@@ -39,11 +39,11 @@ fn default_app() -> SpacetimeApp {
     app
 }
 
-/// Bob released at r = 9 M with E = 1, L = 2.2 at a = 0.9: the worldline that freezes onto the far
-/// branch of r₋ at about t = 85 M, with Alice in the run as a silent receiver. The
+/// Bob released at r = 9 M with E = 1, L = 2.2 at a = 0.9: the worldline that freezes onto the
+/// right branch of r₋ at about t = 85 M, with Alice in the run as a silent receiver. The
 /// `far-branch-freeze` scenario of `crate::perf::replay`, stated here the way a card states one, so
 /// that this test goes on testing the same physics whatever that module does to its scenario list.
-fn far_branch_freeze_app() -> SpacetimeApp {
+fn right_branch_freeze_app() -> SpacetimeApp {
     let mut app = default_app();
     app.controls.alice.enabled = true;
     app.controls.alice.transmit = false;
@@ -116,10 +116,10 @@ fn test_a_loaded_run_plays_on_bit_identically() {
         // (a) The app exactly as it opens, played to 12 M: Bob is through r₊ with both
         // transmissions in flight and arrivals on the record.
         ("the default layout at 12 M", default_app(), 12.0),
-        // (b) The far-branch freeze at 90 M, past the stall at about 85: the frozen family is
+        // (b) The right-branch freeze at 90 M, past the stall at about 85: the frozen family is
         // standing on r₋, u^t is of order 1e10, and the worldline has stopped advancing while the
         // clock runs on. The nastiest state the app can reach.
-        ("the far-branch freeze at 90 M", far_branch_freeze_app(), 90.0),
+        ("the right-branch freeze at 90 M", right_branch_freeze_app(), 90.0),
     ] {
         play_sim(&mut app, until);
         assert!(
@@ -285,7 +285,7 @@ fn test_every_f64_this_state_can_hold_comes_back_as_itself() {
         -0.0,
         1.0,
         -1.0,
-        // u^t at the far-branch stall, and the scale a `Reception::ratio` reaches beside it.
+        // u^t at the right-branch stall, and the scale a `Reception::ratio` reaches beside it.
         1e10,
         9.999_999_999_999_998e9,
         // One ulp above a tenth: seventeen significant digits when written out, which is exactly

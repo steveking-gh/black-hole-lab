@@ -154,7 +154,7 @@ pub(crate) const SECONDS_PER_YEAR: f64 = 86400.0 * 365.25;
 /// of coordinate time is 49 microseconds, and outside the hole u^t is of order 1, so the grid an
 /// exterior observer wants is measured in tens of microseconds.
 ///
-/// It runs on down to femtoseconds for the approach to r-. An observer asymptoting to the far
+/// It runs on down to femtoseconds for the approach to r-. An observer asymptoting to the right
 /// branch of the Cauchy horizon is a finite and *shrinking* proper time from it - the r- curve
 /// crosses their own time axis at the affine length of the worldline from here to the crossing,
 /// which `normal_coords::affine_length_to_surface` integrates exactly and the rest-frame view

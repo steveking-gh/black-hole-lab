@@ -609,7 +609,7 @@ impl SpatialCanvas {
         // does, and a whole light cone integrated as exact null geodesics says everything the
         // twenty-four stubs said and keeps saying it as the light travels.
 
-        // A worldline frozen on the far branch of r- has not stopped: it is riding the horizon's
+        // A worldline frozen on the right branch of r- has not stopped: it is riding the horizon's
         // own null generator, so its marker goes on creeping round the r- circle at Omega_- while
         // the radius and the observer's own clock stand still. Drawn, that is a dot moving
         // steadily along a circle, which is exactly what an ordinary orbit looks like from here.
@@ -3013,7 +3013,7 @@ mod tests {
 
     #[test]
     fn test_a_frozen_observer_is_labelled_frozen_on_the_equatorial_view() {
-        // On this view a worldline frozen on the far branch of r- is a dot creeping round a
+        // On this view a worldline frozen on the right branch of r- is a dot creeping round a
         // circle at a steady rate, which is exactly what an ordinary orbit looks like. It is not
         // one - the radius and the observer's own clock have stopped, and the motion left is the
         // horizon's null generator carrying him - so the marker has to say so, and only when it

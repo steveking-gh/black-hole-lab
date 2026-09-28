@@ -382,7 +382,7 @@ impl Simulation {
     /// It is deliberately a list of things that *hold*, not a list of things that look sensible.
     /// Each of these was measured over the whole test suite and the four `crate::perf` scenarios,
     /// which between them cover an infall onto the ring, a pair transmitting at both pulse caps,
-    /// the freeze onto the far branch of r₋, hand steps forwards and backwards, and the cards being
+    /// the freeze onto the right branch of r₋, hand steps forwards and backwards, and the cards being
     /// ticked on and off mid-run. Three candidates that did not survive that are named at the
     /// bottom.
     ///

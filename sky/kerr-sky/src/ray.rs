@@ -110,7 +110,7 @@
 //! with the horizon's generators, exactly as a region-I ray closes on the past horizon from
 //! outside: it is heading for the *other* branch of r+ - the future horizon's left half in the
 //! Kruskal diagram, beyond which lie the other exterior of the eternal hole and its white hole.
-//! (It is the r+ twin of `kerr_equatorial`'s E - Omega_- L criterion for the far branch of r-.) In a
+//! (It is the r+ twin of `kerr_equatorial`'s E - Omega_- L criterion for the right branch of r-.) In a
 //! hole formed by collapse there is no other exterior: that light left the collapsing star. Either
 //! way it is not light from this universe's far sky, and this crate gives it fate 2, the dark
 //! part of the sky, with its own `Decision` so that a later format can give it a code of its own.

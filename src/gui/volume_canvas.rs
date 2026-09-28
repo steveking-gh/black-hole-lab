@@ -905,7 +905,7 @@ pub(crate) struct PastCone {
 /// `ray_rhs` is autonomous in t, so `NullRay::step_back` integrates the same curve backwards
 /// rather than solving a different problem, and what comes back is the exact locus of everything
 /// whose signals reach this event - not a cone drawn at some opening angle. That is the picture
-/// the app's central claim needs: as the focus observer closes on the far branch of r-, this
+/// the app's central claim needs: as the focus observer closes on the right branch of r-, this
 /// surface's footprint at another observer's radius climbs without bound, so every ingoing photon
 /// from any later time still gets to them.
 ///
@@ -968,7 +968,7 @@ pub(crate) fn build_past_cone(
 /// light cone: on the floor a cone is a circle whose centre has drifted off the emitter, and in the
 /// volume it is a cone, so "which way can this observer go" is a shape rather than an inference.
 /// Surfaces of constant r become vertical pipes, which is what makes r+ and r- read as *places* - a
-/// wall a worldline goes through and cannot come back out of - and a worldline frozen on the far
+/// wall a worldline goes through and cannot come back out of - and a worldline frozen on the right
 /// branch of r- reads as what it is: a helix wound onto the r- pipe, one turn per 2 pi / Omega_- of
 /// t, riding a generator of the surface it can never cross.
 pub struct VolumeCanvas {
@@ -1557,7 +1557,7 @@ impl VolumeCanvas {
         // about where it has been. This says where it has been. Every generator is integrated
         // backwards to the bottom of the window, so the surface is the true locus of the events
         // whose light reaches the focus observer now - the boundary of everything they can
-        // currently see. Near the far branch of r- it is the whole argument in one picture: the
+        // currently see. Near the right branch of r- it is the whole argument in one picture: the
         // surface stops climbing away from r- and instead sweeps up the pipe, so it crosses another
         // observer's worldline at later and later t without bound.
         //
@@ -1912,7 +1912,7 @@ impl VolumeCanvas {
             }
             painter.circle_filled(at, who.marker_radius(), colour_of(who));
             markers.push((who, at));
-            // A worldline frozen on the far branch of r- has not stopped: it is riding the
+            // A worldline frozen on the right branch of r- has not stopped: it is riding the
             // horizon's own null generator, so in the volume it is a helix wound onto the r- pipe
             // while the marker creeps round the ring at Omega_-. The observer's own info box says
             // so, in bold, while it is true; see `spacetime_canvas::telemetry_lines`.
@@ -2915,7 +2915,7 @@ mod tests {
 
     #[test]
     fn test_the_frozen_observers_past_cone_climbs_out_of_region_ii() {
-        // The frozen worldline's event sits a hair above the far branch of r-, and the surface of
+        // The frozen worldline's event sits a hair above the right branch of r-, and the surface of
         // everything it can see is not a small cone around it: run backwards the generators leave
         // r- exponentially fast and cross r+ inside the window. That is the other half of the
         // freeze - he is cut off from his own future, not from his past - and it is the reason the

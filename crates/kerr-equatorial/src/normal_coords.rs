@@ -207,7 +207,7 @@ pub enum HorizonBranch {
     /// The branch a curve only ever settles onto, as the chart's time runs away: the geodesic
     /// arrives at a finite affine length while dt/dsigma diverges, so there is no crossing event
     /// in this chart at all. It is the past horizon of r+, which an outside observer's past light
-    /// cone runs down onto as t -> -infinity, and the far branch of r-, which a worldline with
+    /// cone runs down onto as t -> -infinity, and the right branch of r-, which a worldline with
     /// E - Omega_- L < 0 freezes on as t -> +infinity.
     Asymptotic,
 }
@@ -316,7 +316,7 @@ impl SurfaceSampling {
 /// * A horizon strictly between r0 and r_h that this chart does not let the geodesic cross. See
 ///   [`RadialConstants::crosses_in_chart`]. The *target* surface is exempt, deliberately: r+
 ///   reached from outside on a past-directed direction is the past horizon, which is precisely
-///   what an outside observer's past light cone runs down onto, and r- reached on the far branch
+///   what an outside observer's past light cone runs down onto, and r- reached on the right branch
 ///   is a real limit of the same kind.
 /// * A non-finite input, or a radius at or below the ring.
 pub fn affine_length_to_surface(
@@ -1239,7 +1239,7 @@ mod tests {
 
         // The criterion is the one the app already freezes worldlines on, met here from the other
         // side. A prograde infaller between the horizons with E - Omega_- L < 0 settles onto the
-        // far branch of r- rather than crossing it: it *reaches* the surface, at a finite affine
+        // right branch of r- rather than crossing it: it *reaches* the surface, at a finite affine
         // length and a finite reading of its own watch, while taking infinite coordinate time to
         // do it - which is why r- is drawn for it and the ring beyond r- is not, the crossing
         // having no event in this chart at all.
@@ -1263,7 +1263,7 @@ mod tests {
         );
         assert!(
             to_rm.is_some_and(|s| (s - tau_left).abs() < 1e-6 * tau_left),
-            "the far branch of r- is reached, at the proper time the closed form gives"
+            "the right branch of r- is reached, at the proper time the closed form gives"
         );
         assert!(
             affine_length_to_surface(&metric, r_mid, &onward, 0.05).is_none(),
@@ -1599,7 +1599,7 @@ mod tests {
         // is an observer in Region III, below r-, climbing back towards it: E = 1, L = 1.0 at
         // a = 0.90 has a turning point below r-, so on the outgoing branch of that worldline r-
         // lies ahead. Such an observer sees the branch already fallen through, in the past and
-        // drawn at a shallow tilt, and the far branch being approached, drawn along the null line
+        // drawn at a shallow tilt, and the right branch being approached, drawn along the null line
         // beside the observer. The union of the two is one curve with a corner in it, and the
         // corner is the bifurcation direction rather than a failure of the sampling.
         //
