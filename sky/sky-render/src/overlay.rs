@@ -36,6 +36,7 @@ use crate::cli::Options;
 use crate::layout::{Layout, width_of};
 use crate::panel::{Panel, Placement, Tap};
 use crate::render::Size;
+use crate::shadow::Outline;
 use crate::text::{Coverage, Fonts};
 use crate::values::{Line, Series, format};
 
@@ -72,6 +73,35 @@ pub struct Overlay {
     raster: Coverage,
     /// For each panel, the output pixels it covers.
     panels: Vec<Vec<Tap>>,
+    /// Which of the run's read-outs the panel shows, as positions in the manifest's list: all of
+    /// them, except on a still's panel (see [`shown_lines`]).
+    shown: Vec<usize>,
+}
+
+/// The read-outs a panel shows, as positions in the manifest's list. A film's panel shows them
+/// all. A still's leaves the stopwatch out altogether, label and all, for the reason
+/// `crate::subtitles::still_cue` gives: it counts the time since a film's first frame, and a still
+/// is one moment. The line is left out rather than left blank, so the panel is no larger than
+/// what it says.
+pub fn shown_lines(series: &Series, still: bool) -> Vec<usize> {
+    (0..series.lines.len())
+        .filter(|&l| !(still && series.lines[l].stopwatch))
+        .collect()
+}
+
+/// What the command line says about the panels: where `--readout-at` puts them (for
+/// `--readout-at dark`, `Placement::DEFAULT`, where the panel goes when the dark region cannot
+/// hold it), their size and the decimal mark.
+pub fn settings_of(o: &Options) -> Settings {
+    Settings {
+        placements: o.readout_at.clone(),
+        line_degrees: o.readout_size,
+        style: if o.decimal_comma {
+            Style::COMMA
+        } else {
+            Style::POINT
+        },
+    }
 }
 
 impl Overlay {
@@ -85,40 +115,50 @@ impl Overlay {
         if !o.readouts {
             return Ok(None);
         }
-        let settings = Settings {
-            placements: o.readout_at.clone(),
-            line_degrees: o.readout_size,
-            style: if o.decimal_comma {
-                Style::COMMA
-            } else {
-                Style::POINT
-            },
-        };
+        let shown = shown_lines(series, o.still.is_some());
+        // A still's panel with nothing left to show is no panel at all.
+        if o.still.is_some() && shown.is_empty() {
+            return Ok(None);
+        }
         let size = Size {
             width: o.width,
             height: o.height,
         };
-        Self::new(&settings, series, stopwatch_span, size).map(Some)
+        Self::showing(&settings_of(o), series, &shown, stopwatch_span, size).map(Some)
     }
 
-    /// The panels for a frame of `size`. `stopwatch_span` is the stopwatch time of the first and
-    /// last video frames to be drawn, for the width of the value column.
+    /// The panels for a frame of `size`, showing every read-out. `stopwatch_span` is the
+    /// stopwatch time of the first and last video frames to be drawn, for the width of the value
+    /// column.
+    #[cfg(test)]
     pub fn new(
         settings: &Settings,
         series: &Series,
         stopwatch_span: [f64; 2],
         size: Size,
     ) -> Result<Self, String> {
+        let all: Vec<usize> = (0..series.lines.len()).collect();
+        Self::showing(settings, series, &all, stopwatch_span, size)
+    }
+
+    /// [`Overlay::new`], showing only the read-outs at positions `shown` of the manifest's list.
+    pub fn showing(
+        settings: &Settings,
+        series: &Series,
+        shown: &[usize],
+        stopwatch_span: [f64; 2],
+        size: Size,
+    ) -> Result<Self, String> {
         let pixel = 2.0 * std::f64::consts::PI / size.width as f64;
         let pitch = (settings.line_degrees.to_radians() / pixel) as f32;
         let fonts = Fonts::new(pitch / LINE_SPACING);
-        let lines = series.lines.clone();
+        let lines: Vec<Line> = shown.iter().map(|&l| series.lines[l].clone()).collect();
         let style = settings.style;
 
         // The widest value any line will show. Values between two bundle frames lie between
         // theirs, and so print no wider than the wider of the two.
         let mut widest: f32 = 0.0;
-        for (l, line) in lines.iter().enumerate() {
+        for (line, &l) in lines.iter().zip(shown) {
             let values: Vec<f64> = if line.stopwatch {
                 stopwatch_span.to_vec()
             } else {
@@ -163,16 +203,18 @@ impl Overlay {
             fixed,
             raster,
             panels,
+            shown: shown.to_vec(),
         })
     }
 
     /// Draws this frame's panel: the labels and units, and each line's value, or nothing on a
-    /// line whose value is None.
+    /// line whose value is None. `values` holds one value per read-out of the manifest, shown or
+    /// not.
     pub fn draw(&mut self, values: &[Option<f64>]) -> &Coverage {
         self.raster.data.copy_from_slice(&self.fixed.data);
-        for (l, value) in values.iter().enumerate() {
-            let Some(x) = value else { continue };
-            let text = format(self.style, *x, self.lines[l].decimals);
+        for (l, &from) in self.shown.iter().enumerate() {
+            let Some(x) = values[from] else { continue };
+            let text = format(self.style, x, self.lines[l].decimals);
             let glyphs = self.layout.value(&self.fonts, l, &text);
             self.raster.draw(&self.fonts, &glyphs);
         }
@@ -191,6 +233,20 @@ impl Overlay {
     #[cfg(test)]
     pub fn layout(&self) -> &Layout {
         &self.layout
+    }
+
+    /// How many lines the panel shows.
+    pub fn line_count(&self) -> usize {
+        self.lines.len()
+    }
+
+    /// The panel's size and corners, for `crate::shadow` to fit it.
+    pub fn outline(&self) -> Outline {
+        Outline {
+            width: self.layout.width,
+            height: self.layout.height,
+            radius: self.layout.radius,
+        }
     }
 
     #[cfg(test)]

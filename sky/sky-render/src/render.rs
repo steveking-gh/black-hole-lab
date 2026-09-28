@@ -105,6 +105,35 @@ pub struct Size {
     pub height: usize,
 }
 
+/// The centre of output pixel (i, j) of a frame of `size`, in the frame coordinates of `field`'s
+/// own grid: the two grids cover the same sphere, so the scale is the ratio of their sizes.
+fn field_coordinates(field: &RayField, size: Size, i: usize, j: usize) -> (f64, f64) {
+    (
+        (i as f64 + 0.5) * field.width as f64 / size.width as f64,
+        (j as f64 + 0.5) * field.height as f64 / size.height as f64,
+    )
+}
+
+impl Fields<'_> {
+    /// Whether the renderer draws output pixel (i, j) of a frame of `size` as the dark region,
+    /// black. From one bundle frame: when its field's sample there is [`Ray::Shadow`]. Between
+    /// two: when the NEARER frame's sample is, and only then, under either blend. [`blend`] and
+    /// [`blend_judged`] give the nearer frame's ray whenever the two are not both sky, and two
+    /// sky rays blend to sky or to a marked pixel, never to shadow; `see_rows` then passes a
+    /// shadow through unchanged, and `render_as` draws it black. So this is the renderer's own
+    /// rule, whether the fields are judged or not (judging never changes a shadow).
+    pub fn is_dark(&self, size: Size, i: usize, j: usize) -> bool {
+        let dark = |field: &RayField| {
+            let (u, v) = field_coordinates(field, size, i, j);
+            field.is_dark(u, v)
+        };
+        match *self {
+            Fields::One(a) => dark(a),
+            Fields::Two(a, b, w) => dark(if w <= 0.5 { a } else { b }),
+        }
+    }
+}
+
 /// A pixel's ray, once it is known where on the map it lands.
 #[derive(Debug, Clone, Copy)]
 enum Placed {
@@ -130,10 +159,7 @@ impl Scene<'_> {
     /// Where output pixel (i, j) lands on the map.
     fn place(&self, size: Size, i: usize, j: usize) -> Placed {
         let at = |field: &RayField| {
-            // The output pixel's centre, in the bundle grid's own frame coordinates: the two grids
-            // cover the same sphere, so the scale is the ratio of their sizes.
-            let u = (i as f64 + 0.5) * field.width as f64 / size.width as f64;
-            let v = (j as f64 + 0.5) * field.height as f64 / size.height as f64;
+            let (u, v) = field_coordinates(field, size, i, j);
             field.sample(u, v)
         };
         let ray = match self.fields {

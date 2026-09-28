@@ -79,6 +79,10 @@ read-outs (the bundle's numbers, the observer's stopwatch first):
                              elevation up from the horizon, at most 70 either way. Repeat for more
                              panels, all showing the same numbers (default: one at 0,-30, below
                              the opening view)
+  --readout-at dark          for a still: one panel inside the black hole's dark region, where
+                             it hides no sky, with 1 degree of the region clear all round it;
+                             made smaller, to 1 degree a line, if it does not fit, and put at
+                             0,-30 if it does not fit even then (the run says where it went)
   --readout-size <degrees>   the height of one line of text, as an angle (default 2)
   --decimal-comma            write the decimal mark as a comma, as the app's own setting does
 
@@ -249,8 +253,12 @@ pub struct Options {
     /// The container `out` names; None when there is no `out`.
     pub container: Option<Container>,
     pub still: Option<Still>,
-    /// Where the read-out panels go; never empty.
+    /// Where the read-out panels go; never empty. With `--readout-at dark`, the one default
+    /// place, where the panel goes if the dark region cannot hold it.
     pub readout_at: Vec<Placement>,
+    /// `--readout-at dark`: one panel, placed inside the dark region of the still's picture
+    /// (`crate::shadow`).
+    pub readout_in_dark: bool,
     /// The height of a line of read-out text, in degrees.
     pub readout_size: f64,
     pub decimal_comma: bool,
@@ -296,6 +304,7 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
     let mut photo = None;
     // The first --readout-at replaces the default panel, and each after it adds one.
     let mut readout_at: Vec<Placement> = Vec::new();
+    let mut readout_in_dark = false;
     let mut readout_size = 2.0;
     let mut decimal_comma = false;
     let mut colour = ColourRule::Blackbody;
@@ -477,7 +486,10 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
                 }
                 photo = Some(path);
             }
-            "--readout-at" => readout_at.push(Placement::parse(value()?)?),
+            "--readout-at" => match value()? {
+                "dark" => readout_in_dark = true,
+                text => readout_at.push(Placement::parse(text)?),
+            },
             "--readout-size" => {
                 let text = value()?;
                 readout_size = text
@@ -541,6 +553,22 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
             None
         }
     };
+    if readout_in_dark {
+        if !readout_at.is_empty() {
+            return Err(
+                "--readout-at dark places the one panel by itself, inside the dark region, and \
+                 cannot be combined with a --readout-at <heading>,<elevation>"
+                    .into(),
+            );
+        }
+        if still.is_none() {
+            return Err(
+                "--readout-at dark belongs to a still (--still <frame>): during a film the dark \
+                 region moves and grows, and a panel keeps one place for the whole run"
+                    .into(),
+            );
+        }
+    }
     if let (Some(Codec::Nvenc), Some(p)) = (codec, preset)
         && !(1..=7).contains(&p)
     {
@@ -576,6 +604,7 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
         } else {
             readout_at
         },
+        readout_in_dark,
         readout_size,
         decimal_comma,
         colour,

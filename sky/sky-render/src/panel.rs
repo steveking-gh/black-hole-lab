@@ -91,7 +91,7 @@ impl Placement {
         let malformed = || {
             format!(
                 "--readout-at is <heading>,<elevation> in degrees with a point for any decimals, \
-                 such as 90,-30 or 12.5,-20, not {text:?}"
+                 such as 90,-30 or 12.5,-20, or for a still the word dark, not {text:?}"
             )
         };
         let mut parts = text.split(',');
@@ -185,6 +185,19 @@ impl Panel {
         }
     }
 
+    /// The panel's outline pushed out by `by` panel pixels all round, at the same centre: the
+    /// points of the tangent plane within `by` of the panel. A rounded rectangle is a rectangle
+    /// swept by a disc of its corner radius, so sweeping it by a disc of radius `by` as well gives
+    /// the rectangle `by` larger on each side with corners of radius `radius + by`, exactly.
+    pub fn grown(&self, by: f64) -> Self {
+        Self {
+            width: self.width + 2.0 * by,
+            height: self.height + 2.0 * by,
+            radius: self.radius + by,
+            ..*self
+        }
+    }
+
     #[cfg(test)]
     pub fn width(&self) -> f64 {
         self.width
@@ -239,6 +252,17 @@ impl Panel {
     /// that radius about its centre.
     pub fn angular_radius(&self) -> f64 {
         ((0.5 * self.width).hypot(0.5 * self.height) * self.pixel).atan()
+    }
+
+    /// The angle from the centre to the nearest point of the panel's outline, the middle of its
+    /// longer edges: the panel holds the cap of this radius about its centre, and no larger one.
+    pub fn inner_radius(&self) -> f64 {
+        (0.5 * self.width.min(self.height) * self.pixel).atan()
+    }
+
+    /// A panel pixel's length on the tangent plane.
+    pub fn pixel(&self) -> f64 {
+        self.pixel
     }
 
     /// Whether the panel reaches a pole. The panel's point furthest from the equator is the

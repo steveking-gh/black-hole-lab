@@ -32,6 +32,8 @@
 //! - `values`: each read-out's value at a video frame, and how it is written;
 //! - `subtitles`: the read-outs as an ASS subtitle script, one cue per video frame;
 //! - `panel`: where a read-out panel sits on the sphere, and which pixels show it;
+//! - `shadow`: which pixels of a still are the dark region, and where a panel fits inside it
+//!   (`--readout-at dark`);
 //! - `layout`: where each character of a panel goes, with digits that do not jitter;
 //! - `photo`: the Photo Sphere metadata of a 360-degree JPEG.
 //!
@@ -53,6 +55,7 @@ mod panel;
 mod parallel;
 mod photo;
 mod render;
+mod shadow;
 mod sky;
 mod subtitles;
 mod tally;
@@ -71,6 +74,8 @@ mod tests_marking;
 mod tests_output;
 #[cfg(test)]
 mod tests_readouts;
+#[cfg(test)]
+mod tests_shadow;
 
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -80,9 +85,10 @@ use cli::{Options, Request, USAGE};
 use encode::{Encoding, Ffmpeg};
 use field::{Judge, RayField};
 use output::{Cleanup, Plan};
-use overlay::Overlay;
+use overlay::{Overlay, Settings};
 use readout::Style;
 use render::{Fields, Look, Picture, Scene, Size};
+use shadow::{DarkMap, Placing};
 use sky::{MapFrame, SkyMap};
 use tally::FilmTally;
 use timeline::{Pick, Timeline};
@@ -228,14 +234,11 @@ fn run(o: &Options) -> Result<(), String> {
             .map(|&i| &entry(i).readouts)
             .collect::<Vec<_>>(),
     );
-    let mut overlay = Overlay::for_run(
-        o,
-        &series,
-        [
-            timeline.stopwatch(range.start),
-            timeline.stopwatch(range.end - 1),
-        ],
-    )?;
+    let stopwatch_span = [
+        timeline.stopwatch(range.start),
+        timeline.stopwatch(range.end - 1),
+    ];
+    let mut overlay = Overlay::for_run(o, &series, stopwatch_span)?;
     // Each line's value at video frame k: what the panel paints and the subtitles show alike.
     let values_at = |k: u64| series.at(timeline.pick(k), timeline.stopwatch(k));
     let script = match (&plan, o.subtitles) {
@@ -270,11 +273,17 @@ fn run(o: &Options) -> Result<(), String> {
     };
 
     match (&overlay, &script) {
-        (Some(_), _) => println!(
+        // Said once the panel has its place, which needs the frame's rays.
+        (Some(_), _) if o.readout_in_dark => {}
+        (Some(overlay), _) => println!(
             "read-outs: {} line(s) on {} panel(s) painted on the sky, each line {} degrees high",
-            series.lines.len(),
+            overlay.line_count(),
             o.readout_at.len(),
             o.readout_size
+        ),
+        (None, _) if o.readouts => println!(
+            "read-outs: none painted: a still's panel leaves out the stopwatch, and the bundle \
+             declares no other read-out"
         ),
         (None, Some(_)) => println!(
             "read-outs: {} line(s) as a subtitle track at the bottom right of the screen, in {}, \
@@ -394,13 +403,14 @@ fn run(o: &Options) -> Result<(), String> {
         }
     );
     // A still's video runs at its own low rate, the one picture repeated (`cli::DEFAULT_HOLD_RATE`
-    // says why that rate).
-    let (video_rate, repeats) = match &o.still {
-        Some(still) => (still.rate, still.repeats()),
-        None => (playback.frames_per_second.0, 1),
+    // says why that rate). With `--encoder none` there is no video, and nothing is repeated.
+    let (video_rate, repeats) = match (&o.still, &plan) {
+        (Some(still), Some(_)) => (still.rate, still.repeats()),
+        (Some(still), None) => (still.rate, 1),
+        (None, _) => (playback.frames_per_second.0, 1),
     };
-    match &o.still {
-        Some(still) => println!(
+    match (&o.still, &plan) {
+        (Some(still), Some(_)) => println!(
             "still: video frame {} of {total}, held {} s ({repeats} frame(s) at {video_rate} a \
              second), {} x {}, exposure {stops:+.2} stops, {} threads",
             range.start,
@@ -409,7 +419,11 @@ fn run(o: &Options) -> Result<(), String> {
             size.height,
             o.threads
         ),
-        None => println!(
+        (Some(_), None) => println!(
+            "{}",
+            still_unheld_line(range.start, total, size, stops, o.threads)
+        ),
+        (None, _) => println!(
             "video: {} x {}, {} fps, frames {}..{} of {total}, exposure {stops:+.2} stops, {} \
              threads",
             size.width, size.height, video_rate, range.start, range.end, o.threads
@@ -425,6 +439,67 @@ fn run(o: &Options) -> Result<(), String> {
                 ""
             }
         );
+    }
+
+    let mut loaded: Vec<(usize, RayField)> = Vec::new();
+    let mut load_time = Duration::ZERO;
+    // `--readout-at dark`: the still's rays are read now (the loop below finds them read), the
+    // dark region of its picture found, and the panel placed in it (`shadow`). The overlay made
+    // above holds the panel's place for when the dark region cannot hold it.
+    if o.readout_in_dark
+        && let Some(lines) = overlay.as_ref().map(Overlay::line_count)
+    {
+        let k = range.start;
+        let clock = Instant::now();
+        load_wanted(
+            &mut loaded,
+            &wanted(&timeline, k),
+            &bundle,
+            &complete,
+            judge,
+            o.threads,
+        )?;
+        load_time += clock.elapsed();
+        let clock = Instant::now();
+        let fields = (!timeline.before_first(k)).then(|| fields_of(timeline.pick(k), &loaded));
+        let map = DarkMap::of(fields, size, o.threads);
+        let finding = clock.elapsed();
+        let shown = overlay::shown_lines(&series, true);
+        let settings = overlay::settings_of(o);
+        let placing = shadow::place(&map, o.readout_size, o.threads, |line_degrees| {
+            let measure = Settings {
+                placements: Vec::new(),
+                line_degrees,
+                ..settings.clone()
+            };
+            Overlay::showing(&measure, &series, &shown, stopwatch_span, size)
+                .expect("a panel with no place to be refused from")
+                .outline()
+        });
+        let took = clock.elapsed();
+        if let Placing::Inside { at, line_degrees } = placing {
+            let inside = Settings {
+                placements: vec![at],
+                line_degrees,
+                ..settings
+            };
+            overlay = Some(Overlay::showing(
+                &inside,
+                &series,
+                &shown,
+                stopwatch_span,
+                size,
+            )?);
+        }
+        println!("{}", shadow::sentence(&placing, lines));
+        if took >= Duration::from_millis(20) {
+            println!(
+                "the panel's place took {:.2} s to find, {:.2} s of it finding which pixels are \
+                 dark",
+                took.as_secs_f64(),
+                finding.as_secs_f64()
+            );
+        }
     }
 
     let ffmpeg = match (o.codec, &plan) {
@@ -457,14 +532,9 @@ fn run(o: &Options) -> Result<(), String> {
     };
     let writer = std::thread::spawn(move || write_frames(job, from_renderer, to_renderer));
 
-    let mut loaded: Vec<(usize, RayField)> = Vec::new();
     let mut allocated = 0;
-    let (mut render_time, mut wait_time, mut load_time, mut readout_time) = (
-        Duration::ZERO,
-        Duration::ZERO,
-        Duration::ZERO,
-        Duration::ZERO,
-    );
+    let (mut render_time, mut wait_time, mut readout_time) =
+        (Duration::ZERO, Duration::ZERO, Duration::ZERO);
     let mut last_report = Instant::now();
     let loop_started = Instant::now();
     let count = range.end - range.start;
@@ -477,20 +547,16 @@ fn run(o: &Options) -> Result<(), String> {
             let pick = timeline.pick(k);
             // Before the first complete bundle frame there are no rays for this moment at all.
             let before = timeline.before_first(k);
-            let wanted: Vec<usize> = match pick {
-                _ if before => Vec::new(),
-                Pick::One(a) => vec![a],
-                Pick::Two(a, b, _) => vec![a, b],
-            };
             let clock = Instant::now();
-            loaded.retain(|(p, _)| wanted.contains(p));
-            for &p in &wanted {
-                if !loaded.iter().any(|(q, _)| *q == p) {
-                    loaded.push((p, load::read_field(&bundle, complete[p], judge, o.threads)?));
-                }
-            }
+            load_wanted(
+                &mut loaded,
+                &wanted(&timeline, k),
+                &bundle,
+                &complete,
+                judge,
+                o.threads,
+            )?;
             load_time += clock.elapsed();
-            let field = |p: usize| &loaded.iter().find(|(q, _)| *q == p).expect("loaded").1;
 
             let clock = Instant::now();
             let mut pixels = match returned.try_recv() {
@@ -511,12 +577,8 @@ fn run(o: &Options) -> Result<(), String> {
             let tally = if before {
                 render::fill_unresolved(size, &look, &mut pixels)
             } else {
-                let fields = match pick {
-                    Pick::One(a) => Fields::One(field(a)),
-                    Pick::Two(a, b, w) => Fields::Two(field(a), field(b), w),
-                };
                 let scene = Scene {
-                    fields,
+                    fields: fields_of(pick, &loaded),
                     rotation,
                     sky: &sky,
                 };
@@ -628,6 +690,54 @@ fn run(o: &Options) -> Result<(), String> {
     }
     println!("\nA published video made from NASA's star maps must carry this credit:\n{CREDIT}");
     Ok(())
+}
+
+/// The bundle frames video frame `k` is drawn from, as positions in the list of complete frames:
+/// none before the first complete frame, when there are no rays for that moment at all.
+fn wanted(timeline: &Timeline, k: u64) -> Vec<usize> {
+    match timeline.pick(k) {
+        _ if timeline.before_first(k) => Vec::new(),
+        Pick::One(a) => vec![a],
+        Pick::Two(a, b, _) => vec![a, b],
+    }
+}
+
+/// Keeps in `loaded` exactly the bundle frames `wanted` names, reading (and judging, when there is
+/// a judge) those it does not already hold.
+fn load_wanted(
+    loaded: &mut Vec<(usize, RayField)>,
+    wanted: &[usize],
+    bundle: &sky_format::BundleReader,
+    complete: &[u32],
+    judge: Option<Judge>,
+    threads: usize,
+) -> Result<(), String> {
+    loaded.retain(|(p, _)| wanted.contains(p));
+    for &p in wanted {
+        if !loaded.iter().any(|(q, _)| *q == p) {
+            loaded.push((p, load::read_field(bundle, complete[p], judge, threads)?));
+        }
+    }
+    Ok(())
+}
+
+/// The fields a video frame made of `pick` is drawn from, out of those `loaded` holds.
+fn fields_of(pick: Pick, loaded: &[(usize, RayField)]) -> Fields<'_> {
+    let field = |p: usize| &loaded.iter().find(|(q, _)| *q == p).expect("loaded").1;
+    match pick {
+        Pick::One(a) => Fields::One(field(a)),
+        Pick::Two(a, b, w) => Fields::Two(field(a), field(b), w),
+    }
+}
+
+/// What a run says of a still when no video is made (`--encoder none`): its frame, its size and
+/// exposure, and that it is not held, since there is no video to hold it in.
+fn still_unheld_line(k: u64, total: u64, size: Size, stops: f64, threads: usize) -> String {
+    format!(
+        "still: video frame {k} of {total}, not held, since --encoder none makes no video, {} x \
+         {}, exposure {stops:+.2} stops, {threads} threads",
+        size.width, size.height
+    )
 }
 
 /// The writer thread: each frame to ffmpeg (as many times as `job.repeats` says), to a PNG

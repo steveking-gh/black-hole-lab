@@ -604,3 +604,86 @@ fn test_a_panel_too_large_to_stay_off_the_pole_is_refused() {
     // The same panel on the equator is drawn.
     assert!(Overlay::new(&settings(&[at(0.0, 0.0)], 12.0), &s, [0.0, 1.0], size).is_ok());
 }
+
+// ---- a still's panel -----------------------------------------------------------------------------
+
+#[test]
+fn test_a_stills_panel_leaves_the_stopwatch_line_out_label_and_all_and_a_films_keeps_it() {
+    let (size, _) = frame(2048);
+    let s = series(&[Some(6.0)]);
+    assert_eq!(crate::overlay::shown_lines(&s, true), vec![1]);
+    assert_eq!(crate::overlay::shown_lines(&s, false), vec![0, 1]);
+    let options = |extra: &[&str]| {
+        let mut args: Vec<String> = [
+            "--bundle",
+            "b",
+            "--sky",
+            "s.exr",
+            "--encoder",
+            "none",
+            "--size",
+            "2048x1024",
+            "--readouts",
+            "panel",
+        ]
+        .map(String::from)
+        .to_vec();
+        args.extend(extra.iter().map(|a| a.to_string()));
+        let crate::cli::Request::Render(o) = crate::cli::parse(&args).expect("parses") else {
+            panic!("not a render")
+        };
+        *o
+    };
+    let mut still = Overlay::for_run(&options(&["--still", "0"]), &s, [0.0, 0.0])
+        .expect("no refusal")
+        .expect("a panel");
+    let film = Overlay::for_run(&options(&[]), &s, [0.0, 1.0])
+        .expect("no refusal")
+        .expect("a panel");
+    assert_eq!(
+        still.line_count(),
+        1,
+        "the still's panel shows the stopwatch"
+    );
+    assert_eq!(film.line_count(), 2, "the film's panel lost a line");
+    // The still's panel is the panel of the radius alone: one line high, not a blank line and a
+    // radius, and what it draws is the radius alone, whatever the stopwatch's value.
+    let decls = [decl("r", "Radius", "M", 3)];
+    let frames = [values(&[("r", Some(6.0))])];
+    let radius_only = Series::new(&decls, &frames.iter().collect::<Vec<_>>());
+    let mut alone = Overlay::new(
+        &settings(&[Placement::DEFAULT], 2.0),
+        &radius_only,
+        [0.0, 0.0],
+        size,
+    )
+    .expect("a panel");
+    assert_eq!(still.layout(), alone.layout());
+    assert!(still.layout().height < film.layout().height);
+    let drawn = still.draw(&[Some(4.57), Some(6.0)]).clone();
+    assert_eq!(
+        drawn,
+        *alone.draw(&[Some(6.0)]),
+        "the still's panel drew more"
+    );
+    assert!(
+        drawn.data.iter().any(|&c| c > 0.5),
+        "the radius was not drawn"
+    );
+    // A still whose only read-out is the stopwatch has no panel at all.
+    let only = Series::new(
+        &[decl("stopwatch", "Stopwatch", "s", 2)],
+        &[&values(&[("stopwatch", Some(0.0))])],
+    );
+    assert!(
+        Overlay::for_run(&options(&["--still", "0"]), &only, [0.0, 0.0])
+            .expect("no refusal")
+            .is_none()
+    );
+    // A film's panel of the stopwatch alone is drawn as before.
+    assert!(
+        Overlay::for_run(&options(&[]), &only, [0.0, 1.0])
+            .expect("no refusal")
+            .is_some()
+    );
+}

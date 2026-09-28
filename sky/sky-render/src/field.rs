@@ -309,10 +309,24 @@ impl RayField {
             || faulty(1, 3, SUSPECT_V))
     }
 
-    /// What the rays say at frame coordinates (u, v) of this field's own grid.
-    pub fn sample(&self, u: f64, v: f64) -> Ray {
+    /// The taps at frame coordinates (u, v), and the ray nearest (u, v), whose fate is the fate of
+    /// whatever is drawn there.
+    fn nearest(&self, u: f64, v: f64) -> (Taps, usize) {
         let t = taps(self.width, self.height, u, v);
         let nearest = t.index[t.nearest()];
+        (t, nearest)
+    }
+
+    /// Whether [`RayField::sample`] at (u, v) answers [`Ray::Shadow`]: the first thing it decides,
+    /// from the nearest ray's fate alone, before judging or interpolating anything. Found by the
+    /// same code, so the two cannot disagree; `crate::shadow` asks it of every output pixel.
+    pub fn is_dark(&self, u: f64, v: f64) -> bool {
+        self.fate[self.nearest(u, v).1] == fate::DARK
+    }
+
+    /// What the rays say at frame coordinates (u, v) of this field's own grid.
+    pub fn sample(&self, u: f64, v: f64) -> Ray {
+        let (t, nearest) = self.nearest(u, v);
         match self.fate[nearest] {
             fate::FAR_SKY => {}
             fate::DARK => return Ray::Shadow,

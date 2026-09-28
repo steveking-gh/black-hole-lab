@@ -965,3 +965,53 @@ fn test_a_still_makes_a_held_video_and_a_360_degree_photograph() {
         ["bundle", "map.exr", "view.jpg", "view.mkv"]
     );
 }
+
+#[test]
+fn test_a_photograph_alone_is_written_with_its_metadata_and_nothing_else_and_is_not_overwritten_unasked()
+ {
+    if !have_ffmpeg("the photograph-only test") {
+        return;
+    }
+    let scratch = Scratch::new("photo-only");
+    let (bundle, map) = write_inputs(scratch.path());
+    let jpg = scratch.path().join("look.jpg");
+    let run = |extra: &[&str]| {
+        let mut a: Vec<String> = vec![
+            "--bundle".into(),
+            bundle.to_string_lossy().into_owned(),
+            "--sky".into(),
+            map.to_string_lossy().into_owned(),
+            "--encoder".into(),
+            "none".into(),
+            "--size".into(),
+            "128x64".into(),
+            "--threads".into(),
+            "2".into(),
+            "--still".into(),
+            "3".into(),
+            "--photo".into(),
+            jpg.to_string_lossy().into_owned(),
+        ];
+        a.extend(extra.iter().map(|s| s.to_string()));
+        let Request::Render(o) = crate::cli::parse(&a)? else {
+            panic!("not a render")
+        };
+        crate::run(&o)
+    };
+    // The caller's command: no --out, the panel placed in the dark region (this flat bundle has
+    // none, so it goes below the opening view).
+    run(&["--readouts", "panel", "--readout-at", "dark"]).expect("the photograph is made");
+    assert_eq!(scratch.listing(), ["bundle", "look.jpg", "map.exr"]);
+    let first = std::fs::read(&jpg).expect("a photograph");
+    assert_photo_sphere(&first, 128, 64);
+    // Not replaced without --overwrite.
+    let again = run(&[]).unwrap_err();
+    assert!(again.contains("look.jpg already exists"), "{again}");
+    assert_eq!(std::fs::read(&jpg).expect("a photograph"), first);
+    // Replaced with it, here without a panel: a different picture, still marked, and still alone.
+    run(&["--overwrite"]).expect("the photograph is made again");
+    let second = std::fs::read(&jpg).expect("a photograph");
+    assert_ne!(second, first, "the photograph was not replaced");
+    assert_photo_sphere(&second, 128, 64);
+    assert_eq!(scratch.listing(), ["bundle", "look.jpg", "map.exr"]);
+}
