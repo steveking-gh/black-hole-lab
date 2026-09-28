@@ -3,7 +3,7 @@ use crate::gui::numbers::{self, Styled};
 use crate::gui::theme::Theme;
 use crate::physics::geodesic::GeodesicState;
 use crate::physics::kerr_schild::KerrSchild;
-use crate::physics::observer::{Observer, ObserverMode, Release, WorldlineParams};
+use crate::physics::observer::{Observer, ObserverMode, Release, Who, WorldlineParams};
 use crate::physics::simulation::{Simulation, Transmit};
 use crate::physics::wavefront::{MAX_PULSES, RAYS_PER_PULSE, SignalField, WIDEST_DROP_R};
 
@@ -571,6 +571,22 @@ pub struct AppControls {
     /// about this session and not a setting of the panel, so it is neither written to a file nor
     /// read back out of one.
     pub file_status: Option<FileStatus>,
+    /// Standing request from a Look Around button for a view from this observer, or None.
+    ///
+    /// Raised by the button on either observer's card and consumed once, in `SpacetimeApp::ui`,
+    /// through `take_look_request`, for `file_request`'s reason: the view starts from a save of
+    /// the whole app, and the app is the only thing that holds all of what a save writes.
+    pub look_request: Option<Who>,
+    /// What the view being made, or the last view made, has come to: printed on the card of the
+    /// observer the view is from. A status of its own rather than a turn of `file_status`, because
+    /// a view is not a file action of the user's and must not overwrite what the last Save or Load
+    /// said. A transient, like `file_status`, and for the same reason.
+    pub look_status: Option<LookStatus>,
+    /// Whose view sky-look is making at this moment, or None while it is making none. Written by
+    /// `SpacetimeApp::ui` once a frame, before the panel is drawn, and read by the panel to grey
+    /// both Look Around buttons out and say why: the child process lives on the app, which is not
+    /// `Clone`, and this panel is.
+    pub look_making: Option<Who>,
 }
 
 impl Default for AppControls {
@@ -612,6 +628,9 @@ impl Default for AppControls {
             view_reset_requested: false,
             file_request: None,
             file_status: None,
+            look_request: None,
+            look_status: None,
+            look_making: None,
         }
     }
 }
@@ -860,22 +879,67 @@ fn format_in_m(amount: f64) -> String {
 /// Everything else on the card - every control, in the same order, with the same wording - is the
 /// same code for both, which is the point: Alice and Bob are one idea run twice.
 struct ObserverCard {
+    who: Who,
     name: &'static str,
     colour: egui::Color32,
     transmit_tip: &'static str,
 }
 
 const ALICE_CARD: ObserverCard = ObserverCard {
+    who: Who::Alice,
     name: "Alice",
     colour: Theme::ALICE_COLOR,
     transmit_tip: ALICE_SIGNAL_TIP,
 };
 
 const BOB_CARD: ObserverCard = ObserverCard {
+    who: Who::Bob,
     name: "Bob",
     colour: Theme::BOB_COLOR,
     transmit_tip: BOB_SIGNAL_TIP,
 };
+
+/// What the Look Around button on an observer card says it does.
+///
+/// Written about "this observer", because both cards show it, and about sky-look by name, because
+/// the view is made by a program outside this one and a user who has to build or find that
+/// program has to know what it is called.
+const LOOK_AROUND_TIP: &str = "Make a 360-degree view of the whole sky as this observer sees the sky at this moment, and open the view in the video player the system opens .mkv files with. Black Hole Lab writes the run to a temporary save and hands that save to sky-look, a program of the sky tools that runs beside Black Hole Lab. sky-look traces the light that reaches this observer from every direction, along the paths the hole bends that light onto, and renders the sky as a video of that one moment, held still. In a player that understands 360-degree video, such as VLC, drag with the mouse to look in every direction. The player writes the observer's stopwatch, radius and distant clock at the bottom right of the player's window. Making the view takes from a few seconds to a minute. Black Hole Lab changes nothing about the run meanwhile: a paused run stays paused, a playing run plays on, and the view shows the moment of the press. The line under this card's title follows sky-look's progress and, at the end, names the video file. Black Hole Lab greys this button out while this observer is out of the simulation, while a marker drag holds this observer, and while sky-look is still making another view. sky-look refuses some moments by itself, for example an observer inside the inner horizon, and the line under the title then gives sky-look's reason.";
+
+/// Why a Look Around button is greyed out, or None when the app can see no reason to refuse.
+///
+/// Only the reasons the app can judge for itself: an observer who is not in the run, one the
+/// pointer is holding, and a view already being made - one child process at a time, because a
+/// second would race the first for the same player and the same status line. Whether a view
+/// *can* be made from where the observer stands - inside r₋, on the ring, frozen on the far
+/// branch - is the tracer's question, answered by the tracer, and the card shows its sentence
+/// rather than second-guessing it here with a copy of physics that lives in another program.
+pub(crate) fn look_around_blocked(
+    name: &str,
+    settings: &ObserverSettings,
+    obs: Option<&Observer>,
+    making: Option<Who>,
+) -> Option<String> {
+    if !settings.enabled || obs.is_none() {
+        Some(format!(
+            "{name} is not in the simulation, so there is nobody to look around from. Tick Enable \
+             Observer on this card to put {name} back in the run."
+        ))
+    } else if obs.is_some_and(|obs| obs.mode == ObserverMode::ManualDrag) {
+        Some(format!(
+            "A marker drag holds {name}, and sky-look follows only an observer who moves on a \
+             worldline of their own. Let go of the marker first."
+        ))
+    } else if let Some(other) = making {
+        let other = other.name();
+        Some(format!(
+            "sky-look is still making {other}'s view, and Black Hole Lab makes one view at a time. \
+             Wait until the line under {other}'s title reports that view as finished or refused."
+        ))
+    } else {
+        None
+    }
+}
 
 impl ObserverCard {
     /// Draw this observer's card and apply what it says.
@@ -887,6 +951,11 @@ impl ObserverCard {
     /// `describes`. That way a test, or a keybinding, that writes the field directly gets the same
     /// simulation as a user moving the slider, which an edge-triggered `Response::changed` would
     /// not: it would answer the click and ignore the write.
+    ///
+    /// Returns whether the card's Look Around button was pressed. The card only reports the press:
+    /// the view starts from a save of the whole app, which the card cannot write. `look_making` and
+    /// `look_status` are the two things the card is told about a view; see
+    /// `AppControls::look_making`.
     #[allow(clippy::too_many_arguments)]
     fn show(
         &self,
@@ -897,13 +966,51 @@ impl ObserverCard {
         field: &mut SignalField,
         current_time: f64,
         use_physical_units: bool,
-    ) {
+        look_making: Option<Who>,
+        look_status: Option<&LookStatus>,
+    ) -> bool {
         ui.group(|ui| {
-            ui.label(
-                egui::RichText::new(format!("OBSERVER {}", self.name.to_uppercase()))
-                    .strong()
-                    .color(self.colour),
-            );
+            // The title, with the one action that belongs to this observer at the other end of the
+            // same row: on the card it acts for, and above the Enable box so that it stays in the
+            // same place, greyed out, on a card whose observer has been taken out of the run.
+            let mut look_pressed = false;
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!("OBSERVER {}", self.name.to_uppercase()))
+                        .strong()
+                        .color(self.colour),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let blocked =
+                        look_around_blocked(self.name, settings, obs.as_ref(), look_making);
+                    let button = egui::Button::new("Look Around")
+                        .corner_radius(TRANSPORT_CORNER)
+                        .stroke(egui::Stroke::new(1.2, Theme::CHIP_OUTLINE));
+                    let response = ui
+                        .add_enabled(blocked.is_none(), button)
+                        .on_hover_text(numbers::text(LOOK_AROUND_TIP));
+                    // A greyed-out button shows only its disabled text, so the reason comes first
+                    // and what the button is for follows it. Two labels rather than one string,
+                    // because the reason is composed at run time and `numbers::text` is for prose
+                    // written once in the source.
+                    let response = match blocked {
+                        Some(why) => response.on_disabled_hover_ui(|ui| {
+                            ui.label(why);
+                            ui.add_space(6.0);
+                            ui.label(numbers::text(LOOK_AROUND_TIP));
+                        }),
+                        None => response,
+                    };
+                    look_pressed = response.clicked();
+                });
+            });
+            // What the view from this observer has come to, for as long as nothing newer replaces
+            // it. Drawn in the colours of the file status line, and for its reason: a refusal stays
+            // until the next view, so that it cannot be missed by looking away.
+            if let Some(status) = look_status.filter(|status| status.who == self.who) {
+                let colour = if status.failed { Theme::WARNING_RED } else { Theme::TEXT_MUTED };
+                ui.label(egui::RichText::new(&status.text).small().color(colour));
+            }
 
             ui.checkbox(&mut settings.enabled, "Enable Observer")
                 .on_hover_text(numbers::text(ENABLE_TIP));
@@ -918,7 +1025,7 @@ impl ObserverCard {
                         .small()
                         .color(Theme::TEXT_MUTED),
                 );
-                return;
+                return look_pressed;
             }
             let obs = obs.get_or_insert_with(|| {
                 // Ticked back on part-way through a run: dropped afresh from this card at the
@@ -1184,7 +1291,9 @@ impl ObserverCard {
                     settings.worldline_params(metric),
                 );
             }
-        });
+            look_pressed
+        })
+        .inner
     }
 
     /// Whether `obs` is the observer this card describes: the radius it names, the release it
@@ -1284,6 +1393,18 @@ pub enum FileRequest {
 /// timer would be an error the user could look away from and never see.
 #[derive(Debug, Clone)]
 pub struct FileStatus {
+    pub text: String,
+    pub failed: bool,
+}
+
+/// What a view from one observer has come to, in one line fit to print on that observer's card:
+/// the line sky-look last printed while it works, and then what it made or why it made nothing.
+///
+/// `failed` means what it means on `FileStatus`, and is drawn the same way. `who` is which card
+/// the line belongs on, so that a refusal about Alice is never read as one about Bob.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LookStatus {
+    pub who: Who,
     pub text: String,
     pub failed: bool,
 }
@@ -1474,6 +1595,13 @@ impl AppControls {
     /// `take_view_reset` is: the panel raises the request and the app owns what a save has to write.
     pub fn take_file_request(&mut self) -> Option<FileRequest> {
         self.file_request.take()
+    }
+
+    /// Whose view a Look Around button has asked for since this was last called, clearing the
+    /// request. Called once a frame by `SpacetimeApp::ui`, after the panel has run, for
+    /// `take_file_request`'s reason.
+    pub fn take_look_request(&mut self) -> Option<Who> {
+        self.look_request.take()
     }
 
     /// The gap between the two releases, which is the Δt the blueshift scale exp(κ₋Δt) is quoted
@@ -2134,9 +2262,16 @@ impl AppControls {
         // for - the light cones, the rest-frame view and the stack on r₋ are all his - so his card
         // is the one reached for most often and it sits at the top of the pair. They are the same
         // code twice: see `ObserverCard`.
-        BOB_CARD.show(ui, &sim.metric, &mut self.bob, &mut sim.bob, &mut sim.bob_signal, sim.clock, self.use_physical_units);
+        //
+        // A Look Around press is a request, like Save's, taken by the app after the panel: see
+        // `look_request`.
+        if BOB_CARD.show(ui, &sim.metric, &mut self.bob, &mut sim.bob, &mut sim.bob_signal, sim.clock, self.use_physical_units, self.look_making, self.look_status.as_ref()) {
+            self.look_request = Some(Who::Bob);
+        }
         ui.add_space(4.0);
-        ALICE_CARD.show(ui, &sim.metric, &mut self.alice, &mut sim.alice, &mut sim.alice_signal, sim.clock, self.use_physical_units);
+        if ALICE_CARD.show(ui, &sim.metric, &mut self.alice, &mut sim.alice, &mut sim.alice_signal, sim.clock, self.use_physical_units, self.look_making, self.look_status.as_ref()) {
+            self.look_request = Some(Who::Alice);
+        }
 
         ui.add_space(6.0);
 

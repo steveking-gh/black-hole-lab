@@ -22,6 +22,7 @@
 
 mod app;
 mod gui;
+mod look_around;
 mod perf;
 mod physics;
 mod pool;

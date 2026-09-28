@@ -1,14 +1,16 @@
 use crate::gui::numbers;
 use crate::gui::cauchy_effects::CauchyEffects;
 use crate::gui::controls::{
-    AppControls, DISTANT_CLOCK_GRID_TIP, FileRequest, FileStatus, GLOBAL_VOLUME_TIP, OPENING_SPIN,
-    ReferenceFrame, SignalViews, StepMode, VIEW_TIP,
+    AppControls, DISTANT_CLOCK_GRID_TIP, FileRequest, FileStatus, GLOBAL_VOLUME_TIP, LookStatus,
+    OPENING_SPIN, ReferenceFrame, SignalViews, StepMode, VIEW_TIP,
 };
 use crate::gui::spacetime_canvas::{KEEP_SURFACE_FRAMED_TIP, REST_FRAME_TIP, SpacetimeCanvas};
 use crate::gui::spatial_canvas::{FrontStyle, SpatialCanvas};
 use crate::gui::volume_canvas::VolumeCanvas;
 use crate::gui::theme::Theme;
+use crate::look_around::Progress;
 use crate::physics::kerr_schild::KerrSchild;
+use crate::physics::observer::Who;
 use crate::physics::simulation::Simulation;
 use std::time::Instant;
 
@@ -52,6 +54,11 @@ pub struct SpacetimeApp {
     /// build by giving it fewer frames to do. `crate::perf`'s frame tier sets this to 1/60, the
     /// same step its simulation tier hands `step_forward`, so the two tiers replay the same run.
     pub(crate) fixed_frame_dt: Option<f64>,
+    /// The view `sky-look` is making for a Look Around button, or None - which is the app's state
+    /// for as long as nobody presses one, and costs a frame one test of an Option. Here rather than
+    /// on the panel because a running child process is not something `AppControls` can be cloned
+    /// with. See `crate::look_around`.
+    pub(crate) look_around: Option<crate::look_around::Job>,
 }
 
 impl Default for SpacetimeApp {
@@ -82,6 +89,7 @@ impl Default for SpacetimeApp {
             controls,
             last_update: Instant::now(),
             fixed_frame_dt: None,
+            look_around: None,
         }
     }
 }
@@ -314,6 +322,92 @@ impl SpacetimeApp {
     fn autosave_before_load(&self, dir: &std::path::Path) -> Result<(), crate::save::Error> {
         self.save_to(&dir.join(AUTOSAVE_NAME), "the run replaced by a load")
     }
+
+    /// Start a view of the sky from `who` at this moment, made by `program`, with the save it is
+    /// made from written into `dir`; or say on `who`'s card why no view was started.
+    ///
+    /// The save is `save_to`, the writer the Save button uses, which reads this app and writes
+    /// nothing back to it. So a press leaves the file status line, the play state and the run
+    /// exactly as they were: the only fields it writes are `look_status` and `look_making`. The
+    /// save is written on this thread, like a Save, because it has to be of the moment of the
+    /// press; `sky-look` is then started and not waited for.
+    ///
+    /// `program` is the result of the search for `sky-look` rather than a search made in here, and
+    /// `dir` is a parameter rather than the system's temporary directory, for the reason
+    /// `load_chosen` takes its autosave directory as one: a test can hand in a stand-in and a
+    /// directory of its own. `SpacetimeApp::ui` passes `look_around::locate()` and
+    /// `std::env::temp_dir()`.
+    ///
+    /// A press while a view is being made does nothing: the buttons are greyed out then, and this
+    /// is the same rule stated where no button can be got round.
+    pub(crate) fn look_around(
+        &mut self,
+        who: Who,
+        program: Result<std::path::PathBuf, String>,
+        dir: &std::path::Path,
+    ) {
+        if self.look_around.is_some() {
+            return;
+        }
+        let name = who.name();
+        let failed = |text: String| LookStatus { who, text, failed: true };
+        let status = match program {
+            Err(why) => failed(format!("Could not make {name}'s view: {why}")),
+            Ok(program) => {
+                let save = crate::look_around::scratch_save_path(dir);
+                let note = format!("the moment Look Around was pressed for {name}");
+                match self.save_to(&save, &note) {
+                    // `write_atomically` removes its own half-written temporary on a failure, so
+                    // there is nothing on disk here to clean up.
+                    Err(why) => failed(format!(
+                        "Could not make {name}'s view: the save it starts from failed: {why}"
+                    )),
+                    Ok(()) => match crate::look_around::Job::start(&program, save, who) {
+                        Ok(job) => {
+                            self.look_around = Some(job);
+                            LookStatus {
+                                who,
+                                text: format!("Starting sky-look for {name}'s view."),
+                                failed: false,
+                            }
+                        }
+                        Err(why) => failed(format!(
+                            "Could not start sky-look ({}) for {name}'s view: {why}",
+                            program.display()
+                        )),
+                    },
+                }
+            }
+        };
+        self.controls.look_status = Some(status);
+        self.controls.look_making = self.look_around.as_ref().map(|job| job.who);
+    }
+
+    /// Bring the Look Around status up to date with the view being made, if one is, and say whether
+    /// one still is. Called once a frame, before the panel is drawn, so that the panel greys its
+    /// buttons out on the frame's own answer; it never blocks.
+    ///
+    /// A finished view is dropped here, which is what stops its child and deletes its save: see
+    /// `look_around::Job`.
+    pub(crate) fn poll_look_around(&mut self) -> bool {
+        let Some(job) = self.look_around.as_mut() else {
+            self.controls.look_making = None;
+            return false;
+        };
+        let who = job.who;
+        // Written every frame and not only when a new line arrives, because a Load replaces the
+        // whole panel, status line and all, part-way through a view.
+        let (text, failed, running) = match job.poll() {
+            Progress::Running(line) => (line, false, true),
+            Progress::Finished { text, failed } => (text, failed, false),
+        };
+        if !running {
+            self.look_around = None;
+        }
+        self.controls.look_status = Some(LookStatus { who, text, failed });
+        self.controls.look_making = running.then_some(who);
+        running
+    }
 }
 
 /// The name a save is written under before a load replaces the run in progress.
@@ -541,6 +635,15 @@ impl eframe::App for SpacetimeApp {
             self.sim.clock,
         );
 
+        // A view `sky-look` is making: read what it has said, before the panel draws the status
+        // line and the two buttons. While a view is being made the frame is asked for again a
+        // tenth of a second on, so that the status moves on a paused run with nobody touching the
+        // mouse; once it is made nothing more is asked for, and an idle app goes back to being
+        // idle. Ten times a second is as fast as anybody reads a progress line.
+        if self.poll_look_around() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+
         // 3. Left Dock Panel: Controls
         egui::Panel::left("controls_panel").default_size(300.0).show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
@@ -578,6 +681,12 @@ impl eframe::App for SpacetimeApp {
         }
         if let Some(path) = dropped {
             self.load_chosen(&path, data_directory().as_deref());
+        }
+        // A Look Around press, taken with the file actions because it too starts from a save of
+        // the whole app, which only the app can write. The search for the program is made here, on
+        // the press, and never on a frame.
+        if let Some(who) = self.controls.take_look_request() {
+            self.look_around(who, crate::look_around::locate(), &std::env::temp_dir());
         }
 
         // 4. Central Panel: Split View between Spacetime (t, r) and Spatial (x, y)
@@ -3683,6 +3792,36 @@ mod tests {
             assert!(app.sim.bob_signal.pulses[0].launched_with(rays));
             // And a frame with that pulse standing in both fields, which is the drawing path.
             painted_text(&mut app);
+        }
+    }
+
+    #[test]
+    fn test_both_cards_carry_a_look_around_button_and_a_status_goes_on_its_own_card() {
+        // One button per card, whether or not that observer is in the run - a card unticked keeps
+        // its button, greyed out, where the user expects to find it - and the status of a view on
+        // the card of the observer the view is from and on no other. Whether a button is greyed
+        // out is `look_around_blocked`, tested in `crate::look_around`; this is that the panel
+        // draws what that function decides about, in the place it says.
+        for (alice_on, bob_on) in [(true, true), (true, false), (false, true), (false, false)] {
+            let mut app = SpacetimeApp::default();
+            app.controls.is_playing = false;
+            app.controls.alice.enabled = alice_on;
+            app.controls.bob.enabled = bob_on;
+            app.controls.look_status = Some(LookStatus {
+                who: Who::Alice,
+                text: "Rendering the view.".to_string(),
+                failed: false,
+            });
+            let painted = painted_text(&mut app);
+            let count = |words: &str| painted.matches(words).count();
+            assert_eq!(count("Look Around"), 2, "one button on each card: {painted}");
+            assert_eq!(count("Rendering the view."), 1, "and the status once: {painted}");
+            // Bob's card is drawn first, so a status drawn on Alice's card follows her title.
+            let alice_title = painted.find("OBSERVER ALICE").expect("Alice's card");
+            let line = painted.find("Rendering the view.").expect("the status");
+            assert!(line > alice_title, "the status is on Alice's card: {painted}");
+            // And drawing it moved nothing in the run.
+            assert!(app.look_around.is_none() && app.controls.look_making.is_none());
         }
     }
 }
