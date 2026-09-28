@@ -438,6 +438,8 @@ reasonably prograde angle will also approach the *right branch* and circle
 forever.  Here's a short video showing that Alice's radio transmissions can also
 asymptotically approach the inner horizon.
 
+[bob frozen](https://github.com/user-attachments/assets/0a5fdcae-b924-4613-acc8-7a23c5191d5f)
+
 However, in Bob's FoR, his watch says he crosses the inner horizon quickly.
 
 
