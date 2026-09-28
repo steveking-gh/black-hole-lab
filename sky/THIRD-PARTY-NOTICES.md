@@ -33,6 +33,25 @@ cargo tree -e normal --target all --prefix none --format "{p} {l}" | sed 's/ (\*
 (SIL Open Font License 1.1) and DejaVu Sans (Bitstream Vera licence). Their licence texts are in
 `../assets/fonts`, and the repository root's `THIRD-PARTY-NOTICES.md` describes them.
 
+The panel uses them, and only with `--readouts panel`. The default overlay embeds no typeface: it
+names one, Consolas, and the player draws it from the fonts of the machine it runs on.
+
+## The CIE standard observer
+
+`sky-colour` contains the colour-matching functions of the CIE 1931 standard colorimetric
+observer, at 1 nm from 360 nm to 830 nm, in `sky-colour/src/cie1931.rs`. They say how an eye
+answers to light of each wavelength, and the colour and visible brightness of shifted starlight
+are computed from them.
+
+| Data | Source | Licence |
+| --- | --- | --- |
+| "Colour-matching functions of CIE 1931 standard colorimetric observer", International Commission on Illumination (CIE), Vienna, 2019 | <https://cie.co.at/datatable/cie-1931-colour-matching-functions-2-degree-observer>, DOI 10.25039/CIE.DS.xvudnb9b | CC BY-SA 4.0 |
+
+The table is the CIE's, copied digit for digit and changed in format only; the file records the
+date it was fetched and the checksum it was verified against. Creative Commons lists CC BY-SA 4.0
+as one-way compatible with GPL version 3, the licence of the crates here, which is what allows
+the table to be included.
+
 ## Star maps
 
 The sky renderer draws its star background from NASA's Deep Star Maps 2020, made by the NASA

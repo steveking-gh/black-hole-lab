@@ -1,0 +1,14 @@
+[package]
+name = "sky-colour"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "What colour and brightness shifted starlight has to an eye: blackbody spectra, the CIE observer, and the change a frequency shift makes"
+publish = false
+
+# The doc comments set their formulae as indented blocks, which rustdoc would take for Rust and try
+# to compile. Nothing here is a doctest.
+[lib]
+doctest = false
+
+[dependencies]
