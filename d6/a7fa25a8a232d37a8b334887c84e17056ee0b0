@@ -1,0 +1,24 @@
+sky/sky-render/src/tests_output.rs
+  s_fa4e4937427d8c::t_5830f2d370b9ca 418-421
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d6a7fa25a8a232d37a8b334887c84e17056ee0b0",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_fa4e4937427d8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c3c93472-9aee-43ec-8624-e30a21d0ed6f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
