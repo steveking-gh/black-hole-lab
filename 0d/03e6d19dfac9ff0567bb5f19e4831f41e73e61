@@ -1,0 +1,83 @@
+sky/sky-render/src/layout.rs
+  s_fa4e4937427d8c::t_a9819be61beba5 22-29,64,66-68,78-83,143-154,170,180,198-209
+sky/sky-render/src/cli.rs
+  s_fa4e4937427d8c::t_eb726c05b877fc 148-149
+  s_fa4e4937427d8c::t_1cc56246d54a64 636-640
+  s_fa4e4937427d8c::t_d1d995a828c38c 682-685
+  s_fa4e4937427d8c::t_78d9b5f3b348ac 545-579
+  s_fa4e4937427d8c::t_99810f98afe07e 89-99
+  s_fa4e4937427d8c::t_6f4d2045097db4 285-292
+  s_fa4e4937427d8c::t_106e7d32dc8f3d 150
+  s_fa4e4937427d8c::t_55584a55eae20c 635
+  s_fa4e4937427d8c::t_91b2a7438ad7c6 14
+  s_fa4e4937427d8c::t_42670e072d7fb8 336-339
+  s_fa4e4937427d8c::t_eb5f6110aca93d 151,641
+sky/sky-render/src/subtitles.rs
+  s_fa4e4937427d8c::t_a9819be61beba5 52-56,82,223-245,275-282,333-339
+sky/sky-render/src/tests_readouts.rs
+  s_fa4e4937427d8c::t_1cc56246d54a64 312,322,615-619,641-649,688-695,699
+sky/sky-render/src/main.rs
+  s_fa4e4937427d8c::t_6569d9637b2a69 35-36,53,77-78,92,94,236,242,250-273,276,278-291,303,307-311,322-325,333,507-515,517,519-529,547-548,550-552,562-570,656-662
+  s_fa4e4937427d8c::t_1319c8c2a597a0 546,549
+sky/sky-render/src/tests_marks.rs
+  s_fa4e4937427d8c::t_327270d59f8baf 894-971
+  s_fa4e4937427d8c::t_a8cc20525abaff 1023-1027
+  s_fa4e4937427d8c::t_41b4669ee10eb0 972-995,1003-1022,1028
+  s_fa4e4937427d8c::t_1cc56246d54a64 1-893
+  s_fa4e4937427d8c::t_36944116e81fcc 996-1002
+sky/sky-render/src/values.rs
+  s_fa4e4937427d8c::t_dc4ce876342667 17-33,42-51,55,58-59,64-85
+  s_fa4e4937427d8c::t_c6a8e497642236 123-124,126-129,132-133,137-147
+  s_fa4e4937427d8c::t_a757f037daa0cc 173-180,182,186-192
+  s_fa4e4937427d8c::t_70dc67bcaaf277 99
+  s_fa4e4937427d8c::t_2f54e9cbdca17f 97-98,101-110
+  s_fa4e4937427d8c::t_78b2868f792f49 86
+sky/sky-render/src/overlay.rs
+  s_fa4e4937427d8c::t_9b1413a735c566 166-167,171
+  s_fa4e4937427d8c::t_0024e404088ec7 81-89,91-94
+  s_fa4e4937427d8c::t_2260a733a454c0 115-116,120,126
+sky/sky-render/src/tests_shadow.rs
+  s_fa4e4937427d8c::t_13afd8d100650a 24,545-546,739-799,810-816,820-1006,1010
+  s_fa4e4937427d8c::t_c5cd4b79493e3f 802,1007-1009
+  s_fa4e4937427d8c::t_55f4e2e5c8b245 803-809,817-819
+  s_fa4e4937427d8c::t_cbf67a7c20c311 800-801
+sky/sky-render/src/shadow.rs
+  s_fa4e4937427d8c::t_b6aa5efc4b7e11 410-412,416,421-429,431,445-448,452-455,458-497,584,586-588,593-594,596-605,607,609-632,634,637-660,662-695,723
+  s_fa4e4937427d8c::t_3e4a0d97a5877a 449-451,456-457
+  s_fa4e4937427d8c::t_f7f3b540bb5e99 49-53
+  s_fa4e4937427d8c::t_3468228ffe85c8 93-96,104-105,118-120,148-152,177-205,500,549-551,589-592,595,758-760
+  s_fa4e4937427d8c::t_6569d9637b2a69 217-220,709-716,720-722
+  s_fa4e4937427d8c::t_d38c9d6e77534e 21,23-32,34-36,38-48,54-58,64,81-92,97-103
+  s_fa4e4937427d8c::t_bca5bffe493035 59-63
+  s_fa4e4937427d8c::t_b817591b10b488 717-719
+  s_fa4e4937427d8c::t_83aa4021e97fe3 221,576,583,585,724,761-763
+sky/sky-render/src/marks.rs
+  s_fa4e4937427d8c::t_5fade25ab461f9 516-517
+  s_fa4e4937427d8c::t_70494b6aaa1448 113
+  s_fa4e4937427d8c::t_4f2e0d7a19a2f4 293
+  s_fa4e4937427d8c::t_862ceee5b4a872 116-117
+  s_fa4e4937427d8c::t_4e40cb304292e6 1-46,53-112,115,119-292,294-515,518-532
+  s_fa4e4937427d8c::t_6ae7e41e203156 114,118
+  s_fa4e4937427d8c::t_f00be0bcb7a202 47-52
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "0d03e6d19dfac9ff0567bb5f19e4831f41e73e61",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_fa4e4937427d8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c3c93472-9aee-43ec-8624-e30a21d0ed6f",
+        "model": "unknown"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
