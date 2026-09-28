@@ -1,0 +1,55 @@
+sky/sky-colour/src/temperature.rs
+  s_fa4e4937427d8c::t_18db307f99de74 1-574
+sky/Cargo.toml
+  s_fa4e4937427d8c::t_dfff2d3a4e8edd 22,25
+sky/THIRD-PARTY-NOTICES.md
+  s_fa4e4937427d8c::t_60830936f56534 36-54
+sky/sky-colour/src/shift.rs
+  s_fa4e4937427d8c::t_7c64a16c384c06 1-41,49-659
+  s_fa4e4937427d8c::t_d0785b08672254 42-48
+sky/sky-colour/src/cie1931.rs
+  s_fa4e4937427d8c::t_c67a3ef156b8aa 58-528,545-548,568-573,586-596
+  s_fa4e4937427d8c::t_44877c872b2486 1-57,529-544,549-567,574-585,597-609
+sky/sky-colour/src/table.rs
+  s_fa4e4937427d8c::t_7c64a16c384c06 1-227
+sky/sky-colour/src/colorimetry.rs
+  s_fa4e4937427d8c::t_c67a3ef156b8aa 58-72,77-86,164-173,180-183,218-221
+  s_fa4e4937427d8c::t_9f1e551299780c 1-57,73-76,87-163,174-179,184-217,222-236
+sky/sky-colour/src/planck.rs
+  s_fa4e4937427d8c::t_7c64a16c384c06 1-30,32-219,221-530
+  s_fa4e4937427d8c::t_abc271a0ec19f0 31,220
+sky/sky-colour/tests/pictures.rs
+  s_fa4e4937427d8c::t_c67a3ef156b8aa 1-297
+sky/sky-colour/src/lib.rs
+  s_fa4e4937427d8c::t_44259dcdc51377 88-104
+  s_fa4e4937427d8c::t_76a74b29d6b778 36
+  s_fa4e4937427d8c::t_7c64a16c384c06 1-35,37-87,105-124,126-227
+  s_fa4e4937427d8c::t_93f73289d577ef 125
+sky/sky-colour/tests/report.rs
+  s_fa4e4937427d8c::t_c67a3ef156b8aa 1-133
+sky/sky-colour/Cargo.toml
+  s_fa4e4937427d8c::t_6edb634d73f6b5 1-14
+sky/Cargo.lock
+  s_fa4e4937427d8c::t_ddb85fd04ad1b8 250-253
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "38c71660af49b3a2b92461d90aa8135a06e1cc76",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_fa4e4937427d8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c3c93472-9aee-43ec-8624-e30a21d0ed6f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
