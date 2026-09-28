@@ -1,0 +1,15 @@
+[package]
+name = "sky-look"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "Look Around: one command from a Black Hole Lab save to a 360-degree view of what an observer sees at that moment"
+publish = false
+
+[dependencies]
+# The versions sky-format and sky-trace already use, so the lock file gains no entry. They read the
+# three things this program wants from the save it is handed - the observer's name, the reading of
+# the observer's watch, and whether the app writes its decimal mark as a comma - and nothing else:
+# whether a view can be made from the saved moment is the tracer's question, not this program's.
+flate2 = "1.1"
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }

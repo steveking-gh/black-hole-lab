@@ -195,11 +195,22 @@ pub fn film_cues(
 }
 
 /// The one cue of a still of video frame `k`, held `seconds`: its values for the whole length.
+///
+/// The stopwatch is left out. It counts the time since the film's first frame, and a still is one
+/// moment: of a bundle made for a still it would read zero, and of a frame taken out of a film it
+/// would read the time since a start the viewer never saw. What says which moment a still shows
+/// is whatever else the bundle declares - the tracer declares the observer's watch.
 pub fn still_cue(series: &Series, timeline: &Timeline, k: u64, seconds: f64) -> Cue {
+    let mut values = series.at(timeline.pick(k), timeline.stopwatch(k));
+    for (value, line) in values.iter_mut().zip(&series.lines) {
+        if line.stopwatch {
+            *value = None;
+        }
+    }
     Cue {
         start: 0,
         end: centiseconds(seconds),
-        values: series.at(timeline.pick(k), timeline.stopwatch(k)),
+        values,
     }
 }
 

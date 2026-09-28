@@ -1,0 +1,722 @@
+//! The pure parts: the search for the pieces, the names of the files, the clearing of old
+//! intermediates, the reading of the save and of the renderer's counts. Each against files made for
+//! the test in a scratch directory of its own, and none needing the real tools.
+
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use crate::args::{self, Request, Who};
+use crate::find::{self, FETCH_SCRIPT, Names, SKY_MAP, SKY_MAP_ENV, Search};
+use crate::names;
+use crate::run::{Tally, parse_tally, red_sentence};
+use crate::save;
+use crate::scratch::{self, STALE};
+
+/// A directory of its own for one test, empty, in the system's temporary directory.
+pub fn scratch_dir(what: &str) -> PathBuf {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "sky-look-test-{}-{}-{what}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    dir
+}
+
+fn touch(path: &Path) {
+    std::fs::create_dir_all(path.parent().expect("a parent")).expect("the parent directory");
+    std::fs::write(path, b"").expect("the file");
+}
+
+fn names() -> Names {
+    Names {
+        trace: "sky-trace.exe".into(),
+        render: "sky-render.exe".into(),
+        ffmpeg: "ffmpeg.exe".into(),
+    }
+}
+
+/// A repository with a release build of the sky tools, the star map in `sky/maps`, and ffmpeg in
+/// a directory of its own named by the returned PATH value.
+fn layout(root: &Path) -> (PathBuf, OsString) {
+    let release = root.join("repo/sky/target/release");
+    touch(&release.join("sky-trace.exe"));
+    touch(&release.join("sky-render.exe"));
+    touch(&root.join("repo/sky").join(SKY_MAP));
+    let bin = root.join("ffmpeg/bin");
+    touch(&bin.join("ffmpeg.exe"));
+    let path = std::env::join_paths([root.join("empty"), bin]).expect("a PATH");
+    (release, path)
+}
+
+#[test]
+fn test_every_piece_is_found_where_a_release_build_of_the_sky_tools_puts_it() {
+    let root = scratch_dir("found");
+    let (release, path) = layout(&root);
+    let search = Search {
+        exe_dir: Some(release.clone()),
+        path: Some(path),
+        ..Search::default()
+    };
+    let pieces = find::find(&search, &names()).expect("everything is there");
+    assert_eq!(pieces.trace, release.join("sky-trace.exe"));
+    assert_eq!(pieces.render, release.join("sky-render.exe"));
+    assert_eq!(pieces.ffmpeg, root.join("ffmpeg/bin/ffmpeg.exe"));
+    assert_eq!(pieces.sky, root.join("repo/sky").join(SKY_MAP));
+
+    // A program beside the app, in the repository's own target/release, finds the map in the
+    // `sky` directory beside its ancestor.
+    let beside_app = root.join("repo/target/release");
+    touch(&beside_app.join("sky-trace.exe"));
+    touch(&beside_app.join("sky-render.exe"));
+    let search = Search {
+        exe_dir: Some(beside_app),
+        ..search
+    };
+    assert_eq!(
+        find::find(&search, &names()).expect("found").sky,
+        root.join("repo/sky").join(SKY_MAP)
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_a_piece_named_outright_comes_before_the_search_and_a_wrong_name_is_reported() {
+    let root = scratch_dir("named");
+    let (release, path) = layout(&root);
+    let base = Search {
+        exe_dir: Some(release),
+        path: Some(path),
+        ..Search::default()
+    };
+
+    // --tools, --ffmpeg and --sky each win over the search.
+    let tools = root.join("other-tools");
+    touch(&tools.join("sky-trace.exe"));
+    touch(&tools.join("sky-render.exe"));
+    let ffmpeg = root.join("elsewhere/ffmpeg.exe");
+    touch(&ffmpeg);
+    let map = root.join("maps/mine.exr");
+    touch(&map);
+    let env_map = root.join("maps/from-env.exr");
+    touch(&env_map);
+    let named = Search {
+        tools: Some(tools.clone()),
+        ffmpeg: Some(ffmpeg.clone()),
+        sky: Some(map.clone()),
+        sky_env: Some(env_map.clone().into()),
+        ..base.clone()
+    };
+    let pieces = find::find(&named, &names()).expect("everything is named");
+    assert_eq!(
+        (pieces.trace, pieces.ffmpeg, pieces.sky),
+        (tools.join("sky-trace.exe"), ffmpeg, map)
+    );
+    // The variable comes before the search, and a variable set to nothing is a variable not set.
+    let from_env = Search {
+        sky_env: Some(env_map.clone().into()),
+        ..base.clone()
+    };
+    assert_eq!(find::find(&from_env, &names()).expect("found").sky, env_map);
+    let empty_env = Search {
+        sky_env: Some(OsString::new()),
+        ..base.clone()
+    };
+    assert_eq!(
+        find::find(&empty_env, &names()).expect("found").sky,
+        root.join("repo/sky").join(SKY_MAP)
+    );
+
+    // A name that points at nothing is reported as such, not passed over for the search.
+    let nowhere = root.join("nowhere/x.exe");
+    let cases: [(&str, Search, &[&str]); 4] = [
+        (
+            "--ffmpeg",
+            Search {
+                ffmpeg: Some(nowhere.clone()),
+                ..base.clone()
+            },
+            &["--ffmpeg names", "no program there"],
+        ),
+        (
+            "--sky",
+            Search {
+                sky: Some(nowhere.clone()),
+                ..base.clone()
+            },
+            &["--sky names", "no star map there"],
+        ),
+        (
+            "the variable",
+            Search {
+                sky_env: Some(nowhere.clone().into()),
+                ..base.clone()
+            },
+            &[SKY_MAP_ENV, "no star map there"],
+        ),
+        (
+            "--tools",
+            Search {
+                tools: Some(root.join("nowhere")),
+                ..base.clone()
+            },
+            &[
+                "sky-trace.exe was not found",
+                "--tools <dir>",
+                "cargo build --release",
+            ],
+        ),
+    ];
+    for (what, search, words) in cases {
+        let why = find::find(&search, &names()).expect_err(what);
+        for word in words {
+            assert!(why.contains(word), "{what}: {why}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_each_missing_piece_has_its_own_sentence_saying_what_to_do() {
+    let root = scratch_dir("missing");
+    let (release, path) = layout(&root);
+    let search = Search {
+        exe_dir: Some(release.clone()),
+        path: Some(path),
+        ..Search::default()
+    };
+    let map = root.join("repo/sky").join(SKY_MAP);
+    let missing: [(PathBuf, &[&str]); 4] = [
+        (
+            release.join("sky-trace.exe"),
+            &["sky-trace.exe was not found", "cargo build --release"],
+        ),
+        (
+            release.join("sky-render.exe"),
+            &["sky-render.exe was not found", "cargo build --release"],
+        ),
+        (
+            root.join("ffmpeg/bin/ffmpeg.exe"),
+            &["ffmpeg.exe was not found on the PATH", "--ffmpeg <path>"],
+        ),
+        (
+            map.clone(),
+            &["star map", "fetch-sky.ps1", "--sky <map.exr>", SKY_MAP_ENV],
+        ),
+    ];
+    let mut sentences = Vec::new();
+    for (piece, words) in missing {
+        let hidden = scratch::with_suffix(&piece, ".away");
+        std::fs::rename(&piece, &hidden).expect("the piece is moved away");
+        let why = find::find(&search, &names()).expect_err("a piece is missing");
+        std::fs::rename(&hidden, &piece).expect("the piece is put back");
+        for word in words {
+            assert!(why.contains(word), "{}: {why}", piece.display());
+        }
+        assert_eq!(why.lines().count(), 1, "one sentence: {why}");
+        assert!(why.ends_with('.'), "a complete sentence: {why}");
+        sentences.push(why);
+    }
+    sentences.dedup();
+    assert_eq!(
+        sentences.len(),
+        4,
+        "each piece its own sentence: {sentences:#?}"
+    );
+    // The script is named where it is, in the sky directory that was found.
+    assert!(
+        sentences[3].contains(
+            &root
+                .join("repo/sky")
+                .join(FETCH_SCRIPT)
+                .display()
+                .to_string()
+        )
+    );
+
+    // No sky directory anywhere above: the sentence still names the script.
+    let bare = root.join("bare/bin");
+    touch(&bare.join("sky-trace.exe"));
+    touch(&bare.join("sky-render.exe"));
+    let why = find::find(
+        &Search {
+            exe_dir: Some(bare),
+            ..search
+        },
+        &names(),
+    )
+    .expect_err("no map anywhere");
+    assert!(
+        why.contains("sky/maps/fetch-sky.ps1") && why.contains("no sky directory"),
+        "{why}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_file_names_sort_as_the_times_they_were_made() {
+    // Times chosen across the boundaries a careless format gets wrong: a digit count changing (9
+    // to 10 o'clock, day 9 to 10), a month and a year turning, a leap day, the millisecond.
+    let at = |s: u64, ms: u64| UNIX_EPOCH + Duration::from_millis(s * 1000 + ms);
+    let times = [
+        at(0, 0),
+        at(951_782_400, 0),     // 2000-02-29 00:00
+        at(1_798_761_599, 999), // 2026-12-31 23:59:59.999
+        at(1_798_761_600, 0),   // 2027-01-01 00:00
+        at(1_798_794_000, 0),   // 2027-01-01 09:00
+        at(1_798_797_600, 0),   // 2027-01-01 10:00
+        at(1_799_539_200, 5),   // 2027-01-10 00:00:00.005
+    ];
+    let stems: Vec<String> = times
+        .iter()
+        .map(|&t| names::stem(t, "Bob", Some(1.0), false))
+        .collect();
+    let mut sorted = stems.clone();
+    sorted.sort();
+    assert_eq!(sorted, stems, "sorting the names sorts the times");
+    assert_eq!(names::utc_stamp(times[1]), "2000-02-29 00.00.00.000 UTC");
+    assert_eq!(names::utc_stamp(times[2]), "2026-12-31 23.59.59.999 UTC");
+    assert_eq!(
+        names::stem(times[6], "Alice", Some(12.3456), false),
+        "2027-01-10 00.00.00.005 UTC Alice at tau 12.346 M"
+    );
+    assert_eq!(
+        names::stem(times[6], "Alice", Some(12.3456), true),
+        "2027-01-10 00.00.00.005 UTC Alice at tau 12,346 M",
+        "the decimal mark follows the app's setting"
+    );
+    assert_eq!(
+        names::stem(times[6], "Bob", None, false),
+        "2027-01-10 00.00.00.005 UTC Bob"
+    );
+}
+
+#[test]
+fn test_two_presses_in_one_second_make_two_files_and_neither_writes_over_the_other() {
+    let second = UNIX_EPOCH + Duration::from_secs(1_790_000_000);
+    let (a, b) = (
+        second + Duration::from_millis(1),
+        second + Duration::from_millis(2),
+    );
+    assert_ne!(
+        names::stem(a, "Bob", Some(0.0), false),
+        names::stem(b, "Bob", Some(0.0), false)
+    );
+
+    // And two in the same millisecond, of two copies of the app, which name their files alike.
+    let root = scratch_dir("place");
+    let out = root.join("views");
+    std::fs::create_dir_all(&out).expect("the views directory");
+    let stem = names::stem(a, "Bob", Some(0.0), false);
+    let mut placed = Vec::new();
+    for press in ["first", "second", "third"] {
+        let work = root.join(press);
+        std::fs::create_dir_all(&work).expect("a working directory");
+        let (video, photo) = (work.join("view.mkv"), work.join("view.jpg"));
+        std::fs::write(&video, format!("{press} video")).expect("a video");
+        std::fs::write(&photo, format!("{press} photo")).expect("a photo");
+        placed.push((
+            press,
+            names::place(&video, &photo, &out, &stem).expect("placed"),
+        ));
+    }
+    for (press, files) in &placed {
+        assert_eq!(
+            std::fs::read_to_string(&files.video).expect("the video"),
+            format!("{press} video")
+        );
+        assert_eq!(
+            std::fs::read_to_string(&files.photo).expect("the photo"),
+            format!("{press} photo")
+        );
+        assert_eq!(
+            files.video.file_stem(),
+            files.photo.file_stem(),
+            "one name for both files"
+        );
+    }
+    assert_eq!(placed[0].1.video, out.join(format!("{stem}.mkv")));
+    assert_eq!(placed[1].1.video, out.join(format!("{stem} (2).mkv")));
+    assert_eq!(std::fs::read_dir(&out).expect("the views").count(), 6);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_any_observer_name_makes_a_file_name_windows_accepts() {
+    let names_given = [
+        "Bob",
+        "Alice",
+        "a<b>c:d\"e/f\\g|h?i*j",
+        "trailing dots...",
+        "trailing space ",
+        "   ",
+        "",
+        "CON",
+        "%PATH%",
+        "tab\there\nnewline\u{7}",
+        "Ångström τ 黒",
+        &"x".repeat(300),
+    ];
+    let root = scratch_dir("safe");
+    let when = UNIX_EPOCH + Duration::from_secs(1_790_000_000);
+    for given in names_given {
+        let stem = names::stem(when, given, Some(1.5), false);
+        assert!(
+            !stem
+                .chars()
+                .any(|c| c.is_control() || "<>:\"/\\|?*%".contains(c)),
+            "{given:?} made {stem:?}"
+        );
+        assert!(!stem.ends_with(['.', ' ']), "{given:?} made {stem:?}");
+        assert!(
+            stem.len() < 120,
+            "{given:?} made a name {} bytes long",
+            stem.len()
+        );
+        // And the system agrees: the file can be made, and is found again under that name.
+        let file = root.join(format!("{stem}.mkv"));
+        std::fs::write(&file, b"").unwrap_or_else(|e| panic!("{given:?} made {stem:?}: {e}"));
+        assert!(
+            std::fs::read_dir(&root)
+                .expect("the directory")
+                .any(|e| e.expect("an entry").file_name() == file.file_name().expect("a name")),
+            "{stem:?} was stored under another name"
+        );
+        std::fs::remove_file(&file).expect("removed");
+    }
+    assert_eq!(names::safe_name("  "), "observer");
+    assert_eq!(names::safe_name("a:b"), "a_b");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_the_views_go_to_the_flag_then_the_variable_then_videos_then_home() {
+    let root = scratch_dir("outdir");
+    let (flag, env, videos, home) = (
+        root.join("flag"),
+        root.join("env"),
+        root.join("Videos"),
+        root.join("home"),
+    );
+    std::fs::create_dir_all(&videos).expect("a Videos folder");
+    let pick = |f: Option<&Path>, e: Option<&Path>, v: Option<&Path>, h: Option<&Path>| {
+        names::out_dir(f, e.map(Path::as_os_str), v, h)
+    };
+    let all = pick(Some(&flag), Some(&env), Some(&videos), Some(&home));
+    assert_eq!(all, Ok(flag.clone()));
+    assert_eq!(
+        pick(None, Some(&env), Some(&videos), Some(&home)),
+        Ok(env.clone())
+    );
+    assert_eq!(
+        pick(None, Some(Path::new("")), Some(&videos), Some(&home)),
+        Ok(videos.join(names::VIEWS_DIR))
+    );
+    assert_eq!(
+        pick(None, None, Some(&videos), Some(&home)),
+        Ok(videos.join(names::VIEWS_DIR))
+    );
+    // A Videos folder the system names but that is not there is no Videos folder.
+    let gone = root.join("gone");
+    assert_eq!(
+        pick(None, None, Some(&gone), Some(&home)),
+        Ok(home.join(names::VIEWS_DIR))
+    );
+    let why = pick(None, None, None, None).expect_err("nowhere to go");
+    assert!(
+        why.contains("--out-dir") && why.contains(names::VIEWS_ENV),
+        "{why}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Sets the modification time of `path` itself - a file, a directory, or a link, not what a link
+/// points to - to `age` before now.
+fn backdate(path: &Path, age: Duration) {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_FLAG_BACKUP_SEMANTICS, to open a directory; FILE_FLAG_OPEN_REPARSE_POINT, to open a
+        // link rather than its target.
+        options.custom_flags(0x0200_0000 | 0x0020_0000);
+    }
+    #[cfg(not(windows))]
+    if path.is_dir() {
+        options.write(false).read(true);
+    }
+    let file = options
+        .open(path)
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    file.set_modified(SystemTime::now() - age)
+        .expect("the time is set");
+}
+
+#[test]
+fn test_clearing_deletes_what_is_older_than_an_hour_in_its_own_directory_and_nothing_else() {
+    let temp = scratch_dir("stale");
+    let root = temp.join(scratch::ROOT);
+    let old = STALE + Duration::from_secs(60);
+    let young = STALE - Duration::from_secs(60);
+
+    // Inside: an old run's directory with a bundle in it, an old stray file, a young run's
+    // directory, a young file.
+    let old_run = root.join("run-1-2-0");
+    touch(&old_run.join("bundle/frames/000000.skyframe"));
+    touch(&old_run.join("view.mkv.partial"));
+    backdate(&old_run, old);
+    let old_file = root.join("stray.tmp");
+    touch(&old_file);
+    backdate(&old_file, old);
+    let young_run = root.join("run-3-4-0");
+    touch(&young_run.join("bundle/manifest.json"));
+    backdate(&young_run, young);
+    let young_file = root.join("young.tmp");
+    touch(&young_file);
+
+    // Outside: an old file beside the directory, and an old directory that a link inside points
+    // to. None of it may go.
+    let beside = temp.join("beside.bhl");
+    touch(&beside);
+    backdate(&beside, old);
+    let target = temp.join("elsewhere");
+    touch(&target.join("precious.mkv"));
+    backdate(&target, old);
+    let link = root.join("link-out");
+    #[cfg(windows)]
+    let linked = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&link)
+        .arg(&target)
+        .stdout(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    #[cfg(unix)]
+    let linked = std::os::unix::fs::symlink(&target, &link).is_ok();
+    assert!(linked, "the link is made");
+    backdate(&link, old);
+
+    scratch::clear_stale(&root, SystemTime::now());
+
+    assert!(!old_run.exists(), "the old run's directory is gone");
+    assert!(!old_file.exists(), "the old file is gone");
+    assert!(
+        std::fs::symlink_metadata(&link).is_err(),
+        "the old link is gone"
+    );
+    assert!(
+        young_run.join("bundle/manifest.json").is_file(),
+        "a young run is left alone"
+    );
+    assert!(young_file.is_file(), "a young file is left alone");
+    assert!(root.is_dir(), "the directory itself stays");
+    assert!(beside.is_file(), "nothing beside the directory is touched");
+    assert!(
+        target.join("precious.mkv").is_file(),
+        "nothing a link points to is touched"
+    );
+    let _ = std::fs::remove_dir_all(&temp);
+}
+
+#[test]
+fn test_a_run_works_in_a_directory_of_its_own_which_goes_when_the_run_does() {
+    let temp = scratch_dir("own");
+    let (a, b) = (
+        scratch::Scratch::new(&temp).expect("one"),
+        scratch::Scratch::new(&temp).expect("two"),
+    );
+    assert_ne!(a.dir(), b.dir(), "two runs at once, two directories");
+    for s in [&a, &b] {
+        assert_eq!(s.dir().parent(), Some(temp.join(scratch::ROOT).as_path()));
+    }
+    touch(&a.dir().join("bundle/manifest.json"));
+    let dir = a.dir().to_path_buf();
+    drop(a);
+    assert!(
+        !dir.exists(),
+        "the run's directory is deleted with everything in it"
+    );
+    assert!(b.dir().is_dir(), "and the other run's is not");
+    drop(b);
+    let _ = std::fs::remove_dir_all(&temp);
+}
+
+#[test]
+fn test_the_save_gives_the_observers_name_watch_and_decimal_mark_gzipped_or_not() {
+    let root = scratch_dir("save");
+    let doc = r#"{"format":"black-hole-lab-save","sim":{"bob":{"name":"Bob","tau":1.25},
+        "alice":{"name":"Alice","tau":0.5}},"controls":{"decimal_is_comma":true}}"#;
+    let plain = root.join("plain.bhl");
+    std::fs::write(&plain, doc).expect("a plain save");
+    let packed = root.join("packed.bhl");
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    std::io::Write::write_all(&mut gz, doc.as_bytes()).expect("compressed");
+    std::fs::write(&packed, gz.finish().expect("finished")).expect("a compressed save");
+    for path in [&plain, &packed] {
+        let bob = save::facts(path, Who::Bob);
+        assert_eq!(
+            bob,
+            save::Facts {
+                name: Some("Bob".into()),
+                tau: Some(1.25),
+                comma: true
+            }
+        );
+        assert_eq!(save::facts(path, Who::Alice).tau, Some(0.5));
+    }
+    // A save older than the decimal setting reads as point style, as the app reads it; a file
+    // that is not a save gives nothing, and is left to the tracer to refuse.
+    std::fs::write(&plain, r#"{"sim":{"bob":{"tau":2.0}}}"#).expect("an older save");
+    assert_eq!(
+        save::facts(&plain, Who::Bob),
+        save::Facts {
+            name: None,
+            tau: Some(2.0),
+            comma: false
+        }
+    );
+    std::fs::write(&plain, "not a save").expect("junk");
+    assert_eq!(save::facts(&plain, Who::Bob), save::Facts::default());
+    assert_eq!(
+        save::facts(&root.join("absent.bhl"), Who::Bob),
+        save::Facts::default()
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_the_renderers_counts_become_one_sentence_explaining_the_red() {
+    let line = "pixels drawn over the 1 frame(s): unresolved 0 (0 %), under-sampled 16888 \
+                (0.0503 %), dark 20422816 (60.9 %)";
+    let tally = parse_tally(line).expect("the counts");
+    assert_eq!(
+        tally,
+        Tally {
+            unresolved: 0,
+            undersampled: 16888
+        }
+    );
+    let sentence = red_sentence(tally, false).expect("there is red");
+    assert_eq!(
+        sentence,
+        "16888 pixels (0.0503 % of the picture) could not be determined and are drawn in red \
+         along the edge of the dark region, where the traced rays are too far apart to say which \
+         part of the sky the light came from."
+    );
+    assert!(
+        red_sentence(tally, true)
+            .expect("red")
+            .contains("(0,0503 %")
+    );
+    let both = red_sentence(
+        Tally {
+            unresolved: 10,
+            undersampled: 20,
+        },
+        false,
+    )
+    .expect("red");
+    assert!(
+        both.starts_with("30 pixels")
+            && both.contains("20 along the edge")
+            && both.contains("10 where the tracer"),
+        "{both}"
+    );
+    let lost = red_sentence(
+        Tally {
+            unresolved: 7,
+            undersampled: 0,
+        },
+        false,
+    )
+    .expect("red");
+    assert!(
+        !lost.contains("edge") && lost.contains("could not follow"),
+        "{lost}"
+    );
+    assert_eq!(
+        red_sentence(
+            Tally {
+                unresolved: 0,
+                undersampled: 0
+            },
+            false
+        ),
+        None,
+        "no red, nothing to say"
+    );
+    assert_eq!(parse_tally("read-outs: 3 line(s)"), None);
+}
+
+#[test]
+fn test_the_command_line_needs_a_save_and_an_observer_and_refuses_what_the_tools_would() {
+    let parse = |line: &str| {
+        args::parse(
+            &line
+                .split_whitespace()
+                .map(OsString::from)
+                .collect::<Vec<_>>(),
+        )
+    };
+    let Ok(Request::Look(o)) = parse("x.bhl --observer alice --open") else {
+        panic!("a look")
+    };
+    assert_eq!(
+        (o.who, o.open, o.keep, o.grid, o.hold),
+        (Who::Alice, true, false, args::DEFAULT_GRID, 60.0)
+    );
+    assert_eq!(parse("--help"), Ok(Request::Help));
+    for (line, words) in [
+        ("--observer bob", "No save"),
+        ("x.bhl", "--observer is required"),
+        ("x.bhl --observer carol", "no observer"),
+        ("x.bhl --observer bob --grid 100x100", "twice as wide"),
+        ("x.bhl --observer bob --grid 32768x16384", "more rays"),
+        ("x.bhl --observer bob --hold 0", "--hold"),
+        ("x.bhl --observer bob --exposure nan", "--exposure"),
+        ("x.bhl --observer bob --fast", "no option --fast"),
+        ("x.bhl y.bhl --observer bob", "Two saves"),
+    ] {
+        let why = parse(line).expect_err(line);
+        assert!(why.contains(words) && why.ends_with('.'), "{line}: {why}");
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn test_the_video_is_opened_by_the_shells_start_with_an_empty_title_and_the_path_in_a_variable() {
+    let video = Path::new(r"C:\a b\100% & more ^ (x)!.mkv");
+    let command = crate::open::command(video);
+    let args: Vec<_> = command
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        args.join(" "),
+        r#"/D /V:OFF /C start "" "%BLACK_HOLE_LAB_VIEW%""#
+    );
+    let envs: Vec<_> = command.get_envs().collect();
+    assert_eq!(
+        envs,
+        [(
+            std::ffi::OsStr::new("BLACK_HOLE_LAB_VIEW"),
+            Some(video.as_os_str())
+        )]
+    );
+
+    // What `cmd` makes of that line, with `start` swapped for `echo`: the path, whole and literal,
+    // inside its quotes, however many characters in it are the shell's syntax.
+    use std::os::windows::process::CommandExt;
+    let echoed = std::process::Command::new("cmd")
+        .env("BLACK_HOLE_LAB_VIEW", video)
+        .raw_arg(r#"/D /V:OFF /C echo "" "%BLACK_HOLE_LAB_VIEW%""#)
+        .output()
+        .expect("cmd runs");
+    let said = String::from_utf8_lossy(&echoed.stdout);
+    assert_eq!(said.trim_end(), format!(r#""" "{}""#, video.display()));
+}

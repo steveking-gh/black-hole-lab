@@ -931,12 +931,18 @@ fn test_a_still_makes_a_held_video_and_a_360_degree_photograph() {
     // Six seconds at half a frame a second, stated truly.
     assert!(report.contains("format.duration=\"6.000000\""), "{report}");
     assert!(report.contains("r_frame_rate=\"1/2\""), "{report}");
-    // One cue, the frame's values for the whole length.
+    // One cue, the frame's values for the whole length, without the stopwatch: a still is one
+    // moment and has no elapsed time to show, so the lines are the other two read-outs.
     let shown = dialogues(&extract_subtitles(&out));
     assert_eq!(shown.len(), 1);
     assert_eq!((shown[0].start, shown[0].end), (0, 600));
-    assert!(shown[0].lines[0].contains("0.10"), "{:?}", shown[0].lines);
-    assert!(shown[0].lines[2].contains("n/a"), "{:?}", shown[0].lines);
+    assert_eq!(shown[0].lines.len(), 2, "{:?}", shown[0].lines);
+    assert!(
+        shown[0].lines.iter().all(|l| !l.contains("Stopwatch")),
+        "{:?}",
+        shown[0].lines
+    );
+    assert!(shown[0].lines[1].contains("n/a"), "{:?}", shown[0].lines);
     // The photograph: a JPEG of the frame's size, marked as a 360-degree one.
     let jpeg = std::fs::read(&jpg).expect("a photograph");
     assert_photo_sphere(&jpeg, 128, 64);

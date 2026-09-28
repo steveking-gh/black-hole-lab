@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use kerr_equatorial::KerrSchild;
 use sky_format::{BundleReader, Num, STOPWATCH};
 use sky_trace::bhl;
-use sky_trace::film::{self, DISTANT_CLOCK, RADIUS};
+use sky_trace::film::{self, DISTANT_CLOCK, RADIUS, WATCH};
 use sky_trace::worldline::Worldline;
 
 use crate::run;
@@ -130,6 +130,7 @@ fn test_a_save_is_filmed_at_the_promised_proper_times_with_the_right_read_outs()
         declared,
         vec![
             (STOPWATCH, "Stopwatch", "M", 3),
+            (WATCH, "Watch", "M", 3),
             (RADIUS, "Radius", "M", 3),
             (DISTANT_CLOCK, "Distant clock", "M", 2),
         ]
@@ -143,7 +144,7 @@ fn test_a_save_is_filmed_at_the_promised_proper_times_with_the_right_read_outs()
     let walked = Worldline::from_saved(&metric, bob)
         .unwrap()
         .walk(0.25 / 30.0, 6);
-    let (tau0, t0) = (bob.tau, walked.events[0].t);
+    let tau0 = bob.tau;
     for (k, entry) in m.frames.iter().enumerate() {
         let e = walked.events[k];
         assert_eq!(entry.index, k as u32);
@@ -159,16 +160,16 @@ fn test_a_save_is_filmed_at_the_promised_proper_times_with_the_right_read_outs()
             entry.proper_time.0 - m.frames[0].proper_time.0
         );
         assert!((readout(STOPWATCH) - k as f64 / 120.0).abs() < 1e-15);
+        // The watch and the distant clock are the app's own: the observer's proper time and the
+        // chart's time as the save counts them, not since the film's first frame.
+        assert_eq!(readout(WATCH), entry.proper_time.0);
         assert!((readout(RADIUS) - e.r).abs() < 1e-12, "frame {k}");
-        assert!(
-            (readout(DISTANT_CLOCK) - (e.t - t0)).abs() < 1e-12,
-            "frame {k}"
-        );
+        assert!((readout(DISTANT_CLOCK) - e.t).abs() < 1e-12, "frame {k}");
         let position = entry.position.as_ref().unwrap();
         assert_eq!(position.chart, "kerr-schild");
         let [t, r, theta, phi] = position.coords.map(|c| c.0);
         assert_eq!((r, theta), (readout(RADIUS), std::f64::consts::FRAC_PI_2));
-        assert_eq!(t - t0, readout(DISTANT_CLOCK));
+        assert_eq!(t, readout(DISTANT_CLOCK));
         assert!((phi - e.phi).abs() < 1e-12);
 
         // The specification's rule for rays not of the far sky, in every frame written.

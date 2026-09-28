@@ -80,10 +80,13 @@ use crate::worldline::{End, Event, Film, Worldline};
 /// The program's name, as the manifest's `writer.program` records it.
 pub const PROGRAM: &str = "sky-trace";
 
+/// The id of the watch read-out: the observer's proper time as the app counts it.
+pub const WATCH: &str = "watch";
+
 /// The id of the radius read-out.
 pub const RADIUS: &str = "radius";
 
-/// The id of the distant-clock read-out.
+/// The id of the distant-clock read-out: the chart's time as the app's clock shows it.
 pub const DISTANT_CLOCK: &str = "distant_clock";
 
 /// The mass of Sagittarius A*, in solar masses: the default of `--solar-masses` for a hover test,
@@ -305,11 +308,27 @@ pub fn check_rays(frame: &Frame) -> Result<(), String> {
 }
 
 /// The read-outs every film of this program declares, in the order drawn.
+///
+/// Two of them read the observer's own clock, and they are not the same thing. The stopwatch is
+/// the format's: proper time since the film's first frame, zero where the film starts. The watch
+/// is the app's: the proper time the app shows for this observer, counted from wherever the app
+/// started counting, so that a number read off the film can be found again in the app. They differ
+/// by a constant along a film. A view of one moment has no elapsed time to show, which is why a
+/// renderer leaves the stopwatch out of a still; the watch is what says which moment it is.
+///
+/// The distant clock is likewise the app's clock, the chart's time t, and not the time since the
+/// first frame.
 pub fn readouts() -> Vec<ReadoutDecl> {
     vec![
         ReadoutDecl {
             id: STOPWATCH.into(),
             label: "Stopwatch".into(),
+            unit: "M".into(),
+            decimals: 3,
+        },
+        ReadoutDecl {
+            id: WATCH.into(),
+            label: "Watch".into(),
             unit: "M".into(),
             decimals: 3,
         },
@@ -329,13 +348,14 @@ pub fn readouts() -> Vec<ReadoutDecl> {
 }
 
 /// The manifest entry of frame `index` at `event`, whose proper time is `tau` (the frame's
-/// [`frame_tau`]), in a film whose frame 0 is at proper time `tau0` and chart time `t0`.
+/// [`frame_tau`]), in a film whose frame 0 is at proper time `tau0`.
 ///
 /// The stopwatch is `tau - tau0`, which is the specification's definition to the bit (6: a frame's
-/// stopwatch equals its proper time less frame 0's). The distant clock is the chart's t since
-/// frame 0, the radius the chart's r, and the position the event in ingoing Kerr-Schild
-/// (t, r, theta, phi) with theta = pi/2 on the plane.
-pub fn entry(index: u32, tau: f64, tau0: f64, t0: f64, event: &Event) -> FrameEntry {
+/// stopwatch equals its proper time less frame 0's). The watch is `tau` itself and the distant
+/// clock the chart's t, both as the app counts them (see [`readouts`]). The radius is the chart's
+/// r, and the position the event in ingoing Kerr-Schild (t, r, theta, phi) with theta = pi/2 on
+/// the plane.
+pub fn entry(index: u32, tau: f64, tau0: f64, event: &Event) -> FrameEntry {
     FrameEntry {
         position: Some(Position {
             chart: "kerr-schild".into(),
@@ -343,8 +363,9 @@ pub fn entry(index: u32, tau: f64, tau0: f64, t0: f64, event: &Event) -> FrameEn
         }),
         ..FrameEntry::new(index, tau)
             .with_readout(STOPWATCH, tau - tau0)
+            .with_readout(WATCH, tau)
             .with_readout(RADIUS, event.r)
-            .with_readout(DISTANT_CLOCK, event.t - t0)
+            .with_readout(DISTANT_CLOCK, event.t)
     }
 }
 

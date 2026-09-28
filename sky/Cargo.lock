@@ -261,6 +261,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sky-look"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "serde_json",
+]
+
+[[package]]
 name = "sky-render"
 version = "0.1.0"
 dependencies = [

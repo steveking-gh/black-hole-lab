@@ -272,7 +272,7 @@ pub fn film(options: &Trace, out: &mut dyn Write) -> Result<Summary, Failure> {
         let traced = film::trace(&kerr, event, index, options.width, options.height, threads)
             .map_err(|why| Failure::Write(format!("frame {k} could not be traced: {why}")))?;
         unresolved += traced.unresolved as u64;
-        let entry = film::entry(index, tau, tau0, first.t, event);
+        let entry = film::entry(index, tau, tau0, event);
         writer
             .write_frame_and_manifest(&traced.frame, entry)
             .map_err(|e| Failure::Write(e.to_string()))?;
