@@ -12,8 +12,9 @@
 //! ```
 //!
 //! * progress on standard output, one complete short sentence a line, flushed after each;
-//! * exit 0 on success, with the full path of the video as the last line of standard output, and
-//!   the video already handed to the system's player because of `--open`;
+//! * exit 0 on success, with the full path of the photograph (a 360-degree JPEG) as the last line
+//!   of standard output, and the photograph already handed to a viewer because of `--open`: VLC
+//!   when it is installed, else the system's default program for `.jpg` files;
 //! * exit 2 when it refuses the moment - an observer inside r₋, on the ring, being dragged - with
 //!   one sentence on standard error saying why;
 //! * exit 1 on any other failure, with one sentence on standard error.
@@ -34,7 +35,7 @@
 //!
 //! `sky-look` is stopped, and so is anything it started, and the temporary save is deleted: see
 //! `Job`'s `Drop`. Letting it run on was the other choice, and it was turned down. A view finished
-//! after the app has gone opens a video player out of nowhere, minutes after the user closed the
+//! after the app has gone opens a viewer out of nowhere, up to a minute after the user closed the
 //! program they asked it from, with no status line left to say what it is; and the temporary save
 //! cannot be deleted while a program that has not yet read it is still running, so letting the
 //! child outlive the app would mean leaving a multi-megabyte file in the temporary directory every
@@ -69,8 +70,9 @@ const SKY_RELEASE_DIR: &str = "sky/target/release";
 /// The exit and the last line race: the child flushes its last line and exits, and the thread
 /// reading the pipe may not have handed that line over by the frame that sees the exit. So the
 /// verdict waits for both pipes to close. It does not wait for ever, because a pipe outlives the
-/// child when something the child started inherited it - a player launched by `--open` can hold
-/// standard output open for as long as it plays - and a view that finished must not wait on that.
+/// child when something the child started inherited it - a viewer launched by `--open` can hold
+/// standard output open for as long as it shows the photograph - and a view that finished must not
+/// wait on that.
 const PIPE_GRACE: Duration = Duration::from_secs(2);
 
 /// Windows' `CREATE_NO_WINDOW` process creation flag. A console program started from a windowed
@@ -147,7 +149,7 @@ pub fn scratch_save_path(dir: &Path) -> PathBuf {
 
 /// One thing a reading thread has to report.
 enum Said {
-    /// A line of standard output: progress, or at the end the path of the video.
+    /// A line of standard output: progress, or at the end the path of the photograph.
     Out(String),
     /// A line of standard error: the reason for a refusal or a failure.
     Err(String),
@@ -175,7 +177,7 @@ pub struct Job {
     /// How many of the two pipes are still open.
     open_pipes: u8,
     /// The latest line of standard output, which is the status while the view is being made and
-    /// the path of the video once it is made.
+    /// the path of the photograph once it is made.
     last_line: Option<String>,
     /// Every line of standard error, in order.
     complaint: Vec<String>,
@@ -353,9 +355,9 @@ fn verdict(who: Who, code: Option<i32>, last_line: Option<&str>, complaint: &[St
     let reason = complaint.join(" ");
     let (text, failed) = match code {
         Some(0) => match last_line {
-            Some(video) => (format!("Made {name}'s view and opened it: {video}"), false),
+            Some(photo) => (format!("Made {name}'s view and opened it: {photo}"), false),
             None => (
-                format!("sky-look finished {name}'s view without saying where the video is."),
+                format!("sky-look finished {name}'s view without saying where the photograph is."),
                 true,
             ),
         },

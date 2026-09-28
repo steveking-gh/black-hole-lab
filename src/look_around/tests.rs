@@ -220,10 +220,10 @@ fn test_a_press_hands_sky_look_a_save_of_this_moment_and_changes_nothing_in_the_
     let document = app.snapshot("");
 
     let dir = scratch_dir("press");
-    let video = dir.join("view.mp4");
+    let photo = dir.join("view.jpg");
     let program = stand_in(
         &dir,
-        &[Step::Say("Tracing the light."), Step::Say(&video.display().to_string()), Step::Exit(0)],
+        &[Step::Say("Tracing the light."), Step::Say(&photo.display().to_string()), Step::Exit(0)],
     );
     app.look_around(Who::Bob, Ok(program), &dir);
 
@@ -267,7 +267,7 @@ fn test_the_status_follows_sky_look_and_a_second_press_waits_for_the_first() {
     // following the child rather than reporting on it afterwards.
     let dir = scratch_dir("progress");
     let (go_on, go_to_end) = (dir.join("go-on"), dir.join("go-to-end"));
-    let video = dir.join("view.mp4");
+    let photo = dir.join("view.jpg");
     let program = stand_in(
         &dir,
         &[
@@ -275,8 +275,8 @@ fn test_the_status_follows_sky_look_and_a_second_press_waits_for_the_first() {
             Step::WaitFor(&go_on),
             Step::Say("Rendering the view."),
             Step::WaitFor(&go_to_end),
-            Step::Say("Writing the video."),
-            Step::Say(&video.display().to_string()),
+            Step::Say("Writing the photograph."),
+            Step::Say(&photo.display().to_string()),
             Step::Exit(0),
         ],
     );
@@ -312,7 +312,7 @@ fn test_the_status_follows_sky_look_and_a_second_press_waits_for_the_first() {
     poll_until(&mut app, "the view to be made", finished);
     let done = status(&app);
     assert!(!done.failed, "a view that was made is not a failure: {:?}", done.text);
-    assert_eq!(done.text, format!("Made Alice's view and opened it: {}", video.display()));
+    assert_eq!(done.text, format!("Made Alice's view and opened it: {}", photo.display()));
     assert!(saves_in(&dir).is_empty(), "the temporary save is gone: {:?}", saves_in(&dir));
     let (card, alice) = (&app.controls.alice, app.sim.alice.as_ref());
     assert!(
