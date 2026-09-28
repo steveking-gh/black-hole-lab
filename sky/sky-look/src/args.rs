@@ -1,7 +1,7 @@
 //! The command line: what it takes, and every way it can be wrong, each as its own sentence.
 //!
-//! Hand-rolled, as `sky-trace`'s is: ten flags do not need a parsing crate, and a crate would put
-//! its own wording on the refusals where this program wants to say what to do instead.
+//! Hand-rolled, as `sky-trace`'s is: a dozen flags do not need a parsing crate, and a crate would
+//! put its own wording on the refusals where this program wants to say what to do instead.
 //!
 //! The app always calls `sky-look <file.bhl> --observer bob|alice --open`; everything else is for
 //! a person at a terminal. A command line this program cannot use exits with code 1 and not 2,
@@ -14,9 +14,12 @@ use std::path::PathBuf;
 pub const HELP: &str = "\
 sky-look: makes a 360-degree photograph of the whole sky as one observer of a Black Hole Lab save
 sees it at the saved moment. It runs sky-trace and then sky-render, and is what the app's Look
-Around button starts. The observer's watch, radius and distant clock are written on a panel
-inside the black hole's dark region, where they hide none of the sky, or below the opening view
-when the dark region is too small to hold them.
+Around button starts. The observer's read-outs are written on a panel inside the black hole's
+dark region, where they hide none of the sky, or below the opening view when the dark region is
+too small to hold them: the watch, radius and distant clock, and the speed and heading of travel
+past each local reference observer there is where the observer is (the static observer and the
+ZAMO, or the raindrop inside the outer horizon). Small hollow green signs on the sky, a ring, a
+diamond or a triangle as the panel names them, mark those directions of travel.
 
 USAGE
     sky-look <file.bhl> --observer bob|alice [options]
@@ -37,6 +40,10 @@ USAGE
                             4096x2048. Fewer rays are quicker and widen the red rim round the
                             dark region, where the rays are too far apart to say where the light
                             came from.
+    --units physical|geometric
+                            The units of the read-outs, passed to sky-trace: physical, in
+                            seconds and kilometres as Black Hole Lab's panel shows them, or
+                            geometric, in M. Default physical.
     --exposure <stops>      The exposure, passed to sky-render. Default: sky-render's.
     --keep                  Keep the traced sky bundle, beside the photograph, and say where it
                             is.
@@ -112,11 +119,33 @@ impl Who {
     }
 }
 
+/// The units the read-outs are written in: `sky-trace --units` takes the same two words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Units {
+    /// Seconds and kilometres, on the app's ladder of units (µs to yr, km to ly), as the app's
+    /// panel shows them.
+    Physical,
+    /// Multiples of M, the hole's mass in geometric units.
+    Geometric,
+}
+
+impl Units {
+    /// The word `sky-trace --units` takes.
+    pub fn flag(self) -> &'static str {
+        match self {
+            Self::Physical => "physical",
+            Self::Geometric => "geometric",
+        }
+    }
+}
+
 /// A checked command line.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Options {
     pub save: PathBuf,
     pub who: Who,
+    /// `--units`, physical unless it says otherwise.
+    pub units: Units,
     pub open: bool,
     pub keep: bool,
     pub out_dir: Option<PathBuf>,
@@ -138,10 +167,11 @@ pub enum Request {
 }
 
 /// The flags that take a value.
-const VALUED: [&str; 8] = [
+const VALUED: [&str; 9] = [
     "--observer",
     "--out-dir",
     "--grid",
+    "--units",
     "--exposure",
     "--tools",
     "--ffmpeg",
@@ -221,6 +251,18 @@ pub fn parse(args: &[OsString]) -> Result<Request, String> {
         None => DEFAULT_GRID,
         Some(text) => parse_grid(text)?,
     };
+    // Checked here rather than left to the tracer, whose refusal of its command line comes back
+    // with the same exit code as its refusal of the moment.
+    let units = match value("--units") {
+        None | Some("physical" | "Physical") => Units::Physical,
+        Some("geometric" | "Geometric") => Units::Geometric,
+        Some(other) => {
+            return Err(format!(
+                "There are no units {other:?}; --units is physical, for seconds and kilometres, \
+                 or geometric, for M."
+            ));
+        }
+    };
     let exposure = match value("--exposure") {
         None => None,
         Some(text) => Some(
@@ -239,6 +281,7 @@ pub fn parse(args: &[OsString]) -> Result<Request, String> {
     Ok(Request::Look(Box::new(Options {
         save: PathBuf::from(save),
         who,
+        units,
         open,
         keep,
         out_dir: value("--out-dir").map(PathBuf::from),

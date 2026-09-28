@@ -6,9 +6,12 @@
 //! ```
 //!
 //! It runs `sky-trace` on the one frame of the saved moment and `sky-render` on what that traced,
-//! as a 360-degree photograph with the observer's watch, radius and distant clock painted inside
-//! the hole's dark region (or below the opening view when the dark region is too small to hold
-//! them), puts the photograph in the views directory, and with `--open` hands it to a viewer: VLC
+//! as a 360-degree photograph with the observer's read-outs painted on a panel inside the hole's
+//! dark region (or below the opening view when the dark region is too small to hold them) - the
+//! watch, radius and distant clock, in seconds and kilometres unless `--units geometric` asks for
+//! M, and the speed and heading of travel past each local reference observer there is where the
+//! observer is - and small green signs on the sky marking those directions of travel. It puts the
+//! photograph in the views directory, and with `--open` hands it to a viewer: VLC
 //! when it is installed, which pans a 360-degree photograph, before the system's default program
 //! for `.jpg` files, which may show it flat. The contract with the app, which
 //! `src/look_around.rs` at the repository root is built against:

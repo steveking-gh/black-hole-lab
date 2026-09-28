@@ -1,4 +1,5 @@
-//! A run: find the pieces, trace, render, put the photograph in place, say what was made.
+//! A run: find the pieces, trace, render, put the photograph in place, say what was made and
+//! where on it to look for the read-outs and the marks of the directions of travel.
 //!
 //! The two programs run as child processes, found beside this one: `sky-render` has no library to
 //! call, and a child can be stopped with everything it started, which is what the app does to this
@@ -314,7 +315,9 @@ fn make(
         span(rays * RAY_COST.0 / threads, rays * RAY_COST.1 / threads)
     ));
     let clock = Instant::now();
-    // The bundle directory third, for the tests' stand-in scripts, as below.
+    // The bundle directory third, for the tests' stand-in scripts, as below. `--units` decides
+    // what the tracer writes into the bundle for the read-outs, which the renderer then paints as
+    // they are.
     let trace_args: Vec<OsString> = vec![
         o.save.clone().into(),
         "--out".into(),
@@ -325,6 +328,8 @@ fn make(
         "1".into(),
         "--grid".into(),
         format!("{w}x{h}").into(),
+        "--units".into(),
+        o.units.flag().into(),
     ];
     let traced = run_child(&pieces.trace, &trace_args, |_| {}).map_err(|e| {
         Failure::Failed(format!(
@@ -343,7 +348,8 @@ fn make(
     // traced frame, `--readouts panel` paints the read-outs into the picture (a photograph has no
     // subtitle track to carry them), and `--readout-at dark` puts that panel inside the hole's
     // dark region, where it hides none of the sky, or below the opening view when the dark region
-    // is too small to hold it.
+    // is too small to hold it. The renderer draws the marks of the directions of travel on the
+    // sky of a still by itself, and says where each one is.
     let photo = scratch.dir().join("view.jpg");
     say.line(&format!(
         "Rendering {who}'s view over the star map as a 360-degree photograph of {} x {} pixels; \
@@ -380,7 +386,7 @@ fn make(
     if comma {
         render_args.push("--decimal-comma".into());
     }
-    let (mut tally, mut readouts) = (None, None);
+    let (mut tally, mut readouts, mut marks) = (None, None, Vec::new());
     let rendered = run_child(&pieces.render, &render_args, |line| {
         if line.starts_with("map ") {
             say.line(&format!("Read the star map; drawing {who}'s view."));
@@ -393,6 +399,8 @@ fn make(
             tally = Some(counts);
         } else if let Some(sentence) = readout_sentence(line, comma) {
             readouts = Some(sentence);
+        } else if let Some(sentence) = mark_sentence(line, comma) {
+            marks.push(sentence);
         }
     })
     .map_err(|e| {
@@ -426,8 +434,12 @@ fn make(
             out_dir.display()
         ))
     })?;
+    // Where to look, the panel and then the marks the panel names, before what could not be drawn.
     if let Some(sentence) = readouts {
         say.line(&sentence);
+    }
+    for sentence in &marks {
+        say.line(sentence);
     }
     if let Some(sentence) = tally.and_then(|t| red_sentence(t, comma)) {
         say.line(&sentence);
@@ -641,43 +653,17 @@ pub fn red_sentence(t: Tally, comma: bool) -> Option<String> {
 /// ```
 ///
 /// and the person reading the app's card wants to know where to look, not how many lines there
-/// are or how high. The reading is lenient: the line is recognised by its two key phrases, the
-/// angles are added where they read as numbers and left out where they do not, and a line with
-/// neither phrase - the renderer's other read-out lines, or a wording this program was not written
-/// for - is passed over in silence rather than guessed at.
+/// are or how high. The panel carries every read-out (the watch, radius and distant clock, and the
+/// speed and heading of travel past each local reference observer), so the sentence names none of
+/// them. The reading is lenient: the line is recognised by its two key phrases, the angles are
+/// added where they read as numbers and left out where they do not, and a line with neither
+/// phrase - the renderer's other read-out lines, or a wording this program was not written for -
+/// is passed over in silence rather than guessed at.
 pub fn readout_sentence(line: &str, comma: bool) -> Option<String> {
     let said = line.strip_prefix("read-outs:")?.trim();
-    const WHAT: &str = "The watch, radius and distant clock are written";
+    const WHAT: &str = "The read-outs are written";
     if let Some(at) = said.find("inside the dark region") {
-        let rest = &said[at..];
-        let angle = |before: &str| -> Option<f64> {
-            let end = rest.find(before)?;
-            let number = rest[..end].rsplit(' ').next()?;
-            number
-                .replace(',', ".")
-                .replace('\u{2212}', "-")
-                .parse::<f64>()
-                .ok()
-                .filter(|x| x.is_finite())
-        };
-        let whole = |x: f64| number(x.abs(), 0, comma);
-        let place = match (angle(" degrees right"), angle(" degrees up")) {
-            (Some(h), Some(e)) => {
-                let across = match whole(h).as_str() {
-                    "0" => "in line with the opening view".to_string(),
-                    n => format!(
-                        "{n} degrees {} of the opening view",
-                        if h < 0.0 { "left" } else { "right" }
-                    ),
-                };
-                let up = match whole(e).as_str() {
-                    "0" => String::new(),
-                    n => format!(" and {n} degrees {}", if e < 0.0 { "down" } else { "up" }),
-                };
-                format!(", {across}{up}")
-            }
-            _ => String::new(),
-        };
+        let place = place(&said[at..], comma);
         return Some(format!("{WHAT} inside the dark region of the hole{place}."));
     }
     if let Some(at) = said.find("below the opening view") {
@@ -691,6 +677,100 @@ pub fn readout_sentence(line: &str, comma: bool) -> Option<String> {
         });
     }
     None
+}
+
+/// The one sentence that says where a mark of a direction of travel is on the sky, from the
+/// renderer's line saying that it drew it, or `None` for any other line.
+///
+/// `sky-render` says, for each mark it draws on a still,
+///
+/// ```text
+/// mark: a <shape> in <colour> at H degrees right of the opening view and E degrees up: <label>
+/// ```
+///
+/// with the label the panel gives that direction, such as "Direction of travel past the static
+/// observer". The sentence is this program's own - "A green ring marks the direction of travel past
+/// the static observer, 37 degrees right of the opening view." - with the angles to the whole
+/// degree as the read-outs' place is given. The reading is as lenient as [`readout_sentence`]'s:
+/// the angles are added where they read as numbers and left out where they do not; but a line
+/// without the shape, the colour or the label says nothing, because a sentence without them would
+/// not say which mark it is.
+pub fn mark_sentence(line: &str, comma: bool) -> Option<String> {
+    let said = line.strip_prefix("mark:")?.trim();
+    let (drawn, label) = said.split_once(": ")?;
+    let label = label.trim().trim_end_matches('.').trim_end();
+    let (sign, at) = drawn.split_once(" at ").unwrap_or((drawn, ""));
+    let sign = sign
+        .strip_prefix("a ")
+        .or_else(|| sign.strip_prefix("an "))?;
+    let (shape, colour) = sign.split_once(" in ")?;
+    let (shape, colour) = (shape.trim(), colour.trim());
+    if [shape, colour, label].iter().any(|s| s.is_empty()) {
+        return None;
+    }
+    let article = if colour.starts_with(['a', 'e', 'i', 'o', 'u', 'A', 'E', 'I', 'O', 'U']) {
+        "An"
+    } else {
+        "A"
+    };
+    // "Direction of travel ..." reads as "the direction of travel ..." in the middle of the
+    // sentence; a label that opens with a name or an initialism, such as "ZAMO", keeps its
+    // capitals, and one that brings its own article is not given another.
+    let first = label.split(' ').next().unwrap_or(label);
+    let ordinary = first.chars().next().is_some_and(char::is_uppercase)
+        && first.chars().skip(1).all(|c| !c.is_uppercase());
+    let label = if ordinary {
+        let mut chars = label.chars();
+        let initial = chars.next().map(|c| c.to_lowercase().to_string());
+        format!("{}{}", initial.unwrap_or_default(), chars.as_str())
+    } else {
+        label.to_string()
+    };
+    let the = if ["the ", "a ", "an "].iter().any(|a| label.starts_with(a)) {
+        ""
+    } else {
+        "the "
+    };
+    Some(format!(
+        "{article} {colour} {shape} marks {the}{label}{}.",
+        place(at, comma)
+    ))
+}
+
+/// Where the renderer says a thing is, as ", 37 degrees right of the opening view and 12 degrees
+/// up", from its "H degrees right of the opening view and E degrees up" anywhere in `said`: left
+/// for a negative H, "in line with the opening view" for an H that rounds to 0, the elevation only
+/// when it rounds to something else, and nothing at all when either angle does not read as a
+/// number. The angles are read with either decimal mark, and with a minus sign as well as a hyphen.
+fn place(said: &str, comma: bool) -> String {
+    let angle = |before: &str| -> Option<f64> {
+        let end = said.find(before)?;
+        let number = said[..end].rsplit(' ').next()?;
+        number
+            .replace(',', ".")
+            .replace('\u{2212}', "-")
+            .parse::<f64>()
+            .ok()
+            .filter(|x| x.is_finite())
+    };
+    let whole = |x: f64| number(x.abs(), 0, comma);
+    match (angle(" degrees right"), angle(" degrees up")) {
+        (Some(h), Some(e)) => {
+            let across = match whole(h).as_str() {
+                "0" => "in line with the opening view".to_string(),
+                n => format!(
+                    "{n} degrees {} of the opening view",
+                    if h < 0.0 { "left" } else { "right" }
+                ),
+            };
+            let up = match whole(e).as_str() {
+                "0" => String::new(),
+                n => format!(" and {n} degrees {}", if e < 0.0 { "down" } else { "up" }),
+            };
+            format!(", {across}{up}")
+        }
+        _ => String::new(),
+    }
 }
 
 /// `n` of `of` as a percentage to three significant figures, as `sky-render` writes it.

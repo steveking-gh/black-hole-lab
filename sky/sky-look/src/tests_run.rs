@@ -115,14 +115,26 @@ fn renderer_work() -> Vec<&'static str> {
     }
 }
 
-/// What a real renderer says on a run that works, near enough.
-const RENDERER_SAYS: [&str; 6] = [
-    "read-outs: 4 line(s) on a panel inside the dark region, centred 180 degrees right of the opening view and -20 degrees up, each line 2 degrees high",
+/// What a real renderer says on a run that works, near enough: two marks of directions of travel
+/// among the rest, one before the line on the read-outs and one after the counts, to show that
+/// the order of the sentences is this program's and not the renderer's.
+const RENDERER_SAYS: [&str; 8] = [
+    "mark: a ring in green at 37.25 degrees right of the opening view and 0 degrees up: Direction of travel past the static observer",
+    "read-outs: 6 line(s) on a panel inside the dark region, centred 180 degrees right of the opening view and -20 degrees up, each line 2 degrees high",
     "map C:\\maps\\starmap_2020_8k_gal.exr: 8192 x 4096 galactic, read in 0.6 s",
     "frame 0 (1/1), 1.00 frames/s, 0:00 left",
     "wrote view.jpg (7.3 MB), a JPEG marked as a 360-degree photograph, in 0.4 s",
     "pixels drawn over the 1 frame(s): unresolved 0 (0 %), under-sampled 16888 (0.0503 %), dark 20422816 (60.9 %)",
+    "mark: a diamond in green at -141.6 degrees right of the opening view and 8.4 degrees up: Direction of travel past the ZAMO",
     "A published video made from NASA's star maps must carry this credit:",
+];
+
+/// What this program says of the two marks in [`RENDERER_SAYS`], in order.
+const MARKS_SAID: [&str; 2] = [
+    "A green ring marks the direction of travel past the static observer, 37 degrees right of the \
+     opening view.",
+    "A green diamond marks the direction of travel past the ZAMO, 142 degrees left of the opening \
+     view and 8 degrees up.",
 ];
 
 /// The tracer's sentence for an observer inside the inner horizon, as it prints it.
@@ -305,12 +317,25 @@ fn test_a_view_that_is_made_ends_with_its_path_says_nothing_on_standard_error_an
         "the red is explained: {out}"
     );
 
-    // Where the read-outs went, in a sentence of this program's own.
-    assert!(
-        progress.contains(
-            &"The watch, radius and distant clock are written inside the dark region of the hole, \
-              180 degrees right of the opening view and 20 degrees down."
-        ),
+    // Where the read-outs went, then where each mark is, then the red, in sentences of this
+    // program's own and one after another.
+    let at = |sentence: &str| {
+        progress
+            .iter()
+            .position(|l| *l == sentence)
+            .unwrap_or_else(|| panic!("{sentence:?} is not said: {out}"))
+    };
+    let readouts = at(
+        "The read-outs are written inside the dark region of the hole, 180 degrees \
+                       right of the opening view and 20 degrees down.",
+    );
+    let red = progress
+        .iter()
+        .position(|l| l.starts_with("16888 pixels"))
+        .expect("the red is explained");
+    assert_eq!(
+        [at(MARKS_SAID[0]), at(MARKS_SAID[1]), red],
+        [readouts + 1, readouts + 2, readouts + 3],
         "{out}"
     );
     assert!(
@@ -346,7 +371,12 @@ fn test_a_view_that_is_made_ends_with_its_path_says_nothing_on_standard_error_an
 
     // What the two programs were asked for.
     let traced = case.args_of("sky-trace").expect("the tracer ran");
-    for word in ["--observer bob", "--frames 1", "--grid 4096x2048"] {
+    for word in [
+        "--observer bob",
+        "--frames 1",
+        "--grid 4096x2048",
+        "--units physical",
+    ] {
         assert!(traced.contains(word), "{traced}");
     }
     let rendered = case.args_of("sky-render").expect("the renderer ran");
@@ -518,6 +548,44 @@ fn test_keep_moves_the_bundle_beside_the_photograph_and_says_where() {
 }
 
 #[test]
+fn test_units_reach_the_tracer_and_units_it_does_not_take_are_refused_before_it_starts() {
+    let case = Case::new("units", SAVE);
+    case.tracer(&[Step::Exit(0)]);
+    case.renderer(&[Step::Exit(0)]);
+    let (code, out, err) = case.run(&["--units", "geometric"]);
+    assert_eq!((code, err.as_str()), (0, ""), "{out}");
+    let traced = case.args_of("sky-trace").expect("the tracer ran");
+    assert!(
+        traced.contains("--units geometric") && !traced.contains("physical"),
+        "{traced}"
+    );
+    assert!(
+        !case
+            .args_of("sky-render")
+            .expect("the renderer ran")
+            .contains("--units"),
+        "the renderer paints what the tracer wrote"
+    );
+
+    let refused = Case::new("units-refused", SAVE);
+    refused.tracer(&[Step::Exit(0)]);
+    refused.renderer(&[Step::Exit(0)]);
+    let (code, out, err) = refused.run(&["--units", "imperial"]);
+    assert_eq!(code, 1, "a command line, not a moment: {err}");
+    assert_eq!(out, "", "nothing was started, so there is no progress");
+    assert!(
+        err.starts_with("There are no units \"imperial\"; --units is physical")
+            && err.ends_with(".\n"),
+        "{err}"
+    );
+    assert_eq!(
+        refused.args_of("sky-trace"),
+        None,
+        "the tracer was not started"
+    );
+}
+
+#[test]
 fn test_a_save_set_to_the_decimal_comma_gets_comma_read_outs_and_names() {
     let case = Case::new(
         "comma",
@@ -542,6 +610,10 @@ fn test_a_save_set_to_the_decimal_comma_gets_comma_read_outs_and_names() {
         "{out}"
     );
     assert!(out.contains("(0,0503 % of the picture)"), "{out}");
+    // The marks' angles are whole degrees, which no decimal mark touches.
+    for said in MARKS_SAID {
+        assert!(out.contains(said), "{said}: {out}");
+    }
 }
 
 #[test]

@@ -8,11 +8,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::args::{self, Request, Who};
+use crate::args::{self, Request, Units, Who};
 use crate::find::{self, FETCH_SCRIPT, Names, SKY_MAP, SKY_MAP_ENV, Search};
 use crate::names;
 use crate::open::{self, Viewer};
-use crate::run::{Tally, parse_tally, readout_sentence, red_sentence};
+use crate::run::{Tally, mark_sentence, parse_tally, readout_sentence, red_sentence};
 use crate::save;
 use crate::scratch::{self, STALE};
 
@@ -678,6 +678,22 @@ fn test_the_command_line_needs_a_save_and_an_observer_and_refuses_what_the_tools
     };
     assert_eq!(o.viewer, Some(PathBuf::from(r"C:\tools\viewer.exe")));
     assert_eq!(parse("--help"), Ok(Request::Help));
+    // The read-outs are in seconds and kilometres unless the command line asks for M.
+    for (line, units) in [
+        ("x.bhl --observer bob", Units::Physical),
+        ("x.bhl --observer bob --units physical", Units::Physical),
+        ("x.bhl --units geometric --observer bob", Units::Geometric),
+    ] {
+        let Ok(Request::Look(o)) = parse(line) else {
+            panic!("a look: {line}")
+        };
+        assert_eq!(o.units, units, "{line}");
+    }
+    assert_eq!(
+        (Units::Physical.flag(), Units::Geometric.flag()),
+        ("physical", "geometric"),
+        "the words sky-trace --units takes"
+    );
     for (line, words) in [
         ("--observer bob", "No save"),
         ("x.bhl", "--observer is required"),
@@ -685,6 +701,15 @@ fn test_the_command_line_needs_a_save_and_an_observer_and_refuses_what_the_tools
         ("x.bhl --observer bob --grid 100x100", "twice as wide"),
         ("x.bhl --observer bob --grid 32768x16384", "more rays"),
         ("x.bhl --observer bob --exposure nan", "--exposure"),
+        (
+            "x.bhl --observer bob --units si",
+            "There are no units \"si\"; --units is physical",
+        ),
+        ("x.bhl --observer bob --units", "--units needs a value"),
+        (
+            "x.bhl --observer bob --units physical --units geometric",
+            "--units is given twice",
+        ),
         ("x.bhl --observer bob --fast", "no option --fast"),
         // The held video is gone, and its option with it: refused as any unknown option is.
         (
@@ -710,7 +735,7 @@ fn test_the_renderers_line_on_the_read_outs_becomes_one_sentence_saying_where_th
     assert_eq!(
         readout_sentence(inside, false).as_deref(),
         Some(
-            "The watch, radius and distant clock are written inside the dark region of the hole, \
+            "The read-outs are written inside the dark region of the hole, \
              180 degrees right of the opening view and 20 degrees down."
         )
     );
@@ -719,7 +744,7 @@ fn test_the_renderers_line_on_the_read_outs_becomes_one_sentence_saying_where_th
     assert_eq!(
         readout_sentence(ahead, false).as_deref(),
         Some(
-            "The watch, radius and distant clock are written inside the dark region of the hole, \
+            "The read-outs are written inside the dark region of the hole, \
              in line with the opening view."
         )
     );
@@ -736,14 +761,14 @@ fn test_the_renderers_line_on_the_read_outs_becomes_one_sentence_saying_where_th
     let odd = "read-outs: 4 line(s) on a panel inside the dark region, somewhere";
     assert_eq!(
         readout_sentence(odd, false).as_deref(),
-        Some("The watch, radius and distant clock are written inside the dark region of the hole.")
+        Some("The read-outs are written inside the dark region of the hole.")
     );
     let below = "read-outs: 4 line(s) on a panel below the opening view, because the dark region \
                  is 3 degrees across and the panel needs 9";
     assert_eq!(
         readout_sentence(below, false).as_deref(),
         Some(
-            "The watch, radius and distant clock are written below the opening view, because the \
+            "The read-outs are written below the opening view, because the \
              dark region is 3 degrees across and the panel needs 9."
         )
     );
@@ -753,7 +778,7 @@ fn test_the_renderers_line_on_the_read_outs_becomes_one_sentence_saying_where_th
             false
         )
         .as_deref(),
-        Some("The watch, radius and distant clock are written below the opening view.")
+        Some("The read-outs are written below the opening view.")
     );
     // Any other line, the renderer's older read-out lines included, says nothing.
     for line in [
@@ -763,6 +788,85 @@ fn test_the_renderers_line_on_the_read_outs_becomes_one_sentence_saying_where_th
         "the region inside the dark region is dark",
     ] {
         assert_eq!(readout_sentence(line, false), None, "{line}");
+    }
+}
+
+#[test]
+fn test_each_mark_the_renderer_draws_becomes_one_sentence_saying_what_it_marks_and_where() {
+    let say = |line: &str| mark_sentence(line, false);
+    assert_eq!(
+        say(
+            "mark: a ring in green at 37.25 degrees right of the opening view and 0 degrees up: \
+             Direction of travel past the static observer"
+        )
+        .as_deref(),
+        Some(
+            "A green ring marks the direction of travel past the static observer, 37 degrees \
+             right of the opening view."
+        )
+    );
+    // Left for a negative angle, the elevation when it rounds to more than 0, and the ZAMO's
+    // capitals kept where they come after an ordinary word.
+    assert_eq!(
+        say(
+            "mark: a diamond in green at -141.6 degrees right of the opening view and 8.4 degrees \
+             up: Direction of travel past the ZAMO"
+        )
+        .as_deref(),
+        Some(
+            "A green diamond marks the direction of travel past the ZAMO, 142 degrees left of the \
+             opening view and 8 degrees up."
+        )
+    );
+    // Straight ahead, below the horizon, with a minus sign and the decimal comma.
+    assert_eq!(
+        say(
+            "mark: a triangle in green at 0,3 degrees right of the opening view and \u{2212}12,6 \
+             degrees up: Direction of travel past the raindrop"
+        )
+        .as_deref(),
+        Some(
+            "A green triangle marks the direction of travel past the raindrop, in line with the \
+             opening view and 13 degrees down."
+        )
+    );
+    // A label that opens with an initialism keeps its capitals; one with its own article is not
+    // given another; a colour that starts with a vowel takes "An".
+    assert_eq!(
+        say(
+            "mark: a ring in orange at 10 degrees right of the opening view and 0 degrees up: \
+             ZAMO's direction of travel."
+        )
+        .as_deref(),
+        Some(
+            "An orange ring marks the ZAMO's direction of travel, 10 degrees right of the opening \
+             view."
+        )
+    );
+    assert_eq!(
+        say("mark: a ring in green at 5 degrees right of the opening view and 0 degrees up: The way Bob goes")
+            .as_deref(),
+        Some("A green ring marks the way Bob goes, 5 degrees right of the opening view.")
+    );
+    // Angles that do not read as numbers are left out, and the mark is still named.
+    assert_eq!(
+        say("mark: a ring in green at somewhere: Direction of travel past the static observer")
+            .as_deref(),
+        Some("A green ring marks the direction of travel past the static observer.")
+    );
+    // A line without the shape, the colour or the label, or any other line, says nothing.
+    for line in [
+        "mark: a ring in green at 37 degrees right of the opening view and 0 degrees up",
+        "mark: a ring in green at 37 degrees right of the opening view and 0 degrees up: ",
+        "mark: ring in green at 37 degrees right of the opening view and 0 degrees up: Travel",
+        "mark: a ring at 37 degrees right of the opening view and 0 degrees up: Travel",
+        "mark: a  in green at 37 degrees right of the opening view and 0 degrees up: Travel",
+        "marks: 2 drawn",
+        "read-outs: 4 line(s) on a panel inside the dark region, centred 180 degrees right of the \
+         opening view and -20 degrees up, each line 2 degrees high",
+        "frame 0 (1/1), 1.00 frames/s, 0:00 left",
+    ] {
+        assert_eq!(say(line), None, "{line}");
     }
 }
 
