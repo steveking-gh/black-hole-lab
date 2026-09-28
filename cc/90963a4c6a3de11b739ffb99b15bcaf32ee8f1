@@ -1,0 +1,30 @@
+sky/sky-trace/src/args.rs
+  s_fa4e4937427d8c::t_428ba5ce09273d 110
+sky/sky-trace/src/units/tests.rs
+  s_fa4e4937427d8c::t_428ba5ce09273d 180
+sky/sky-trace/src/bhl.rs
+  s_fa4e4937427d8c::t_428ba5ce09273d 34-38
+sky/sky-trace/src/units.rs
+  s_fa4e4937427d8c::t_428ba5ce09273d 10,16-19,46-47,56-57
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "cc90963a4c6a3de11b739ffb99b15bcaf32ee8f1",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_fa4e4937427d8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c3c93472-9aee-43ec-8624-e30a21d0ed6f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
