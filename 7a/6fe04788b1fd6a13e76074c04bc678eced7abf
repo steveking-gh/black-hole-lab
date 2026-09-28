@@ -1,0 +1,58 @@
+sky/sky-trace/src/travel/dd.rs
+  s_fa4e4937427d8c::t_016193a824ee55 1-346
+sky/sky-format/src/tests.rs
+  s_fa4e4937427d8c::t_2af0d9e53487dd 364,367-375
+  s_fa4e4937427d8c::t_e72e2fcc90964a 256-336,340-356,361-363,365-366,376-378
+  s_fa4e4937427d8c::t_eafaa4c9d6ae02 337-339,357-360
+sky/sky-trace/src/trace_tests.rs
+  s_fa4e4937427d8c::t_c5415c55e7f3f8 12,131-132,139-170,208-231,276,378-381,439-583,619,626-629
+  s_fa4e4937427d8c::t_ff73070db34f5c 584-618,620-625,630
+sky/sky-trace/src/travel/tests.rs
+  s_fa4e4937427d8c::t_522c03ad3cc2de 1-804
+sky/sky-trace/src/film.rs
+  s_fa4e4937427d8c::t_e34d492faccfdc 62-72,84-85,89-90,323-367,378-385,387-390,394-450,452,458-462,472-479,481,503-505,559,561
+sky/sky-trace/src/lib.rs
+  s_fa4e4937427d8c::t_da5a0989111bba 12-15,19-20
+sky/sky-trace/src/travel.rs
+  s_fa4e4937427d8c::t_eafe5b73d24307 1-117,124-154,164-243,247-257,259-264,266-267,278-445,447-457,466-497,503-510,512-523,587-588,591-592,594-599,602-611
+  s_fa4e4937427d8c::t_522c03ad3cc2de 155-163,498,500-502,511,536-538,540-541,543-547,572-573
+  s_fa4e4937427d8c::t_e34d492faccfdc 244-246,258,268-277,446,458-465,526-535,539,542,548-571,574-585,589-590,593,600-601
+  s_fa4e4937427d8c::t_07162e1c6b293c 499
+  s_fa4e4937427d8c::t_6e3adc8890c18c 118-123
+  s_fa4e4937427d8c::t_016193a824ee55 265,524-525,586
+sky/sky-trace/src/args.rs
+  s_fa4e4937427d8c::t_2d145d8294cd64 11-12,47-52,98-106,108-111,186-187,206,218,504-513,524
+sky/sky-trace/src/units.rs
+  s_fa4e4937427d8c::t_fe5bb53d1ac358 30-33,35-45,47-50,91-98,137,139
+  s_fa4e4937427d8c::t_8aeece6ed39339 1-29,34,46,51-90,99-136,138,140-149
+sky/sky-trace/src/units/tests.rs
+  s_fa4e4937427d8c::t_ee543e20c59fa3 1-213
+sky/kerr-sky/src/observer.rs
+  s_fa4e4937427d8c::t_eafaa4c9d6ae02 256
+  s_fa4e4937427d8c::t_393309da53962e 212-216,250-255,257-265,305-306,469-482,485-492,776-791,795-797,799-829
+  s_fa4e4937427d8c::t_0c035d0098371a 794,798
+  s_fa4e4937427d8c::t_842a0f3691520d 792-793
+sky/sky-trace/src/trace.rs
+  s_fa4e4937427d8c::t_4778b3c0ac2d4f 175-185,218-220,222-232,278-279,296
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "7a6fe04788b1fd6a13e76074c04bc678eced7abf",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_fa4e4937427d8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c3c93472-9aee-43ec-8624-e30a21d0ed6f",
+        "model": "unknown"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
