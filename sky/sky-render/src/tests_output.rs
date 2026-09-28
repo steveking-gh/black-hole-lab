@@ -415,7 +415,10 @@ fn test_the_style_line_is_the_approved_trials_at_the_default_size_and_scales_wit
     let line = subtitles::style_line(&big);
     let fields: Vec<&str> = line.trim_start_matches("Style: ").split(',').collect();
     assert_eq!(fields.len(), 23);
-    assert_eq!((fields[1], fields[2], fields[16]), ("Courier New", "54", "6"));
+    assert_eq!(
+        (fields[1], fields[2], fields[16]),
+        ("Courier New", "54", "6")
+    );
     assert_eq!((fields[15], fields[18]), ("3", "3"));
     // The script states the resolution the size is measured against, and turns wrapping off.
     let (series, timeline) = film(&decls());
