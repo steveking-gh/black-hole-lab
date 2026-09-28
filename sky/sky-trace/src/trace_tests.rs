@@ -9,6 +9,7 @@ use kerr_equatorial::KerrSchild;
 use sky_format::{BundleReader, Num, STOPWATCH};
 use sky_trace::bhl;
 use sky_trace::film::{self, DISTANT_CLOCK, RADIUS, WATCH};
+use sky_trace::travel;
 use sky_trace::worldline::Worldline;
 
 use crate::run;
@@ -127,12 +128,44 @@ fn test_a_save_is_filmed_at_the_promised_proper_times_with_the_right_read_outs()
         .map(|r| (r.id.as_str(), r.label.as_str(), r.unit.as_str(), r.decimals))
         .collect();
     assert_eq!(
-        declared,
-        vec![
+        declared[..4],
+        [
             (STOPWATCH, "Stopwatch", "M", 3),
             (WATCH, "Watch", "M", 3),
             (RADIUS, "Radius", "M", 3),
             (DISTANT_CLOCK, "Distant clock", "M", 2),
+        ]
+    );
+    // The travel read-outs follow: Bob starts at 2.27 M, outside the static limit, and in six
+    // frames of 1/120 M is nowhere near it, so the static observer and the ZAMO are both there.
+    let ids: Vec<&str> = declared[4..].iter().map(|d| d.0).collect();
+    assert_eq!(
+        ids,
+        [
+            "speed_static",
+            "heading_static",
+            "speed_zamo",
+            "heading_zamo"
+        ]
+    );
+    let marks: Vec<(&str, &str, &str)> = m
+        .marks
+        .iter()
+        .map(|k| (k.id.as_str(), k.label.as_str(), k.shape.as_str()))
+        .collect();
+    assert_eq!(
+        marks,
+        [
+            (
+                "travel_static",
+                "Direction of travel past the static observer",
+                "ring"
+            ),
+            (
+                "travel_zamo",
+                "Direction of travel past the ZAMO",
+                "diamond"
+            ),
         ]
     );
 
@@ -171,6 +204,30 @@ fn test_a_save_is_filmed_at_the_promised_proper_times_with_the_right_read_outs()
         assert_eq!((r, theta), (readout(RADIUS), std::f64::consts::FRAC_PI_2));
         assert_eq!(t, readout(DISTANT_CLOCK));
         assert!((phi - e.phi).abs() < 1e-12);
+
+        // The travel past each reference observer, as `travel` computes it at the event.
+        let kerr = kerr_sky::Kerr::from_equatorial(&metric);
+        let passings = travel::passing(&kerr, &e, &film::triad(&kerr, &e).unwrap());
+        for p in &passings {
+            let id = p.reference.id();
+            assert_eq!(readout(&format!("speed_{id}")), p.speed, "frame {k}");
+            let n = entry
+                .marks
+                .get(&format!("travel_{id}"))
+                .map(|n| n.map(|c| c.0));
+            assert_eq!(n, p.direction, "frame {k}");
+            // The written heading is the direction's, up to whole turns (a film's heading is
+            // continuous) and up to its rounding bound (zero to rounding is written +0.0).
+            if let Some(heading) = p.heading() {
+                let written = readout(&format!("heading_{id}"));
+                let off = written - heading;
+                let off = off - 360.0 * (off / 360.0).round();
+                assert!(
+                    off.abs() <= p.heading_rounding().max(1e-12),
+                    "frame {k}: {written} written for {heading}"
+                );
+            }
+        }
 
         // The specification's rule for rays not of the far sky, in every frame written.
         let frame = reader.read_frame(k as u32).unwrap();
@@ -216,6 +273,7 @@ fn test_resume_traces_only_the_missing_frame_and_refuses_other_settings() {
         ("--solar-masses", "10", "mass in solar masses"),
         ("--frames", "4", "length (--frames or --seconds)"),
         ("--hover", "7", "save or hover test"),
+        ("--units", "geometric", "read-outs or their units (--units)"),
     ] {
         let mut other = resumed.clone();
         let at = other.iter().position(|a| *a == change);
@@ -317,6 +375,10 @@ fn test_each_bad_command_line_is_refused_with_its_own_sentence() {
             vec![&save, "--out", &out, "--threads", "0"],
             "--threads wants",
         ),
+        (
+            vec![&save, "--out", &out, "--units", "metric"],
+            "--units wants physical",
+        ),
         (vec![&golden, "--out", &out], "does not end within"),
         (
             vec!["--info", &save, "--out", &out],
@@ -373,4 +435,196 @@ fn test_each_bad_command_line_is_refused_with_its_own_sentence() {
         m_solar: 1.0,
     };
     assert!(film::hover_observer(&metric, 2.0001).is_ok());
+}
+
+#[test]
+fn test_the_read_outs_are_displayed_in_seconds_and_kilometres_unless_geometric_is_asked_for() {
+    // The same film twice, --units physical by default and --units geometric: the values stored
+    // are the same to the bit, and only the declarations differ, by a display on each of the four
+    // clocks and the ruler. Bob's six frames at Sagittarius A* span 0.04 M of proper time, so
+    // the stopwatch and the watch are shown in the unit of one M, 20.44 s: seconds; the distant
+    // clock, t from 0 to 0.06 M, in seconds too. The radius, 2.27 M, is 13.89 million km.
+    let scratch = Scratch::new("units");
+    let save = repo_file("demos/near_fall.bhl")
+        .to_string_lossy()
+        .into_owned();
+    let (physical, geometric) = (scratch.join("physical"), scratch.join("geometric"));
+    for (out, more) in [
+        (&physical, vec![]),
+        (&geometric, vec!["--units", "geometric"]),
+    ] {
+        let mut args = vec![
+            save.as_str(),
+            "--out",
+            out,
+            "--grid",
+            "8x4",
+            "--frames",
+            "6",
+        ];
+        args.extend(more);
+        quiet(&args).unwrap().unwrap();
+    }
+    let physical = BundleReader::open(&physical).unwrap().manifest().clone();
+    let geometric = BundleReader::open(&geometric).unwrap().manifest().clone();
+    assert!(geometric.readouts.iter().all(|r| r.display.is_none()));
+    let seconds = 4.15e6 * bhl::GM_SUN_OVER_C3_SECONDS;
+    let shown: Vec<(&str, &str, f64, u32)> = physical.readouts[..4]
+        .iter()
+        .map(|r| {
+            let d = r.display.as_ref().expect("a display on each of the four");
+            (r.id.as_str(), d.unit.as_str(), d.scale.0, d.decimals)
+        })
+        .collect();
+    let million_km = seconds * 299_792.458 / 1e6;
+    assert_eq!(
+        shown,
+        [
+            (STOPWATCH, "s", seconds, 2),
+            (WATCH, "s", seconds, 2),
+            (RADIUS, "million km", million_km, 2),
+            (DISTANT_CLOCK, "s", seconds, 2),
+        ]
+    );
+    assert!(physical.readouts[4..].iter().all(|r| r.display.is_none()));
+    let strip = |m: &sky_format::Manifest| {
+        let mut m = m.clone();
+        for r in &mut m.readouts {
+            r.display = None;
+        }
+        m
+    };
+    assert_eq!(
+        strip(&physical),
+        strip(&geometric),
+        "the same bundle in other units"
+    );
+    // Either way it is a valid manifest, and it survives JSON to the bit.
+    for m in [&physical, &geometric] {
+        m.validate().unwrap();
+        assert_eq!(&sky_format::Manifest::from_json(&m.to_json()).unwrap(), m);
+    }
+}
+
+#[test]
+fn test_a_still_of_bob_says_which_side_its_headings_are_on() {
+    // One frame of Bob, as the app's Look Around makes it: the headings are magnitudes, each with
+    // the side in its unit, and the manifest is valid and survives JSON. And a longer film of the
+    // same save, through the ergosphere and r+, gives signed headings in one unit, and quotes
+    // each reference observer exactly where it exists.
+    let scratch = Scratch::new("still");
+    let save = repo_file("demos/near_fall.bhl")
+        .to_string_lossy()
+        .into_owned();
+    let still = scratch.join("still");
+    quiet(&[&save, "--out", &still, "--grid", "8x4", "--frames", "1"])
+        .unwrap()
+        .unwrap();
+    let m = BundleReader::open(&still).unwrap().manifest().clone();
+    m.validate().unwrap();
+    assert_eq!(sky_format::Manifest::from_json(&m.to_json()).unwrap(), m);
+    let entry = &m.frames[0];
+    let headings: Vec<_> = m
+        .readouts
+        .iter()
+        .filter(|r| r.id.starts_with("heading_"))
+        .collect();
+    assert!(!headings.is_empty());
+    for r in headings {
+        let value = entry.readouts[&r.id].0;
+        assert!(value >= 0.0, "{}: {value}", r.id);
+        assert!(
+            r.unit == travel::RIGHT_OF_THE_HOLE || r.unit == travel::LEFT_OF_THE_HOLE,
+            "{}",
+            r.unit
+        );
+        // The side agrees with the mark: to the viewer's right is -y.
+        let n = entry.marks[&format!("travel_{}", &r.id["heading_".len()..])];
+        assert_eq!(
+            n[1].0 <= 0.0,
+            r.unit == travel::RIGHT_OF_THE_HOLE,
+            "{}",
+            r.id
+        );
+    }
+
+    let film = scratch.join("film");
+    quiet(&[
+        &save, "--out", &film, "--grid", "8x4", "--frames", "4", "--rate", "36",
+    ])
+    .unwrap()
+    .unwrap();
+    let m = BundleReader::open(&film).unwrap().manifest().clone();
+    m.validate().unwrap();
+    for r in m.readouts.iter().filter(|r| r.id.starts_with("heading_")) {
+        assert_eq!(r.unit, travel::RIGHT_OF_THE_HOLE);
+    }
+    let r_plus = KerrSchild {
+        m: 1.0,
+        a: 0.9,
+        m_solar: 1.0,
+    }
+    .outer_horizon();
+    let mut seen = [false; 3];
+    for entry in &m.frames {
+        let r = entry.readouts[RADIUS].0;
+        let quoted = [
+            entry.readouts.contains_key("speed_static"),
+            entry.readouts.contains_key("speed_zamo"),
+            entry.readouts.contains_key("speed_raindrop"),
+        ];
+        assert_eq!(quoted, [r > 2.0, r > r_plus, r <= r_plus], "r = {r}");
+        for (s, q) in seen.iter_mut().zip(quoted) {
+            *s |= q;
+        }
+    }
+    assert_eq!(seen, [true; 3], "the film passes through all three regions");
+}
+
+#[test]
+fn test_a_resumed_film_writes_the_same_continuous_headings() {
+    // Bob's whole fall in 60 frames: his heading past the raindrop sits at 180 from frame 46 on,
+    // where the written values are unwrapped from frame 46's. Frames lost on either side of that
+    // run and traced again by --resume must come back with the same values to the bit, since
+    // they follow from the walk of the whole worldline and not from what was written before.
+    let scratch = Scratch::new("resume-headings");
+    let out = scratch.join("bob");
+    let save = repo_file("demos/near_fall.bhl")
+        .to_string_lossy()
+        .into_owned();
+    let line = [
+        save.as_str(),
+        "--out",
+        &out,
+        "--grid",
+        "8x4",
+        "--frames",
+        "60",
+        "--rate",
+        "1.98",
+    ];
+    quiet(&line).unwrap().unwrap();
+    let whole = BundleReader::open(&out).unwrap().manifest().clone();
+    let raindrop: Vec<f64> = whole.frames[46..]
+        .iter()
+        .map(|f| f.readouts["heading_raindrop"].0)
+        .collect();
+    assert!(
+        raindrop
+            .iter()
+            .all(|h| (h.abs() - 180.0).abs() < 1e-6 && h.signum() == raindrop[0].signum()),
+        "{raindrop:?}"
+    );
+    for k in [10, 47, 59] {
+        std::fs::remove_file(Path::new(&out).join(sky_format::frame_file_name(k))).unwrap();
+    }
+    let mut resumed = line.to_vec();
+    resumed.push("--resume");
+    let summary = quiet(&resumed).unwrap().unwrap();
+    assert_eq!((summary.written, summary.skipped), (3, 57));
+    let again = BundleReader::open(&out).unwrap().manifest().clone();
+    assert_eq!(
+        again, whole,
+        "the resumed bundle's manifest is the first one, to the bit"
+    );
 }

@@ -209,6 +209,11 @@ struct Reference {
     gamma: f64,
     /// Speed relative to the raindrop.
     beta: f64,
+    /// Celerity gamma beta relative to the raindrop: the length of the observer's velocity in
+    /// the raindrop's (e1, e2).
+    celerity: f64,
+    /// A bound on the rounding error of `celerity` (see [`Triad::celerity`]).
+    celerity_rounding: f64,
     /// 1 - beta, as 1 / (gamma (gamma + gamma beta)): never by subtraction.
     one_minus_beta: f64,
     /// Unit direction of the observer's velocity in the raindrop's (e1, e2).
@@ -242,6 +247,22 @@ impl Reference {
         let c = Self::components(kerr, r, &rain, &observer.u);
         let gamma = c[0];
         let speed = c[1].hypot(c[2]);
+        // Each of c1 and c2 is a sum of nine products g_{mu nu} u^mu e^nu, formed from numbers
+        // that each carry a rounding of their own: the metric's components, u, and legs built
+        // from the raindrop's closed form. Its error is a few units of rounding of the sum of the
+        // products' sizes, whatever the size of the answer; 8 of them bounds it with room (the
+        // test below measures the raindrop against itself, where the answer is the error).
+        let g = eq.metric_components(r);
+        let size = |e: &[f64; 3]| {
+            let mut sum = 0.0;
+            for (i, row) in g.iter().enumerate() {
+                for (j, g_ij) in row.iter().enumerate() {
+                    sum += (g_ij * observer.u[i] * e[j]).abs();
+                }
+            }
+            sum
+        };
+        let celerity_rounding = 8.0 * f64::EPSILON * (size(&rain.e1) + size(&rain.e2));
         let (dir, beta, one_minus_beta) = if speed > 0.0 {
             // gamma^2 - (gamma beta)^2 = 1 for a unit u, so 1 - beta = 1 / (gamma (gamma + gamma beta)).
             (
@@ -281,6 +302,8 @@ impl Reference {
             ],
             gamma,
             beta,
+            celerity: speed,
+            celerity_rounding,
             one_minus_beta,
             dir,
             turn,
@@ -443,8 +466,30 @@ impl Triad {
         (self.reference.gamma, self.reference.one_minus_beta)
     }
 
+    /// The observer's celerity gamma beta relative to the raindrop at the same event, and a bound
+    /// on its rounding error.
+    ///
+    /// The celerity is the length of the observer's velocity components (c1, c2) in the
+    /// raindrop's frame, each a dot product of u with a leg of order one, so its error does not
+    /// grow with the boost relative to its size. But it is an absolute error: an observer who is
+    /// the raindrop, or all but, gets a celerity of a few roundings pointing anywhere. Where the
+    /// celerity is not larger than the bound, the observer is at rest relative to the raindrop as
+    /// far as f64 can tell, and [`Triad::forward`] names no direction; where it is, `forward` is
+    /// good to about bound / celerity radians.
+    pub fn celerity(&self) -> (f64, f64) {
+        (self.reference.celerity, self.reference.celerity_rounding)
+    }
+
     /// The direction of the observer's motion relative to the raindrop, in the triad: where the
     /// sky crowds when the boost is large.
+    ///
+    /// It is also the direction in which the observer sees itself travel past the raindrop. The
+    /// observer's frame is the raindrop's boosted by beta along dir, and in the boosted frame the
+    /// raindrop moves at beta along -dir, the boosted legs' own components; so the observer moves
+    /// past it along +dir of the boosted legs, which the turn carries into the triad. There is no
+    /// cancellation in it at any boost: dir is two components of order one over their length,
+    /// and the turn is exact. It means nothing where [`Triad::celerity`] says the observer is at
+    /// rest relative to the raindrop.
     pub fn forward(&self) -> [f64; 3] {
         let f = &self.reference;
         let [c, s] = f.turn;
@@ -726,6 +771,60 @@ mod tests {
         println!(
             "conditioned against direct: {worst:.1e}; sky_direction round trip {worst_back:.1e}"
         );
+    }
+
+    #[test]
+    fn test_the_raindrop_is_at_rest_relative_to_itself_to_within_the_rounding_bound() {
+        // The raindrop's own 4-velocity, handed in as an observer's, must come out with a
+        // celerity no larger than the bound `celerity` states, at every radius and spin, through
+        // both horizons and down to just outside r-: the answer there is exactly zero, so what is
+        // measured is the rounding itself. And an observer who does move relative to the raindrop,
+        // by the other observers of this module, must come out far above it.
+        let mut worst = 0.0f64;
+        let mut moving = f64::INFINITY;
+        for &a in &[0.0, 0.5, 0.9, 0.998] {
+            let kerr = Kerr::new(1.0, a);
+            let eq = kerr.equatorial();
+            let (rp, rm) = (kerr.outer_horizon(), kerr.inner_horizon());
+            let mut radii = vec![40.0, 6.0, 2.0, 1.0 + 1e-9, rp + 1e-9, rp, rp - 1e-9];
+            radii.extend([0.5 * (rp + rm), 1.001 * rm, rm + 1e-9, 0.3]);
+            for r in radii {
+                // Outside r- and off the ring: at a = 0, r- is 0 and "just outside r-" is the
+                // singularity itself.
+                if r <= rm || r < 0.05 {
+                    continue;
+                }
+                let rain = GeodesicState::new_infall(&eq, 0.0, r, 1.0, 0.0).u;
+                let obs = Observer::new(&kerr, r, 0.4, rain).unwrap();
+                let t = Triad::new(&kerr, &obs, 0.0);
+                let (celerity, rounding) = t.celerity();
+                assert!(
+                    celerity <= rounding,
+                    "the raindrop at r = {r}, a = {a} moves past itself at {celerity:e}, above \
+                     the bound {rounding:e}"
+                );
+                worst = worst.max(celerity / rounding);
+                for (name, u) in observers(&kerr, r) {
+                    // The helper's closed forms are not all good 4-velocities at every radius of
+                    // this list (an orbit a whisker outside its photon orbit is not); those are
+                    // not what this test is about.
+                    let Ok(obs) = Observer::new(&kerr, r, 0.4, u) else {
+                        continue;
+                    };
+                    if name == "raindrop" {
+                        continue;
+                    }
+                    let t = Triad::new(&kerr, &obs, 0.0);
+                    let (celerity, rounding) = t.celerity();
+                    moving = moving.min(celerity / rounding);
+                }
+            }
+        }
+        println!(
+            "the raindrop's celerity past itself reaches {worst:.3} of the bound; the other \
+             observers' is at least {moving:.1e} times it"
+        );
+        assert!(moving > 1e6, "{moving}");
     }
 
     #[test]

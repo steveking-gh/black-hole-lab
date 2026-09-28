@@ -9,7 +9,13 @@
 //! planes from `kerr-sky`, the manifest entry - and states the manifest of the whole film. It is
 //! pure too: the program opens the save and writes the bundle, and the tests run all of it on
 //! grids of a few pixels.
+//!
+//! `units` chooses the seconds and kilometres a renderer shows the clock and ruler read-outs in,
+//! and `travel` the direction and speed of the observer's travel past each local reference
+//! observer, which the bundle carries as read-outs and as marks on the sky.
 
 pub mod bhl;
 pub mod film;
+pub mod travel;
+pub mod units;
 pub mod worldline;

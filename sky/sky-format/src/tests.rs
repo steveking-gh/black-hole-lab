@@ -253,6 +253,129 @@ fn test_a_manifest_with_a_field_this_build_does_not_know_still_opens() {
     assert_eq!(back, sample_manifest(8, 4));
 }
 
+/// The sample manifest with a display on the stopwatch, two marks, and a frame that carries one.
+fn manifest_with_displays_and_marks() -> Manifest {
+    let mut manifest = sample_manifest(8, 4);
+    manifest.readouts[0].display = Some(Display {
+        unit: "min".into(),
+        scale: Num(1.0 / 60.0),
+        decimals: 3,
+    });
+    manifest.marks = vec![
+        MarkDecl {
+            id: "travel_zamo".into(),
+            label: "Direction of travel past the ZAMO".into(),
+            shape: "diamond".into(),
+        },
+        MarkDecl {
+            id: "travel_static".into(),
+            label: "Direction of travel past the static observer".into(),
+            shape: "ring".into(),
+        },
+    ];
+    let mut entry = FrameEntry::new(0, 10.0)
+        .with_readout(STOPWATCH, 0.0)
+        .with_mark("travel_zamo", [0.6, -0.8, 0.0]);
+    entry.bytes = 99;
+    manifest.frames.push(entry);
+    manifest
+}
+
+#[test]
+fn test_a_manifest_without_displays_or_marks_reads_as_before_and_one_with_them_round_trips() {
+    // Written without them, neither field appears in the text, so an older reader sees exactly
+    // what it saw before they existed; and the text reads back to the same manifest.
+    let plain = sample_manifest(8, 4);
+    let text = plain.to_json();
+    assert!(
+        !text.contains("\"display\"") && !text.contains("\"marks\""),
+        "{text}"
+    );
+    assert_eq!(Manifest::from_json(&text).unwrap(), plain);
+
+    // With them, to the bit, the mark's direction included.
+    let full = manifest_with_displays_and_marks();
+    full.validate().unwrap();
+    let text = full.to_json();
+    assert!(text.contains("\"display\"") && text.contains("\"marks\""));
+    let back = Manifest::from_json(&text).unwrap();
+    assert_eq!(back, full);
+    assert_eq!(
+        back.frames[0].marks["travel_zamo"].map(|c| c.0),
+        [0.6, -0.8, 0.0]
+    );
+}
+
+#[test]
+fn test_each_way_a_display_or_a_mark_can_be_wrong_is_refused_with_its_own_sentence() {
+    let mut complaints: Vec<(&str, String)> = Vec::new();
+    let mut refuse = |what: &'static str, manifest: Manifest| {
+        let error = manifest.validate().expect_err(what);
+        assert!(
+            matches!(error, Error::InvalidManifest { .. }),
+            "{what}: the wrong refusal, {error:?}"
+        );
+        // Through the text as well: a reader refuses what a writer would not write.
+        let from_text = Manifest::from_json(&manifest.to_json()).expect_err(what);
+        assert_eq!(from_text.to_string(), error.to_string(), "{what}");
+        complaints.push((what, error.to_string()));
+    };
+    for (what, scale) in [
+        ("a display scale of zero", 0.0),
+        ("a negative display scale", -20.44),
+        ("a display scale that is NaN", f64::NAN),
+        ("an infinite display scale", f64::INFINITY),
+    ] {
+        let mut m = manifest_with_displays_and_marks();
+        m.readouts[0].display.as_mut().unwrap().scale = Num(scale);
+        refuse(what, m);
+    }
+    let mut m = manifest_with_displays_and_marks();
+    m.marks.push(m.marks[0].clone());
+    refuse("a mark declared twice", m);
+    let mut m = manifest_with_displays_and_marks();
+    m.frames[0] = m.frames[0]
+        .clone()
+        .with_mark("travel_raindrop", [1.0, 0.0, 0.0]);
+    refuse("a frame's mark that is not declared", m);
+    for (what, n) in [
+        ("a direction that is not unit", [0.6, 0.8, 0.1]),
+        ("a direction of length zero", [0.0, 0.0, 0.0]),
+        ("a direction with a NaN in it", [f64::NAN, 0.0, 1.0]),
+    ] {
+        let mut m = manifest_with_displays_and_marks();
+        m.frames[0] = m.frames[0].clone().with_mark("travel_zamo", n);
+        refuse(what, m);
+    }
+    // Within the tolerance is a unit vector: seven figures are enough.
+    let mut m = manifest_with_displays_and_marks();
+    m.frames[0] = m.frames[0]
+        .clone()
+        .with_mark("travel_zamo", [0.6000001, -0.8, 0.0]);
+    m.validate().unwrap();
+
+    for what in [
+        "a mark declared twice",
+        "a frame's mark that is not declared",
+    ] {
+        let text = &complaints.iter().find(|(w, _)| *w == what).unwrap().1;
+        assert!(text.contains("\"travel_"), "{what}: {text}");
+    }
+    // The scales name the read-out, and the directions the frame and the mark.
+    for (what, text) in &complaints {
+        assert!(!text.contains('\n'), "{what}: one sentence: {text}");
+        if what.contains("scale") {
+            assert!(text.contains("\"stopwatch\""), "{what}: {text}");
+        }
+        if what.starts_with("a direction") {
+            assert!(
+                text.contains("frame 0") && text.contains("\"travel_zamo\""),
+                "{what}: {text}"
+            );
+        }
+    }
+}
+
 #[test]
 fn test_pixel_to_direction_to_pixel_is_the_identity() {
     for (width, height) in [(8, 4), (7, 3), (1, 1), (64, 32), (5, 9)] {

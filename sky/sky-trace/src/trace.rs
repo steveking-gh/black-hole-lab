@@ -165,7 +165,6 @@ fn differing_setting(found: &Manifest, wanted: &Manifest) -> Option<&'static str
         ("grid (--grid)", found.grid == wanted.grid),
         ("far-sky orientation", found.far_sky == wanted.far_sky),
         ("--fps or --rate", found.playback == wanted.playback),
-        ("set of read-outs", found.readouts == wanted.readouts),
         // The triad sentence carries the first frame's proper time and radius along with the rate:
         // a different observer of the same save differs there, or in its name.
         ("observer (--observer)", found.observer == wanted.observer),
@@ -173,6 +172,17 @@ fn differing_setting(found: &Manifest, wanted: &Manifest) -> Option<&'static str
             "length (--frames or --seconds)",
             found.frames_planned == wanted.frames_planned,
         ),
+        // Last, because the declarations follow from everything above: the units of the clocks
+        // and the ruler are chosen from the whole film, and which reference observers occur, and
+        // whether any is passed faster than 0.9999 c, from its every frame. With the settings
+        // above the same, the walk is the same to the bit and so are they, unless --units
+        // differs, or the bundle was written by a build that declared other read-outs or marks -
+        // one from before displays and marks, say - whose frames would not match this build's.
+        (
+            "set of read-outs or their units (--units)",
+            found.readouts == wanted.readouts,
+        ),
+        ("set of marks", found.marks == wanted.marks),
     ]
     .into_iter()
     .find(|(_, same)| !same)
@@ -205,12 +215,21 @@ pub fn film(options: &Trace, out: &mut dyn Write) -> Result<Summary, Failure> {
     }
     let frames = walked.events.len() as u32;
 
-    // Every event's camera, before any ray is traced: cheap, and a refusal now costs nothing.
+    // Every event's camera and every frame's travel past the reference observers, before any ray
+    // is traced: cheap, and a refusal now costs nothing. The read-outs' units are chosen here too,
+    // from the whole film.
     let kerr = Kerr::from_equatorial(&metric);
-    for (k, event) in walked.events.iter().enumerate() {
-        film::triad(&kerr, event)
-            .map_err(|why| usage(format!("frame {k} cannot be filmed: {why}")))?;
-    }
+    let taus: Vec<f64> = (0..walked.events.len())
+        .map(|k| film::frame_tau(worldline.tau0(), k, options.rate, options.fps))
+        .collect();
+    let plan = film::plan(
+        &kerr,
+        &walked.events,
+        &taus,
+        named.save.hole.seconds_per_unit(),
+        options.units,
+    )
+    .map_err(usage)?;
 
     let threads = options.threads.unwrap_or_else(|| {
         std::thread::available_parallelism()
@@ -256,6 +275,8 @@ pub fn film(options: &Trace, out: &mut dyn Write) -> Result<Summary, Failure> {
         tau0,
         r0: first.r,
         frames,
+        readouts: plan.readouts.clone(),
+        marks: plan.marks.clone(),
     };
     let mut writer = open_bundle(&options.out, film::manifest(&setup), options.resume)?;
 
@@ -272,7 +293,7 @@ pub fn film(options: &Trace, out: &mut dyn Write) -> Result<Summary, Failure> {
         let traced = film::trace(&kerr, event, index, options.width, options.height, threads)
             .map_err(|why| Failure::Write(format!("frame {k} could not be traced: {why}")))?;
         unresolved += traced.unresolved as u64;
-        let entry = film::entry(index, tau, tau0, event);
+        let entry = film::entry(index, tau, tau0, event, &plan);
         writer
             .write_frame_and_manifest(&traced.frame, entry)
             .map_err(|e| Failure::Write(e.to_string()))?;

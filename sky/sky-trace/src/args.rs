@@ -8,6 +8,8 @@
 
 use std::path::PathBuf;
 
+use sky_trace::units::Units;
+
 /// How many frames a film is allowed when `--frames` is not given. A worldline that ends - at the
 /// ring, on the inner horizon - ends well inside this at any sensible step; one that does not (a
 /// static observer, an orbit) needs a length. The dry run gives it this one; a tracing run, which
@@ -42,6 +44,12 @@ FILMING A SAVE
     --seconds <s>           Or its length in seconds of video: round(s * fps) frames.
                             Default for both: to the end of the observer's worldline.
     --threads <n>           Threads that trace the rows of a frame. Default: all of them.
+    --units physical|geometric
+                            How the renderer shows times and radii. physical, the default,
+                            declares each clock and the radius with a unit a person reads -
+                            seconds up to years, metres up to light-years - chosen once for
+                            the whole film; geometric shows them in M alone. The values stored
+                            are in M either way.
     --resume                Continue a bundle a previous run left at --out, tracing only the
                             frames it lacks. The settings must be the ones it was started with.
                             With no bundle there yet, a new one is started. Without --resume, an
@@ -87,9 +95,20 @@ WHERE A FILM ENDS
     A film of a worldline that does not end (a static observer, an orbit) needs --frames or
     --seconds.
 
+THE DIRECTION OF TRAVEL
+    The bundle gives the observer's speed past each local reference observer that exists at the
+    event - the static observer outside r = 2 M, the ZAMO outside r+, and the raindrop (the
+    E = 1, L = 0 fall from rest at infinity) where neither exists - and the direction of that
+    travel on the observer's sky, as a heading to the right of the hole and as a mark the renderer
+    draws: a ring past the static observer, a diamond past the ZAMO, a triangle past the raindrop.
+    Above 0.9999 c the Lorentz factor is given instead of the speed. An observer at rest relative
+    to one of them has no direction of travel past it, and no mark.
+
 UNITS
-    Times and radii are in M, the hole's mass in geometric units. Seconds are quoted from the
-    hole's mass in solar masses and GM_sun/c^3 = 4.925490947e-6 s.
+    Times and radii are stored in M, the hole's mass in geometric units. Seconds and kilometres
+    come from the hole's mass in solar masses and GM_sun/c^3 = 4.925490947e-6 s, and a kilometre
+    of radius is c = 299792.458 km/s times that; the app's own constants are 3 parts in 10^4 higher,
+    so the two differ in the fourth figure.
 ";
 
 /// Which of the save's two observers to film.
@@ -164,6 +183,8 @@ pub struct Trace {
     /// Threads to trace on; `None` for all the machine has.
     pub threads: Option<usize>,
     pub resume: bool,
+    /// How the read-outs are declared; physical unless `--units geometric`.
+    pub units: Units,
 }
 
 /// The default video frame rate.
@@ -182,7 +203,7 @@ pub const MAX_RAYS: u64 = 16384 * 8192;
 const VALUED: [&str; 4] = ["--info", "--observer", "--step", "--frames"];
 
 /// The flags of a tracing run that take a value.
-const TRACE_VALUED: [&str; 11] = [
+const TRACE_VALUED: [&str; 12] = [
     "--out",
     "--observer",
     "--grid",
@@ -194,6 +215,7 @@ const TRACE_VALUED: [&str; 11] = [
     "--hover",
     "--spin",
     "--solar-masses",
+    "--units",
 ];
 
 /// Reads the command line, without the program's own name.
@@ -479,6 +501,16 @@ fn parse_trace(args: &[String]) -> Result<Command, String> {
             }
         },
     };
+    let units = match value("--units") {
+        None | Some("physical") => Units::Physical,
+        Some("geometric") => Units::Geometric,
+        Some(other) => {
+            return Err(format!(
+                "--units wants physical (seconds and kilometres, the default) or geometric (M \
+                 alone), and was given {other:?}"
+            ));
+        }
+    };
     Ok(Command::Trace(Trace {
         subject,
         out: PathBuf::from(out),
@@ -489,6 +521,7 @@ fn parse_trace(args: &[String]) -> Result<Command, String> {
         frames,
         threads,
         resume,
+        units,
     }))
 }
 

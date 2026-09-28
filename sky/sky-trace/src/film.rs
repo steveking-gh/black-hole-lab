@@ -59,6 +59,17 @@
 //! closed form of aberration. A radial fall has no such offset; Bob's, in the demonstration save,
 //! is radial but for the frame dragging.
 //!
+//! # The read-outs and the marks
+//!
+//! Every film declares four clock and ruler read-outs - stopwatch, watch, radius, distant clock -
+//! stored in M, each with a display in seconds or kilometres and their multiples unless
+//! `--units geometric` asks for none (`units`). Then, for each local reference observer that the
+//! film passes - the static observer, the ZAMO, the raindrop - the speed past it (or the Lorentz
+//! factor above 0.9999 c), the heading of travel past it, and a mark on the sky where the observer
+//! sees itself going (`travel`). All of it is decided by [`plan`] from the walk of the whole
+//! worldline before any ray is traced, because a declaration is one for the whole film: its unit
+//! is chosen with every frame in view, and it is declared only if some frame needs it.
+//!
 //! # The spin's sense
 //!
 //! The far-sky frame's Z is along the hole's angular momentum (specification 4.4) and `kerr_sky`
@@ -70,11 +81,13 @@ use std::f64::consts::FRAC_PI_2;
 use kerr_equatorial::KerrSchild;
 use kerr_sky::{Kerr, Observer, TraceOptions, Triad, trace_frame};
 use sky_format::{
-    FORMAT, FarSky, Frame, FrameEntry, Geometry, GridSpec, Manifest, Num, Playback, Position,
-    ReadoutDecl, STOPWATCH, Source, TimeUnit, VERSION, WriterInfo, fate,
+    Display, FORMAT, FarSky, Frame, FrameEntry, Geometry, GridSpec, Manifest, MarkDecl, Num,
+    Playback, Position, ReadoutDecl, STOPWATCH, Source, TimeUnit, VERSION, WriterInfo, fate,
 };
 
 use crate::bhl::{self, Mode, Release, SavedObserver, TrailPoint};
+use crate::travel::{self, Passing};
+use crate::units::{self, Units};
 use crate::worldline::{End, Event, Film, Worldline};
 
 /// The program's name, as the manifest's `writer.program` records it.
@@ -307,7 +320,51 @@ pub fn check_rays(frame: &Frame) -> Result<(), String> {
     Ok(())
 }
 
-/// The read-outs every film of this program declares, in the order drawn.
+/// How each of the four clock and ruler read-outs is displayed: stopwatch, watch, radius and
+/// distant clock, in the order drawn. `None` shows the value in M, as stored.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Displays {
+    pub stopwatch: Option<Display>,
+    pub watch: Option<Display>,
+    pub radius: Option<Display>,
+    pub distant_clock: Option<Display>,
+}
+
+/// The displays of a film's read-outs (specification 6.1, and the module `units`).
+///
+/// Each read-out's unit is chosen once, from the largest magnitude it takes over the film's
+/// frames: the stopwatch's |tau_k - tau_0|, the watch's |tau_k|, the radius's r and the distant
+/// clock's |t|, with `taus[k]` the proper time of frame k ([`frame_tau`]) and `events[k]` its
+/// event. `Units::Geometric` gives no displays at all.
+pub fn displays(units: Units, seconds_per_m: f64, taus: &[f64], events: &[Event]) -> Displays {
+    if units == Units::Geometric {
+        return Displays::default();
+    }
+    let largest =
+        |values: &mut dyn Iterator<Item = f64>| values.fold(0.0f64, |m, v| m.max(v.abs()));
+    let tau0 = taus.first().copied().unwrap_or(0.0);
+    Displays {
+        stopwatch: Some(units::time_display(
+            largest(&mut taus.iter().map(|&tau| tau - tau0)),
+            seconds_per_m,
+        )),
+        watch: Some(units::time_display(
+            largest(&mut taus.iter().copied()),
+            seconds_per_m,
+        )),
+        radius: Some(units::length_display(
+            largest(&mut events.iter().map(|e| e.r)),
+            seconds_per_m,
+        )),
+        distant_clock: Some(units::time_display(
+            largest(&mut events.iter().map(|e| e.t)),
+            seconds_per_m,
+        )),
+    }
+}
+
+/// The four clock and ruler read-outs every film of this program declares, in the order drawn,
+/// each with its display.
 ///
 /// Two of them read the observer's own clock, and they are not the same thing. The stopwatch is
 /// the format's: proper time since the film's first frame, zero where the film starts. The watch
@@ -318,49 +375,91 @@ pub fn check_rays(frame: &Frame) -> Result<(), String> {
 ///
 /// The distant clock is likewise the app's clock, the chart's time t, and not the time since the
 /// first frame.
-pub fn readouts() -> Vec<ReadoutDecl> {
+pub fn readouts(displays: &Displays) -> Vec<ReadoutDecl> {
+    let declare = |id: &str, label: &str, decimals: u32, display: &Option<Display>| ReadoutDecl {
+        id: id.into(),
+        label: label.into(),
+        unit: "M".into(),
+        decimals,
+        display: display.clone(),
+    };
     vec![
-        ReadoutDecl {
-            id: STOPWATCH.into(),
-            label: "Stopwatch".into(),
-            unit: "M".into(),
-            decimals: 3,
-            display: None,
-        },
-        ReadoutDecl {
-            id: WATCH.into(),
-            label: "Watch".into(),
-            unit: "M".into(),
-            decimals: 3,
-            display: None,
-        },
-        ReadoutDecl {
-            id: RADIUS.into(),
-            label: "Radius".into(),
-            unit: "M".into(),
-            decimals: 3,
-            display: None,
-        },
-        ReadoutDecl {
-            id: DISTANT_CLOCK.into(),
-            label: "Distant clock".into(),
-            unit: "M".into(),
-            decimals: 2,
-            display: None,
-        },
+        declare(STOPWATCH, "Stopwatch", 3, &displays.stopwatch),
+        declare(WATCH, "Watch", 3, &displays.watch),
+        declare(RADIUS, "Radius", 3, &displays.radius),
+        declare(DISTANT_CLOCK, "Distant clock", 2, &displays.distant_clock),
     ]
 }
 
+/// What the walk decides before any ray is traced: every read-out and mark the manifest declares,
+/// and each frame's travel past the reference observers that exist at its event.
+///
+/// The declarations are written into the manifest when the bundle is created, from the walk of the
+/// whole worldline, so a resumed run - which walks the same worldline to the bit - makes the same
+/// ones, and `trace.rs` refuses to resume a bundle whose declarations differ.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Plan {
+    pub readouts: Vec<ReadoutDecl>,
+    pub marks: Vec<MarkDecl>,
+    /// Frame k's passings, outermost reference observer first (`travel::passing`).
+    pub passing: Vec<Vec<Passing>>,
+    /// The heading each of frame k's passings is written with (`travel::written_headings`):
+    /// continuous along the film.
+    pub headings: Vec<Vec<Option<f64>>>,
+}
+
+impl Plan {
+    /// Whether the film is a still: its headings are then magnitudes (`travel::declarations`).
+    pub fn single(&self) -> bool {
+        self.passing.len() == 1
+    }
+}
+
+/// The plan of a film whose frame k is at proper time `taus[k]` and event `events[k]`, for a hole
+/// whose M lasts `seconds_per_m` seconds.
+///
+/// It sets up the camera at every event, which is cheap, so that an event it cannot be set up at
+/// is refused now, with the frame's number, and not hours into the tracing.
+pub fn plan(
+    kerr: &Kerr,
+    events: &[Event],
+    taus: &[f64],
+    seconds_per_m: f64,
+    units: Units,
+) -> Result<Plan, String> {
+    let passing = events
+        .iter()
+        .enumerate()
+        .map(|(k, event)| {
+            let triad =
+                triad(kerr, event).map_err(|why| format!("frame {k} cannot be filmed: {why}"))?;
+            Ok(travel::passing(kerr, event, &triad))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let (travel_readouts, marks) = travel::declarations(&passing);
+    let headings = travel::written_headings(&passing);
+    let mut readouts = readouts(&displays(units, seconds_per_m, taus, events));
+    readouts.extend(travel_readouts);
+    Ok(Plan {
+        readouts,
+        marks,
+        passing,
+        headings,
+    })
+}
+
 /// The manifest entry of frame `index` at `event`, whose proper time is `tau` (the frame's
-/// [`frame_tau`]), in a film whose frame 0 is at proper time `tau0`.
+/// [`frame_tau`]), in a film whose frame 0 is at proper time `tau0` and whose plan is `plan`.
 ///
 /// The stopwatch is `tau - tau0`, which is the specification's definition to the bit (6: a frame's
 /// stopwatch equals its proper time less frame 0's). The watch is `tau` itself and the distant
 /// clock the chart's t, both as the app counts them (see [`readouts`]). The radius is the chart's
 /// r, and the position the event in ingoing Kerr-Schild (t, r, theta, phi) with theta = pi/2 on
-/// the plane.
-pub fn entry(index: u32, tau: f64, tau0: f64, event: &Event) -> FrameEntry {
-    FrameEntry {
+/// the plane. Then the speed, or the Lorentz factor, past each reference observer that exists at
+/// the event, and the heading and mark of travel past each wherever there is a direction
+/// (`travel::values`).
+pub fn entry(index: u32, tau: f64, tau0: f64, event: &Event, plan: &Plan) -> FrameEntry {
+    let mut entry = FrameEntry {
         position: Some(Position {
             chart: "kerr-schild".into(),
             coords: [Num(event.t), Num(event.r), Num(FRAC_PI_2), Num(event.phi)],
@@ -370,7 +469,16 @@ pub fn entry(index: u32, tau: f64, tau0: f64, event: &Event) -> FrameEntry {
             .with_readout(WATCH, tau)
             .with_readout(RADIUS, event.r)
             .with_readout(DISTANT_CLOCK, event.t)
+    };
+    let k = index as usize;
+    let (readouts, marks) = travel::values(&plan.passing[k], &plan.headings[k]);
+    for (id, value) in readouts {
+        entry = entry.with_readout(&id, value);
     }
+    for (id, n) in marks {
+        entry = entry.with_mark(&id, n);
+    }
+    entry
 }
 
 /// What a film's manifest says about the run.
@@ -392,6 +500,9 @@ pub struct Setup {
     pub r0: f64,
     /// Frames the film has.
     pub frames: u32,
+    /// The read-outs and marks the manifest declares: a [`Plan`]'s.
+    pub readouts: Vec<ReadoutDecl>,
+    pub marks: Vec<MarkDecl>,
 }
 
 /// The sentence for `observer.triad`: how the triad is built and carried (specification 4.2),
@@ -445,9 +556,9 @@ pub fn manifest(setup: &Setup) -> Manifest {
             frames_per_second: Num(setup.fps),
             proper_time_per_video_second: Num(setup.rate),
         },
-        readouts: readouts(),
+        readouts: setup.readouts.clone(),
         labels: Vec::new(),
-        marks: Vec::new(),
+        marks: setup.marks.clone(),
         frames_planned: Some(setup.frames),
         frames: Vec::new(),
     }
