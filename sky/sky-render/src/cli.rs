@@ -14,11 +14,15 @@ use crate::tone::parse_hex_colour;
 pub const USAGE: &str = "\
 sky-render: renders a sky bundle over a star map into a 360-degree video
 
-usage: sky-render --bundle <dir> --sky <map.exr> --out <video.mp4> [options]
+usage: sky-render --bundle <dir> --sky <map.exr> --out <video.mkv> [options]
 
   --bundle <dir>             the sky bundle (a directory holding manifest.json and frames/)
   --sky <map.exr>            the star map, an equirectangular OpenEXR file
-  --out <video.mp4>          the video to write, tagged as a 360-degree equirectangular video
+  --out <video.mkv|video.mp4>
+                             the video to write, tagged as a 360-degree equirectangular video.
+                             A .mkv file carries the read-outs as its subtitle track; beside a
+                             .mp4 file they go into a subtitle file of the same name ending .ass,
+                             which VLC loads by itself
   --size <W>x<H>             the video's size; W must be twice H (default 8192x4096)
   --exposure <stops>         the exposure as a power of two, at most 100 either way (default:
                              2.5 stops for a map 8192 wide, two more for every doubling of the
@@ -45,10 +49,21 @@ usage: sky-render --bundle <dir> --sky <map.exr> --out <video.mp4> [options]
   --threads <n>              render threads (default: all)
   --frames <a>..<b>          render only video frames a to b - 1 (a.. and ..b also work)
   --keep-frames <dir>        also write each frame as a 16-bit PNG into <dir>
-  --overwrite                replace --out if it exists
+  --overwrite                replace --out, its .ass file and --photo if they exist
 
-read-outs (the bundle's numbers, the observer's stopwatch first, drawn on the sky):
-  --readouts on|off          draw them (default on); off leaves the sky exactly as without them
+read-outs (the bundle's numbers, the observer's stopwatch first):
+  --readouts overlay|panel|off
+                             overlay (default): a subtitle track, which the player draws at the
+                             bottom right of its window, where it stays as the viewer looks
+                             around; the picture carries nothing. panel (or on): a panel painted
+                             on the sky, seen only when looking that way. off: none, and the sky
+                             exactly as without them
+  --overlay-size <percent>   the height of one line of the overlay, as a percentage of the
+                             screen's height (default 1.67: size 18 of 1080, the approved size)
+  --overlay-font <name>      the overlay's typeface, which the player looks for on its own
+                             machine; its digits must all be one width (default Consolas, which
+                             Windows has; Courier New is on Windows and macOS, and on Linux as
+                             Liberation Mono)
   --readout-at <heading>,<elevation>
                              where a panel is centred, in degrees: heading to the viewer's right
                              of the opening view (90 is a quarter turn right, 180 behind),
@@ -57,6 +72,17 @@ read-outs (the bundle's numbers, the observer's stopwatch first, drawn on the sk
                              the opening view)
   --readout-size <degrees>   the height of one line of text, as an angle (default 2)
   --decimal-comma            write the decimal mark as a comma, as the app's own setting does
+
+a still (one moment's view, to look around in):
+  --still [<k>]              render video frame k alone, and hold it (k may be left out when the
+                             bundle makes one video frame)
+  --hold <seconds>           how long the held video lasts (default 60)
+  --hold-rate <per second>   how often the held picture is repeated (default 0.5; rarer frames
+                             are stored truly, but tools that guess a rate by probing misread it)
+  --photo <file.jpg>         also write the view as a 360-degree JPEG photograph (Google Photo
+                             Sphere). A photograph has no subtitle track: it shows the read-outs
+                             only with --readouts panel
+
   --help                     this text
 ";
 
@@ -67,6 +93,116 @@ const MAX_EXPOSURE_STOPS: f64 = 100.0;
 /// The largest `--readout-size`, in degrees: a line of text a sixth of the way up the sky is
 /// already more than anyone needs to read it.
 const MAX_READOUT_SIZE: f64 = 15.0;
+
+/// The largest `--overlay-size`, in percent of the screen's height: ten such lines fill it, and
+/// three read-outs at that size already hide a third of the view.
+const MAX_OVERLAY_SIZE: f64 = 10.0;
+
+/// A still's held video lasts a minute unless told otherwise: long enough to look all round.
+pub const DEFAULT_HOLD_SECONDS: f64 = 60.0;
+
+/// The longest `--hold`, in seconds: an hour of one picture is more than anyone needs to look
+/// around in it, and the limit keeps the frame count and the subtitle times ordinary numbers.
+const MAX_HOLD_SECONDS: f64 = 3600.0;
+
+/// How many times a second a still's picture is handed to the encoder. Measured 2026-09-27 with
+/// ffmpeg 8.1.2 and SVT-AV1, 60 s held at 1, 1/2, 1/3, 1/4, 1/5, 1/6, 1/10 and 1/60 frames a
+/// second: every MP4 and every Matroska file remuxed from it is valid, reads back 60 s long, and
+/// stores the true frame duration (the MP4's sample table; Matroska's DefaultDuration). What
+/// fails below one frame in 2 s is the guess a reader makes by probing: ffprobe looks at the
+/// first 5 s, sees fewer than three frames, and reports a frame rate of 1000 (the millisecond
+/// timestamps' rate), or at 1/10 even with a longer look guesses 1/2. A player that estimates
+/// the rate the same way could be misled, so the rate is the lowest at which the guess is right.
+/// (At 8K the guess fails at any rate, for another reason: the one keyframe is 10 MB, past the
+/// 5 MB ffprobe reads, so it sees one frame. The stored duration is still true.)
+pub const DEFAULT_HOLD_RATE: f64 = 0.5;
+
+/// The fastest `--hold-rate`: a film's own rate. Faster only makes more identical frames.
+const MAX_HOLD_RATE: f64 = 60.0;
+
+/// What becomes of the read-outs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadoutMode {
+    /// A subtitle track, drawn by the player in screen space.
+    Overlay,
+    /// A panel painted on the sphere.
+    Panel,
+    Off,
+}
+
+/// The container `--out` names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Container {
+    /// Matroska: the video and the read-outs' subtitle track in one file.
+    Mkv,
+    /// MP4: the video, with the read-outs in a subtitle file beside it.
+    Mp4,
+}
+
+impl Container {
+    /// The container a file name asks for, by its extension in any case.
+    pub fn of(path: &std::path::Path) -> Result<Self, String> {
+        let extension = path
+            .extension()
+            .map(|e| e.to_string_lossy().to_ascii_lowercase());
+        match extension.as_deref() {
+            Some("mkv") => Ok(Self::Mkv),
+            Some("mp4") => Ok(Self::Mp4),
+            _ => Err(format!(
+                "--out {} ends neither in .mkv (the video with its read-outs as a subtitle track) \
+                 nor in .mp4 (the video, with its read-outs in a .ass file beside it)",
+                path.display()
+            )),
+        }
+    }
+}
+
+/// What `--still` asks for.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Still {
+    /// The video frame, or None for the film's only one.
+    pub frame: Option<u64>,
+    /// How long the held video should last, in seconds.
+    pub hold: f64,
+    /// How many times a second the picture is handed to the encoder.
+    pub rate: f64,
+    /// Where the photograph goes, when one is asked for.
+    pub photo: Option<PathBuf>,
+}
+
+impl Still {
+    /// The video frame a still of a film of `total` video frames shows, or a sentence saying why
+    /// there is none.
+    pub fn frame_of(&self, total: u64) -> Result<u64, String> {
+        match self.frame {
+            Some(k) if k < total => Ok(k),
+            Some(k) => Err(format!(
+                "--still {k} is past the end of the film, whose {total} video frame(s) are \
+                 numbered 0 to {}",
+                total.saturating_sub(1)
+            )),
+            None if total == 1 => Ok(0),
+            None => Err(format!(
+                "--still needs a video frame number: the bundle makes {total} video frames, \
+                 numbered 0 to {}",
+                total.saturating_sub(1)
+            )),
+        }
+    }
+
+    /// How many times the picture is handed to the encoder: enough to fill `hold`, and at least
+    /// once. The held video lasts `repeats / rate` seconds, `hold` rounded up to a whole frame.
+    pub fn repeats(&self) -> u64 {
+        // The tolerance keeps a hold that is a whole number of frames, but whose product comes
+        // out a rounding error above it in binary, from gaining a frame.
+        ((self.hold * self.rate * (1.0 - 1e-12)).ceil() as u64).max(1)
+    }
+
+    /// The held video's length in seconds.
+    pub fn seconds(&self) -> f64 {
+        self.repeats() as f64 / self.rate
+    }
+}
 
 /// Everything the command line says.
 #[derive(Debug, Clone, PartialEq)]
@@ -92,8 +228,18 @@ pub struct Options {
     pub frames: Option<Range<u64>>,
     pub keep_frames: Option<PathBuf>,
     pub overwrite: bool,
-    /// `--readouts off` makes this false.
+    /// Whether the read-out panel is painted on the picture: `--readouts panel`, or `on`.
     pub readouts: bool,
+    /// Whether the read-outs are written as a subtitle track: `--readouts overlay`, the default.
+    /// At most one of this and `readouts` is true, and `--readouts off` makes both false.
+    pub subtitles: bool,
+    /// The height of a line of the overlay, in percent of the screen's height.
+    pub overlay_size: f64,
+    /// The overlay's typeface, by name.
+    pub overlay_font: String,
+    /// The container `out` names; None when there is no `out`.
+    pub container: Option<Container>,
+    pub still: Option<Still>,
     /// Where the read-out panels go; never empty.
     pub readout_at: Vec<Placement>,
     /// The height of a line of read-out text, in degrees.
@@ -128,13 +274,19 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
     let mut frames = None;
     let mut keep_frames = None;
     let mut overwrite = false;
-    let mut readouts = true;
+    let mut mode = ReadoutMode::Overlay;
+    let mut overlay_size = crate::subtitles::DEFAULT_PERCENT;
+    let mut overlay_font = crate::subtitles::DEFAULT_FONT.to_string();
+    let mut still_frame: Option<Option<u64>> = None;
+    let mut hold = None;
+    let mut hold_rate = None;
+    let mut photo = None;
     // The first --readout-at replaces the default panel, and each after it adds one.
     let mut readout_at: Vec<Placement> = Vec::new();
     let mut readout_size = 2.0;
     let mut decimal_comma = false;
 
-    let mut rest = args.iter();
+    let mut rest = args.iter().peekable();
     while let Some(flag) = rest.next() {
         let mut value = || {
             rest.next()
@@ -220,11 +372,95 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
             "--keep-frames" => keep_frames = Some(PathBuf::from(value()?)),
             "--overwrite" => overwrite = true,
             "--readouts" => {
-                readouts = match value()? {
-                    "on" => true,
-                    "off" => false,
-                    other => return Err(format!("--readouts is on or off, not {other:?}")),
+                mode = match value()? {
+                    "overlay" => ReadoutMode::Overlay,
+                    // `on` asked for the panel before the overlay existed, and still does.
+                    "panel" | "on" => ReadoutMode::Panel,
+                    "off" => ReadoutMode::Off,
+                    other => {
+                        return Err(format!(
+                            "--readouts is overlay, panel or off, not {other:?}"
+                        ));
+                    }
                 };
+            }
+            "--overlay-size" => {
+                let text = value()?;
+                overlay_size = text
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|s| s.is_finite() && *s > 0.0 && *s <= MAX_OVERLAY_SIZE)
+                    .ok_or_else(|| {
+                        format!(
+                            "--overlay-size is the height of a line in percent of the screen's \
+                             height, more than 0 and at most {MAX_OVERLAY_SIZE}, not {text:?}"
+                        )
+                    })?;
+            }
+            "--overlay-font" => {
+                let text = value()?.trim();
+                // The name goes into a style line of comma-separated fields, which a comma
+                // would end early.
+                if text.is_empty() || text.chars().any(|c| c == ',' || c.is_control()) {
+                    return Err(format!(
+                        "--overlay-font names a typeface, with no comma or control character, \
+                         not {text:?}"
+                    ));
+                }
+                overlay_font = text.to_string();
+            }
+            "--still" => {
+                // The frame number may be left out, so the next argument is taken as one only
+                // when it is not another option.
+                let k = match rest.next_if(|next| !next.starts_with("--")) {
+                    Some(text) => Some(text.parse::<u64>().map_err(|_| {
+                        format!("--still takes a video frame number, such as 237, not {text:?}")
+                    })?),
+                    None => None,
+                };
+                still_frame = Some(k);
+            }
+            "--hold" => {
+                let text = value()?;
+                hold = Some(
+                    text.parse::<f64>()
+                        .ok()
+                        .filter(|s| s.is_finite() && *s > 0.0 && *s <= MAX_HOLD_SECONDS)
+                        .ok_or_else(|| {
+                            format!(
+                                "--hold is how many seconds the still lasts, more than 0 and at \
+                                 most {MAX_HOLD_SECONDS}, not {text:?}"
+                            )
+                        })?,
+                );
+            }
+            "--hold-rate" => {
+                let text = value()?;
+                hold_rate = Some(
+                    text.parse::<f64>()
+                        .ok()
+                        .filter(|s| s.is_finite() && *s > 0.0 && *s <= MAX_HOLD_RATE)
+                        .ok_or_else(|| {
+                            format!(
+                                "--hold-rate is how many times a second the still's picture \
+                                 is repeated, more than 0 and at most {MAX_HOLD_RATE}, not \
+                                 {text:?}"
+                            )
+                        })?,
+                );
+            }
+            "--photo" => {
+                let path = PathBuf::from(value()?);
+                let extension = path
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_ascii_lowercase());
+                if !matches!(extension.as_deref(), Some("jpg" | "jpeg")) {
+                    return Err(format!(
+                        "--photo names a JPEG photograph, ending .jpg or .jpeg, not {}",
+                        path.display()
+                    ));
+                }
+                photo = Some(path);
             }
             "--readout-at" => readout_at.push(Placement::parse(value()?)?),
             "--readout-size" => {
@@ -250,6 +486,36 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
     if codec.is_some() && out.is_none() {
         return Err("--out is required: the video to write".into());
     }
+    let container = out.as_deref().map(Container::of).transpose()?;
+    let still = match still_frame {
+        Some(frame) => {
+            if frames.is_some() {
+                return Err(
+                    "--still renders one video frame and --frames a run of them; give one".into(),
+                );
+            }
+            Some(Still {
+                frame,
+                hold: hold.unwrap_or(DEFAULT_HOLD_SECONDS),
+                rate: hold_rate.unwrap_or(DEFAULT_HOLD_RATE),
+                photo,
+            })
+        }
+        None => {
+            for (given, flag) in [
+                (hold.is_some(), "--hold"),
+                (hold_rate.is_some(), "--hold-rate"),
+                (photo.is_some(), "--photo"),
+            ] {
+                if given {
+                    return Err(format!(
+                        "{flag} belongs to a still, and there is no --still <frame>"
+                    ));
+                }
+            }
+            None
+        }
+    };
     if let (Some(Codec::Nvenc), Some(p)) = (codec, preset)
         && !(1..=7).contains(&p)
     {
@@ -274,7 +540,12 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
         frames,
         keep_frames,
         overwrite,
-        readouts,
+        readouts: mode == ReadoutMode::Panel,
+        subtitles: mode == ReadoutMode::Overlay,
+        overlay_size,
+        overlay_font,
+        container,
+        still,
         readout_at: if readout_at.is_empty() {
             vec![Placement::DEFAULT]
         } else {

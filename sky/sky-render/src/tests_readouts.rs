@@ -561,7 +561,8 @@ fn test_readout_placements_near_a_pole_or_malformed_are_refused_each_with_its_ow
         panic!()
     };
     assert_eq!(o.readout_at, vec![Placement::DEFAULT]);
-    assert!(o.readouts && !o.decimal_comma && o.readout_size == 2.0);
+    // The overlay is the default: subtitles, and no panel painted on the picture.
+    assert!(o.subtitles && !o.readouts && !o.decimal_comma && o.readout_size == 2.0);
     let crate::cli::Request::Render(o) = parse(&[
         "--readout-at",
         "90,0",

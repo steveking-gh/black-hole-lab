@@ -321,7 +321,7 @@ pub fn film(options: &Trace, out: &mut dyn Write) -> Result<Summary, Failure> {
     ));
     report.push_str(&format!(
         "render it, from the sky directory:\n    cargo run --release -p sky-render -- --bundle \
-         \"{}\" --sky {STAR_MAP} --out \"{}.mp4\"\n",
+         \"{}\" --sky {STAR_MAP} --out \"{}.mkv\"\n",
         bundle.display(),
         bundle.display()
     ));

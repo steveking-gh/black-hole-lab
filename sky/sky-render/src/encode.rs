@@ -306,6 +306,143 @@ impl Ffmpeg {
     }
 }
 
+impl Drop for Ffmpeg {
+    /// An ffmpeg abandoned before `finish`, by a run that failed, is stopped and waited for:
+    /// left alone it would go on encoding into its partial file after this program has deleted
+    /// it (or, on Windows, keep it open so that it cannot be deleted).
+    fn drop(&mut self) {
+        if self.stdin.take().is_some() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+
+/// Runs ffmpeg with `args` and `input` on its standard input, and returns its standard output, or
+/// a sentence with its last words saying why it failed to `what`.
+fn run_once(
+    program: &Path,
+    args: &[String],
+    input: Vec<u8>,
+    what: &str,
+) -> Result<Vec<u8>, String> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("could not start {} to {what}: {e}", program.display()))?;
+    // The input is fed from a thread of its own while the output is read here: a pipe holds a
+    // few kilobytes, and ffmpeg may write before it has read everything.
+    let mut stdin = child.stdin.take().expect("stdin was piped");
+    let feeder = std::thread::spawn(move || {
+        let _ = stdin.write_all(&input);
+    });
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("could not wait for {}: {e}", program.display()))?;
+    let _ = feeder.join();
+    if output.status.success() {
+        return Ok(output.stdout);
+    }
+    let words = String::from_utf8_lossy(&output.stderr);
+    let lines: Vec<&str> = words.lines().collect();
+    let tail = &lines[lines.len().saturating_sub(REPORT)..];
+    Err(format!(
+        "{} failed to {what} ({}). Its last words:\n    {}",
+        program.display(),
+        output.status,
+        tail.join("\n    ")
+    ))
+}
+
+/// A frame of 16-bit RGB as a JPEG photograph at high quality, made by ffmpeg.
+///
+/// JPEG is 8-bit Y'CbCr with the BT.601 matrix at full range (the JFIF convention every decoder
+/// assumes), and the frame's codes are sRGB-encoded, which is what a JPEG without a colour profile
+/// is taken to hold. The chroma is kept at full resolution (4:4:4): a marker pixel one pixel wide
+/// would be smeared into its neighbours by halved chroma. `-q:v 2` is the MJPEG encoder's
+/// usual "high quality" (1 would roughly double the file for no visible gain).
+pub fn jpeg(program: &Path, frame: &[u16], width: usize, height: usize) -> Result<Vec<u8>, String> {
+    let args: Vec<String> = [
+        "-hide_banner",
+        "-nostats",
+        "-loglevel",
+        "error",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb48le",
+        "-video_size",
+        &format!("{width}x{height}"),
+        "-i",
+        "pipe:0",
+        "-frames:v",
+        "1",
+        "-vf",
+        // Full range stated twice, on the conversion and on the stream: the encoder takes plain
+        // yuv444p only when told its range is full (the older yuvj444p says so by its name,
+        // and is deprecated). Measured 2026-09-27, the two ways make the same bytes.
+        "scale=out_color_matrix=bt601:out_range=full,format=yuv444p",
+        "-color_range",
+        "pc",
+        "-c:v",
+        "mjpeg",
+        "-q:v",
+        "2",
+        "-f",
+        "mjpeg",
+        "pipe:1",
+    ]
+    .map(String::from)
+    .to_vec();
+    let input = frame.iter().flat_map(|v| v.to_le_bytes()).collect();
+    run_once(program, &args, input, "make the photograph")
+}
+
+/// Copies the video of the tagged MP4 `video`, and the subtitles of the ASS file `subtitles` if
+/// there is one, into the Matroska file `out`, without re-encoding either.
+///
+/// ffmpeg reads the Spherical Video V1 box of the MP4 as the stream's spherical mapping and
+/// writes it as Matroska's own `Projection` element, so the Matroska file is tagged as a
+/// 360-degree video without this program writing Matroska itself. The subtitle track is marked
+/// as the default one, which makes VLC show it without being asked.
+pub fn remux_matroska(
+    program: &Path,
+    video: &Path,
+    subtitles: Option<&Path>,
+    out: &Path,
+) -> Result<(), String> {
+    let path = |p: &Path| p.to_string_lossy().into_owned();
+    let mut args: Vec<String> = ["-hide_banner", "-nostats", "-loglevel", "error", "-y", "-i"]
+        .map(String::from)
+        .to_vec();
+    args.push(path(video));
+    if let Some(subtitles) = subtitles {
+        args.extend(["-i".into(), path(subtitles)]);
+    }
+    args.extend(["-map", "0:v", "-c:v", "copy"].map(String::from));
+    if subtitles.is_some() {
+        args.extend(
+            [
+                "-map",
+                "1:s",
+                "-c:s",
+                "ass",
+                "-disposition:s:0",
+                "default",
+                "-metadata:s:s:0",
+                "title=Read-outs",
+            ]
+            .map(String::from),
+        );
+    }
+    // Named, not inferred from the file name, which ends in a temporary suffix.
+    args.extend(["-f".into(), "matroska".into(), path(out)]);
+    run_once(program, &args, Vec::new(), "make the Matroska file").map(|_| ())
+}
+
 /// Writes a frame as a 16-bit RGB PNG, marked as sRGB. PNG stores 16-bit samples big-endian.
 pub fn write_png(path: &Path, frame: &[u16], width: usize, height: usize) -> Result<(), String> {
     let say = |e: &dyn std::fmt::Display| format!("could not write {}: {e}", path.display());
