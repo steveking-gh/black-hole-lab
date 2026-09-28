@@ -1,0 +1,40 @@
+sky/sky-format/src/manifest.rs
+  s_fa4e4937427d8c::t_7f632a1287cc2f 31-33,62-65,235-261,288-291,305,314-319,463-476,522-539
+sky/sky-format/src/lib.rs
+  s_fa4e4937427d8c::t_7f632a1287cc2f 39-41
+sky/sky-trace/src/film.rs
+  s_fa4e4937427d8c::t_7f632a1287cc2f 328,335,342,349,450
+sky/sky-format/src/tests.rs
+  s_fa4e4937427d8c::t_7f632a1287cc2f 73,76,215,637
+sky/sky-testgen/src/main.rs
+  s_fa4e4937427d8c::t_7f632a1287cc2f 147,150
+sky/sky-render/src/tests_shadow.rs
+  s_fa4e4937427d8c::t_7f632a1287cc2f 223
+physics_simulation_specification.md
+  s_fa4e4937427d8c::t_1f5ec6ec5bcffc 334,412,511,525-548,771-805
+sky/sky-render/src/tests_output.rs
+  s_fa4e4937427d8c::t_7f632a1287cc2f 73,726
+sky/sky-render/src/tests_readouts.rs
+  s_fa4e4937427d8c::t_7f632a1287cc2f 94
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "6be50a28beccc4ae3ed7cfabec3baf24d4e2d55e",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_fa4e4937427d8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c3c93472-9aee-43ec-8624-e30a21d0ed6f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
