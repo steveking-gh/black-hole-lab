@@ -325,24 +325,28 @@ pub fn readouts() -> Vec<ReadoutDecl> {
             label: "Stopwatch".into(),
             unit: "M".into(),
             decimals: 3,
+            display: None,
         },
         ReadoutDecl {
             id: WATCH.into(),
             label: "Watch".into(),
             unit: "M".into(),
             decimals: 3,
+            display: None,
         },
         ReadoutDecl {
             id: RADIUS.into(),
             label: "Radius".into(),
             unit: "M".into(),
             decimals: 3,
+            display: None,
         },
         ReadoutDecl {
             id: DISTANT_CLOCK.into(),
             label: "Distant clock".into(),
             unit: "M".into(),
             decimals: 2,
+            display: None,
         },
     ]
 }
@@ -443,6 +447,7 @@ pub fn manifest(setup: &Setup) -> Manifest {
         },
         readouts: readouts(),
         labels: Vec::new(),
+        marks: Vec::new(),
         frames_planned: Some(setup.frames),
         frames: Vec::new(),
     }

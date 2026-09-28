@@ -331,6 +331,7 @@ know, at any depth (section 10).
 | `playback` | object | yes | How the frames map onto a video (5.7). |
 | `readouts` | array | yes | The read-outs, each declared once (section 6). |
 | `labels` | array | no | Names that point sources can carry (section 8). Absent means empty. |
+| `marks` | array | no | The marks, each declared once (section 12). Absent means empty. |
 | `frames_planned` | integer | no | How many frames the run means to write. For progress displays only. |
 | `frames` | array | yes | The frames written so far (5.8). May be empty. |
 
@@ -408,6 +409,7 @@ or after it has been resumed.
 | `file` | string | yes | The frame file's name relative to the bundle directory. Always the name section 2 gives for `index`; a reader **must** refuse any other. |
 | `bytes` | integer | yes | The length of the frame file in bytes. |
 | `readouts` | object | yes | The value of each read-out at this frame, keyed by read-out id (section 6). May be empty. |
+| `marks` | object | no | Where the observer looks to see each mark at this frame, keyed by mark id (section 12). Absent means empty. |
 
 `position.chart` names the coordinates:
 
@@ -506,6 +508,7 @@ Each element of the manifest's `readouts` array declares one read-out:
 | `label` | string | yes | What the renderer writes beside the value. |
 | `unit` | string | yes | What the renderer writes after the value. Empty for a pure number. |
 | `decimals` | integer | yes | How many decimal places the renderer should show. |
+| `display` | object | no | The read-out in a unit a person would rather read (section 6.1). |
 
 The renderer draws the read-outs in the order they are declared.
 
@@ -518,6 +521,30 @@ stopwatch value equals its `proper_time` less frame 0's `proper_time`.
 read-out, and the renderer then does not draw that read-out on that frame. A value **may** be
 non-finite; a renderer draws NaN as "not available" and infinity as the infinity sign. Every key
 **must** be the id of a declared read-out.
+
+### 6.1 Display units
+
+A bundle's numbers are in the bundle's units: for a Kerr run, times and lengths in `M`. A person
+often wants seconds and kilometres. A declaration **may** carry a `display` object saying how:
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `unit` | string | yes | What the renderer writes after the displayed value: `"s"`, `"km"`. |
+| `scale` | number | yes | How many of `display.unit` one of the declaration's own `unit` is. Positive and finite. |
+| `decimals` | integer | yes | How many decimal places the renderer should show of the displayed value. |
+
+The values in the frames do not change: they stay in the declaration's own `unit`, whether or not
+there is a `display`. A renderer that knows `display` **should** show `value * scale`, followed by
+`display.unit`, to `display.decimals` places. A renderer that does not know it shows the value as
+stored, followed by `unit`, and what it shows is still true. That is why the conversion is a field
+of its own and not a change of `unit`: a reader that skipped an unknown field would otherwise
+write a number of `M` with the word seconds after it.
+
+The stopwatch follows the same rule. Its stored value is in the bundle's time unit; a `display`
+on its declaration says how to show that value.
+
+`display.scale` is one number for the whole bundle, so a read-out keeps one unit from the first
+frame to the last. A writer chooses the unit with the whole run in view.
 
 ## 7. The frame file
 
@@ -741,3 +768,38 @@ uses.
 | A frame file's index differs from the index its name gives. | `IndexMismatch` |
 | Any other failure of section 7.7: a wrong chunk length, an unknown codec on a known tag, a DEFLATE stream that will not inflate, a duplicate or missing required chunk, bytes after the last chunk. | `Corrupt` |
 | A frame is asked for that the manifest does not list. | `FrameNotWritten` |
+
+## 12. Marks
+
+A *mark* is a direction on the observer's sky at which the renderer draws a sign: for example, the
+direction in which the observer is travelling. A mark is an annotation, not light. The renderer
+draws it over the finished picture, and neither the exposure nor the shift touches it.
+
+The renderer draws marks without knowing what they mean. The manifest's `marks` array declares
+each mark once:
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `id` | string | yes | The key under which each frame's `marks` object gives the direction. Unique within the bundle. |
+| `label` | string | yes | What the mark shows, in words. A renderer may write it beside the sign or in a legend. |
+| `shape` | string | yes | The sign: `"ring"`, `"diamond"` or `"triangle"`. A renderer draws a shape it does not know as a ring. |
+
+A frame's `marks` object maps mark ids to directions. Each direction is an array of three numbers:
+the unit vector `n`, written in the observer's triad, along which the observer looks to see the
+mark, exactly as a pixel's `n` is (section 4.3). Its length **must** be 1 to within `1e-6`, and
+every key **must** be the id of a declared mark.
+
+A frame **may** omit a mark, and the renderer then does not draw that mark on that frame. A writer
+omits a mark wherever the direction does not exist: the direction of travel of an observer who is
+at rest has none.
+
+Between two frames that both carry a mark, a renderer turns the direction along the great circle
+from one to the other. Where only one of the two carries it, the renderer draws the mark only on
+the video frames nearer that one.
+
+A sign hides the sky behind it, so a sign is small and hollow: the direction itself, at the
+sign's centre, stays in view. A renderer **must not** draw a sign in the colour it uses for
+unresolved or under-sampled pixels.
+
+Marks were added to version 1 as optional fields (section 10). A reader that does not know them
+draws the picture without them.

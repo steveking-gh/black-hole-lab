@@ -144,8 +144,10 @@ pub fn manifest(options: &Options) -> Manifest {
             label: "Stopwatch".into(),
             unit: "s".into(),
             decimals: 2,
+            display: None,
         }],
         labels: Vec::new(),
+        marks: Vec::new(),
         frames_planned: Some(options.frames),
         frames: Vec::new(),
     }

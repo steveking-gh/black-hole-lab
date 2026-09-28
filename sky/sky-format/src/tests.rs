@@ -70,8 +70,10 @@ fn sample_manifest(width: u32, height: u32) -> Manifest {
             label: "Stopwatch".into(),
             unit: "s".into(),
             decimals: 2,
+            display: None,
         }],
         labels: Vec::new(),
+        marks: Vec::new(),
         frames_planned: None,
         frames: Vec::new(),
     }
@@ -210,6 +212,7 @@ fn test_a_manifest_round_trips_through_json_non_finite_numbers_and_all() {
         label: "Blueshift".into(),
         unit: String::new(),
         decimals: 3,
+        display: None,
     });
     manifest.labels.push(Label {
         id: 7,
@@ -631,6 +634,7 @@ fn test_write_the_golden_bundle() {
         label: "Peak shift".into(),
         unit: String::new(),
         decimals: 3,
+        display: None,
     });
     manifest.labels.push(Label {
         id: 0,

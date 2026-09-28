@@ -70,6 +70,7 @@ fn decl(id: &str, label: &str, unit: &str, decimals: u32) -> ReadoutDecl {
         label: label.into(),
         unit: unit.into(),
         decimals,
+        display: None,
     }
 }
 
@@ -722,6 +723,7 @@ fn write_inputs(dir: &Path) -> (PathBuf, PathBuf) {
         },
         readouts: decls(),
         labels: Vec::new(),
+        marks: Vec::new(),
         frames_planned: Some(3),
         frames: Vec::new(),
     };

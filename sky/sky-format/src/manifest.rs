@@ -28,6 +28,9 @@ pub const PIXEL_CENTRES: &str = "half-integer";
 pub const STOPWATCH: &str = "stopwatch";
 /// The label a point source carries when it has none. No declared label may use it.
 pub const NO_LABEL: u32 = u32::MAX;
+/// How far a mark's direction may be from unit length before a manifest is refused: loose enough
+/// for a vector written to seven figures, tight enough that a vector nobody normalised fails.
+pub const MARK_TOLERANCE: f64 = 1e-6;
 
 /// How far the far-sky axes may stray from an orthonormal right-handed set before a manifest is
 /// refused. The published galactic matrix is orthonormal to about 1e-10; this is loose enough
@@ -56,6 +59,10 @@ pub struct Manifest {
     /// The names point sources can carry, by id. Empty when there are no point sources.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<Label>,
+    /// The marks, each declared once: directions on the observer's sky that the renderer draws a
+    /// sign at (section 12). Empty when there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub marks: Vec<MarkDecl>,
     /// How many frames the run means to write, for a progress bar. Not a promise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frames_planned: Option<u32>,
@@ -225,6 +232,33 @@ pub struct ReadoutDecl {
     pub unit: String,
     /// How many decimals the renderer should show.
     pub decimals: u32,
+    /// The read-out in a unit a person would rather read, when the writer offers one (section
+    /// 6.1). The values the frames carry stay in `unit` either way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<Display>,
+}
+
+/// A read-out as a renderer may show it instead of as it is stored: the stored value times
+/// `scale`, followed by `unit`, to `decimals` places.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Display {
+    pub unit: String,
+    /// How many of `unit` one of the declaration's own unit is. Positive and finite.
+    pub scale: Num,
+    pub decimals: u32,
+}
+
+/// One mark, declared once for the whole bundle: a direction on the observer's sky that the
+/// renderer draws a sign at, such as the direction the observer is travelling in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MarkDecl {
+    /// The key each frame's `marks` object uses.
+    pub id: String,
+    /// What the mark shows, in words.
+    pub label: String,
+    /// The sign the renderer draws: `"ring"`, `"diamond"` or `"triangle"`. A renderer draws a
+    /// shape it does not know as a ring.
+    pub shape: String,
 }
 
 /// A name a point source can carry.
@@ -251,6 +285,10 @@ pub struct FrameEntry {
     /// The value of each declared read-out at this frame, by id. A read-out missing here is not
     /// shown on this frame.
     pub readouts: BTreeMap<String, Num>,
+    /// Where the observer looks to see each declared mark at this frame, by id: a unit vector in
+    /// the triad, like a pixel's n. A mark missing here is not drawn on this frame.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub marks: BTreeMap<String, [Num; 3]>,
 }
 
 impl FrameEntry {
@@ -264,12 +302,19 @@ impl FrameEntry {
             file: frame_file_name(index),
             bytes: 0,
             readouts: BTreeMap::new(),
+            marks: BTreeMap::new(),
         }
     }
 
     /// Sets a read-out's value, for chaining.
     pub fn with_readout(mut self, id: &str, value: f64) -> Self {
         self.readouts.insert(id.into(), Num(value));
+        self
+    }
+
+    /// Sets the direction the observer looks in to see a mark, for chaining.
+    pub fn with_mark(mut self, id: &str, n: [f64; 3]) -> Self {
+        self.marks.insert(id.into(), n.map(Num));
         self
     }
 }
@@ -415,6 +460,20 @@ impl Manifest {
             if self.readouts[..k].iter().any(|s| s.id == r.id) {
                 return bad(format!("the read-out {:?} is declared twice", r.id));
             }
+            if let Some(display) = &r.display
+                && !(display.scale.0.is_finite() && display.scale.0 > 0.0)
+            {
+                return bad(format!(
+                    "the read-out {:?} is displayed at a scale of {}, and a scale is a positive \
+                     number",
+                    r.id, display.scale.0
+                ));
+            }
+        }
+        for (k, m) in self.marks.iter().enumerate() {
+            if self.marks[..k].iter().any(|n| n.id == m.id) {
+                return bad(format!("the mark {:?} is declared twice", m.id));
+            }
         }
         for (k, l) in self.labels.iter().enumerate() {
             if l.id == NO_LABEL {
@@ -456,6 +515,24 @@ impl Manifest {
             if !self.readouts.iter().any(|r| &r.id == id) {
                 return bad(format!(
                     "frame {} has a value for the read-out {id:?}, which is not declared",
+                    entry.index
+                ));
+            }
+        }
+        for (id, n) in &entry.marks {
+            if !self.marks.iter().any(|m| &m.id == id) {
+                return bad(format!(
+                    "frame {} has a direction for the mark {id:?}, which is not declared",
+                    entry.index
+                ));
+            }
+            let length = n.iter().map(|c| c.0 * c.0).sum::<f64>().sqrt();
+            // Written as a negation so that a NaN, which passes no comparison, is refused too.
+            #[allow(clippy::neg_cmp_op_on_partial_ord)]
+            if !((length - 1.0).abs() <= MARK_TOLERANCE) {
+                return bad(format!(
+                    "frame {} gives the mark {id:?} a direction of length {length}, and a \
+                     direction is a unit vector",
                     entry.index
                 ));
             }

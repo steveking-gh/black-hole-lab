@@ -220,6 +220,7 @@ fn decl(id: &str, label: &str, unit: &str, decimals: u32) -> ReadoutDecl {
         label: label.into(),
         unit: unit.into(),
         decimals,
+        display: None,
     }
 }
 

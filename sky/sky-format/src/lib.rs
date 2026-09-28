@@ -36,9 +36,9 @@ pub use error::Error;
 pub use frame::{CHUNK_HEADER_LEN, Codec, Frame, HEADER_LEN, MAGIC, PointSource, crc32, fate, tag};
 pub use grid::Grid;
 pub use manifest::{
-    Axes, FarSky, FrameEntry, Geometry, GridSpec, HEADING_ZERO, Label, Manifest, NO_LABEL,
-    Observer, PIXEL_CENTRES, POLE, PROJECTION, Playback, Position, ReadoutDecl, STOPWATCH, Source,
-    TimeUnit, WriterInfo, frame_file_name,
+    Axes, Display, FarSky, FrameEntry, Geometry, GridSpec, HEADING_ZERO, Label, MARK_TOLERANCE,
+    Manifest, MarkDecl, NO_LABEL, Observer, PIXEL_CENTRES, POLE, PROJECTION, Playback, Position,
+    ReadoutDecl, STOPWATCH, Source, TimeUnit, WriterInfo, frame_file_name,
 };
 pub use num::Num;
 
