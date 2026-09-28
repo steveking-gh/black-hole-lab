@@ -6,6 +6,7 @@
 use std::ops::Range;
 use std::path::PathBuf;
 
+use crate::colour::ColourRule;
 use crate::encode::Codec;
 use crate::panel::Placement;
 use crate::sky::MapFrame;
@@ -27,6 +28,14 @@ usage: sky-render --bundle <dir> --sky <map.exr> --out <video.mkv> [options]
   --exposure <stops>         the exposure as a power of two, at most 100 either way (default:
                              2.5 stops for a map 8192 wide, two more for every doubling of the
                              map's width)
+  --colour blackbody|map     how shifted light is coloured. blackbody (default): each texel of
+                             the map is a blackbody at the temperature its colour implies, and a
+                             shift g makes it the blackbody at g times that temperature, as an
+                             eye sees it, so hue and brightness both follow the shift. map: the
+                             map's own colour times g^4, the renderer's old rule
+  --show-model-range         draw each sky pixel in a false colour for the range its shift g
+                             falls in, showing where the blackbody model is good (the colours
+                             are printed with the run); a diagnostic, off by default
   --encoder svt|nvenc|aom|none
                              SVT-AV1 on the CPU (default), NVIDIA's AV1 encoder, or libaom;
                              none renders without encoding (with --keep-frames, or for timing)
@@ -245,6 +254,10 @@ pub struct Options {
     /// The height of a line of read-out text, in degrees.
     pub readout_size: f64,
     pub decimal_comma: bool,
+    /// `--colour`: how shifted light is coloured.
+    pub colour: ColourRule,
+    /// `--show-model-range`: the picture shows the class of each sky pixel's shift.
+    pub show_model_range: bool,
 }
 
 /// What the command line asks for.
@@ -285,6 +298,8 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
     let mut readout_at: Vec<Placement> = Vec::new();
     let mut readout_size = 2.0;
     let mut decimal_comma = false;
+    let mut colour = ColourRule::Blackbody;
+    let mut show_model_range = false;
 
     let mut rest = args.iter().peekable();
     while let Some(flag) = rest.next() {
@@ -477,6 +492,16 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
                     })?;
             }
             "--decimal-comma" => decimal_comma = true,
+            "--colour" => {
+                colour = match value()? {
+                    "blackbody" => ColourRule::Blackbody,
+                    "map" => ColourRule::Map,
+                    other => {
+                        return Err(format!("--colour is blackbody or map, not {other:?}"));
+                    }
+                };
+            }
+            "--show-model-range" => show_model_range = true,
             other => return Err(format!("{other:?} is not an option; see --help")),
         }
     }
@@ -553,6 +578,8 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
         },
         readout_size,
         decimal_comma,
+        colour,
+        show_model_range,
     })))
 }
 

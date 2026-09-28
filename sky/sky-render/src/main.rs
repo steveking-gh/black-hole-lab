@@ -3,9 +3,10 @@
 //! The bundle (physics_simulation_specification.md at the workspace root) says, for each moment
 //! of an observer's watch and each direction on the observer's sky, where on the distant sky the
 //! light came from, how its frequency was shifted, and whether it came from the sky at all. This
-//! program knows no physics: it looks each direction up on a star map, brightens or dims it by
-//! the shift, and hands the frames to ffmpeg, which encodes them as AV1. Then it marks the file as
-//! an equirectangular 360-degree video, so that a player lets the viewer look around.
+//! program knows no geometry: it looks each direction up on a star map, colours and brightens or
+//! dims it as the shift makes an eye see it (by the model of the crate `sky-colour`, `colour`),
+//! and hands the frames to ffmpeg, which encodes them as AV1. Then it marks the file as an
+//! equirectangular 360-degree video, so that a player lets the viewer look around.
 //!
 //! The read-outs (the observer's stopwatch and the bundle's other numbers) go by default into a
 //! subtitle track, which the player draws fixed at the bottom right of its window while the sky
@@ -19,11 +20,14 @@
 //! - `bilinear` and `field`: the ray at any output pixel, from the bundle's coarser grid, across
 //!   the seam and over the poles, respecting each ray's fate, and marking where the rays are too
 //!   far apart to say where the light came from;
-//! - `sky`: the rotation into the map's frame, and the filtered map lookup (a rip-map);
-//! - `tone`: the shift's g^4, the exposure, clipping and the sRGB curve;
+//! - `sky`: the rotation into the map's frame, and the filtered map lookup (a rip-map), with each
+//!   texel it reads shifted under the blackbody model;
+//! - `colour`: the colour rule (`--colour`), the display's gamut, the ranges of g in which the
+//!   model is good (`--show-model-range`), and what the run says about them (`tests_colour`);
+//! - `tone`: the old rule's g^4, the exposure, clipping and the sRGB curve;
 //! - `render`: the frame, row bands on scoped threads;
 //! - `tally`: how many pixels were drawn unresolved, under-sampled and dark, and the sentence that
-//!   explains a marker colour;
+//!   explains a marker colour; and the sky pixels by their shift;
 //! - `mp4`: the spherical-video tag, appended to the finished file;
 //! - `values`: each read-out's value at a video frame, and how it is written;
 //! - `subtitles`: the read-outs as an ASS subtitle script, one cue per video frame;
@@ -37,6 +41,7 @@
 
 mod bilinear;
 mod cli;
+mod colour;
 mod encode;
 mod field;
 mod layout;
@@ -59,6 +64,8 @@ mod values;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_colour;
+#[cfg(test)]
 mod tests_marking;
 #[cfg(test)]
 mod tests_output;
@@ -75,7 +82,7 @@ use field::{Judge, RayField};
 use output::{Cleanup, Plan};
 use overlay::Overlay;
 use readout::Style;
-use render::{Fields, Look, Scene, Size};
+use render::{Fields, Look, Picture, Scene, Size};
 use sky::{MapFrame, SkyMap};
 use tally::FilmTally;
 use timeline::{Pick, Timeline};
@@ -289,8 +296,13 @@ fn run(o: &Options) -> Result<(), String> {
     let image_damaged = image.damaged;
     let read_seconds = clock.elapsed().as_secs_f64();
     let clock = Instant::now();
-    let sky = SkyMap::new(image.width, image.height, image.texels, o.threads);
+    let sky = SkyMap::with_colour(image.width, image.height, image.texels, o.threads, o.colour);
     let pyramid_seconds = clock.elapsed().as_secs_f64();
+    let picture = if o.show_model_range {
+        Picture::ModelRange
+    } else {
+        Picture::Light
+    };
     let map_frame = o
         .map_frame
         .unwrap_or_else(|| MapFrame::from_file_name(&o.sky));
@@ -334,13 +346,39 @@ fn run(o: &Options) -> Result<(), String> {
             listed - complete.len()
         );
     }
+    let (texel_bytes, kelvin_bytes) = sky.bytes();
     println!(
-        "map {}: {} x {} {}, read in {read_seconds:.1} s, rip-map built in {pyramid_seconds:.1} s",
+        "map {}: {} x {} {}, read in {read_seconds:.1} s, rip-map built in {pyramid_seconds:.1} s \
+         ({:.0} MB{})",
         o.sky.display(),
         sky.width(),
         sky.height(),
-        map_frame.name()
+        map_frame.name(),
+        texel_bytes as f64 / 1e6,
+        if kelvin_bytes > 0 {
+            format!(
+                ", and {:.0} MB of each texel's temperature and tint, for the blackbody model",
+                kelvin_bytes as f64 / 1e6
+            )
+        } else {
+            String::new()
+        }
     );
+    println!(
+        "colour: {}{}",
+        o.colour.name(),
+        match o.colour {
+            colour::ColourRule::Blackbody => {
+                " (each texel a blackbody at the temperature its colour implies, seen at g times it)"
+            }
+            colour::ColourRule::Map => " (the map's colour times g^4, the old rule)",
+        }
+    );
+    if o.show_model_range {
+        for line in colour::legend() {
+            println!("{line}");
+        }
+    }
     if image_damaged > 0 {
         println!(
             "the map has {image_damaged} texel(s) whose value is not a finite number; they are \
@@ -482,7 +520,7 @@ fn run(o: &Options) -> Result<(), String> {
                     rotation,
                     sky: &sky,
                 };
-                render::render(&scene, size, &look, o.threads, &mut pixels)
+                render::render_as(&scene, size, &look, picture, o.threads, &mut pixels)
             };
             counts.add(k, tally);
             render_time += clock.elapsed();
@@ -570,6 +608,20 @@ fn run(o: &Options) -> Result<(), String> {
     );
     for line in counts.report(o.unresolved, o.undersampled, o.mark_undersampled) {
         println!("{line}");
+    }
+    for line in counts.shift_report() {
+        println!("{line}");
+    }
+    for line in colour::explain(o.colour) {
+        println!("{line}");
+    }
+    if let Some(note) = colour::background_note(counts.total.shift.largest) {
+        println!("{note}");
+    }
+    if o.show_model_range {
+        for line in colour::legend() {
+            println!("{line}");
+        }
     }
     if sent < count {
         return Err(format!("stopped after {sent} of {count} frames"));

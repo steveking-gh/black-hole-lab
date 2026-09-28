@@ -23,19 +23,28 @@
 //!
 //! # Counting
 //!
-//! [`render`] returns how many pixels of the frame it drew as unresolved, under-sampled and dark
-//! ([`Tally`]), before any read-out panel is painted over them. Light that came out as NaN, which
-//! the arithmetic of `crate::tone` no longer produces, would be drawn and counted as unresolved
-//! rather than written as black.
+//! [`render_as`] returns how many pixels of the frame it drew as unresolved, under-sampled and
+//! dark ([`Tally`]), before any read-out panel is painted over them, and the shifts of those it
+//! drew as light. Light that came out as NaN (not known: under the blackbody model, a texel that
+//! is not the colour of any light) is drawn and counted as unresolved rather than written as
+//! black.
+//!
+//! # What a pixel sees, and its colour
+//!
+//! [`Scene::see_rows`] finds, for each pixel, where on the map its light came from, over how
+//! large a patch, and with what shift; `crate::colour::light` then forms the light under the map's
+//! colour rule. Kept apart so that `--show-model-range` ([`Picture::ModelRange`]) and the tests can
+//! use the first without the second.
 
 use std::ops::Range;
 use std::sync::Mutex;
 
+use crate::colour::{Class, light};
 use crate::field::{Ray, RayField, blend, blend_judged};
 use crate::parallel::for_each_band;
-use crate::sky::{Mat3, SkyMap, apply};
+use crate::sky::{Footprint, Mat3, SkyMap, apply};
 use crate::tally::Tally;
-use crate::tone::{Encoder, shade};
+use crate::tone::Encoder;
 
 /// The bundle frames a video frame is made of, prepared.
 #[derive(Clone, Copy)]
@@ -68,8 +77,22 @@ pub struct Look {
 /// What one output pixel shows, before tone mapping.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Shade {
-    /// Linear light, scaled by g^4 and the exposure, not clipped.
+    /// Linear light under the map's colour rule and the exposure, not clipped above; NaN when it
+    /// is not known (`crate::colour::light`).
     Light([f32; 3]),
+    Shadow,
+    Unresolved,
+    Undersampled,
+}
+
+/// What one output pixel sees, before its colour is formed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Seen {
+    /// The far sky: where on the map, over how large a patch, and with what shift.
+    Sky {
+        footprint: Footprint,
+        g: f64,
+    },
     Shadow,
     Unresolved,
     Undersampled,
@@ -134,13 +157,14 @@ impl Scene<'_> {
         out.extend((0..size.width).map(|i| self.place(size, i, j)));
     }
 
-    /// Shades rows `rows` of the frame, handing each pixel's shade to `emit(i, j, shade)`.
-    pub fn shade_rows(
+    /// Finds what rows `rows` of the frame see, handing each pixel's answer to
+    /// `emit(i, j, seen)`: for sky, the footprint on the map and the shift, from which
+    /// `crate::colour::light` forms the light.
+    pub fn see_rows(
         &self,
         size: Size,
-        gain: f32,
         rows: Range<usize>,
-        mut emit: impl FnMut(usize, usize, Shade),
+        mut emit: impl FnMut(usize, usize, Seen),
     ) {
         if rows.is_empty() {
             return;
@@ -166,7 +190,7 @@ impl Scene<'_> {
                 _ => None,
             };
             for i in 0..w {
-                let shade = match here[i] {
+                let seen = match here[i] {
                     Placed::Sky { at, g } => {
                         // The right-hand neighbour, or the left-hand one if that is not sky.
                         let across =
@@ -185,17 +209,19 @@ impl Scene<'_> {
                         let unmeasured =
                             across.is_none() && w > 1 || down.is_none() && size.height > 1;
                         if judged && unmeasured {
-                            Shade::Undersampled
+                            Seen::Undersampled
                         } else {
-                            let footprint = self.sky.footprint(at, across, down);
-                            Shade::Light(shade(self.sky.sample(footprint), g, gain))
+                            Seen::Sky {
+                                footprint: self.sky.footprint(at, across, down),
+                                g,
+                            }
                         }
                     }
-                    Placed::Shadow => Shade::Shadow,
-                    Placed::Unresolved => Shade::Unresolved,
-                    Placed::Undersampled => Shade::Undersampled,
+                    Placed::Shadow => Seen::Shadow,
+                    Placed::Unresolved => Seen::Unresolved,
+                    Placed::Undersampled => Seen::Undersampled,
                 };
-                emit(i, j, shade);
+                emit(i, j, seen);
             }
             // Row j becomes the row above, row j + 1 the row drawn, and the old row above's
             // storage is reused for the next row below.
@@ -206,32 +232,84 @@ impl Scene<'_> {
             ));
         }
     }
+
+    /// Shades rows `rows` of the frame, handing each pixel's shade and, for light, its shift to
+    /// `emit(i, j, shade, g)`.
+    pub fn shade_rows(
+        &self,
+        size: Size,
+        gain: f32,
+        rows: Range<usize>,
+        mut emit: impl FnMut(usize, usize, Shade, Option<f64>),
+    ) {
+        self.see_rows(size, rows, |i, j, seen| match seen {
+            Seen::Sky { footprint, g } => emit(
+                i,
+                j,
+                Shade::Light(light(self.sky, footprint, g, gain)),
+                Some(g),
+            ),
+            Seen::Shadow => emit(i, j, Shade::Shadow, None),
+            Seen::Unresolved => emit(i, j, Shade::Unresolved, None),
+            Seen::Undersampled => emit(i, j, Shade::Undersampled, None),
+        });
+    }
 }
 
 /// Renders a frame into `out`, three 16-bit codes per pixel (R, G, B), rows top to bottom, on
-/// `threads` threads, and counts what it drew.
+/// `threads` threads, and counts what it drew. (The renderer itself calls [`render_as`].)
+#[cfg(test)]
 pub fn render(scene: &Scene, size: Size, look: &Look, threads: usize, out: &mut [u16]) -> Tally {
+    render_as(scene, size, look, Picture::Light, threads, out)
+}
+
+/// What a frame's sky pixels show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Picture {
+    /// Their light.
+    Light,
+    /// The class of their shift, in false colour (`--show-model-range`, `crate::colour::Class`).
+    /// The pixels are shaded as for `Light` first, so that one whose light is not known is drawn
+    /// and counted as unresolved in both pictures alike.
+    ModelRange,
+}
+
+/// [`render`], showing `picture`.
+pub fn render_as(
+    scene: &Scene,
+    size: Size,
+    look: &Look,
+    picture: Picture,
+    threads: usize,
+    out: &mut [u16],
+) -> Tally {
     assert_eq!(out.len(), size.width * size.height * 3);
     let row_len = size.width * 3;
     let total = Mutex::new(Tally::default());
     for_each_band(out, row_len, BAND_ROWS, threads, |rows, band| {
         let first = rows.start;
         let mut tally = Tally::default();
-        scene.shade_rows(size, look.gain, rows, |i, j, s| {
+        scene.shade_rows(size, look.gain, rows, |i, j, s, g| {
             tally.pixels += 1;
-            let rgb = match s {
-                Shade::Light(light) if !light.iter().any(|c| c.is_nan()) => {
-                    light.map(|c| look.encoder.encode(c))
+            let rgb = match (s, g) {
+                // Light that is not known (NaN: a texel that is not light, or a shift that is not
+                // one) is drawn and counted as unresolved, and so never reaches the encoder.
+                (Shade::Light(light), Some(g)) if !light.iter().any(|c| c.is_nan()) => {
+                    tally.shift.count(g);
+                    match picture {
+                        Picture::Light => light.map(|c| look.encoder.encode(c)),
+                        Picture::ModelRange => Class::of(g).code(),
+                    }
                 }
-                Shade::Light(_) | Shade::Unresolved => {
+                (Shade::Light(_) | Shade::Unresolved, _) => {
                     tally.unresolved += 1;
                     look.unresolved
                 }
-                Shade::Shadow => {
+                (Shade::Shadow, _) => {
                     tally.dark += 1;
                     [0; 3]
                 }
-                Shade::Undersampled => {
+                (Shade::Undersampled, _) => {
                     tally.undersampled += 1;
                     look.undersampled
                 }
@@ -268,7 +346,7 @@ pub fn shades(scene: &Scene, size: Size, gain: f32, threads: usize) -> Vec<Shade
     let mut out = vec![Shade::Shadow; size.width * size.height];
     for_each_band(&mut out, size.width, BAND_ROWS, threads, |rows, band| {
         let first = rows.start;
-        scene.shade_rows(size, gain, rows, |i, j, s| {
+        scene.shade_rows(size, gain, rows, |i, j, s, _| {
             band[(j - first) * size.width + i] = s
         });
     });

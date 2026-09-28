@@ -64,6 +64,15 @@
 //! covers and not over-weighted toward the pole. Reading a level uses the pole and seam rules of
 //! `crate::bilinear`.
 //!
+//! # Shifting under the blackbody model
+//!
+//! Under `--colour blackbody` the map is built with each texel of every level also in the form
+//! the model needs ([`SkyMap::with_colour`]: the temperature its colour implies and its tint,
+//! found once when the map is loaded), and [`SkyMap::sample_shifted`] reads the same texels with
+//! the same weights as [`SkyMap::sample`], shifting each before blending. Why in that order, and
+//! what error the pre-averaged levels leave, is measured in `crate::colour`, "Filtering and
+//! shifting".
+//!
 //! # Fallbacks in the footprint, and what each gives
 //!
 //! - *A missing neighbour* (not sky) gives a step of zero along that axis, so the patch is
@@ -80,7 +89,10 @@
 
 use std::f64::consts::PI;
 
+use sky_colour::colorimetry::{rgb_to_xyz, xyz_to_rgb};
+
 use crate::bilinear::taps;
+use crate::colour::{ColourRule, ln_blackbody};
 use crate::parallel::for_each_band;
 
 /// A 3 x 3 matrix, row-major.
@@ -153,7 +165,20 @@ struct Level {
     /// This level's size over level 0's, across and down, for scaling a place on level 0.
     scale: (f64, f64),
     texels: Vec<[f32; 3]>,
+    /// For `--colour blackbody`, each texel as the model sees it (see [`shift_forms`]); empty
+    /// under the map's own colour.
+    shift: Vec<ShiftForm>,
 }
+
+/// A texel as the blackbody model sees it: `[ln T, a_X, a_Y, a_Z]`, T the temperature (K) its
+/// colour implies and a_c = ln P_c - ln B_c(T) the logarithm of its tint, P its tristimulus
+/// values and B those of the blackbody at T. Seen with shift g the texel is then
+/// exp(a_c + ln B_c(g T)): the model's P_c B_c(g T) / B_c(T), with no RGB to convert and one
+/// lookup of the blackbody, at g T, instead of two.
+///
+/// ln T is +infinity for a colour at or beyond the hot end of the locus (a_c is then ln P_c),
+/// -infinity for a black texel, and NaN for one that is not the colour of any light.
+type ShiftForm = [f32; 4];
 
 impl Level {
     /// The bilinear value at level-0 frame coordinates (u, v).
@@ -186,6 +211,9 @@ pub struct SkyMap {
     down: usize,
     /// Level (lx, ly) is at `ly * across + lx`.
     levels: Vec<Level>,
+    /// How shifted light is coloured over this map; `Blackbody` exactly when every level carries
+    /// its texels' temperatures.
+    colour: ColourRule,
 }
 
 /// Where a direction lands on a map, and how many level-0 texels one output pixel spans there
@@ -200,8 +228,23 @@ pub struct Footprint {
 
 impl SkyMap {
     /// Builds the rip-map of a `width` x `height` map given row by row, top row first, each row
-    /// left to right, as linear RGB. `threads` share the building.
+    /// left to right, as linear RGB, for the map's own colour times g^4 (`--colour map`).
+    /// `threads` share the building. (The renderer itself calls [`SkyMap::with_colour`].)
+    #[cfg(test)]
     pub fn new(width: usize, height: usize, texels: Vec<[f32; 3]>, threads: usize) -> Self {
+        Self::with_colour(width, height, texels, threads, ColourRule::Map)
+    }
+
+    /// As [`SkyMap::new`], for the colour rule `colour`. Under `Blackbody` the temperature every
+    /// texel of every level implies is found here, once, so that a frame does not search for it
+    /// per pixel (see [`SkyMap::sample_shifted`]).
+    pub fn with_colour(
+        width: usize,
+        height: usize,
+        texels: Vec<[f32; 3]>,
+        threads: usize,
+        colour: ColourRule,
+    ) -> Self {
         assert_eq!(
             texels.len(),
             width * height,
@@ -229,6 +272,7 @@ impl SkyMap {
                     height,
                     scale: (1.0, 1.0),
                     texels,
+                    shift: Vec::new(),
                 },
                 None => halve_down(&levels[(ly - 1) * across], h, threads),
             };
@@ -238,17 +282,40 @@ impl SkyMap {
                 levels.push(next);
             }
         }
+        if colour == ColourRule::Blackbody {
+            // Built here, with the map, rather than by the first pixel of the first frame.
+            ln_blackbody();
+            for level in &mut levels {
+                level.shift = shift_forms(&level.texels, threads);
+            }
+        }
         Self {
             width,
             height,
             across,
             down,
             levels,
+            colour,
         }
     }
 
     pub fn width(&self) -> usize {
         self.width
+    }
+
+    /// The colour rule this map was built for.
+    pub fn colour(&self) -> ColourRule {
+        self.colour
+    }
+
+    /// The bytes the levels hold: their texels, and their temperatures when there are any.
+    pub fn bytes(&self) -> (usize, usize) {
+        self.levels.iter().fold((0, 0), |(t, k), level| {
+            (
+                t + std::mem::size_of_val(level.texels.as_slice()),
+                k + std::mem::size_of_val(level.shift.as_slice()),
+            )
+        })
     }
 
     pub fn height(&self) -> usize {
@@ -345,6 +412,183 @@ impl SkyMap {
         }
         out
     }
+
+    #[cfg(test)]
+    /// How many texels, with a weight above zero, [`SkyMap::sample`] reads over a footprint.
+    pub fn texels_read(&self, f: Footprint) -> usize {
+        let (lx, fx) = level_of(f.across, self.across);
+        let (ly, fy) = level_of(f.down, self.down);
+        let mut n = 0;
+        for (a, wa) in [(lx, 1.0 - fx), (lx + 1, fx)] {
+            for (b, wb) in [(ly, 1.0 - fy), (ly + 1, fy)] {
+                if wa == 0.0 || wb == 0.0 {
+                    continue;
+                }
+                let level = &self.levels[b * self.across + a];
+                let t = taps(
+                    level.width,
+                    level.height,
+                    f.u * level.scale.0,
+                    f.v * level.scale.1,
+                );
+                n += t.weight.iter().filter(|&&w| w > 0.0).count();
+            }
+        }
+        n
+    }
+
+    /// The light over a footprint seen with shift `g` under the blackbody model, in the map's
+    /// linear units (no exposure), not clipped and possibly with negative channels: each of the
+    /// texels [`SkyMap::sample`] reads is shifted at its own temperature, and the shifted texels
+    /// are blended with `sample`'s weights. Only for a map built for `ColourRule::Blackbody`.
+    ///
+    /// Why texel by texel and not the blend: the model is not linear in colour (the shift of a
+    /// mean of two colours is not the mean of their shifts; the crate `sky-colour`'s item 2), and
+    /// each texel of the map is the smallest patch whose colour the map states. Shifting each
+    /// texel the filter reads and then blending is the true order for every texel it reads; what
+    /// remains of the other order is inside a coarse level's texels, each the mean of the level-0
+    /// texels it covers and shifted at the temperature of that mean (the measurement and the bound
+    /// are in `crate::colour`, "Filtering and shifting"). It is also what makes the temperatures
+    /// found once per texel usable: the temperature of a blend of texels would have to be searched
+    /// for per pixel.
+    ///
+    /// A texel that is not light makes the pixel NaN, not known. A shift so large that the light
+    /// overflows f64 (g beyond about 10^270) makes it infinite, which the encoder shows as white:
+    /// it is then more than 10^270 times the texel's light, beyond any display at any exposure.
+    pub fn sample_shifted(&self, f: Footprint, g: f64) -> [f64; 3] {
+        debug_assert_eq!(self.colour, ColourRule::Blackbody);
+        // Not a shift (`crate::field` lets none of these through; a direct caller might).
+        if !(g.is_finite() && g >= 0.0) {
+            return [f64::NAN; 3];
+        }
+        let table = ln_blackbody();
+        let (w_min, w_max) = table.domain();
+        let ln_g = g.ln();
+        let (lx, fx) = level_of(f.across, self.across);
+        let (ly, fy) = level_of(f.down, self.down);
+        // The shifted texels are summed in XYZ and turned into RGB once: the shift is formed in
+        // XYZ and the conversion is linear, so this is the blend of the shifted RGB, reordered.
+        let mut xyz = [0.0f64; 3];
+        for (a, wa) in [(lx, 1.0 - fx), (lx + 1, fx)] {
+            if wa == 0.0 {
+                continue;
+            }
+            for (b, wb) in [(ly, 1.0 - fy), (ly + 1, fy)] {
+                if wb == 0.0 {
+                    continue;
+                }
+                let level = &self.levels[b * self.across + a];
+                let t = taps(
+                    level.width,
+                    level.height,
+                    f.u * level.scale.0,
+                    f.v * level.scale.1,
+                );
+                for k in 0..4 {
+                    let w = wa * wb * t.weight[k];
+                    if w == 0.0 {
+                        continue;
+                    }
+                    let [ln_t, tint @ ..] = level.shift[t.index[k]];
+                    if ln_t == f32::NEG_INFINITY {
+                        // Black: no light, shifted or not.
+                        continue;
+                    }
+                    if ln_t.is_nan() {
+                        return [f64::NAN; 3];
+                    }
+                    let ln_t = f64::from(ln_t);
+                    let ln_gt = ln_t + ln_g;
+                    if ln_gt < w_min {
+                        // g T below 10 K: below e^-1675 of the texel, zero in f64, the library's
+                        // own rule (`sky_colour::shift`, "Units and the table's ends"). It also
+                        // takes g = 0, whose logarithm is -infinity.
+                        continue;
+                    }
+                    let a = tint.map(f64::from);
+                    let shifted: [f64; 3] = if ln_t == f64::INFINITY {
+                        // A colour at or beyond the locus's hot end, whose a_c is ln P_c: the
+                        // Rayleigh-Jeans limit, Q = g, as the library has it.
+                        std::array::from_fn(|c| g * a[c].exp())
+                    } else if ln_gt <= w_max {
+                        let b = table.at(ln_gt);
+                        std::array::from_fn(|c| (a[c] + b[c]).exp())
+                    } else {
+                        // Past the table's top (g T above 10^10 K): the library, slower.
+                        let b = sky_colour::model().blackbody_xyz(ln_gt.exp());
+                        std::array::from_fn(|c| a[c].exp() * b[c])
+                    };
+                    for c in 0..3 {
+                        xyz[c] += w * shifted[c];
+                    }
+                }
+            }
+        }
+        if xyz.iter().all(|c| c.is_finite()) {
+            xyz_to_rgb(xyz)
+        } else {
+            // Every texel read is light, so its X, Y, Z are not below zero, Q is positive and g
+            // finite: a sum that is not finite has overflowed (see above).
+            [f64::INFINITY; 3]
+        }
+    }
+}
+
+/// Each texel as the blackbody model sees it ([`ShiftForm`]), on `threads` threads: the one
+/// search for the temperature a texel's colour implies (the library's, 75 ns), made once when the
+/// map is loaded instead of once per pixel per frame.
+///
+/// Its precision, in f32. ln T is below 24 (T up to 10^10 K), where f32's spacing is at most
+/// 1.9e-6, so the stored T is within 1e-6 of the implied one (2.4e-7 below 2981 K, where
+/// ln T < 8). The tint a_c is formed against the blackbody at that stored T, so at g near 1 the
+/// texel comes back as itself whatever the rounding, and the stored T enters only through the
+/// difference of the slopes d ln B / d ln T at g T and at T, each at most about c2 / (lambda T)
+/// for the longest wavelength that counts: about 60 at the least implied temperature, 300 K, and
+/// below 5 from 3000 K up. The shifted texel is then within 1.5e-5 of the model's at 300 K and
+/// within 5e-6 from 3000 K up. a_c itself lies within about -25 to 60 (ln B_c(T) runs from about
+/// -55 at 300 K to +25 at 10^6 K, and the map's values are at most 1), where f32 rounds to 2e-6 of
+/// the texel's light at most. Against the output's step, 1.5e-5 of full scale, these are nothing.
+fn shift_forms(texels: &[[f32; 3]], threads: usize) -> Vec<ShiftForm> {
+    let model = sky_colour::model();
+    let table = ln_blackbody();
+    let (_, w_max) = table.domain();
+    let mut out = vec![[0.0f32; 4]; texels.len()];
+    for_each_band(&mut out, 4096, 16, threads, |rows, band| {
+        let first = rows.start * 4096;
+        for (k, out) in band.iter_mut().enumerate() {
+            let texel = texels[first + k].map(f64::from);
+            // A texel that is light has X, Y, Z >= 0 up to rounding; the library clamps that
+            // rounding to 0 and so does this (its logarithm is then -infinity, and it adds 0).
+            let ln_p = rgb_to_xyz(texel).map(|c| c.max(0.0).ln());
+            *out = match model.implied_temperature(texel) {
+                Some(implied) if implied.kelvin.is_infinite() => [
+                    f32::INFINITY,
+                    ln_p[0] as f32,
+                    ln_p[1] as f32,
+                    ln_p[2] as f32,
+                ],
+                Some(implied) => {
+                    let ln_t = implied.kelvin.ln() as f32;
+                    let w = f64::from(ln_t);
+                    let b = if w <= w_max {
+                        table.at(w)
+                    } else {
+                        model.blackbody_xyz(w.exp()).map(f64::ln)
+                    };
+                    [
+                        ln_t,
+                        (ln_p[0] - b[0]) as f32,
+                        (ln_p[1] - b[1]) as f32,
+                        (ln_p[2] - b[2]) as f32,
+                    ]
+                }
+                None if texel.iter().all(|&c| c == 0.0) => [f32::NEG_INFINITY; 4],
+                // Not the colour of any light (a tristimulus value below zero) or not finite.
+                None => [f32::NAN; 4],
+            };
+        }
+    });
+    out
 }
 
 /// The level whose texels are `span` level-0 texels long, as a whole level and the fraction of
@@ -415,6 +659,7 @@ fn halve_across(src: &Level, m: usize, threads: usize) -> Level {
         height: src.height,
         scale: (m as f64 / src.width as f64 * src.scale.0, src.scale.1),
         texels,
+        shift: Vec::new(),
     }
 }
 
@@ -443,6 +688,7 @@ fn halve_down(src: &Level, m: usize, threads: usize) -> Level {
         height: m,
         scale: (src.scale.0, m as f64 / src.height as f64 * src.scale.1),
         texels,
+        shift: Vec::new(),
     }
 }
 

@@ -276,6 +276,7 @@ dependencies = [
  "exr",
  "png",
  "readout",
+ "sky-colour",
  "sky-format",
 ]
 

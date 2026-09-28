@@ -1,16 +1,19 @@
 //! From the map's linear light to the numbers written into a video frame.
 //!
-//! Three steps, in this order: scale by the shift and the exposure (linear light), clip to [0, 1],
-//! and apply the sRGB transfer function. The frame then holds 16-bit sRGB-encoded values, which
-//! ffmpeg turns into 10-bit BT.709 Y'CbCr for the encoder.
+//! Three steps, in this order: the light as the shift makes it, times the exposure (linear
+//! light), clip to [0, 1], and apply the sRGB transfer function. The frame then holds 16-bit
+//! sRGB-encoded values, which ffmpeg turns into 10-bit BT.709 Y'CbCr for the encoder.
 //!
 //! # The shift
 //!
-//! Light arriving with shift g carries g^4 times the bolometric intensity of the map at the point
-//! it came from (the specification, section 4.6: I_nu / nu^3 is invariant along a ray, and
-//! integrating over frequency gives the fourth power). That factor is applied here to every
-//! channel alike. A blueshifted sky is also bluer, and a redshifted one redder, which is not done
-//! yet: see [`shade`].
+//! How the shift colours light is chosen by `--colour` (`crate::colour`). Under `blackbody`, the
+//! default, the colour and the visible brightness both follow the shift, by the model of the
+//! crate `sky-colour`, formed in `crate::sky` and brought into the display's gamut below by
+//! `crate::colour::lift_negatives`. Under `map`, the old rule, and under either at g = 1, it is
+//! [`shade`] here: light arriving with shift g carries g^4 times the bolometric intensity of the
+//! map at the point it came from (the specification, section 4.6: I_nu / nu^3 is invariant along
+//! a ray, and integrating over frequency gives the fourth power), applied to every channel
+//! alike, with the map's hue.
 //!
 //! # Exposure
 //!
@@ -28,8 +31,8 @@
 //! sRGB curve, to the encoded values. A factor on encoded values is not an exposure: it raises
 //! the contrast, leaving the faint sky about where 1.5 stops of true gain puts it and lifting the
 //! bright parts to where 3 stops does. No gain on linear light reproduces that curve, and a gain
-//! on linear light is what this renderer must use, because the shift's g^4 is a factor on linear
-//! light too and the two have to compose. Of the gains tried (1.5 to 4 stops in half-stop steps,
+//! on linear light is what this renderer must use, because the shift acts on linear light too
+//! and the two have to compose. Of the gains tried (1.5 to 4 stops in half-stop steps,
 //! 2026-09-27, against the approved picture at 1600 x 800) 2.5 stops came nearest, with an rms
 //! difference of 5 codes in 255: the 90th percentile and the mean agree, and the faint background
 //! is some 5 codes brighter than in the approved clip.
@@ -51,23 +54,41 @@
 //!   finite f32 and cannot supply the other half of an infinity times zero.
 //! - *Clipping at 1* ([`Encoder::encode`]). A display limit, not an unknown: a clipped pixel is
 //!   known to be at least that bright. Channels clip separately, so a very bright coloured pixel
-//!   drifts toward white, as it does in any photograph.
+//!   drifts toward white, as it does in any photograph. This holds under `--colour blackbody`
+//!   too, where the library's own rule above white is not used, so that g = 1 is the old picture
+//!   to the bit (`crate::colour`, "Into the display's gamut").
+//! - *A negative channel* (`crate::colour::lift_negatives`). A shifted blackbody's colour can
+//!   lie outside BT.709; it is moved toward the grey of its own luminance until no channel is
+//!   negative. A display limit too: the luminance and the dominant wavelength are kept, and only
+//!   the saturation the display cannot show is given up.
 //! - *NaN encoded as 0* ([`Encoder::encode`]). Unreachable from the renderer: map texels are
 //!   finite (`crate::load`), the rip-map's weights are finite and positive, and shifts are finite
-//!   and not negative (`crate::field`), so the light is finite or, by overflow, infinite. The
-//!   rule stays as a guard for direct callers; the renderer checks for NaN before encoding and
-//!   would draw such a pixel as unresolved.
-//! - *The colour of shifted light*. Only the brightness follows g; the hue is the map's. This is
-//!   wrong wherever g is far from 1, it is known and described at [`shade`], and marking it would
-//!   mark every pixel of a moving observer's sky. It waits for a spectral model.
+//!   and not negative (`crate::field`), so the light is finite or, by overflow, infinite. Under
+//!   the blackbody model the library answers NaN for a texel that is not the colour of any light
+//!   (a map with negative values; NASA's have none), and `crate::render` draws and counts that
+//!   pixel as unresolved before the encoder sees it
+//!   (`test_no_nan_reaches_the_encoder_for_black_saturated_or_far_off_texels_and_every_awkward_shift`).
+//!   The rule stays as a guard for direct callers.
+//! - *The colour of shifted light*. Under `--colour blackbody`, the default, the hue and the
+//!   visible brightness both follow g, by a stated model: each texel a blackbody at the
+//!   temperature its colour implies. It is an approximation, not an unknown: the library documents
+//!   its errors (for single stars good from g = 0.9 to 2, for the diffuse glow from 0.8 to 1.25,
+//!   and beyond a shift of a few the light an eye would see is mostly not starlight), and marking
+//!   it would mark most of a moving observer's sky. So it is not marked; the run prints what the
+//!   model assumes and gets wrong, and what share of the film's sky lies outside those ranges, and
+//!   `--show-model-range` draws where. The filter's order of averaging and shifting adds an error
+//!   of its own, measured and bounded in `crate::colour`, "Filtering and shifting". Under
+//!   `--colour map` only the brightness follows g, as g^4, and the hue is the map's: known to be
+//!   wrong wherever g is far from 1, and kept for comparison.
 
 /// The default exposure, in stops, for a map `width` texels wide.
 pub fn default_exposure_stops(width: usize) -> f64 {
     2.5 + 2.0 * (width as f64 / 8192.0).log2()
 }
 
-/// The linear light a pixel shows: the map's value `rgb` where the ray came from, seen with shift
-/// `g`, under the exposure `gain`. Not clipped.
+/// The linear light a pixel shows under `--colour map`, and under either rule at g = 1: the map's
+/// value `rgb` where the ray came from, seen with shift `g` as g^4, under the exposure `gain`.
+/// Not clipped.
 pub fn shade(rgb: [f32; 3], g: f64, gain: f32) -> [f32; 3] {
     let scale = (g * g * g * g) as f32 * gain;
     // The common case, in the arithmetic the renderer has always used. A scale that is not a
@@ -89,14 +110,11 @@ pub fn shade(rgb: [f32; 3], g: f64, gain: f32) -> [f32; 3] {
             }
         });
     }
-    // ---- COLOUR SHIFT GOES HERE --------------------------------------------------------------
-    // The g^4 above is the bolometric factor, the same for every channel. The full effect of a
-    // shift also moves the spectrum: I_nu,observed(nu) = g^3 I_nu,map(nu / g), so a star of
-    // temperature T appears as one of temperature g T. Doing that means treating each texel as a
-    // blackbody (or some other spectrum) fitted to its RGB, scaling the temperature by g, and
-    // integrating the new spectrum against the three primaries - with the g^4 then coming out of
-    // that integral rather than being applied separately. Until then the colour is the map's.
-    // -------------------------------------------------------------------------------------------
+    // The g^4 above is the bolometric factor, the same for every channel: the old rule. The full
+    // effect of a shift also moves the spectrum, I_nu,observed(nu) = g^3 I_nu,map(nu / g), so a
+    // star of temperature T appears as one of temperature g T; that is `--colour blackbody`,
+    // `crate::colour::light`, where the brightening comes out of the eye's integral of the
+    // shifted spectrum rather than being applied separately.
     rgb.map(|c| c * scale)
 }
 
