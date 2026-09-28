@@ -395,8 +395,9 @@ horizon, the inner horizon can be either a moment in time or a place in space
 depending on which side you find yourself.
 
 The inner horizon has two *branches*, so to speak, which we'll call *left* and
-*right*.  There is nothing physical implied by these names, they simply take inspiration
-from the Penrose diagram for a rotating black hole:
+*right*.  There is nothing physical implied by these names, they simply take
+inspiration from the [Penrose](https://en.wikipedia.org/wiki/Penrose_diagram)
+diagram for a rotating black hole:
 
 <img src="./assets/images/penrose_1_plain_no_text.svg" width="400">
 
@@ -410,14 +411,14 @@ both cases.
 Our understanding of the physics at the inner horizon is much less clear than at
 the outer event horizon.  In our real universe, crossing the outer horizon may
 very well be a *smooth no drama* experience.  In contrast, crossing the inner
-horizon, if such a thing is even possible, would be packed with excitement and
-not the good kind.  For reference, this paper assesses the survivability of a
-real physical object crossing the Cauchy horizon with a nod to the hit movie
-*Interstellar*. [Physical objects approaching the Cauchy horizon of a rapidly
-rotating Kerr black hole](https://arxiv.org/abs/1610.04355), Mallary, Khanna,
-Burko, 2018. Interestingly, the paper finds that the stress from spacetime
-curvature on a real physical object passing through the Cauchy horizon might not
-be catastrophic.
+horizon, if even possible, would be packed with excitement and not the good
+kind.  For reference, this paper assesses the survivability of a real physical
+object crossing the Cauchy horizon with a nod to the hit movie *Interstellar*.
+[Physical objects approaching the Cauchy horizon of a rapidly rotating Kerr
+black hole](https://arxiv.org/abs/1610.04355) by Mallary, Khanna, Burko, 2018.
+Interestingly, the paper finds that the stress from spacetime curvature on a
+real physical object passing through the Cauchy horizon might not be
+catastrophic.
 
 As before, Black Hole Lab let's our Kerr metric solution to general relativity
 be the only word on the physics.
@@ -425,15 +426,17 @@ be the only word on the physics.
 #### The *right branch* of the Inner Horizon
 
 General relativity predicts extraordinary effects as one approaches the inner
-horizon, so let's examine this case in detail.  We'll start with an approach to
-the *right branch*.
+horizon, so let's examine these cases in detail.  We'll start with an approach
+to the *right branch*.
 
 If Bob enters the *outer* event horizon with enough prograde angular momentum,
-he will asymptotically approach the *right branch* of the *inner* horizon.  The
-simulation, which runs on coordinate time, shows Bob circling forever, getting
-slightly closer to `r_` each trip around the inside of the black hole.  Not just
-Bob, but any light that enters the black hole at the right angle will also
-approach the *right branch* and circle forever.
+the simulation (which runs in coordinate time) shows Bob asymptotically approach
+the *right branch* of the *inner* horizon.  Letting the simulation run shows Bob
+circling forever, getting slightly closer to `r_` each trip around the inside of
+the black hole.  Not just Bob, but any light that enters the black hole at
+reasonably prograde angle will also approach the *right branch* and circle
+forever.  Here's a short video showing that Alice's radio transmissions can also
+asymptotically approach the inner horizon.
 
 However, in Bob's FoR, his watch says he crosses the inner horizon quickly.
 
