@@ -21,7 +21,7 @@ use crate::panel::{Panel, Placement};
 use crate::render::{Fields, Look, Scene, Shade, Size, render, shades};
 use crate::shadow::{
     DarkMap, FLOOR_DEGREES, MARGIN_DEGREES, Outline, Placing, Why, degrees, fits, line_heights,
-    place, sentence,
+    place, place_near, sentence,
 };
 use crate::sky::{MapFrame, Mat3, SkyMap, orientation};
 use crate::tone::Encoder;
@@ -542,7 +542,8 @@ fn prove_black(radius: f64) -> f64 {
     let black = |i: usize, j: usize| picture[3 * (j * size.width + i)..][..3] == [0, 0, 0];
 
     let series = tracer_series();
-    let shown = shown_lines(&series, true);
+    let values = series.at(crate::timeline::Pick::One(0), 0.0);
+    let shown = shown_lines(&series, Some(&values));
     let settings = |placements: Vec<Placement>, line_degrees: f64| Settings {
         placements,
         line_degrees,
@@ -734,4 +735,276 @@ fn test_readout_at_dark_is_for_a_still_alone_and_for_one_panel_alone() {
         "{other}"
     );
     assert!(crate::cli::USAGE.contains("--readout-at dark"));
+}
+
+// ---- the panel and the marks ---------------------------------------------------------------------
+
+/// How far from a mark's direction the panel must keep: the sign and the clearance.
+fn mark_reach() -> f64 {
+    (crate::marks::DEFAULT_SIZE_DEGREES + crate::shadow::MARK_CLEARANCE_DEGREES).to_radians()
+}
+
+#[test]
+fn test_a_mark_at_the_centre_of_the_dark_region_moves_the_panel_aside_and_the_two_never_touch() {
+    // The whole path on a rendered frame, as `prove_black`, with a ring at the dark disc's
+    // centre, where the panel would otherwise go.
+    let size = size(1024);
+    let centre = towards(20.0, -5.0);
+    let sky = SkyMap::new(64, 32, vec![[0.3; 3]; 64 * 32], 2);
+    let field = judged(&frame_with_disc(128, 64, centre, 22.0), size, &sky);
+    let scene = Scene {
+        fields: Fields::One(&field),
+        rotation: identity(),
+        sky: &sky,
+    };
+    let look = Look {
+        gain: 1.0,
+        unresolved: [65_535, 0, 0],
+        undersampled: [65_535, 0, 0],
+        encoder: Encoder::new(),
+    };
+    let mut picture = vec![0u16; size.width * size.height * 3];
+    render(&scene, size, &look, 2, &mut picture);
+    let black = |k: usize| picture[3 * k..3 * k + 3] == [0, 0, 0];
+
+    let series = tracer_series();
+    let values = series.at(crate::timeline::Pick::One(0), 0.0);
+    let shown = shown_lines(&series, Some(&values));
+    let settings = |placements: Vec<Placement>, line_degrees: f64| Settings {
+        placements,
+        line_degrees,
+        style: Style::POINT,
+    };
+    let measure = |s: f64| {
+        Overlay::showing(&settings(Vec::new(), s), &series, &shown, [0.0, 0.0], size)
+            .expect("a panel")
+            .outline()
+    };
+    // Without the mark the panel is centred on it.
+    let plain = DarkMap::of(Some(Fields::One(&field)), size, 2);
+    let (alone, _) = inside(place(&plain, 2.0, 2, measure), "no mark");
+    assert!(
+        angle(towards(alone.heading, alone.elevation), centre) < 1f64.to_radians(),
+        "without a mark the panel is not at the disc's centre"
+    );
+    // With it, the panel moves aside.
+    let mut map = DarkMap::of(Some(Fields::One(&field)), size, 2);
+    let taken = map.keep_clear(&[centre], mark_reach());
+    assert!(taken > 100, "the mark took only {taken} dark pixels");
+    let (placing, middle) = place_near(&map, 2.0, 2, measure);
+    let (at, s) = inside(placing, "a mark at the centre");
+    // C0 is the middle of the whole disc, found before the mark was cut out: where the panel
+    // went without the mark.
+    let middle = middle.expect("a middle");
+    assert_eq!(
+        (middle.heading, middle.elevation),
+        (alone.heading, alone.elevation)
+    );
+    // The panel moves off the mark, but only just: straight above or below it, its near edge the
+    // mark's reach and the margin from the centre. Two lines 2 degrees high make a panel about
+    // 5.2 degrees high, so its centre is about 2.5 + 1 + 2.6 = 6.1 degrees from C0; it must be
+    // within 7.5, and at C0's heading to within a lattice step. (Here it goes above, 5.75
+    // degrees off: on this frame's half-degree pixels the nearest centre below that fits is 6.5
+    // off. Below wins only a tie; the next test has one.)
+    let off = angle(towards(at.heading, at.elevation), centre).to_degrees();
+    assert!(
+        (3.0..7.5).contains(&off),
+        "the panel is {off:.2} degrees from C0, at ({}, {})",
+        at.heading,
+        at.elevation
+    );
+    assert!(
+        (at.heading - middle.heading).abs() <= 1.0,
+        "the panel is not straight above or below the mark: at ({}, {})",
+        at.heading,
+        at.elevation
+    );
+    assert_eq!(
+        s, 2.0,
+        "the panel was made smaller though there was room beside the mark"
+    );
+    let mut overlay = Overlay::showing(&settings(vec![at], s), &series, &shown, [0.0, 0.0], size)
+        .expect("a panel");
+
+    // What the panel covers (it darkens every pixel of a white frame it covers), and what it and
+    // its margin reach.
+    let white = vec![65_535u16; picture.len()];
+    let mut painted = white.clone();
+    overlay.paint(&mut painted, &values);
+    let covered: Vec<usize> = (0..size.width * size.height)
+        .filter(|&k| painted[3 * k..3 * k + 3] != white[3 * k..3 * k + 3])
+        .collect();
+    assert!(covered.len() > 500);
+    let o = overlay.outline();
+    let near: Vec<usize> = near_panel(size, &panel_of(size, at, o), o)
+        .into_iter()
+        .map(|(i, j)| j * size.width + i)
+        .collect();
+    let grid = Grid::new(size.width as u32, size.height as u32);
+    let direction =
+        |k: usize| grid.pixel_direction((k % size.width) as u32, (k / size.width) as u32);
+    for &k in covered.iter().chain(&near) {
+        assert!(
+            black(k),
+            "pixel {k} is under the panel or its margin and was not black"
+        );
+        let off = angle(direction(k), centre);
+        assert!(
+            off > mark_reach(),
+            "pixel {k} is under the panel or its margin, {:.2} degrees from the mark",
+            off.to_degrees()
+        );
+    }
+    // Drawn as the run draws them, the mark first and the panel over it: every pixel the mark
+    // changed is as the mark left it, and no pixel the panel covers is one the mark touched.
+    let sign = crate::marks::Sign::new(
+        crate::marks::Shape::Ring,
+        centre,
+        crate::marks::DEFAULT_SIZE_DEGREES,
+    );
+    let mut marked = picture.clone();
+    crate::marks::paint(&mut marked, size, &[sign], crate::marks::DEFAULT_COLOUR);
+    let touched: Vec<usize> = (0..size.width * size.height)
+        .filter(|&k| marked[3 * k..3 * k + 3] != picture[3 * k..3 * k + 3])
+        .collect();
+    assert!(
+        touched.len() > 20,
+        "the ring touched {} pixels",
+        touched.len()
+    );
+    let mut both = marked.clone();
+    overlay.paint(&mut both, &values);
+    for &k in &touched {
+        assert_eq!(
+            both[3 * k..3 * k + 3],
+            marked[3 * k..3 * k + 3],
+            "the panel painted over pixel {k} of the ring"
+        );
+        assert!(
+            !covered.contains(&k),
+            "the panel covers pixel {k} of the ring"
+        );
+    }
+}
+
+#[test]
+fn test_a_panel_that_cannot_keep_clear_of_the_marks_goes_below_the_opening_view_and_says_why() {
+    let size = size(720);
+    let o = outline(size, 6.0, 2.0);
+    // A dark disc of 9 degrees holds the panel at its centre at 2 degrees a line. With a mark at
+    // the centre it holds it only smaller, beside the mark, and clear of it.
+    let centre = towards(0.0, 0.0);
+    let mut map = mask(size, disc(centre, 9.0));
+    let (at, s) = inside(place(&map, 2.0, 3, &o), "a disc of 9 degrees");
+    assert!(at.heading.abs() < 1e-9 && at.elevation.abs() < 1e-9 && s == 2.0);
+    map.keep_clear(&[centre], mark_reach());
+    let (at, s) = inside(place(&map, 2.0, 3, &o), "a disc of 9 degrees with a mark");
+    let panel = panel_of(size, at, o(s));
+    assert!(s < 2.0, "the panel was not made smaller beside the mark");
+    assert!(
+        angle(towards(at.heading, at.elevation), centre) > mark_reach(),
+        "the panel is centred within the mark's reach"
+    );
+    assert_clear(&map, size, &panel, o(s), "a disc of 9 degrees with a mark");
+    // A disc of 6 degrees holds it without the mark, and with the mark at no size.
+    let mut map = mask(size, disc(centre, 6.0));
+    assert!(matches!(place(&map, 2.0, 3, &o), Placing::Inside { .. }));
+    map.keep_clear(&[centre], mark_reach());
+    let placing = place(&map, 2.0, 3, &o);
+    assert_eq!(
+        placing,
+        Placing::Outside(Why::TooSmallBesideMarks { line_degrees: 1.0 })
+    );
+    assert_eq!(
+        sentence(&placing, 2),
+        "read-outs: 2 line(s) on a panel below the opening view, because the dark region is too \
+         small to hold them at 1 degree a line and keep 1 degree clear of its rim and of the marks"
+    );
+    // A dark region the marks take wholly is not called no dark region.
+    let mut tiny = mask(size, disc(centre, 1.5));
+    assert!(tiny.count() > 0);
+    tiny.keep_clear(&[centre], mark_reach());
+    assert_eq!(tiny.count(), 0);
+    assert_eq!(
+        place(&tiny, 2.0, 3, &o),
+        Placing::Outside(Why::TooSmallBesideMarks { line_degrees: 1.0 })
+    );
+    // A mark outside the dark region takes nothing and changes nothing.
+    let mut apart = mask(size, disc(centre, 30.0));
+    assert_eq!(apart.keep_clear(&[towards(120.0, 0.0)], mark_reach()), 0);
+    let (at, _) = inside(place(&apart, 2.0, 3, &o), "a mark far away");
+    assert!(at.heading.abs() < 1e-9 && at.elevation.abs() < 1e-9);
+}
+
+#[test]
+fn test_between_centres_equally_near_the_middle_the_panel_goes_below_the_mark_not_above() {
+    // A dark disc about the opening view with a mark at its centre, symmetric above and below:
+    // the nearest centres that take the panel are straight above and straight below, equally
+    // near, and the panel goes below, as a caption goes under its figure.
+    let size = size(720);
+    let o = outline(size, 6.0, 2.0);
+    let centre = towards(0.0, 0.0);
+    let mut map = mask(size, disc(centre, 25.0));
+    map.keep_clear(&[centre], mark_reach());
+    let (placing, middle) = place_near(&map, 2.0, 3, &o);
+    let (at, s) = inside(placing, "a disc with a mark at its centre");
+    let middle = middle.expect("a middle");
+    assert!(middle.heading.abs() < 1e-9 && middle.elevation.abs() < 1e-9);
+    assert_eq!(s, 2.0);
+    assert!(
+        at.heading.abs() < 1e-9 && at.elevation < 0.0,
+        "the panel went to ({}, {}), not straight below the mark",
+        at.heading,
+        at.elevation
+    );
+    // Its mirror image above is as near and also fits: the choice was the tie's.
+    let above = Placement {
+        heading: at.heading,
+        elevation: -at.elevation,
+    };
+    assert!(
+        fits(&map, &panel_of(size, above, o(s))),
+        "the centre above does not fit"
+    );
+    assert_clear(
+        &map,
+        size,
+        &panel_of(size, at, o(s)),
+        o(s),
+        "below the mark",
+    );
+    // And nothing nearer C0 takes it: the panel is as near the middle as the claims allow, to a
+    // refinement step.
+    for k in 0..=20 {
+        let e = -(k as f64) * 0.25;
+        if e > at.elevation + 0.25 - 1e-9 {
+            assert!(
+                !fits(
+                    &map,
+                    &panel_of(
+                        size,
+                        Placement {
+                            heading: 0.0,
+                            elevation: e
+                        },
+                        o(s)
+                    )
+                ),
+                "the panel would fit at elevation {e}, nearer the middle than {}",
+                at.elevation
+            );
+        }
+    }
+    // The run says how far from the middle it went.
+    assert_eq!(
+        crate::shadow::beside_marks_line(
+            Placement {
+                heading: 0.0,
+                elevation: -6.25
+            },
+            middle
+        ),
+        "the panel keeps clear of the marks, 6.25 degrees from the middle of the dark region, \
+         which is 0 degrees right of the opening view and 0 degrees up"
+    );
 }

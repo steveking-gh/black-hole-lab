@@ -18,26 +18,50 @@
 //! decided here by the same code. So "dark" below means black in the finished picture, before the
 //! panel is painted.
 //!
-//! # The centre
+//! # The middle of the dark region, C0
 //!
-//! The panel is centred where the dark region is deepest: at the point farthest, as an angle on
-//! the sphere, from every pixel that is not dark, the centre of the largest cap the dark region
-//! holds. Its radius, the point's *clearance*, is measured to the centres of the pixels that are
-//! not dark but touch a dark one (the *rim*). That is enough: from a dark point, the nearest pixel
-//! that is not dark has a neighbour nearer the point, which is dark, or it would not be the
-//! nearest; so it touches the dark region. The rim is a curve, a few thousand pixels at 8K, and
-//! it is kept in buckets about [`BUCKET_DEGREES`] across, each with its own centre and radius, so
-//! that a point's clearance reads only the buckets that could hold its nearest rim pixel: a bucket
-//! whose nearest possible point is already farther than the nearest found is not opened.
+//! The panel is kept as near as it can be to where the dark region is deepest: the point
+//! farthest, as an angle on the sphere, from every pixel that is not dark, the centre of the
+//! largest cap the dark region holds. Call it C0. Its radius, a point's *clearance*, is measured
+//! to the centres of the pixels that are not dark but touch a dark one (the *rim*). That is enough:
+//! from a dark point, the nearest pixel that is not dark has a neighbour nearer the point, which is
+//! dark, or it would not be the nearest; so it touches the dark region. The rim is a curve, a few
+//! thousand pixels at 8K, and it is kept in buckets about [`BUCKET_DEGREES`] across, each with its
+//! own centre and radius, so that a point's clearance reads only the buckets that could hold its
+//! nearest rim pixel: a bucket whose nearest possible point is already farther than the nearest
+//! found is not opened.
 //!
-//! Candidate centres are a lattice [`LATTICE_DEGREES`] apart in heading and elevation, measured by
-//! true angles on the sphere, never by distances in the frame, and the neighbourhood of the best
-//! is searched again [`REFINE_DEGREES`] apart. The lattice runs round the whole circle, so a dark
+//! C0 is found on a lattice [`LATTICE_DEGREES`] apart in heading and elevation, measured by true
+//! angles on the sphere, never by distances in the frame, and the neighbourhood of the best is
+//! searched again [`REFINE_DEGREES`] apart. The lattice runs round the whole circle, so a dark
 //! region behind the observer, split by the frame's seam, is found whole. Elevations stop at the
-//! limit `crate::panel` sets for any panel, [`POLE_CLEARANCE_DEGREES`] from a pole. Candidates are
-//! ranked by clearance (to a nanoradian, so that a symmetric region's mirror images tie), then by
-//! nearness to the frame's equator, then to heading 0, then right before left and up before down,
-//! so that the choice is the same on every run.
+//! limit `crate::panel` sets for any panel, [`POLE_CLEARANCE_DEGREES`] from a pole. Lattice points
+//! are ranked by clearance (to a nanoradian, so that a symmetric region's mirror images tie), then
+//! by nearness to the frame's equator, then to heading 0, then right before left and up before
+//! down, so that the choice is the same on every run. C0 is always found in the whole dark
+//! region, before the marks take anything from it (below, "Marks"): it is where a viewer looks
+//! to see the dark region, and so where the panel is looked for.
+//!
+//! # Near the middle
+//!
+//! The candidate centres are C0 itself and every point of the lattice whose pixel is dark, taken
+//! in order of their angle from C0, nearest first. Between centres equally near C0 (to a
+//! nanoradian) the LOWER comes first, so that a panel with room both above and below the signs at
+//! the middle goes below them, as a caption goes under the figure it names; this comes before
+//! nearness to the frame's equator, which would otherwise put the panel above signs that sit
+//! below the equator. Then the one nearer heading 0, then right before left. For each line height, the requested one first, the panel goes at the first
+//! candidate at which it passes the exact test below. The lattice's first fit is at most a
+//! lattice step from the nearest centre that could take the panel, so the points within a lattice
+//! diagonal nearer C0 than it are tried again, in the same order, [`REFINE_DEGREES`] apart, and
+//! the panel goes at the first of those that passes, if one does. Only when no candidate takes a
+//! height is the next smaller height tried.
+//!
+//! Where the panel fits at C0 it goes there, as it always did. On 2026-09-27 it did in every still
+//! tried of the real bundles without marks (`hover_r6_a0` and `hover_r6_a09` frame 0,
+//! `bob_near_fall` frames 0, 237 and 473, at 8192 x 4096), whose placements and pictures are the
+//! same to the bit as before this rule. A panel
+//! that does not fit at C0 at the requested height now goes to the nearest centre that takes it
+//! at that height, where before it went to the deepest of a few centres three degrees apart.
 //!
 //! # The size, and the exact test
 //!
@@ -54,10 +78,31 @@
 //! margin: every point within the margin of the panel, as an angle, is then inside the grown
 //! outline, and the margin kept is at least the one promised, a little more toward the corners.
 //!
-//! The requested line height is tried first, at the best few centres [`CENTRES_APART_DEGREES`]
-//! apart; then heights about [`SHRINK`] times smaller each time, down to [`FLOOR_DEGREES`]. If
-//! nothing fits, the panel goes where `--readouts panel` puts it by default, at the full size,
-//! and the run says why.
+//! The line heights tried are the requested one, then heights about [`SHRINK`] times smaller each
+//! time, down to [`FLOOR_DEGREES`]. If nothing fits, the panel goes where `--readouts panel` puts
+//! it by default, at the full size, and the run says why.
+//!
+//! The clearance only rules centres out quickly (a centre whose clearance is less than the
+//! panel's half-height and the margin cannot take it); every centre that is not ruled out is
+//! decided by the exact test, on the run's threads a batch at a time, the first in order that
+//! passes winning. At 8192 x 4096 the whole search takes a few tenths of a second.
+//!
+//! # Marks
+//!
+//! A mark's sign (`crate::marks`) can lie inside the dark region: a radially falling observer's
+//! direction of travel is straight at the hole. The panel must not hide it, so before the panel is
+//! placed every pixel within a mark's sign, or within [`MARK_CLEARANCE_DEGREES`] of it, is taken
+//! as not dark ([`DarkMap::keep_clear`]). A sign lies within `--mark-size` of its direction, so
+//! those are the pixels within the size and the clearance of the direction. Nothing else changes:
+//! the rim, the candidates and the exact test all see those pixels as they see any pixel that is
+//! not dark, so the panel and its margin keep off them, and the sign and the panel do not touch;
+//! only C0 is found in the whole region, so that the panel lands just beside the signs, which in a
+//! falling observer's view sit at the middle of the dark region, and not in whatever part of it
+//! is deepest once they are cut out (which can be forty degrees away, out of a 16:9 view). The
+//! claim above stays exact as it was stated: a pixel taken as not dark is only ever one that was
+//! dark, so every pixel the panel and its margin cover is still one the renderer draws as dark.
+//! When no place is left the panel goes below the opening view as before, and the run says the
+//! region was too small to hold it clear of its rim and of the marks.
 
 use std::cmp::Ordering;
 use std::f64::consts::PI;
@@ -69,6 +114,9 @@ use crate::render::{Fields, Size};
 
 /// How far outside the panel's outline the pixels must still be dark, in degrees.
 pub const MARGIN_DEGREES: f64 = 1.0;
+
+/// How far beyond a mark's sign the pixels are taken as not dark, in degrees.
+pub const MARK_CLEARANCE_DEGREES: f64 = 1.0;
 
 /// The smallest line height the panel is shrunk to, in degrees. A player showing 90 degrees of
 /// the sphere on a screen 1080 pixels high gives a degree 12 pixels: a line of text any smaller
@@ -86,10 +134,6 @@ const LATTICE_DEGREES: f64 = 1.0;
 const REFINE_DEGREES: f64 = 0.25;
 const REFINE_STEPS: i32 = 4;
 
-/// How many centres each size is tried at, and how far apart they must be, in degrees.
-const CENTRES: usize = 6;
-const CENTRES_APART_DEGREES: f64 = 3.0;
-
 /// The rough size of a bucket of rim pixels, in degrees.
 const BUCKET_DEGREES: f64 = 2.0;
 
@@ -101,6 +145,11 @@ pub struct DarkMap {
     size: Size,
     dark: Vec<bool>,
     count: usize,
+    /// How many dark pixels [`DarkMap::keep_clear`] has taken as not dark.
+    cleared: usize,
+    /// The dark region as it was before [`DarkMap::keep_clear`] took anything from it, where it
+    /// took something: where its deepest point is, is where the panel is kept near.
+    whole: Option<Vec<bool>>,
 }
 
 impl DarkMap {
@@ -125,7 +174,35 @@ impl DarkMap {
     pub fn from_mask(size: Size, dark: Vec<bool>) -> Self {
         assert_eq!(dark.len(), size.width * size.height);
         let count = dark.iter().filter(|&&d| d).count();
-        Self { size, dark, count }
+        Self {
+            size,
+            dark,
+            count,
+            cleared: 0,
+            whole: None,
+        }
+    }
+
+    /// Takes as not dark every pixel within `reach` radians of any of `directions` (the module's
+    /// comment, "Marks"), and returns how many dark pixels that was.
+    pub fn keep_clear(&mut self, directions: &[[f64; 3]], reach: f64) -> usize {
+        let before = self.count;
+        let whole = self.whole.take().unwrap_or_else(|| self.dark.clone());
+        for &n in directions {
+            let centre = n.map(|c| c / crate::field::norm(n));
+            let (size, dark) = (self.size, &mut self.dark);
+            crate::marks::for_each_in_cap(size, centre, reach, |i, j, m| {
+                if angle(m, centre) <= reach {
+                    dark[j * size.width + i] = false;
+                }
+            });
+        }
+        self.count = self.dark.iter().filter(|&&d| d).count();
+        self.cleared += before - self.count;
+        if self.cleared > 0 {
+            self.whole = Some(whole);
+        }
+        before - self.count
     }
 
     pub fn is_dark(&self, i: usize, j: usize) -> bool {
@@ -135,6 +212,11 @@ impl DarkMap {
     /// How many pixels are dark.
     pub fn count(&self) -> usize {
         self.count
+    }
+
+    /// How many dark pixels [`DarkMap::keep_clear`] has taken for the marks.
+    pub fn cleared(&self) -> usize {
+        self.cleared
     }
 
     /// The unit direction through the centre of pixel (i, j), by the specification's formulae
@@ -325,24 +407,28 @@ fn wrap_degrees(h: f64) -> f64 {
     if a > 180.0 { a - 360.0 } else { a }
 }
 
-/// The best centres, best first: up to [`CENTRES`] of them, each [`CENTRES_APART_DEGREES`] from
-/// those before it, the first refined. Empty when no candidate is dark.
-fn centres(map: &DarkMap, rim: &[Bucket], threads: usize) -> Vec<Candidate> {
+/// Every point of the lattice of candidate centres (the module's comment, "The centre"), as
+/// (heading, elevation) in degrees.
+fn lattice() -> Vec<(f64, f64)> {
     let limit = 90.0 - POLE_CLEARANCE_DEGREES;
     let rows = (limit / LATTICE_DEGREES).floor() as i32;
     let across = (180.0 / LATTICE_DEGREES).round() as i32;
-    let lattice: Vec<(f64, f64)> = (-rows..=rows)
+    (-rows..=rows)
         .flat_map(|b| {
             (-across + 1..=across)
                 .map(move |a| (a as f64 * LATTICE_DEGREES, b as f64 * LATTICE_DEGREES))
         })
-        .collect();
-    let mut found = survey(map, rim, &lattice, threads);
+        .collect()
+}
+
+/// The deepest point of the dark region `map` describes, whose rim is `rim`: the best of the
+/// lattice by [`rank`], searched again [`REFINE_DEGREES`] apart about it. None when no point of
+/// the lattice is dark.
+fn deepest(map: &DarkMap, rim: &[Bucket], threads: usize) -> Option<Candidate> {
+    let limit = 90.0 - POLE_CLEARANCE_DEGREES;
+    let mut found = survey(map, rim, &lattice(), threads);
     found.sort_by(rank);
-    let Some(&first) = found.first() else {
-        return Vec::new();
-    };
-    // The best, searched again more finely about it.
+    let first = *found.first()?;
     let near: Vec<(f64, f64)> = (-REFINE_STEPS..=REFINE_STEPS)
         .flat_map(|b| {
             (-REFINE_STEPS..=REFINE_STEPS).map(move |a| {
@@ -356,19 +442,62 @@ fn centres(map: &DarkMap, rim: &[Bucket], threads: usize) -> Vec<Candidate> {
         .collect();
     let mut refined = survey(map, rim, &near, threads);
     refined.sort_by(rank);
-    let mut chosen = vec![refined.first().copied().unwrap_or(first)];
-    for c in found {
-        if chosen.len() == CENTRES {
-            break;
-        }
-        let apart = chosen
-            .iter()
-            .all(|d| angle(c.direction(), d.direction()) >= CENTRES_APART_DEGREES.to_radians());
-        if apart {
-            chosen.push(c);
+    Some(refined.first().copied().unwrap_or(first))
+}
+
+/// The order in which centres are tried (the module's comment, "Near the middle"): `Less` when
+/// `a` is nearer `from`, as an angle to a nanoradian; between centres equally near, the lower
+/// one, then the one nearer heading 0, then right before left.
+fn nearer(from: [f64; 3], a: &Candidate, b: &Candidate) -> Ordering {
+    let off = |c: &Candidate| (angle(from, c.direction()) * 1e9).round() as i64;
+    off(a)
+        .cmp(&off(b))
+        .then(a.elevation.total_cmp(&b.elevation))
+        .then(a.heading.abs().total_cmp(&b.heading.abs()))
+        .then(b.heading.total_cmp(&a.heading))
+}
+
+/// The first of `candidates`, in their order, at which a panel of outline `o` passes the exact
+/// test ([`fits`]); those whose clearance is less than the panel's half-height and the margin are
+/// passed over without it. The tests run on `threads` threads a batch at a time, and the answer is
+/// the first in order that passes, whichever thread finished first.
+fn first_fit(
+    map: &DarkMap,
+    candidates: &[Candidate],
+    o: Outline,
+    threads: usize,
+) -> Option<Candidate> {
+    let pixel = 2.0 * PI / map.size.width as f64;
+    let hopeful: Vec<(Candidate, Panel)> = candidates
+        .iter()
+        .map(|c| {
+            let at = Placement {
+                heading: c.heading,
+                elevation: c.elevation,
+            };
+            (*c, Panel::new(at, pixel, o.width, o.height, o.radius))
+        })
+        // A centre nearer the rim than the panel's half-height and the margin cannot take it.
+        .filter(|(c, panel)| {
+            c.clearance + 1e-9 >= panel.inner_radius() + MARGIN_DEGREES.to_radians()
+        })
+        .collect();
+    for batch in hopeful.chunks(threads.max(1)) {
+        let passed: Vec<bool> = std::thread::scope(|scope| {
+            let tests: Vec<_> = batch
+                .iter()
+                .map(|(_, panel)| scope.spawn(move || fits(map, panel)))
+                .collect();
+            tests
+                .into_iter()
+                .map(|t| t.join().expect("no test thread panics"))
+                .collect()
+        });
+        if let Some(k) = passed.iter().position(|&p| p) {
+            return Some(batch[k].0);
         }
     }
-    chosen
+    None
 }
 
 /// Whether `panel` and every pixel within the margin of its outline are dark (the module's
@@ -417,6 +546,9 @@ pub enum Why {
     /// The dark region cannot hold the panel with its margin even at this line height, the
     /// smallest tried.
     TooSmall { line_degrees: f64 },
+    /// As `TooSmall`, where some of the dark region was taken for the marks' signs and their
+    /// clearance (the module's comment, "Marks").
+    TooSmallBesideMarks { line_degrees: f64 },
 }
 
 /// The line heights tried, largest first: `requested`, then [`SHRINK`] times the one before
@@ -441,45 +573,126 @@ pub fn line_heights(requested: f64) -> Vec<f64> {
 
 /// Where a panel whose outline at a line height of s degrees is `outline(s)` goes in the frame
 /// `map` describes, asked for at `requested` degrees a line; on `threads` threads.
+#[cfg(test)]
 pub fn place(
     map: &DarkMap,
     requested: f64,
     threads: usize,
     outline: impl Fn(f64) -> Outline,
 ) -> Placing {
-    if map.count() == 0 {
-        return Placing::Outside(Why::NoDark);
-    }
-    let rim = rim(map, threads);
-    let centres = centres(map, &rim, threads);
-    if centres.is_empty() {
-        return Placing::Outside(Why::NearPole);
-    }
-    let pixel = 2.0 * PI / map.size.width as f64;
+    place_near(map, requested, threads, outline).0
+}
+
+/// [`place`], and the middle of the dark region the panel is kept near, C0 (the module's comment,
+/// "Near the middle"), when there is one.
+pub fn place_near(
+    map: &DarkMap,
+    requested: f64,
+    threads: usize,
+    outline: impl Fn(f64) -> Outline,
+) -> (Placing, Option<Placement>) {
     let heights = line_heights(requested);
+    let smallest = *heights.last().expect("at least the requested height");
+    // Where the marks took some of the dark region, it is the marks that leave no room.
+    let outside = |why: Why| {
+        if map.cleared > 0 {
+            Placing::Outside(Why::TooSmallBesideMarks {
+                line_degrees: smallest,
+            })
+        } else {
+            Placing::Outside(why)
+        }
+    };
+    if map.count() == 0 {
+        return (outside(Why::NoDark), None);
+    }
+    let rim_now = rim(map, threads);
+    // C0: the deepest point of the whole dark region, the marks' signs not cut out of it.
+    let c0 = match &map.whole {
+        Some(whole) => {
+            let whole = DarkMap::from_mask(map.size, whole.clone());
+            deepest(&whole, &rim(&whole, threads), threads)
+        }
+        None => deepest(map, &rim_now, threads),
+    };
+    let Some(c0) = c0 else {
+        return (outside(Why::NearPole), None);
+    };
+    let middle = Placement {
+        heading: c0.heading,
+        elevation: c0.elevation,
+    };
+    let from = c0.direction();
+    // Every centre that is dark with the marks cut out, C0 itself first among equals, nearest
+    // C0 first.
+    let mut points = lattice();
+    points.insert(0, (c0.heading, c0.elevation));
+    let mut found = survey(map, &rim_now, &points, threads);
+    if found.is_empty() {
+        return (outside(Why::NearPole), Some(middle));
+    }
+    found.sort_by(|a, b| nearer(from, a, b));
     for &s in &heights {
         let o = outline(s);
-        for c in &centres {
-            let at = Placement {
-                heading: c.heading,
-                elevation: c.elevation,
-            };
-            let panel = Panel::new(at, pixel, o.width, o.height, o.radius);
-            // A centre nearer the rim than the panel's half-height and the margin cannot take it.
-            if c.clearance + 1e-9 < panel.inner_radius() + MARGIN_DEGREES.to_radians() {
-                continue;
-            }
-            if fits(map, &panel) {
-                return Placing::Inside {
-                    at,
-                    line_degrees: s,
-                };
-            }
-        }
+        let Some(best) = first_fit(map, &found, o, threads) else {
+            continue;
+        };
+        // The lattice's first fit; any centre nearer C0 that could take the panel lies within a
+        // lattice diagonal of it, and those are tried again REFINE_DEGREES apart.
+        let off = angle(from, best.direction());
+        let chosen = if off > 0.0 {
+            let mut near = survey(map, &rim_now, &nearer_points(c0, off), threads);
+            near.sort_by(|a, b| nearer(from, a, b));
+            first_fit(map, &near, o, threads).unwrap_or(best)
+        } else {
+            best
+        };
+        let at = Placement {
+            heading: chosen.heading,
+            elevation: chosen.elevation,
+        };
+        return (
+            Placing::Inside {
+                at,
+                line_degrees: s,
+            },
+            Some(middle),
+        );
     }
-    Placing::Outside(Why::TooSmall {
-        line_degrees: *heights.last().expect("at least the requested height"),
-    })
+    (
+        outside(Why::TooSmall {
+            line_degrees: smallest,
+        }),
+        Some(middle),
+    )
+}
+
+/// The points REFINE_DEGREES apart about `c0`, in heading and elevation, whose angle from it is
+/// less than `off` radians and not less than `off` less a lattice diagonal: where a centre nearer
+/// C0 than the lattice's first fit could still lie.
+fn nearer_points(c0: Candidate, off: f64) -> Vec<(f64, f64)> {
+    let limit = 90.0 - POLE_CLEARANCE_DEGREES;
+    let from = c0.direction();
+    let inner = off - 2f64.sqrt() * LATTICE_DEGREES.to_radians();
+    let reach = off.to_degrees();
+    let down = (reach / REFINE_DEGREES).ceil() as i32;
+    // Across, a degree of heading is cos e of a degree of angle; the steps are capped at a turn.
+    let widest = (c0.elevation.abs() + reach).min(limit).to_radians().cos();
+    let across = ((reach / (REFINE_DEGREES * widest)).ceil() as i32).min(720);
+    (-down..=down)
+        .flat_map(|b| {
+            (-across..=across).map(move |a| {
+                (
+                    wrap_degrees(c0.heading + a as f64 * REFINE_DEGREES),
+                    c0.elevation + b as f64 * REFINE_DEGREES,
+                )
+            })
+        })
+        .filter(|&(h, e)| {
+            let here = angle(from, towards_degrees(h, e));
+            e.abs() <= limit && here < off && here >= inner
+        })
+        .collect()
 }
 
 /// A number of degrees as the run writes it: to a hundredth at most, no trailing zeros, no -0.
@@ -491,6 +704,22 @@ pub fn degrees(x: f64) -> String {
     } else {
         text.into()
     }
+}
+
+/// What the run adds when the marks moved the panel: how far it is from the middle of the dark
+/// region, C0, and where C0 is.
+pub fn beside_marks_line(at: Placement, middle: Placement) -> String {
+    let off = angle(
+        towards_degrees(at.heading, at.elevation),
+        towards_degrees(middle.heading, middle.elevation),
+    );
+    format!(
+        "the panel keeps clear of the marks, {} from the middle of the dark region, which is {} \
+         degrees right of the opening view and {} degrees up",
+        angle_text(off.to_degrees()),
+        degrees(middle.heading),
+        degrees(middle.elevation)
+    )
 }
 
 /// `1 degree`, `0.8 degrees`.
@@ -523,6 +752,12 @@ pub fn sentence(placing: &Placing, lines: usize) -> String {
                 Why::TooSmall { line_degrees } => format!(
                     "the dark region is too small to hold them at {} a line and keep {} clear \
                      of its rim",
+                    angle_text(*line_degrees),
+                    angle_text(MARGIN_DEGREES)
+                ),
+                Why::TooSmallBesideMarks { line_degrees } => format!(
+                    "the dark region is too small to hold them at {} a line and keep {} clear \
+                     of its rim and of the marks",
                     angle_text(*line_degrees),
                     angle_text(MARGIN_DEGREES)
                 ),

@@ -49,6 +49,11 @@
 //! aliases. `--overlay-font "Courier New"` is the choice for a film that will be watched on other
 //! machines; it is a thinner face than Consolas.
 //!
+//! A unit that begins with the degree sign is written straight after its number, `44.0° right
+//! of the hole`, as the panel writes it (`crate::layout::hangs`): the degree sign takes the column
+//! of the space before the units, and every other unit keeps its space, so the lines stay one
+//! length and the columns stay put.
+//!
 //! # Times
 //!
 //! ASS writes a time as H:MM:SS.cc, in hundredths of a second. At 30 frames a second a frame
@@ -74,6 +79,7 @@ use std::ops::Range;
 
 use readout::Style;
 
+use crate::layout::hangs;
 use crate::timeline::Timeline;
 use crate::values::{Line, Series, format};
 
@@ -214,6 +220,29 @@ pub fn still_cue(series: &Series, timeline: &Timeline, k: u64, seconds: f64) -> 
     }
 }
 
+/// A still's cue and the lines it is written with, cut down to the lines it shows: a read-out
+/// the still's frame has no value for is left out label and all, as a still's panel leaves it out
+/// (`crate::overlay::shown_lines`), so that its label and unit do not widen the columns of what
+/// the cue does say. A film's cues are not cut: a line without a value on one frame has one on
+/// another, and its columns stay put.
+///
+/// The stopwatch is the one line kept without a value: it is never shown in a still's cue
+/// ([`still_cue`]), but its label and unit have always counted in the width of a still's columns,
+/// and a bundle written before read-outs could go missing keeps the script it always had, to the
+/// byte.
+pub fn still_only(lines: &[Line], cue: &Cue) -> (Vec<Line>, Cue) {
+    let kept: Vec<usize> = (0..lines.len())
+        .filter(|&l| lines[l].stopwatch || cue.values[l].is_some())
+        .collect();
+    (
+        kept.iter().map(|&l| lines[l].clone()).collect(),
+        Cue {
+            values: kept.iter().map(|&l| cue.values[l]).collect(),
+            ..cue.clone()
+        },
+    )
+}
+
 /// `text` as a cue shows it literally: no override block, no escape, on one line.
 pub fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -243,7 +272,14 @@ fn padded(text: &str, width: usize, right: bool) -> String {
 pub fn script(lines: &[Line], cues: &[Cue], look: &Look) -> String {
     let widest = |texts: &mut dyn Iterator<Item = usize>| texts.max().unwrap_or(0);
     let label_width = widest(&mut lines.iter().map(|l| l.label.chars().count()));
-    let unit_width = widest(&mut lines.iter().map(|l| l.unit.chars().count()));
+    // A unit that hangs (`crate::layout::hangs`) puts its first character, the degree sign, in
+    // the column of the space before the units, so it is one narrower in the unit column.
+    let unit_width = widest(
+        &mut lines
+            .iter()
+            .map(|l| l.unit.chars().count() - usize::from(hangs(&l.unit))),
+    );
+    let has_units = lines.iter().any(|l| !l.unit.is_empty());
     let text = |l: usize, x: f64| format(look.style, x, lines[l].decimals);
     let value_width = widest(&mut cues.iter().flat_map(|cue| {
         cue.values
@@ -294,9 +330,13 @@ pub fn script(lines: &[Line], cues: &[Cue], look: &Look) -> String {
                     s += &HARD_SPACE.repeat(2);
                 }
                 s += &padded(&text(l, x), value_width, true);
-                if unit_width > 0 {
-                    s += HARD_SPACE;
-                    s += &padded(&line.unit, unit_width, false);
+                if has_units {
+                    if hangs(&line.unit) {
+                        s += &padded(&line.unit, unit_width + 1, false);
+                    } else {
+                        s += HARD_SPACE;
+                        s += &padded(&line.unit, unit_width, false);
+                    }
                 }
                 Some(s)
             })

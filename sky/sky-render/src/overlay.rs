@@ -78,14 +78,20 @@ pub struct Overlay {
     shown: Vec<usize>,
 }
 
-/// The read-outs a panel shows, as positions in the manifest's list. A film's panel shows them
-/// all. A still's leaves the stopwatch out altogether, label and all, for the reason
-/// `crate::subtitles::still_cue` gives: it counts the time since a film's first frame, and a still
-/// is one moment. The line is left out rather than left blank, so the panel is no larger than
-/// what it says.
-pub fn shown_lines(series: &Series, still: bool) -> Vec<usize> {
+/// The read-outs a panel shows, as positions in the manifest's list. A film's panel (`still`
+/// None) shows them all, and a line without a value on some frame is drawn there without one. A
+/// still's, whose values at its one frame are `still`, leaves out altogether, label and all, the
+/// stopwatch, for the reason `crate::subtitles::still_cue` gives (it counts the time since a
+/// film's first frame, and a still is one moment), and every read-out that has no value at that
+/// frame: a writer declares some read-outs that exist only at some frames, such as a speed past a
+/// reference observer who exists only outside the static limit. A line is left out rather than
+/// left blank, so the panel is no larger than what it says.
+pub fn shown_lines(series: &Series, still: Option<&[Option<f64>]>) -> Vec<usize> {
     (0..series.lines.len())
-        .filter(|&l| !(still && series.lines[l].stopwatch))
+        .filter(|&l| match still {
+            None => true,
+            Some(values) => !series.lines[l].stopwatch && values[l].is_some(),
+        })
         .collect()
 }
 
@@ -106,16 +112,18 @@ pub fn settings_of(o: &Options) -> Settings {
 
 impl Overlay {
     /// The panels a run's command line asks for, or None with `--readouts off`, which leaves
-    /// every frame exactly as the renderer drew it.
+    /// every frame exactly as the renderer drew it. `still` holds a still's values at its frame
+    /// (see [`shown_lines`]); it is None for a film.
     pub fn for_run(
         o: &Options,
         series: &Series,
+        still: Option<&[Option<f64>]>,
         stopwatch_span: [f64; 2],
     ) -> Result<Option<Self>, String> {
         if !o.readouts {
             return Ok(None);
         }
-        let shown = shown_lines(series, o.still.is_some());
+        let shown = shown_lines(series, still);
         // A still's panel with nothing left to show is no panel at all.
         if o.still.is_some() && shown.is_empty() {
             return Ok(None);
@@ -155,12 +163,12 @@ impl Overlay {
         let lines: Vec<Line> = shown.iter().map(|&l| series.lines[l].clone()).collect();
         let style = settings.style;
 
-        // The widest value any line will show. Values between two bundle frames lie between
-        // theirs, and so print no wider than the wider of the two.
+        // The widest value any line will show, as displayed. Values between two bundle frames
+        // lie between theirs, and so print no wider than the wider of the two.
         let mut widest: f32 = 0.0;
         for (line, &l) in lines.iter().zip(shown) {
             let values: Vec<f64> = if line.stopwatch {
-                stopwatch_span.to_vec()
+                stopwatch_span.iter().map(|t| t * line.scale).collect()
             } else {
                 series.values_of(l).collect()
             };

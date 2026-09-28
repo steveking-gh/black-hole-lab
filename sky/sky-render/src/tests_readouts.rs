@@ -309,7 +309,7 @@ fn test_no_pixel_outside_the_panel_changes_and_with_readouts_off_none_does() {
         panic!("not a render")
     };
     assert!(
-        Overlay::for_run(&options, &s, [0.0, 1.0])
+        Overlay::for_run(&options, &s, None, [0.0, 1.0])
             .expect("no refusal")
             .is_none()
     );
@@ -319,7 +319,7 @@ fn test_no_pixel_outside_the_panel_changes_and_with_readouts_off_none_does() {
         ..*options
     };
     assert!(
-        Overlay::for_run(&on, &s, [0.0, 1.0])
+        Overlay::for_run(&on, &s, None, [0.0, 1.0])
             .expect("a panel")
             .is_some()
     );
@@ -612,8 +612,11 @@ fn test_a_panel_too_large_to_stay_off_the_pole_is_refused() {
 fn test_a_stills_panel_leaves_the_stopwatch_line_out_label_and_all_and_a_films_keeps_it() {
     let (size, _) = frame(2048);
     let s = series(&[Some(6.0)]);
-    assert_eq!(crate::overlay::shown_lines(&s, true), vec![1]);
-    assert_eq!(crate::overlay::shown_lines(&s, false), vec![0, 1]);
+    assert_eq!(
+        crate::overlay::shown_lines(&s, Some(&[Some(0.0), Some(6.0)])),
+        vec![1]
+    );
+    assert_eq!(crate::overlay::shown_lines(&s, None), vec![0, 1]);
     let options = |extra: &[&str]| {
         let mut args: Vec<String> = [
             "--bundle",
@@ -635,10 +638,15 @@ fn test_a_stills_panel_leaves_the_stopwatch_line_out_label_and_all_and_a_films_k
         };
         *o
     };
-    let mut still = Overlay::for_run(&options(&["--still", "0"]), &s, [0.0, 0.0])
-        .expect("no refusal")
-        .expect("a panel");
-    let film = Overlay::for_run(&options(&[]), &s, [0.0, 1.0])
+    let mut still = Overlay::for_run(
+        &options(&["--still", "0"]),
+        &s,
+        Some(&[Some(0.0), Some(6.0)]),
+        [0.0, 0.0],
+    )
+    .expect("no refusal")
+    .expect("a panel");
+    let film = Overlay::for_run(&options(&[]), &s, None, [0.0, 1.0])
         .expect("no refusal")
         .expect("a panel");
     assert_eq!(
@@ -677,13 +685,18 @@ fn test_a_stills_panel_leaves_the_stopwatch_line_out_label_and_all_and_a_films_k
         &[&values(&[("stopwatch", Some(0.0))])],
     );
     assert!(
-        Overlay::for_run(&options(&["--still", "0"]), &only, [0.0, 0.0])
-            .expect("no refusal")
-            .is_none()
+        Overlay::for_run(
+            &options(&["--still", "0"]),
+            &only,
+            Some(&[None]),
+            [0.0, 0.0]
+        )
+        .expect("no refusal")
+        .is_none()
     );
     // A film's panel of the stopwatch alone is drawn as before.
     assert!(
-        Overlay::for_run(&options(&[]), &only, [0.0, 1.0])
+        Overlay::for_run(&options(&[]), &only, None, [0.0, 1.0])
             .expect("no refusal")
             .is_some()
     );

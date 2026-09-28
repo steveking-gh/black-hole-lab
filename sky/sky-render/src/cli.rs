@@ -11,6 +11,7 @@ use crate::encode::Codec;
 use crate::panel::Placement;
 use crate::sky::MapFrame;
 use crate::tone::parse_hex_colour;
+use crate::values::Units;
 
 pub const USAGE: &str = "\
 sky-render: renders a sky bundle over a star map into a 360-degree video
@@ -85,6 +86,17 @@ read-outs (the bundle's numbers, the observer's stopwatch first):
                              0,-30 if it does not fit even then (the run says where it went)
   --readout-size <degrees>   the height of one line of text, as an angle (default 2)
   --decimal-comma            write the decimal mark as a comma, as the app's own setting does
+  --units display|stored     display (default): a read-out the bundle offers in a unit a person
+                             would rather read (seconds, kilometres) is shown in it; stored: every
+                             read-out in the unit the bundle stores it in (for a Kerr run, M)
+
+marks (signs at directions the bundle names, such as the direction of travel):
+  --marks on|off             on (default): a small hollow sign at each mark; off: none, and the
+                             sky exactly as without them
+  --mark-size <degrees>      the angle from a sign's centre to its outer edge, or to its corners
+                             (default 1.5)
+  --mark-colour <RRGGBB>     the signs' colour (default 33FF66, a green no light of the sky has);
+                             never the colour of unresolved or under-sampled pixels
 
 a still (one moment's view, to look around in):
   --still [<k>]              render video frame k alone, and hold it (k may be left out when the
@@ -132,6 +144,10 @@ pub const DEFAULT_HOLD_RATE: f64 = 0.5;
 
 /// The fastest `--hold-rate`: a film's own rate. Faster only makes more identical frames.
 const MAX_HOLD_RATE: f64 = 60.0;
+
+/// The largest `--mark-size`, in degrees: a sign is small so that it hides little sky, and one of
+/// this size is ten degrees across, five lines of a panel's text high.
+const MAX_MARK_SIZE: f64 = 5.0;
 
 /// What becomes of the read-outs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -266,6 +282,14 @@ pub struct Options {
     pub colour: ColourRule,
     /// `--show-model-range`: the picture shows the class of each sky pixel's shift.
     pub show_model_range: bool,
+    /// `--units`: which unit the read-outs are shown in.
+    pub units: Units,
+    /// `--marks on` (true, the default) or `off`.
+    pub marks: bool,
+    /// `--mark-size`: the angle from a sign's centre to its outer edge, in degrees.
+    pub mark_size: f64,
+    /// `--mark-colour`, as 16-bit sRGB-encoded codes.
+    pub mark_colour: [u16; 3],
 }
 
 /// What the command line asks for.
@@ -309,6 +333,10 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
     let mut decimal_comma = false;
     let mut colour = ColourRule::Blackbody;
     let mut show_model_range = false;
+    let mut units = Units::Display;
+    let mut marks = true;
+    let mut mark_size = crate::marks::DEFAULT_SIZE_DEGREES;
+    let mut mark_colour = crate::marks::DEFAULT_COLOUR;
 
     let mut rest = args.iter().peekable();
     while let Some(flag) = rest.next() {
@@ -514,6 +542,41 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
                 };
             }
             "--show-model-range" => show_model_range = true,
+            "--units" => {
+                units = match value()? {
+                    "display" => Units::Display,
+                    "stored" => Units::Stored,
+                    other => {
+                        return Err(format!("--units is display or stored, not {other:?}"));
+                    }
+                };
+            }
+            "--marks" => {
+                marks = match value()? {
+                    "on" => true,
+                    "off" => false,
+                    other => return Err(format!("--marks is on or off, not {other:?}")),
+                };
+            }
+            "--mark-size" => {
+                let text = value()?;
+                mark_size = text
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|s| s.is_finite() && *s > 0.0 && *s <= MAX_MARK_SIZE)
+                    .ok_or_else(|| {
+                        format!(
+                            "--mark-size is the angle from a sign's centre to its outer edge in \
+                             degrees, more than 0 and at most {MAX_MARK_SIZE}, not {text:?}"
+                        )
+                    })?;
+            }
+            "--mark-colour" => {
+                let text = value()?;
+                mark_colour = parse_hex_colour(text).ok_or_else(|| {
+                    format!("--mark-colour takes six hex digits such as 33FF66, not {text:?}")
+                })?;
+            }
             other => return Err(format!("{other:?} is not an option; see --help")),
         }
     }
@@ -569,6 +632,13 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
             );
         }
     }
+    if marks {
+        crate::marks::check_colour(
+            mark_colour,
+            unresolved,
+            mark_undersampled.then_some(undersampled),
+        )?;
+    }
     if let (Some(Codec::Nvenc), Some(p)) = (codec, preset)
         && !(1..=7).contains(&p)
     {
@@ -609,6 +679,10 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
         decimal_comma,
         colour,
         show_model_range,
+        units,
+        marks,
+        mark_size,
+        mark_colour,
     })))
 }
 

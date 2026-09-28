@@ -32,6 +32,8 @@
 //! - `values`: each read-out's value at a video frame, and how it is written;
 //! - `subtitles`: the read-outs as an ASS subtitle script, one cue per video frame;
 //! - `panel`: where a read-out panel sits on the sphere, and which pixels show it;
+//! - `marks`: the signs drawn at directions the bundle names, how they turn between bundle
+//!   frames, and which pixels each covers;
 //! - `shadow`: which pixels of a still are the dark region, and where a panel fits inside it
 //!   (`--readout-at dark`);
 //! - `layout`: where each character of a panel goes, with digits that do not jitter;
@@ -48,6 +50,7 @@ mod encode;
 mod field;
 mod layout;
 mod load;
+mod marks;
 mod mp4;
 mod output;
 mod overlay;
@@ -71,6 +74,8 @@ mod tests_colour;
 #[cfg(test)]
 mod tests_marking;
 #[cfg(test)]
+mod tests_marks;
+#[cfg(test)]
 mod tests_output;
 #[cfg(test)]
 mod tests_readouts;
@@ -84,8 +89,9 @@ use std::time::{Duration, Instant};
 use cli::{Options, Request, USAGE};
 use encode::{Encoding, Ffmpeg};
 use field::{Judge, RayField};
+use marks::{Marks, Pen};
 use output::{Cleanup, Plan};
-use overlay::{Overlay, Settings};
+use overlay::{Overlay, Settings, shown_lines};
 use readout::Style;
 use render::{Fields, Look, Picture, Scene, Size};
 use shadow::{DarkMap, Placing};
@@ -227,35 +233,62 @@ fn run(o: &Options) -> Result<(), String> {
 
     // The read-outs are set up before the map is read, so that a panel the command line cannot
     // place is refused at once and not after the map's half-minute.
-    let series = Series::new(
+    let series = Series::in_units(
         &manifest.readouts,
         &complete
             .iter()
             .map(|&i| &entry(i).readouts)
             .collect::<Vec<_>>(),
+        o.units,
     );
     let stopwatch_span = [
         timeline.stopwatch(range.start),
         timeline.stopwatch(range.end - 1),
     ];
-    let mut overlay = Overlay::for_run(o, &series, stopwatch_span)?;
     // Each line's value at video frame k: what the panel paints and the subtitles show alike.
     let values_at = |k: u64| series.at(timeline.pick(k), timeline.stopwatch(k));
+    // A still's values at its one frame, which decide which lines its panel shows.
+    let still_values = o.still.as_ref().map(|_| values_at(range.start));
+    let mut overlay = Overlay::for_run(o, &series, still_values.as_deref(), stopwatch_span)?;
+    // The marks, and the pen they are drawn with; None with `--marks off` or none declared, which
+    // leaves every frame exactly as it was drawn without them.
+    let marks = Marks::new(
+        &manifest.marks,
+        &complete
+            .iter()
+            .map(|&i| &entry(i).marks)
+            .collect::<Vec<_>>(),
+    );
+    let pen = (o.marks && !marks.declared.is_empty()).then_some(Pen {
+        size_degrees: o.mark_size,
+        colour: o.mark_colour,
+    });
+    // Each mark's direction at video frame k; none before the bundle's first complete frame.
+    let marks_at = |k: u64| {
+        if timeline.before_first(k) {
+            vec![None; marks.declared.len()]
+        } else {
+            marks.at(timeline.pick(k))
+        }
+    };
     let script = match (&plan, o.subtitles) {
         (Some(_), true) => {
-            let cues = match &o.still {
+            let (lines, cues) = match &o.still {
                 // A still's read-outs are those of its one frame, for the whole held video.
-                Some(still) => vec![subtitles::still_cue(
-                    &series,
-                    &timeline,
-                    range.start,
-                    still.seconds(),
-                )],
-                None => subtitles::film_cues(
-                    &series,
-                    &timeline,
-                    range.clone(),
-                    playback.frames_per_second.0,
+                Some(still) => {
+                    let cue =
+                        subtitles::still_cue(&series, &timeline, range.start, still.seconds());
+                    let (lines, cue) = subtitles::still_only(&series.lines, &cue);
+                    (lines, vec![cue])
+                }
+                None => (
+                    series.lines.clone(),
+                    subtitles::film_cues(
+                        &series,
+                        &timeline,
+                        range.clone(),
+                        playback.frames_per_second.0,
+                    ),
                 ),
             };
             let look = subtitles::Look {
@@ -267,9 +300,14 @@ fn run(o: &Options) -> Result<(), String> {
                     Style::POINT
                 },
             };
-            Some(subtitles::script(&series.lines, &cues, &look))
+            Some(subtitles::script(&lines, &cues, &look))
         }
         _ => None,
+    };
+    // How many lines the subtitles show: a still's, those its one cue has a value for.
+    let subtitle_lines = match &still_values {
+        Some(values) => shown_lines(&series, Some(values)).len(),
+        None => series.lines.len(),
     };
 
     match (&overlay, &script) {
@@ -281,6 +319,10 @@ fn run(o: &Options) -> Result<(), String> {
             o.readout_at.len(),
             o.readout_size
         ),
+        (None, _) if o.readouts && series.lines.len() > 1 => println!(
+            "read-outs: none painted: a still's panel leaves out the stopwatch, and no other \
+             read-out has a value at this frame"
+        ),
         (None, _) if o.readouts => println!(
             "read-outs: none painted: a still's panel leaves out the stopwatch, and the bundle \
              declares no other read-out"
@@ -288,7 +330,7 @@ fn run(o: &Options) -> Result<(), String> {
         (None, Some(_)) => println!(
             "read-outs: {} line(s) as a subtitle track at the bottom right of the screen, in {}, \
              each line {:.2} % of the screen's height (size {} of {}); the picture carries none",
-            series.lines.len(),
+            subtitle_lines,
             o.overlay_font,
             o.overlay_size,
             subtitles::font_size(o.overlay_size),
@@ -462,20 +504,29 @@ fn run(o: &Options) -> Result<(), String> {
         load_time += clock.elapsed();
         let clock = Instant::now();
         let fields = (!timeline.before_first(k)).then(|| fields_of(timeline.pick(k), &loaded));
-        let map = DarkMap::of(fields, size, o.threads);
+        let mut map = DarkMap::of(fields, size, o.threads);
+        // The panel keeps clear of every sign drawn in this picture (`shadow`, "Marks").
+        if let Some(pen) = pen {
+            let drawn: Vec<[f64; 3]> = marks_at(k).into_iter().flatten().collect();
+            map.keep_clear(
+                &drawn,
+                (pen.size_degrees + shadow::MARK_CLEARANCE_DEGREES).to_radians(),
+            );
+        }
         let finding = clock.elapsed();
-        let shown = overlay::shown_lines(&series, true);
+        let shown = shown_lines(&series, still_values.as_deref());
         let settings = overlay::settings_of(o);
-        let placing = shadow::place(&map, o.readout_size, o.threads, |line_degrees| {
-            let measure = Settings {
-                placements: Vec::new(),
-                line_degrees,
-                ..settings.clone()
-            };
-            Overlay::showing(&measure, &series, &shown, stopwatch_span, size)
-                .expect("a panel with no place to be refused from")
-                .outline()
-        });
+        let (placing, middle) =
+            shadow::place_near(&map, o.readout_size, o.threads, |line_degrees| {
+                let measure = Settings {
+                    placements: Vec::new(),
+                    line_degrees,
+                    ..settings.clone()
+                };
+                Overlay::showing(&measure, &series, &shown, stopwatch_span, size)
+                    .expect("a panel with no place to be refused from")
+                    .outline()
+            });
         let took = clock.elapsed();
         if let Placing::Inside { at, line_degrees } = placing {
             let inside = Settings {
@@ -492,6 +543,13 @@ fn run(o: &Options) -> Result<(), String> {
             )?);
         }
         println!("{}", shadow::sentence(&placing, lines));
+        // Said only when the marks moved the panel off the middle of the dark region.
+        if map.cleared() > 0
+            && let (Placing::Inside { at, .. }, Some(middle)) = (placing, middle)
+            && at != middle
+        {
+            println!("{}", shadow::beside_marks_line(at, middle));
+        }
         if took >= Duration::from_millis(20) {
             println!(
                 "the panel's place took {:.2} s to find, {:.2} s of it finding which pixels are \
@@ -499,6 +557,15 @@ fn run(o: &Options) -> Result<(), String> {
                 took.as_secs_f64(),
                 finding.as_secs_f64()
             );
+        }
+    }
+    if let Some(pen) = pen {
+        if o.still.is_some() {
+            for line in marks::still_lines(&marks, &marks_at(range.start), pen) {
+                println!("{line}");
+            }
+        } else if let Some(line) = marks::film_line(&marks, pen) {
+            println!("{line}");
         }
     }
 
@@ -586,6 +653,13 @@ fn run(o: &Options) -> Result<(), String> {
             };
             counts.add(k, tally);
             render_time += clock.elapsed();
+            // The marks first, then the panels over them (`marks`).
+            if let Some(pen) = pen {
+                let clock = Instant::now();
+                let signs = marks::signs(&marks, &marks_at(k), pen);
+                marks::paint(&mut pixels, size, &signs, pen.colour);
+                readout_time += clock.elapsed();
+            }
             if let Some(overlay) = &mut overlay {
                 let clock = Instant::now();
                 overlay.paint(&mut pixels, &values_at(k));

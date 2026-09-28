@@ -19,6 +19,14 @@
 //!   the unit never moves either, and the panel never changes size (its place on the sphere is
 //!   computed once, see `crate::panel`).
 //!
+//! A unit follows its number after a space, as in running text (`12.345 M`, `0.4800 c`), with
+//! one exception, [`hangs`]: a unit that begins with the degree sign is set straight after the
+//! number, `44.0° right of the hole`, as an angle is written. The panel's unit column stays where
+//! it is for every other line, and on such a line the degree sign sits in the gap before the
+//! column, where the space would have been: the words after it start a little to the right of the
+//! other units, and the digits and the decimal marks keep their columns. `crate::subtitles` sets
+//! the same rule in its columns of characters.
+//!
 //! Everything here is in panel pixels and knows nothing of fonts beyond [`Metrics`].
 
 /// What layout needs to know about the typeface at the size it is set in, in panel pixels.
@@ -53,7 +61,11 @@ pub struct Layout {
     label_x: f32,
     /// The right edge of the value column.
     value_right: f32,
+    /// Where the unit column starts: a space after the value column.
     unit_x: f32,
+    /// Where each line's unit starts: `unit_x`, or the value column's right edge for a unit that
+    /// [`hangs`].
+    unit_starts: Vec<f32>,
     baselines: Vec<f32>,
 }
 
@@ -62,6 +74,12 @@ const MARGIN_ACROSS: f32 = 0.5;
 const MARGIN_DOWN: f32 = 0.3;
 const LABEL_GAP: f32 = 0.7;
 const CORNER: f32 = 0.3;
+
+/// Whether a unit is set straight after its number rather than after a space: one that begins
+/// with the degree sign (`°`, `° right of the hole`). Every other unit keeps its space.
+pub fn hangs(unit: &str) -> bool {
+    unit.starts_with('°')
+}
 
 /// The width `text` takes, digits at the tabular width.
 pub fn width_of(m: &impl Metrics, text: &str) -> f32 {
@@ -122,7 +140,18 @@ impl Layout {
         } else {
             value_right
         };
-        let width = (unit_x + unit_w + margin).ceil() as usize;
+        let unit_starts: Vec<f32> = units
+            .iter()
+            .map(|u| if hangs(u) { value_right } else { unit_x })
+            .collect();
+        // The right edge of the widest unit as set. Where no unit hangs this is `unit_x + unit_w`
+        // to the bit: adding one number to each of several keeps their order exactly.
+        let right = units
+            .iter()
+            .zip(&unit_starts)
+            .map(|(u, &x)| x + width_of(m, u))
+            .fold(unit_x, f32::max);
+        let width = (right + margin).ceil() as usize;
         let top = MARGIN_DOWN * pitch;
         let lines = labels.len();
         let height = (2.0 * top + lines as f32 * pitch).ceil() as usize;
@@ -138,6 +167,7 @@ impl Layout {
             label_x,
             value_right,
             unit_x,
+            unit_starts,
             baselines,
         }
     }
@@ -147,7 +177,7 @@ impl Layout {
         let mut out = Vec::new();
         for (k, (label, unit)) in labels.iter().zip(units).enumerate() {
             set(m, label, self.label_x, self.baselines[k], &mut out);
-            set(m, unit, self.unit_x, self.baselines[k], &mut out);
+            set(m, unit, self.unit_starts[k], self.baselines[k], &mut out);
         }
         out
     }
@@ -164,5 +194,17 @@ impl Layout {
     /// The pen position at which every line's unit starts.
     pub fn unit_x(&self) -> f32 {
         self.unit_x
+    }
+
+    #[cfg(test)]
+    /// Where line `line`'s unit starts.
+    pub fn unit_start(&self, line: usize) -> f32 {
+        self.unit_starts[line]
+    }
+
+    #[cfg(test)]
+    /// The right edge of the value column.
+    pub fn value_right(&self) -> f32 {
+        self.value_right
     }
 }
