@@ -177,8 +177,7 @@ fn test_the_smallest_and_largest_holes_the_app_offers() {
         assert_eq!(shown(&t), time, "{solar_masses}, {largest} M of time");
         assert_eq!(shown(&l), length, "{solar_masses}, {largest} M of radius");
     }
-    // The values themselves, at Sagittarius A*: the app's own test has 20.45 s, from a constant 3
-    // parts in 10^4 high.
+    // The values themselves, at Sagittarius A*, which the app's own test of its units has too.
     let s = seconds(4.15e6);
     assert_eq!(format!("{:.2}", time_display(1.0, s).scale.0), "20.44");
     assert_eq!(format!("{:.3}", length_display(1.0, s).scale.0), "6.128");

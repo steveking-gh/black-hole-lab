@@ -7,17 +7,16 @@
 //! # The conversion
 //!
 //! One M of time is `m_solar` G M_sun / c^3 seconds (`bhl::Hole::seconds_per_unit`), from the
-//! accepted G M_sun / c^3 = 4.925490947e-6 s that `bhl` already uses. One M of length is the
+//! accepted G M_sun / c^3 = 4.925490947e-6 s of the geometry crate. One M of length is the
 //! distance light goes in that time, the same number of seconds times c = 299 792.458 km/s, which
 //! is exact by the definition of the metre. So the second and the kilometre come from one number
 //! and agree with each other: a radius of 1 M is, in kilometres, exactly c times the duration of
 //! 1 M in seconds.
 //!
-//! The app's own constants are 4.927038e-6 s and 1.477 km per solar mass. They are 3.1 and 2.5
-//! parts in 10^4 above the accepted values, by different amounts (1.477 km / c is 4.9267e-6 s, not
-//! 4.927038e-6 s), so they do not agree with each other either. This program keeps to the accepted
-//! values, and its read-outs therefore differ from the app's in the fourth significant figure: the
-//! app's Sagittarius A* lasts 20.45 s an M where this one's lasts 20.44 s.
+//! The app converts with the same two numbers (`KerrSchild::t_grav_seconds` and `r_grav_km`), so a
+//! reading here and the same reading in the app agree. Until 2026-09-27 the app's constants were
+//! 4.927038e-6 s and 1.477 km per solar mass, 3.1 and 2.5 parts in 10^4 high, and a save's
+//! `step_distance_km` written before then carries the old kilometre.
 //!
 //! # The unit
 //!
@@ -44,10 +43,8 @@
 //! and at most three decimals every reading at or above its unit has at least four figures. There
 //! is no astronomical-unit rung.
 //!
-//! The light-year is not the app's either. The app rounds it to four figures (9.461e12 km), 2.9
-//! parts in 10^5 off, enough to move the fourth figure now and then; here it is the IAU's, the
-//! distance light goes in a Julian year: 299 792.458 km/s times 365.25 x 86 400 s, exactly
-//! 9 460 730 472 580.8 km.
+//! The light-year is the IAU's, the distance light goes in a Julian year: 299 792.458 km/s times
+//! 365.25 x 86 400 s, exactly 9 460 730 472 580.8 km.
 //!
 //! # The decimals
 //!
@@ -56,8 +53,8 @@
 
 use sky_format::{Display, Num};
 
-/// The speed of light, in km/s: exact, by the definition of the metre.
-pub const C_KM_PER_S: f64 = 299_792.458;
+/// The speed of light, in km/s: the geometry crate's, exact by the definition of the metre.
+pub const C_KM_PER_S: f64 = kerr_equatorial::kerr_schild::C_KM_PER_S;
 
 /// Seconds in a Julian year of 365.25 days.
 pub const SECONDS_PER_YEAR: f64 = 365.25 * 86_400.0;

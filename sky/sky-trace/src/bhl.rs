@@ -31,10 +31,11 @@ pub const FORMAT: &str = "black-hole-lab-save";
 /// a new version is a change of structure or meaning, not an added field.
 pub const VERSION: u32 = 1;
 
-/// The accepted value of G M_sun / c^3, in seconds: the time one M of the chart's clock lasts for a
-/// hole of one solar mass. The app's own conversion (`KerrSchild::t_grav_seconds`) uses 4.927038e-6,
-/// which is 3.1 parts in 10^4 high; this program quotes seconds from the accepted value.
-pub const GM_SUN_OVER_C3_SECONDS: f64 = 4.925490947e-6;
+/// G M_sun / c^3, in seconds: the time one M of the chart's clock lasts for a hole of one solar
+/// mass. It is the geometry crate's own number, which the app converts with too
+/// (`KerrSchild::t_grav_seconds`), so that a reading here and the same reading in the app are
+/// the same number.
+pub const GM_SUN_OVER_C3_SECONDS: f64 = kerr_equatorial::kerr_schild::GM_SUN_OVER_C3_SECONDS;
 
 /// Everything that can go wrong opening a save, each with its own sentence.
 #[derive(Debug)]

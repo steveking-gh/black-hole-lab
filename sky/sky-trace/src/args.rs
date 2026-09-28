@@ -107,8 +107,7 @@ THE DIRECTION OF TRAVEL
 UNITS
     Times and radii are stored in M, the hole's mass in geometric units. Seconds and kilometres
     come from the hole's mass in solar masses and GM_sun/c^3 = 4.925490947e-6 s, and a kilometre
-    of radius is c = 299792.458 km/s times that; the app's own constants are 3 parts in 10^4 higher,
-    so the two differ in the fourth figure.
+    of radius is c = 299792.458 km/s times that, as in Black Hole Lab itself.
 ";
 
 /// Which of the save's two observers to film.
