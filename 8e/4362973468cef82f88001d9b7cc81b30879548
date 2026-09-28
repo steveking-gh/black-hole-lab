@@ -1,0 +1,37 @@
+crates/kerr-equatorial/src/kerr_schild.rs
+  s_fa4e4937427d8c::t_740b2e1afaeb69 131-135
+  s_fa4e4937427d8c::t_6b576a16448969 85-87,89,93,95
+  s_fa4e4937427d8c::t_f07722423ec561 16-28
+src/gui/units.rs
+  s_fa4e4937427d8c::t_15aa2e73e78a70 121,124,126,128
+  s_fa4e4937427d8c::t_4a789026ddf64c 154
+  s_fa4e4937427d8c::t_c7af28dd9b563d 157
+  s_fa4e4937427d8c::t_9cd75053c7fa3a 11-14
+src/gui/axis.rs
+  s_fa4e4937427d8c::t_77b6506c39eae6 547
+src/gui/controls.rs
+  s_fa4e4937427d8c::t_014daf263c89b6 16
+  s_fa4e4937427d8c::t_0f2938a27abc68 906-908
+  s_fa4e4937427d8c::t_4008eb89e2484a 909
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "8e4362973468cef82f88001d9b7cc81b30879548",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_fa4e4937427d8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c3c93472-9aee-43ec-8624-e30a21d0ed6f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
