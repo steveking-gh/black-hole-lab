@@ -8,9 +8,10 @@
 use crate::gui::numbers;
 use kerr_equatorial::KerrSchild;
 
-/// Kilometres in an astronomical unit, and in a light-year.
-const KM_PER_AU: f64 = 1.496e8;
-const KM_PER_LY: f64 = 9.461e12;
+/// Kilometres in an astronomical unit, which the IAU defines as exactly this, and in a light-year,
+/// the distance light goes in a Julian year: 299 792.458 km/s times 365.25 days of 86 400 s.
+const KM_PER_AU: f64 = 149_597_870.7;
+const KM_PER_LY: f64 = 9_460_730_472_580.8;
 
 /// Seconds in a Julian year.
 const SECONDS_PER_YEAR: f64 = 86400.0 * 365.25;
@@ -117,14 +118,14 @@ mod tests {
 
     #[test]
     fn test_physical_units_conversion() {
-        // Solar mass: 1 M_sun gives r_g ~ 1.477 km and t_g ~ 4.93 µs.
+        // Solar mass: 1 M_sun gives r_g = 1.476625 km and t_g = 4.925491 µs.
         let ks_sun = KerrSchild::with_solar_mass(1.0, 0.0, 1.0);
         assert_eq!(ks_sun.format_physical_distance(1.0), "1.5 km");
-        assert!(ks_sun.format_physical_time(1.0).ends_with("µs"));
+        assert_eq!(ks_sun.format_physical_time(1.0), "4.93 µs");
 
-        // Sagittarius A*: 4.15e6 M_sun gives t_g ~ 20.4 s.
+        // Sagittarius A*: 4.15e6 M_sun gives t_g = 20.44 s.
         let ks_sgr = KerrSchild::with_solar_mass(1.0, 0.9, 4.15e6);
-        assert_eq!(ks_sgr.format_physical_time(1.0), "20.45 s");
+        assert_eq!(ks_sgr.format_physical_time(1.0), "20.44 s");
     }
 
     #[test]
@@ -150,10 +151,10 @@ mod tests {
     fn test_large_values_are_grouped_and_follow_the_style() {
         let ks = KerrSchild::with_solar_mass(1.0, 0.9, 1e8);
         assert_eq!(ks.format_grid_km(12_345.6, 0.1), "12,345.6 km");
-        assert_eq!(ks.format_physical_distance(1.0), "1.0 AU (147,700,000 km)");
+        assert_eq!(ks.format_physical_distance(1.0), "1.0 AU (147,662,504 km)");
         numbers::set_style(numbers::style_for(true));
         assert_eq!(ks.format_grid_km(12_345.6, 0.1), "12.345,6 km");
-        assert_eq!(ks.format_physical_distance(1.0), "1,0 AU (147.700.000 km)");
+        assert_eq!(ks.format_physical_distance(1.0), "1,0 AU (147.662.504 km)");
         numbers::set_style(numbers::style_for(false));
     }
 }

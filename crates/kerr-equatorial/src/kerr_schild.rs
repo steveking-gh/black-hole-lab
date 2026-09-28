@@ -13,6 +13,19 @@ pub struct KerrSchild {
     pub a: f64,
 }
 
+/// G M_sun / c^3 in seconds: how long one M of time lasts for a hole of one solar mass.
+///
+/// The product G M_sun is measured far better than G or M_sun alone (the orbits of the planets
+/// give it to ten figures; G is known to five), so the conversion is made from the product and
+/// never from the two apart. 4.925490947 microseconds is the value pulsar timing uses for it, and
+/// it agrees with the IAU's nominal G M_sun = 1.3271244e20 m^3 / s^2 over c^3 to its last figure.
+/// Every conversion to seconds, kilometres or metres in this crate comes from this number and
+/// from c, so that they agree with each other.
+pub const GM_SUN_OVER_C3_SECONDS: f64 = 4.925490947e-6;
+
+/// The speed of light in km/s: exact, by the definition of the metre.
+pub const C_KM_PER_S: f64 = 299_792.458;
+
 /// Coordinate slopes of the two *principal null directions* (PNDs) of the Kerr geometry at a
 /// radius r on the equatorial plane. These are the repeated null eigendirections of the Weyl
 /// tensor (the algebraically special rays that make Kerr type D), not the extreme rays of the
@@ -69,16 +82,17 @@ impl KerrSchild {
         self.a / self.m
     }
 
-    /// Physical gravitational radius r_g = G * M / c^2 in kilometers.
-    /// G * M_sun / c^2 = 1.477 km
+    /// Physical gravitational radius r_g = G * M / c^2 in kilometers: the distance light goes in
+    /// `t_grav_seconds`, so that the kilometre and the second come from one number and agree.
+    /// G * M_sun / c^2 = 1.476625 km.
     pub fn r_grav_km(&self) -> f64 {
-        self.m_solar * 1.477
+        self.t_grav_seconds() * C_KM_PER_S
     }
 
     /// Physical gravitational time unit t_g = G * M / c^3 in seconds.
-    /// G * M_sun / c^3 = 1.477 km / 299792.458 km/s = 4.927e-6 s (microseconds).
+    /// G * M_sun / c^3 = 4.925490947e-6 s (microseconds): see `GM_SUN_OVER_C3_SECONDS`.
     pub fn t_grav_seconds(&self) -> f64 {
-        self.m_solar * 4.927038e-6
+        self.m_solar * GM_SUN_OVER_C3_SECONDS
     }
 
     /// A rate quoted per unit of the chart's time, in inverse seconds.
@@ -114,9 +128,11 @@ impl KerrSchild {
     /// the reading near r-.
     pub fn tidal_acceleration_g(&self, r: f64, height_m: f64) -> f64 {
         let r_m = (r / self.m).max(0.01) * self.r_grav_km() * 1000.0;
-        let g_const = 6.67430e-11;
-        let m_kg = self.m_solar * 1.98847e30;
-        let a_tidal_si = (2.0 * g_const * m_kg / (r_m * r_m * r_m)) * height_m;
+        // G M = c^2 r_g, from the same number as r_g itself: G and the Sun's mass in kilograms,
+        // multiplied together, give the product to five figures where this has ten.
+        let c_m_per_s = C_KM_PER_S * 1000.0;
+        let gm_si = c_m_per_s * c_m_per_s * self.r_grav_km() * 1000.0;
+        let a_tidal_si = (2.0 * gm_si / (r_m * r_m * r_m)) * height_m;
         (a_tidal_si / 9.80665).max(0.0)
     }
 

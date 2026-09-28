@@ -544,7 +544,7 @@ mod tests {
         assert_eq!(time_label_m(-12.5, 0.5), "-12.5M");
         assert_eq!(time_label_m(12.3456, 0.002), "+12.346M");
         assert_eq!(time_label_physical(&sgr, 14.0, 2.0), "4.77 min");
-        assert_eq!(time_label_physical(&sgr, 20.0, 5e-4), "6.8157 min");
+        assert_eq!(time_label_physical(&sgr, 20.0, 5e-4), "6.8136 min");
         assert_eq!(time_label_physical(&sgr, -14.0, 2.0), "-4.77 min");
         // Then the offsets, and the unit boundary in particular: a grid ruled every 20 s counts in
         // seconds until the count reaches a thousand of them, and climbs only then.
