@@ -1,0 +1,37 @@
+README.md
+  h_5b3f31968f5853 402,404-409
+  s_8aa93072b73a6b::t_dc9ec7c17692c3 403
+assets/images/penrose_1_plain_no_text.svg
+  s_6dcc5794e669c5::t_9b963f52b8108d 14-51,58-63,569-570,573-574,589,593,602,606,615,619,633-664
+assets/images/penrose_1.svg
+  h_5b3f31968f5853 28-29,35-36,39-82,89-94,671-672,676-677,681-682,768-799
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ddae95416362d5e46552645f1e7aab4eee07d4fe",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_6dcc5794e669c5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b98462eb-1428-428b-bcc2-5fb980ac9339",
+        "model": "unknown"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    },
+    "s_8aa93072b73a6b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "50fc83b7-c9fd-4cee-9aaa-b8e3131a67f9",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
