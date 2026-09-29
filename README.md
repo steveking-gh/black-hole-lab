@@ -294,11 +294,11 @@ his radio pulse.  Some of the pulse sent just outside the horizon will escape
 outward, but his next pulse just inside the horizon remains completely trapped
 and cannot return to our universe.
 
-[bob horizon 1](https://github.com/user-attachments/assets/cf6b8056-f693-4113-ac4e-6d056a30aa84)
+![bob horizon 1](https://github.com/user-attachments/assets/cf6b8056-f693-4113-ac4e-6d056a30aa84)
 
 Let's look at this same horizon crossing from the 1D+1 chart.
 
-[bob horizon 2](https://github.com/user-attachments/assets/a0dc92db-b3ac-4dfa-b37a-fbbecd4fb825)
+![bob horizon 2](https://github.com/user-attachments/assets/a0dc92db-b3ac-4dfa-b37a-fbbecd4fb825)
 
 Just as Bob crosses the horizon, his light cone tilts completely into the black
 hole.  Bob's entire future is *inside* the event horizon.  Notice the "comets"
@@ -354,11 +354,11 @@ radio pulses are equivalent to the light reflecting of Bob's feet.  The
 `EQUATORIAL PLANE` view shows Bob continuing to receive Alice's transmissions
 (triangle shaped ticks) without interruption as the move across the horizon.
 
-[Bob feet equatorial](https://github.com/user-attachments/assets/4f4046f4-51cd-4b34-97f2-5f8fa198ee34)
+![Bob feet equatorial](https://github.com/user-attachments/assets/4f4046f4-51cd-4b34-97f2-5f8fa198ee34)
 
 In Bob's 1D+1 FoR view, we likewise see him receiving Alice's transmissions.
 
-[Bob feet 1d1](https://github.com/user-attachments/assets/15223301-369c-403b-8a39-76a3f1357a47)
+![Bob feet 1d1](https://github.com/user-attachments/assets/15223301-369c-403b-8a39-76a3f1357a47)
 
 In Bob's FoR above, note the orange circle of Alice appears in Bob's past light
 cone.  Here's a zoomed-in view:
@@ -409,15 +409,15 @@ of extremely energetic photons physicists call **infinite blueshift** in both
 cases.
 
 Our understanding of the physics at the inner horizon is much less clear than at
-the outer event horizon.  In our real universe, crossing the outer horizon may
-very well be a *smooth no drama* experience.  In contrast, crossing the inner
-horizon, if even possible, would be packed with excitement and not the good
-kind.  For reference, this paper assesses the survivability of a real physical
-object crossing the Cauchy horizon with a nod to the hit movie *Interstellar*.
+the outer event horizon.  In our real universe, crossing the *outer* horizon may
+very well be a *smooth no drama* experience.  In contrast, crossing the *inner*
+horizon, if even possible, would be thrilling and not in a good way.  For
+reference, this paper assesses the survivability of a real physical object
+crossing the Cauchy horizon with a nod to the hit movie *Interstellar*.
 [Physical objects approaching the Cauchy horizon of a rapidly rotating Kerr
-black hole](https://arxiv.org/abs/1610.04355) by Mallary, Khanna, Burko, 2018.
+black hole](https://arxiv.org/abs/1610.04355) by Mallary, Khanna, Burko in 2018.
 Interestingly, the paper finds that the stress from spacetime curvature on a
-real physical object passing through the Cauchy horizon might not be
+real physical object passing through the inner horizon might not be
 catastrophic.
 
 As before, Black Hole Lab let's our Kerr metric solution to general relativity
@@ -426,29 +426,96 @@ be the only word on the physics.
 #### The *right branch* of the Inner Horizon
 
 General relativity predicts extraordinary effects as one approaches the inner
-horizon, so let's examine these cases in detail.  We'll start with an approach
-to the *right branch*.
+horizon, so let's examine some scenarios in detail.  We'll start with an
+approach to the *right branch*.
 
 If Bob enters the *outer* event horizon with enough prograde angular momentum,
 the simulation (which runs in coordinate time) shows Bob asymptotically approach
-the *right branch* of the *inner* horizon.  Letting the simulation run shows Bob
-circling forever, getting slightly closer to `r_` each trip around the inside of
-the black hole.  Not just Bob, but any light that enters the black hole at
-reasonably prograde angle will also approach the *right branch* and circle
-forever.  Here's a short video showing that Alice's radio transmissions can also
-asymptotically approach the inner horizon.
+the *right branch* of the *inner* horizon.  You can open
+demos/bob_right_branch.bhl to watch this case unfold.
 
-[bob frozen](https://github.com/user-attachments/assets/0a5fdcae-b924-4613-acc8-7a23c5191d5f)
+![bob right branch](assets/images/bob_right_branch_1.png)
 
-However, in Bob's FoR, his watch says he crosses the inner horizon quickly.
+Letting the simulation run shows Bob circling, getting slightly closer to `r_`
+as he circles around the inside of the black hole.  Eventually, the simulation
+cannot accurately track Bob as his circumstances grow more extreme. At that
+point, the simulation marks Bob as "Frozen: gliding on the r_ generator".
+
+Here's a short video showing Bob frozen (no longer accurately simulated) on r_
+while Alice's sends her radio transmissions from outside the black hole.
+
+![bob frozen](https://github.com/user-attachments/assets/0a5fdcae-b924-4613-acc8-7a23c5191d5f)
+
+Notice the simulation shows the radio waves with *three* possible paths here.
+All the rays approach from Bob's right, aka the *outward* direction and proceed
+*inward* toward the left.  Note that 'outward' and 'inward' may be improper
+terms in region II of the black hole, since *time* points radially 'inward'
+here.  We would not be wrong to say the light rays approach from their past and
+head toward their future.
+
+The first group of waves slows their radial descent as they asymptotically
+approach Bob from above.  Some rays in this group reach Bob and show a *finite*
+amount of time from the outside universe and are not wildly blueshifted in Bob's
+FoR.  These waves travel with Bob, so the relative energies are not dramatic.
+The remaining rays in this group stay above Bob forever as they approach r_.
+
+The second group of waves passes Bob and the inner horizon through the *left*
+branch, but then does not hit the ring singularity.  These waves climb back
+upward to the underside of the inner horizon in `Region III`.
+
+The third group of waves is a bit harder to see at default comet settings.
+These waves have a steep inclination and speed past Bob through the left
+branch of r_ on their way to hit the ring singularity.
+
+#### Understanding the Cause of Infinite Blueshift
+
+A case that causes a mathematical infinity in a physical theory implies the
+theory broke down and no longer describes the real physics.  For example,
+general relativity has the famous singularity of infinite density in a black
+hole.  At the inner horizon, another fascinating infinity arises that physicists
+call *infinite blueshift*. Let's have a look.
+
+In the interior region II of a black hole, recall that *time itself* points
+inward from the outer horizon `r+` "down" to the inner horizon `r_`.  In region
+II, the `r+` and `r_` horizons are not *places*, they are *moments* in the past
+and future respectively.  As Bob approaches the right branch of r_, we see his
+*inward* time-like progress asymptotically slow.  Bob makes rapid progress
+through space as he circles the r_ horizon, but ever decreasing progress through
+time.  Specifically, we're referring here to Bob's stall in *coordinate time*,
+which is equivalent to a distant clock.  We must wait for time = infinity to see
+Bob finally cross the horizon.
+
+What about Bob's frame of reference in this scenario?  Relativity insists that
+Bob's FoR is just as real and valid as that of a distant clock in the outside
+universe.  For Bob, his wristwatch naturally ticks one second per second.  He
+*cannot* locally measure a slowdown in the flow of time as if noticing himself
+in slow motion.  Indeed, let's look at Bob's FoR:
+
+![bob right branch for](assets/images/bob_right_branch_2.png)
+
+First, Bob's proper time shows him crossing the inner horizon not at time =
+infinity, but in a mere 35 *microseconds*.  The asymptotic slowdown in
+*coordinate time* does not exist in Bob's FoR.  Second, notice how the physics
+of the inner horizon crams the coordinate time lines of the outside universe
+ever tighter into the remaining area between Bob and the horizon.  In this
+snapshot, the time between those distant clock lines is measured in minutes, not
+microseconds like Bob's clock lines.  The discrepancy between Bob's time and the
+outside universe grows unbounded!
+
+We've finally set the stage to describe the *infinite blueshift*.
 
 
- However, in Bob's frame of
-reference, his own watch says he quickly passes through the inner horizon.
-Recall that when passing through the *outer* horizon, Alice watching from
-outside the black hole sees Bob taking an infinite amount of time to cross.
-However, in coordinate time *and* in Bob's proper time, he crosses the *outer*
-horizon quickly.
+
+
+
+
+
+
+
+
+
+
+
 
 
 
