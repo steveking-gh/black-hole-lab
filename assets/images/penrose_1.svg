@@ -2,9 +2,9 @@
 <!-- Created with Inkscape (http://www.inkscape.org/) -->
 
 <svg
-   width="158.121mm"
-   height="158.12097mm"
-   viewBox="0 0 158.121 158.12097"
+   width="134.60608mm"
+   height="167.60609mm"
+   viewBox="0 0 134.60608 167.60609"
    version="1.1"
    id="svg1"
    inkscape:version="1.4.4 (dcaf3e7, 2026-05-05)"
@@ -25,8 +25,8 @@
      inkscape:document-units="mm"
      showguides="true"
      inkscape:zoom="1.9964005"
-     inkscape:cx="467.09065"
-     inkscape:cy="225.90658"
+     inkscape:cx="360.39863"
+     inkscape:cy="243.93903"
      inkscape:window-width="3840"
      inkscape:window-height="2054"
      inkscape:window-x="3829"
@@ -75,29 +75,36 @@
          id="path7" />
     </marker>
     <rect
-       x="85.654156"
+       x="85.65416"
        y="441.29422"
        width="153.77676"
-       height="73.63252"
+       height="73.632523"
        id="rect1" />
     <rect
-       x="22.668214"
-       y="417.59101"
+       x="22.668215"
+       y="417.591"
        width="214.28546"
-       height="59.504062"
+       height="59.504063"
        id="rect139" />
     <rect
-       x="85.654156"
+       x="85.65416"
        y="441.29422"
        width="153.77676"
-       height="73.63252"
+       height="73.632523"
        id="rect2" />
   </defs>
   <g
      inkscape:label="Layer 1"
      inkscape:groupmode="layer"
      id="layer1"
-     transform="translate(-19.544693,-37.414832)">
+     transform="translate(-47.729651,-32.599776)">
+    <rect
+       style="fill:#ffffff;stroke:#006680;stroke-width:0.352999;stroke-linecap:round;stroke-dasharray:none;stroke-opacity:1"
+       id="rect3"
+       width="134.25308"
+       height="167.2531"
+       x="47.906151"
+       y="32.776276" />
     <g
        id="g56"
        transform="matrix(1.0132058,0,0,1.0132058,33.089867,-1.2695885)"
@@ -774,7 +781,7 @@
        xml:space="preserve"
        transform="matrix(0.26458333,0,0,0.26458333,112.86185,24.89791)"
        id="text1"
-       style="font-size:17.3333px;font-family:'Atkinson Hyperlegible';-inkscape-font-specification:'Atkinson Hyperlegible';writing-mode:lr-tb;direction:ltr;white-space:pre;shape-inside:url(#rect1);fill:#ff5555;stroke:none;stroke-width:1.33333;stroke-linecap:round"><tspan
+       style="font-size:17.3333px;font-family:'Atkinson Hyperlegible';-inkscape-font-specification:'Atkinson Hyperlegible';writing-mode:lr-tb;direction:ltr;white-space:pre;shape-inside:url(#rect1);display:inline;fill:#ff5555;stroke:none;stroke-width:1.33333;stroke-linecap:round"><tspan
          x="85.654297"
          y="456.74113"
          id="tspan3">High Angular </tspan><tspan
@@ -785,7 +792,7 @@
        xml:space="preserve"
        transform="matrix(0.26458333,0,0,0.26458333,84.507155,32.436484)"
        id="text2"
-       style="font-size:17.3333px;font-family:'Atkinson Hyperlegible';-inkscape-font-specification:'Atkinson Hyperlegible';writing-mode:lr-tb;direction:ltr;white-space:pre;shape-inside:url(#rect2);fill:#006680;stroke:none;stroke-width:1.33333;stroke-linecap:round"><tspan
+       style="font-size:17.3333px;font-family:'Atkinson Hyperlegible';-inkscape-font-specification:'Atkinson Hyperlegible';writing-mode:lr-tb;direction:ltr;white-space:pre;shape-inside:url(#rect2);display:inline;fill:#006680;stroke:none;stroke-width:1.33333;stroke-linecap:round"><tspan
          x="85.654297"
          y="456.74113"
          id="tspan5">Low Angular </tspan><tspan

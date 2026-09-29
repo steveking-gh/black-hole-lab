@@ -2,9 +2,9 @@
 <!-- Created with Inkscape (http://www.inkscape.org/) -->
 
 <svg
-   width="158.121mm"
-   height="158.12097mm"
-   viewBox="0 0 158.121 158.12097"
+   width="134.60608mm"
+   height="167.60609mm"
+   viewBox="0 0 134.60608 167.60609"
    version="1.1"
    id="svg1"
    xmlns="http://www.w3.org/2000/svg"
@@ -44,27 +44,34 @@
          id="path7" />
     </marker>
     <rect
-       x="85.654156"
+       x="85.65416"
        y="441.29422"
        width="153.77676"
-       height="73.63252"
+       height="73.632523"
        id="rect1" />
     <rect
-       x="22.668214"
-       y="417.59101"
+       x="22.668215"
+       y="417.591"
        width="214.28546"
-       height="59.504062"
+       height="59.504063"
        id="rect139" />
     <rect
-       x="85.654156"
+       x="85.65416"
        y="441.29422"
        width="153.77676"
-       height="73.63252"
+       height="73.632523"
        id="rect2" />
   </defs>
   <g
      id="layer1"
-     transform="translate(-19.544693,-37.414832)">
+     transform="translate(-47.729651,-32.599776)">
+    <rect
+       style="fill:#ffffff;stroke:#006680;stroke-width:0.352999;stroke-linecap:round;stroke-dasharray:none;stroke-opacity:1"
+       id="rect3"
+       width="134.25308"
+       height="167.2531"
+       x="47.906151"
+       y="32.776276" />
     <g
        id="g56"
        transform="matrix(1.0132058,0,0,1.0132058,33.089867,-1.2695885)"
