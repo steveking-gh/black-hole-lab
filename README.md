@@ -294,11 +294,11 @@ his radio pulse.  Some of the pulse sent just outside the horizon will escape
 outward, but his next pulse just inside the horizon remains completely trapped
 and cannot return to our universe.
 
-![bob horizon 1](https://github.com/user-attachments/assets/cf6b8056-f693-4113-ac4e-6d056a30aa84)
+[bob horizon 1](https://github.com/user-attachments/assets/cf6b8056-f693-4113-ac4e-6d056a30aa84)
 
 Let's look at this same horizon crossing from the 1D+1 chart.
 
-![bob horizon 2](https://github.com/user-attachments/assets/a0dc92db-b3ac-4dfa-b37a-fbbecd4fb825)
+[bob horizon 2](https://github.com/user-attachments/assets/a0dc92db-b3ac-4dfa-b37a-fbbecd4fb825)
 
 Just as Bob crosses the horizon, his light cone tilts completely into the black
 hole.  Bob's entire future is *inside* the event horizon.  Notice the "comets"
@@ -354,11 +354,11 @@ radio pulses are equivalent to the light reflecting of Bob's feet.  The
 `EQUATORIAL PLANE` view shows Bob continuing to receive Alice's transmissions
 (triangle shaped ticks) without interruption as the move across the horizon.
 
-![Bob feet equatorial](https://github.com/user-attachments/assets/4f4046f4-51cd-4b34-97f2-5f8fa198ee34)
+[Bob feet equatorial](https://github.com/user-attachments/assets/4f4046f4-51cd-4b34-97f2-5f8fa198ee34)
 
 In Bob's 1D+1 FoR view, we likewise see him receiving Alice's transmissions.
 
-![Bob feet 1d1](https://github.com/user-attachments/assets/15223301-369c-403b-8a39-76a3f1357a47)
+[Bob feet 1d1](https://github.com/user-attachments/assets/15223301-369c-403b-8a39-76a3f1357a47)
 
 In Bob's FoR above, note the orange circle of Alice appears in Bob's past light
 cone.  Here's a zoomed-in view:
@@ -444,7 +444,7 @@ point, the simulation marks Bob as "Frozen: gliding on the r_ generator".
 Here's a short video showing Bob frozen (no longer accurately simulated) on r_
 while Alice's sends her radio transmissions from outside the black hole.
 
-![bob frozen](https://github.com/user-attachments/assets/0a5fdcae-b924-4613-acc8-7a23c5191d5f)
+[bob frozen](https://github.com/user-attachments/assets/0a5fdcae-b924-4613-acc8-7a23c5191d5f)
 
 Notice the simulation shows the radio waves with *three* possible paths here.
 All the rays approach from Bob's right, aka the *outward* direction and proceed
