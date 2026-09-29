@@ -86,9 +86,23 @@ pub(crate) fn rad_per_second(per_s: f64) -> String {
     style().si_signed(per_s, "rad/s", 4, Prefixes::Small)
 }
 
-/// A frequency in hertz at four significant digits under an SI prefix, pico to tera.
+/// A frequency in hertz at four significant digits under an SI prefix, pico to tera. Below a
+/// hertz the unit is spelled out - 489.0 millihertz, 4.200 microhertz - since a lower-case `m`
+/// beside an upper-case `M` is one letter's case from a factor of a billion.
 pub(crate) fn hertz(hz: f64) -> String {
-    style().si(hz, "Hz", 4, Prefixes::All)
+    const SPELLED: [(&str, &str); 4] = [
+        (" mHz", " millihertz"),
+        (" µHz", " microhertz"),
+        (" nHz", " nanohertz"),
+        (" pHz", " picohertz"),
+    ];
+    let text = style().si(hz, "Hz", 4, Prefixes::All);
+    for (short, long) in SPELLED {
+        if let Some(number) = text.strip_suffix(short) {
+            return format!("{number}{long}");
+        }
+    }
+    text
 }
 
 /// Fixed prose written in point style - a hover tip, the theory window, a preset's name - in the

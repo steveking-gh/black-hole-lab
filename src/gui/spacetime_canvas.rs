@@ -4625,7 +4625,7 @@ pub(crate) fn wave_crests(
     }
 }
 
-/// A frequency in hertz with the usual SI prefix, at four significant digits: 489.0 mHz,
+/// A frequency in hertz with the usual SI prefix, at four significant digits: 489.0 millihertz,
 /// 12.35 Hz, 1.095 kHz, 136.2 MHz. Below a picohertz or above a terahertz it falls back to
 /// scientific notation, and anything that is not a finite positive number is "n/a".
 pub(crate) fn format_frequency(hz: f64) -> String {
@@ -6282,21 +6282,21 @@ mod canvas_tests {
     #[test]
     fn test_a_frequency_is_printed_with_its_si_prefix_at_four_significant_digits() {
         for (hz, want) in [
-            (0.489, "489.0 mHz"),
+            (0.489, "489.0 millihertz"),
             (12.345, "12.35 Hz"),
             (1095.4, "1.095 kHz"),
             (136_150.846, "136.2 kHz"),
             (2.5e6, "2.500 MHz"),
             (7.77e10, "77.70 GHz"),
             (3.0e12, "3.000 THz"),
-            (4.2e-6, "4.200 µHz"),
+            (4.2e-6, "4.200 microhertz"),
             (999.96, "1.000 kHz"),
         ] {
             assert_eq!(format_frequency(hz), want, "{hz} Hz");
         }
         assert_eq!(format_frequency(0.0), "n/a");
         assert_eq!(format_frequency(f64::NAN), "n/a");
-        assert_eq!(format_frequency(1e-9), "1.000 nHz");
+        assert_eq!(format_frequency(1e-9), "1.000 nanohertz");
         assert_eq!(format_frequency(1e-15), "1.000e-15 Hz");
     }
 
@@ -6376,8 +6376,9 @@ mod canvas_tests {
             let mut parts = line.trim_start_matches(label).split_whitespace();
             let number: f64 = parts.next().and_then(|n| n.parse().ok()).unwrap_or_else(|| panic!("a number on {line:?}"));
             let scale = match parts.next() {
-                Some("µHz") => 1e-6,
-                Some("mHz") => 1e-3,
+                Some("nanohertz") => 1e-9,
+                Some("microhertz") => 1e-6,
+                Some("millihertz") => 1e-3,
                 Some("Hz") => 1.0,
                 Some("kHz") => 1e3,
                 Some("MHz") => 1e6,
