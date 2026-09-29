@@ -1,0 +1,19 @@
+assets/images/penrose_1_plain_no_text.svg
+  s_6dcc5794e669c5::t_c6795b7c3d959d 5-7,47,50,53-54,56,59,62,67-74
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "dca830711ffcc34a950892fc1028b82e6454dce2",
+  "prompts": {},
+  "sessions": {
+    "s_6dcc5794e669c5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b98462eb-1428-428b-bcc2-5fb980ac9339",
+        "model": "unknown"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
