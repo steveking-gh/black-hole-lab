@@ -399,14 +399,14 @@ The inner horizon has two *branches*, so to speak, which we'll call *left* and
 inspiration from the [Penrose](https://en.wikipedia.org/wiki/Penrose_diagram)
 diagram for a rotating black hole:
 
-<img src="./assets/images/penrose_1_plain_no_text.svg" width="400">
+<img src="./assets/images/penrose_1_plain_no_text.svg" width="600">
 
-If you have high angular momentum, you'll encounter the *right* branch
-where the inner horizon profoundly compresses incoming time.  With low angular
-momentum, you fall through the *left* branch of the horizon.  The two branches
-result in quite different fates!  Unfortunately, you would probably be fried in
-a bath of extremely energetic photons physicists call **infinite blueshift** in
-both cases.
+If you have high angular momentum, you'll encounter the *right* branch where the
+inner horizon profoundly compresses incoming time.  With low angular momentum,
+you fall through the *left* branch of the horizon.  The different branches
+result in different fates!  Unfortunately, you would probably be fried in a bath
+of extremely energetic photons physicists call **infinite blueshift** in both
+cases.
 
 Our understanding of the physics at the inner horizon is much less clear than at
 the outer event horizon.  In our real universe, crossing the outer horizon may

@@ -25,22 +25,73 @@
      inkscape:document-units="mm"
      showguides="true"
      inkscape:zoom="1.9964005"
-     inkscape:cx="242.68678"
-     inkscape:cy="422.25996"
+     inkscape:cx="467.09065"
+     inkscape:cy="225.90658"
      inkscape:window-width="3840"
      inkscape:window-height="2054"
      inkscape:window-x="3829"
      inkscape:window-y="-11"
      inkscape:window-maximized="1"
-     inkscape:current-layer="layer1" />
+     inkscape:current-layer="layer1"
+     showgrid="false" />
   <defs
      id="defs1">
+    <marker
+       style="overflow:visible"
+       id="marker3"
+       refX="0"
+       refY="0"
+       orient="auto-start-reverse"
+       inkscape:stockid="Concave triangle arrow"
+       markerWidth="1"
+       markerHeight="1"
+       viewBox="0 0 1 1"
+       inkscape:isstock="true"
+       inkscape:collect="always"
+       preserveAspectRatio="xMidYMid">
+      <path
+         transform="scale(0.7)"
+         d="M -2,-4 9,0 -2,4 c 2,-2.33 2,-5.66 0,-8 z"
+         style="fill:context-stroke;fill-rule:evenodd;stroke:none"
+         id="path3" />
+    </marker>
+    <marker
+       style="overflow:visible"
+       id="ConcaveTriangle"
+       refX="0"
+       refY="0"
+       orient="auto-start-reverse"
+       inkscape:stockid="Concave triangle arrow"
+       markerWidth="1"
+       markerHeight="1"
+       viewBox="0 0 1 1"
+       inkscape:isstock="true"
+       inkscape:collect="always"
+       preserveAspectRatio="xMidYMid">
+      <path
+         transform="scale(0.7)"
+         d="M -2,-4 9,0 -2,4 c 2,-2.33 2,-5.66 0,-8 z"
+         style="fill:context-stroke;fill-rule:evenodd;stroke:none"
+         id="path7" />
+    </marker>
+    <rect
+       x="85.654156"
+       y="441.29422"
+       width="153.77676"
+       height="73.63252"
+       id="rect1" />
     <rect
        x="22.668214"
        y="417.59101"
        width="214.28546"
        height="59.504062"
        id="rect139" />
+    <rect
+       x="85.654156"
+       y="441.29422"
+       width="153.77676"
+       height="73.63252"
+       id="rect2" />
   </defs>
   <g
      inkscape:label="Layer 1"
@@ -617,18 +668,18 @@
     <text
        xml:space="preserve"
        style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.58611px;font-family:'Atkinson Hyperlegible';-inkscape-font-specification:'Atkinson Hyperlegible';text-align:center;writing-mode:lr-tb;direction:ltr;text-anchor:middle;white-space:pre;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.352777;stroke-linecap:round"
-       x="137.25366"
-       y="157.29303"
+       x="137.81354"
+       y="169.02522"
        id="text142"><tspan
          sodipodi:role="line"
          style="font-size:4.58611px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.352778"
-         x="124.29332"
-         y="157.29303"
+         x="137.81354"
+         y="169.02522"
          id="tspan143">Our Universe</tspan><tspan
          sodipodi:role="line"
          style="font-size:4.58611px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.352778"
-         x="124.29332"
-         y="163.02567"
+         x="137.81354"
+         y="174.75786"
          id="tspan145">Region I</tspan></text>
     <text
        xml:space="preserve"
@@ -714,5 +765,37 @@
          x="128.85979"
          y="-10.535792"
          id="tspan155">Inner Horizon - Right</tspan></text>
+    <path
+       style="fill:none;stroke:#ff5555;stroke-width:0.353;stroke-linecap:round;stroke-dasharray:none;marker-end:url(#ConcaveTriangle)"
+       d="M 133.52065,145.42693 C 125.1043,136.53245 118.05867,110.06838 121.26161,85.821482"
+       id="path1"
+       sodipodi:nodetypes="cc" />
+    <text
+       xml:space="preserve"
+       transform="matrix(0.26458333,0,0,0.26458333,112.86185,24.89791)"
+       id="text1"
+       style="font-size:17.3333px;font-family:'Atkinson Hyperlegible';-inkscape-font-specification:'Atkinson Hyperlegible';writing-mode:lr-tb;direction:ltr;white-space:pre;shape-inside:url(#rect1);fill:#ff5555;stroke:none;stroke-width:1.33333;stroke-linecap:round"><tspan
+         x="85.654297"
+         y="456.74113"
+         id="tspan3">High Angular </tspan><tspan
+         x="85.654297"
+         y="478.40775"
+         id="tspan4">Momentum</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(0.26458333,0,0,0.26458333,84.507155,32.436484)"
+       id="text2"
+       style="font-size:17.3333px;font-family:'Atkinson Hyperlegible';-inkscape-font-specification:'Atkinson Hyperlegible';writing-mode:lr-tb;direction:ltr;white-space:pre;shape-inside:url(#rect2);fill:#006680;stroke:none;stroke-width:1.33333;stroke-linecap:round"><tspan
+         x="85.654297"
+         y="456.74113"
+         id="tspan5">Low Angular </tspan><tspan
+         x="85.654297"
+         y="478.40775"
+         id="tspan6">Momentum</tspan></text>
+    <path
+       style="fill:none;stroke:#006680;stroke-width:0.352999;stroke-linecap:round;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#marker3)"
+       d="M 118.35065,148.56242 C 72.080787,122.03274 74.147131,85.788351 74.147131,85.788351"
+       id="path2"
+       sodipodi:nodetypes="cc" />
   </g>
 </svg>
