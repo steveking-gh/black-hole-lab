@@ -114,29 +114,17 @@ fn renderer_work() -> Vec<&'static str> {
     }
 }
 
-/// What a real renderer says on a run that works, near enough: two marks of directions of travel
-/// among the rest, one before the line on the read-outs and one after the counts, to show that
-/// the order of the sentences is this program's and not the renderer's.
-const RENDERER_SAYS: [&str; 11] = [
+/// What a real renderer says on a run that works, near enough, with lines this program passes
+/// over among the ones it reads.
+const RENDERER_SAYS: [&str; 8] = [
     "progress 15%",
     "progress 65%",
-    "mark: a ring in green at 37.25 degrees right of the opening view and 0 degrees up: Direction of travel past the static observer",
-    "read-outs: 6 line(s) on a panel inside the dark region, centred 180 degrees right of the opening view and -20 degrees up, each line 2 degrees high",
     "map C:\\maps\\starmap_2020_8k_gal.exr: 8192 x 4096 galactic, read in 0.6 s",
     "frame 0 (1/1), 1.00 frames/s, 0:00 left",
     "progress 100%",
     "wrote view.jpg (7.3 MB), a JPEG marked as a 360-degree photograph, in 0.4 s",
     "pixels drawn over the 1 frame(s): unresolved 0 (0 %), under-sampled 16888 (0.0503 %), dark 20422816 (60.9 %)",
-    "mark: a diamond in green at -141.6 degrees right of the opening view and 8.4 degrees up: Direction of travel past the ZAMO",
     "A published video made from NASA's star maps must carry this credit:",
-];
-
-/// What this program says of the two marks in [`RENDERER_SAYS`], in order.
-const MARKS_SAID: [&str; 2] = [
-    "A green ring marks the direction of travel past the static observer, 37 degrees right of the \
-     opening view.",
-    "A green diamond marks the direction of travel past the ZAMO, 142 degrees left of the opening \
-     view and 8 degrees up.",
 ];
 
 /// The tracer's sentence for an observer inside the inner horizon, as it prints it.
@@ -200,6 +188,7 @@ impl Case {
                 render: program("sky-render"),
                 ffmpeg: "ffmpeg.exe".into(),
             },
+            prompt: prompt_stand_in,
         }
     }
 
@@ -280,6 +269,15 @@ impl Drop for Case {
     }
 }
 
+/// The file the stand-in for the command prompt leaves where it was started.
+const PROMPT_MARK: &str = "prompt-started-here";
+
+/// What `--shell` starts instead of a command prompt: a file in the directory the prompt would have
+/// started in, so that a test can see where that is without a prompt opening on the desktop.
+fn prompt_stand_in(dir: &Path) -> std::io::Result<()> {
+    std::fs::write(dir.join(PROMPT_MARK), b"")
+}
+
 const SAVE: &str = r#"{"format":"black-hole-lab-save","version":1,"sim":{"bob":{"name":"Bob","tau":1.5}},"controls":{"decimal_is_comma":false}}"#;
 
 /// The save's bytes and modification time, to show it was not touched.
@@ -348,10 +346,10 @@ fn test_a_view_that_is_made_is_a_folder_holding_everything_and_ends_with_the_pho
     let (last, progress) = lines.split_last().expect("some output");
     assert_sentences(progress);
     let folder = case.folder();
-    assert_eq!(
-        progress[0],
-        format!("Making Bob's view in {}.", folder.display()),
-        "{out}"
+    assert!(
+        progress[0].starts_with(&format!("Making Bob's view in {}, at ", folder.display()))
+            && progress[0].ends_with(" UTC."),
+        "the folder, and when: {out}"
     );
     assert!(
         progress[1].starts_with("Tracing the light that reaches Bob from every direction"),
@@ -377,27 +375,6 @@ fn test_a_view_that_is_made_is_a_folder_holding_everything_and_ends_with_the_pho
         "the red is explained: {out}"
     );
 
-    // Where the read-outs went, then where each mark is, then the red, in sentences of this
-    // program's own and one after another.
-    let at = |sentence: &str| {
-        progress
-            .iter()
-            .position(|l| *l == sentence)
-            .unwrap_or_else(|| panic!("{sentence:?} is not said: {out}"))
-    };
-    let readouts = at(
-        "The read-outs are written inside the dark region of the hole, 180 degrees \
-                       right of the opening view and 20 degrees down.",
-    );
-    let red = progress
-        .iter()
-        .position(|l| l.starts_with("16888 pixels"))
-        .expect("the red is explained");
-    assert_eq!(
-        [at(MARKS_SAID[0]), at(MARKS_SAID[1]), red],
-        [readouts + 1, readouts + 2, readouts + 3],
-        "{out}"
-    );
     assert!(
         progress.iter().any(
             |l| l.starts_with("Made Bob's view in ") && l.ends_with("a 360-degree photograph.")
@@ -417,7 +394,7 @@ fn test_a_view_that_is_made_is_a_folder_holding_everything_and_ends_with_the_pho
         .expect("a name")
         .to_string_lossy()
         .into_owned();
-    assert!(name.ends_with(" UTC Bob at tau 1.500 M"), "{name}");
+    assert_eq!(name, "Bob_1.500", "the observer and the watch's reading");
     assert_eq!(
         std::fs::read_to_string(&photo)
             .expect("the photograph")
@@ -637,7 +614,7 @@ fn test_a_failure_of_the_renderer_comes_through_as_code_1_and_leaves_the_folder_
     let case = Case::new("render-fails", SAVE);
     case.tracer(&[Step::Exit(0)]);
     case.renderer(&[
-        Step::Say("read-outs: 3 line(s)"),
+        Step::Say("progress 10%"),
         Step::Complain(
             "sky-render: ffmpeg stopped while writing the photograph: There is not enough space \
              on the disk",
@@ -775,14 +752,10 @@ fn test_a_save_set_to_the_decimal_comma_gets_comma_read_outs_and_names() {
         out.lines()
             .last()
             .expect("a path")
-            .ends_with("Bob at tau 1,500 M.jpg"),
+            .ends_with("Bob_1,500.jpg"),
         "{out}"
     );
     assert!(out.contains("(0,0503 % of the picture)"), "{out}");
-    // The marks' angles are whole degrees, which no decimal mark touches.
-    for said in MARKS_SAID {
-        assert!(out.contains(said), "{said}: {out}");
-    }
 }
 
 #[test]
@@ -847,13 +820,123 @@ fn test_open_starts_the_named_viewer_on_the_photograph_and_names_the_program() {
         assert!(std::time::Instant::now() < deadline, "the viewer never ran");
         std::thread::sleep(std::time::Duration::from_millis(10));
     };
-    // The option, then the photograph's path as one argument. The standard library quotes every
-    // argument it hands a batch file, which is what the stand-in is on Windows; a program such as
-    // VLC reads the quotes away.
+    // The option, then the photograph's path as one argument. The standard library quotes an
+    // argument it hands a batch file, which is what the stand-in is on Windows, when the argument
+    // holds anything a batch file could misread: the option's `=` always, the path only when it
+    // has a space (the test's scratch directory has none, and a view's name has none). A program
+    // such as VLC reads the quotes away.
+    let path = if last.contains(' ') {
+        format!("\"{last}\"")
+    } else {
+        last.to_string()
+    };
     let expected = if cfg!(windows) {
-        format!("\"--image-duration=-1\" \"{last}\"")
+        format!("\"--image-duration=-1\" {path}")
     } else {
         format!("--image-duration=-1 {last}")
     };
     assert_eq!(given.trim(), expected);
+}
+
+#[test]
+fn test_the_rendering_terminal_shows_the_commands_and_the_programs_own_output_and_nothing_else() {
+    let case = Case::new("terminal", SAVE);
+    case.tracer(&tracing_steps());
+    case.renderer(&rendering_steps());
+    let status = case.status.display().to_string();
+    let (code, out, err) = case.run(&["--status", &status, "--shell"]);
+    assert_eq!(
+        code, 0,
+        "out: {out}
+err: {err}"
+    );
+
+    // Standard output: each command, then what that program printed, line for line as it printed
+    // it; and standard error: what the tracer printed there. Nothing of sky-look's own.
+    let lines: Vec<&str> = out.lines().collect();
+    let tracer_said = [
+        "progress 1%",
+        "progress 50%",
+        "progress 52%",
+        "frame 1 of 1: 0.14 frames a second, about 0 s left, 0 unresolved rays so far",
+        "progress 100%",
+    ];
+    assert!(
+        lines[0].starts_with("& ") && lines[0].contains("sky-trace"),
+        "{out}"
+    );
+    assert_eq!(lines[1..=tracer_said.len()], tracer_said, "{out}");
+    let render = &lines[tracer_said.len() + 1..];
+    assert!(
+        render[0].starts_with("& ") && render[0].contains("sky-render"),
+        "{out}"
+    );
+    assert_eq!(render[1..], RENDERER_SAYS, "{out}");
+    assert_eq!(
+        err.lines().collect::<Vec<_>>(),
+        ["a warning the tracer printed"]
+    );
+
+    // The sentences, the percentages among them, still reach the status file and the log, and
+    // the verdict ends both.
+    let said = case.status_lines();
+    assert!(
+        said.iter()
+            .any(|l| l == "Tracing the light that reaches Bob: 50%."),
+        "{said:?}"
+    );
+    assert!(
+        said.iter().any(|l| l == "Rendering Bob's view: 65%."),
+        "{said:?}"
+    );
+    assert!(
+        said.iter().any(|l| l.starts_with("Made Bob's view in ")),
+        "{said:?}"
+    );
+    assert!(
+        said.last().is_some_and(|l| l.starts_with("done ")),
+        "{said:?}"
+    );
+    let folder = case.folder();
+    assert_eq!(
+        std::fs::read_to_string(folder.join(LOG_FILE)).expect("the log"),
+        std::fs::read_to_string(&case.status).expect("the status file")
+    );
+    // And the prompt starts in the view's folder, once the verdict is written.
+    assert!(
+        folder.join(PROMPT_MARK).is_file(),
+        "the prompt starts in the folder"
+    );
+}
+
+#[test]
+fn test_a_failure_in_the_rendering_terminal_is_the_programs_own_words_there_and_the_verdict_elsewhere()
+ {
+    let case = Case::new("terminal-fails", SAVE);
+    case.tracer(&[Step::Exit(0)]);
+    let complaint = "sky-render: ffmpeg stopped while writing the photograph";
+    case.renderer(&[Step::Complain(complaint), Step::Exit(1)]);
+    let status = case.status.display().to_string();
+    let (code, out, err) = case.run(&["--status", &status, "--shell"]);
+    assert_eq!(code, 1, "the exit code is the same");
+    assert_eq!(
+        err.lines().collect::<Vec<_>>(),
+        [complaint],
+        "the renderer's line alone"
+    );
+    assert!(
+        out.lines().all(|l| l.starts_with("& ")),
+        "the commands alone: {out}"
+    );
+    assert!(
+        case.status_lines()
+            .last()
+            .is_some_and(|l| l.starts_with("failed sky-render could not make Bob's view")),
+        "{:?}",
+        case.status_lines()
+    );
+    assert!(
+        case.folder().join(PROMPT_MARK).is_file(),
+        "a prompt all the same"
+    );
 }

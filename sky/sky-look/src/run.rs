@@ -44,9 +44,10 @@ pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 pub const PHOTO_SIZE: (u64, u64) = (8192, 4096);
 
 /// The least rise in a child's percentage that is passed on as a sentence. The tracer and the
-/// renderer each print every whole percent; a sentence every five is a line about every half
-/// second on the owner's machine, which is as often as anybody reads a progress line, and twenty
-/// lines a program rather than a hundred in the rendering terminal.
+/// renderer, run without `--verbose` as this program runs them, print their percentage every ten
+/// points, and every one of those is passed on; the step is five and not ten so that a child run
+/// by hand with `--verbose`, printing every point, is still passed on at no more than twenty lines,
+/// about one every half second on the owner's machine.
 const PERCENT_STEP: u32 = 5;
 
 /// The file in the view's folder that holds the commands this program ran.
@@ -84,6 +85,9 @@ pub struct Environment {
     pub videos: Option<PathBuf>,
     pub home: Option<PathBuf>,
     pub names: Names,
+    /// Starts the command prompt `--shell` leaves in the view's folder: `shell::start`, which a
+    /// test replaces so that no prompt opens on the desktop of whoever runs the tests.
+    pub prompt: fn(&Path) -> std::io::Result<()>,
 }
 
 impl Environment {
@@ -103,6 +107,7 @@ impl Environment {
             videos: names::videos_folder(home.as_deref()),
             home,
             names: Names::native(),
+            prompt: shell::start,
         }
     }
 }
@@ -139,16 +144,35 @@ impl Failure {
     }
 }
 
-/// Writes progress: one line at a time, flushed after each, to standard output, to the status
-/// file when `--status` names one, and to `log.txt` in the view's folder once there is a folder -
-/// with every line said before then written there first, so the log is the whole run.
+/// Where everything a run says goes: its sentences of progress, its verdict, the commands it runs
+/// and what those programs print.
 ///
-/// A line goes to the status file in one write of the whole line and its line feed, so that the
-/// app, which reads the file while it grows, finds either the whole line or none of it in all but
-/// the rarest case, and waits for the line feed in that one. None of the three is a reason to stop
-/// if it goes away: the app stops this program when it wants it stopped.
+/// Every sentence and the verdict go to the status file when `--status` names one, and to
+/// `log.txt` in the view's folder once there is a folder - with every line said before then
+/// written there first, so the log is the whole run. A line goes to the status file in one write of
+/// the whole line and its line feed, so that the app, which reads the file while it grows, finds
+/// either the whole line or none of it in all but the rarest case, and waits for the line feed in
+/// that one.
+///
+/// What reaches the console depends on who is watching it:
+///
+/// - At a terminal, with no `--shell`: the sentences, each command just before it runs, and at the
+///   end the photograph's path on standard output, or the failure's sentence on standard error.
+///   This program is the whole of what the person asked for, and speaks for the programs it runs.
+/// - In the rendering terminal (`--shell`): each command, and then what that program prints,
+///   standard output and standard error alike, byte for byte as it arrives, and nothing of this
+///   program's own. The person who ticked Show Rendering Terminal asked to watch the tools at work;
+///   the app's card already carries the sentences, and the same sentences again between the
+///   programs' own lines would be the same story told twice in two voices. The terminal is the
+///   place to see exactly what `sky-trace` and `sky-render` said, which the sentences leave out.
+///
+/// None of these is a reason to stop if it goes away: the app stops this program when it wants it
+/// stopped.
 pub struct Say<'a> {
     out: &'a mut dyn Write,
+    err: &'a mut dyn Write,
+    /// Whether this is the rendering terminal (`--shell`).
+    terminal: bool,
     status: Option<File>,
     log: Option<File>,
     /// Every line written to the status file so far, for `log.txt` when the folder is made.
@@ -158,9 +182,14 @@ pub struct Say<'a> {
 }
 
 impl<'a> Say<'a> {
-    /// Progress to `out`, and to the file at `status` too when there is one: opened to append, and
-    /// made if it is not there.
-    pub fn new(out: &'a mut dyn Write, status: Option<&Path>) -> std::io::Result<Self> {
+    /// Progress for the console `out` and `err`, as `terminal` decides, and for the file at
+    /// `status` too when there is one: opened to append, and made if it is not there.
+    pub fn new(
+        out: &'a mut dyn Write,
+        err: &'a mut dyn Write,
+        terminal: bool,
+        status: Option<&Path>,
+    ) -> std::io::Result<Self> {
         let status = match status {
             Some(path) => Some(
                 std::fs::OpenOptions::new()
@@ -172,6 +201,8 @@ impl<'a> Say<'a> {
         };
         Ok(Self {
             out,
+            err,
+            terminal,
             status,
             log: None,
             said: Vec::new(),
@@ -179,17 +210,50 @@ impl<'a> Say<'a> {
         })
     }
 
-    /// A sentence of progress, everywhere progress goes.
+    /// A sentence of progress: the status file and the log, and standard output unless this is the
+    /// rendering terminal.
     pub fn line(&mut self, line: &str) {
-        self.console(line);
+        if !self.terminal {
+            write_line(self.out, line);
+        }
         self.record(line);
     }
 
-    /// A line for standard output alone: a command, or the photograph's path at the end, which are
-    /// for a person or a script at a terminal and are not sentences of progress.
-    pub fn console(&mut self, line: &str) {
-        let _ = writeln!(self.out, "{line}");
-        let _ = self.out.flush();
+    /// A command about to be run, on standard output wherever the console is.
+    pub fn command(&mut self, line: &str) {
+        write_line(self.out, line);
+    }
+
+    /// The photograph's path, the last line of standard output of a run at a terminal; nothing in
+    /// the rendering terminal.
+    pub fn result(&mut self, path: &str) {
+        if !self.terminal {
+            write_line(self.out, path);
+        }
+    }
+
+    /// A failure's sentence, on standard error at a terminal; nothing in the rendering terminal,
+    /// where the program that failed has said why in its own words above.
+    pub fn complain(&mut self, sentence: &str) {
+        if !self.terminal {
+            write_line(self.err, sentence);
+        }
+    }
+
+    /// A line a child printed: passed through as it came, to this program's standard output or
+    /// error as the child printed it, in the rendering terminal and nowhere else; and handed back,
+    /// when it was standard output, as the text this program reads its percentages and its
+    /// read-out, mark and tally lines from - which it does the same way wherever the console is.
+    fn echo<'l>(&mut self, heard: Heard<'l>) -> Option<&'l str> {
+        let (to, raw, line) = match heard {
+            Heard::Out { raw, line } => (&mut *self.out, raw, Some(line)),
+            Heard::Err { raw } => (&mut *self.err, raw, None),
+        };
+        if self.terminal {
+            let _ = to.write_all(raw);
+            let _ = to.flush();
+        }
+        line
     }
 
     /// The last line of the status file and the log: `word`, a space, and `text` on one line.
@@ -226,9 +290,17 @@ impl<'a> Say<'a> {
     }
 }
 
+/// `line` and a line feed on `to`, flushed.
+fn write_line(to: &mut dyn Write, line: &str) {
+    let _ = writeln!(to, "{line}");
+    let _ = to.flush();
+}
+
 /// The program: parses `args`, runs, writes progress and the photograph's path to `out` and a
-/// failure's one sentence to `err`, writes the verdict to the status file, starts the prompt that
-/// `--shell` asks for, and returns the exit code. Nothing reaches `err` on a run that succeeds.
+/// failure's one sentence to `err` (or, in the rendering terminal, the commands and the programs'
+/// own output: see [`Say`]), writes the verdict to the status file, starts the prompt that
+/// `--shell` asks for, and returns the exit code. Nothing of this program's reaches `err` on a run
+/// that succeeds.
 pub fn cli(args: &[OsString], env: &Environment, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     let options = match args::parse(args) {
         Ok(Request::Help) => {
@@ -241,7 +313,12 @@ pub fn cli(args: &[OsString], env: &Environment, out: &mut dyn Write, err: &mut 
             // A command line that names a status file still gets its verdict there, so that the
             // app shows this sentence rather than a program that stopped without saying why.
             if let Some(path) = args::status_named(args)
-                && let Ok(mut say) = Say::new(&mut std::io::sink(), Some(&path))
+                && let Ok(mut say) = Say::new(
+                    &mut std::io::sink(),
+                    &mut std::io::sink(),
+                    false,
+                    Some(&path),
+                )
             {
                 say.verdict("failed", &sentence);
             }
@@ -249,9 +326,11 @@ pub fn cli(args: &[OsString], env: &Environment, out: &mut dyn Write, err: &mut 
             return 1;
         }
     };
-    let mut say = match Say::new(out, options.status.as_deref()) {
+    let mut say = match Say::new(out, err, options.shell, options.status.as_deref()) {
         Ok(say) => say,
         Err(e) => {
+            // Said on standard error even in the rendering terminal: with no status file, the
+            // console is the only place left to say it.
             let _ = writeln!(
                 err,
                 "Could not open the status file {} ({e}); name a file in a directory that can be \
@@ -266,35 +345,27 @@ pub fn cli(args: &[OsString], env: &Environment, out: &mut dyn Write, err: &mut 
             let path = photo.display().to_string();
             say.verdict("done", &path);
             // The contract's last line of standard output: the full path, and nothing else on it.
-            say.console(&path);
+            say.result(&path);
             0
         }
         Err(failure) => {
             say.verdict(failure.word(), failure.sentence());
-            let _ = writeln!(err, "{}", one_line(failure.sentence()));
-            let _ = err.flush();
+            say.complain(&one_line(failure.sentence()));
             failure.code()
         }
     };
     if options.shell {
-        // After the verdict, so that the app has its answer before the prompt starts, and on the
-        // console alone, since the sentence is about this window. With no folder - the run
-        // stopped before one was made - the prompt starts where this program was started.
+        // After the verdict, so that the app has its answer before the prompt starts. With no
+        // folder - the run stopped before one was made - the prompt starts where this program was
+        // started. Nothing is said of it: the prompt, showing the folder, says it for itself, and
+        // a prompt that will not start leaves nothing attached to keep the window open to read a
+        // sentence in.
         let dir = say
             .folder()
             .map(Path::to_path_buf)
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("."));
-        match shell::start(&dir) {
-            Ok(()) => say.console(&format!(
-                "Started a command prompt in {}; close this window when you are done with it.",
-                dir.display()
-            )),
-            Err(e) => say.console(&format!(
-                "Could not start a command prompt in {} ({e}).",
-                dir.display()
-            )),
-        }
+        let _ = (env.prompt)(&dir);
     }
     code
 }
@@ -340,12 +411,7 @@ pub fn look(o: &Options, env: &Environment, say: &mut Say) -> Result<PathBuf, Fa
     std::fs::create_dir_all(&out_dir).map_err(cannot_make)?;
     let facts = save::facts(&o.save, o.who);
     let comma = facts.comma;
-    let stem = names::stem(
-        made_at,
-        facts.name.as_deref().unwrap_or(who),
-        facts.tau,
-        comma,
-    );
+    let stem = names::stem(facts.name.as_deref().unwrap_or(who), facts.tau, comma);
     let folder = names::make_folder(&out_dir, &stem).map_err(cannot_make)?;
     // The folder's own name, which is `stem` unless another view already had it.
     let name = folder
@@ -357,7 +423,11 @@ pub fn look(o: &Options, env: &Environment, say: &mut Say) -> Result<PathBuf, Fa
             folder.display()
         ))
     })?;
-    say.line(&format!("Making {who}'s view in {}.", folder.display()));
+    say.line(&format!(
+        "Making {who}'s view in {}, at {}.",
+        folder.display(),
+        names::utc_stamp(made_at)
+    ));
 
     // The save goes into the folder first of all, so that every command after this names the
     // copy that stays with the view, and the app's temporary save, moved, is no longer the app's
@@ -458,7 +528,8 @@ fn make(
     ];
     commands.ran(say, &pieces.trace, &trace_args);
     let mut shown = 0;
-    let traced = run_child(&pieces.trace, &trace_args, |line| {
+    let traced = run_child(&pieces.trace, &trace_args, |heard| {
+        let Some(line) = say.echo(heard) else { return };
         if let Some(sentence) = percent_sentence(line, &mut shown, || {
             format!("Tracing the light that reaches {who}")
         }) {
@@ -518,19 +589,16 @@ fn make(
         render_args.push("--decimal-comma".into());
     }
     commands.ran(say, &pieces.render, &render_args);
-    let (mut tally, mut readouts, mut marks) = (None, None, Vec::new());
+    let mut tally = None;
     let mut shown = 0;
-    let rendered = run_child(&pieces.render, &render_args, |line| {
+    let rendered = run_child(&pieces.render, &render_args, |heard| {
+        let Some(line) = say.echo(heard) else { return };
         if let Some(sentence) =
             percent_sentence(line, &mut shown, || format!("Rendering {who}'s view"))
         {
             say.line(&sentence);
         } else if let Some(counts) = parse_tally(line) {
             tally = Some(counts);
-        } else if let Some(sentence) = readout_sentence(line, comma) {
-            readouts = Some(sentence);
-        } else if let Some(sentence) = mark_sentence(line, comma) {
-            marks.push(sentence);
         }
     })
     .map_err(|e| {
@@ -557,13 +625,6 @@ fn make(
         number(clock.elapsed().as_secs_f64(), 1, comma)
     ));
 
-    // Where to look, the panel and then the marks the panel names, before what could not be drawn.
-    if let Some(sentence) = readouts {
-        say.line(&sentence);
-    }
-    for sentence in &marks {
-        say.line(sentence);
-    }
     if let Some(sentence) = tally.and_then(|t| red_sentence(t, comma)) {
         say.line(&sentence);
     }
@@ -590,7 +651,7 @@ impl Commands {
     /// `program` is about to be started with `args`.
     fn ran(&mut self, say: &mut Say, program: &Path, args: &[OsString]) {
         let line = powershell_line(program, args);
-        say.console(&line);
+        say.command(&line);
         let mut text = String::new();
         if !self.begun {
             text.push_str(COMMANDS_HEADER);
@@ -676,16 +737,28 @@ struct Ended {
     complaint: Vec<String>,
 }
 
-/// Runs `program` with `args`, handing each line of its standard output to `heard` as it comes and
-/// keeping its standard error, and waits for it.
+/// One line a child printed, as [`run_child`] hands it over.
+enum Heard<'a> {
+    /// A line of standard output: the bytes as they came, line ending and all, and the line as
+    /// text, decoded leniently and trimmed, for this program to read.
+    Out { raw: &'a [u8], line: &'a str },
+    /// A line of standard error, as it came.
+    Err { raw: &'a [u8] },
+}
+
+/// Runs `program` with `args`, handing each line it prints to `heard` as it comes - standard output
+/// and standard error both, in the order they arrive - keeping its standard error for the verdict,
+/// and waits for it.
 ///
 /// A thread a pipe: a child that fills the pipe nobody is reading stops, and one reader could wait
-/// for ever on one pipe while the child waits on the other. Lines are read as bytes and decoded
-/// leniently; the line ending, `\r` included, is trimmed.
+/// for ever on one pipe while the child waits on the other. Every line is handed over as the bytes
+/// that came, blank ones too, so that the rendering terminal can show exactly what the child
+/// printed; the text this program reads is decoded leniently, with the line ending, `\r`
+/// included, trimmed.
 fn run_child(
     program: &Path,
     args: &[OsString],
-    mut heard: impl FnMut(&str),
+    mut heard: impl FnMut(Heard),
 ) -> std::io::Result<Ended> {
     let mut command = Command::new(program);
     command
@@ -700,12 +773,12 @@ fn run_child(
     }
     let mut child = command.spawn()?;
     enum Said {
-        Out(String),
-        Err(String),
+        Out(Vec<u8>),
+        Err(Vec<u8>),
         Closed,
     }
     /// A pipe of the child's, and how its lines are to be told apart from the other's.
-    type Pipe = (Option<Box<dyn std::io::Read + Send>>, fn(String) -> Said);
+    type Pipe = (Option<Box<dyn std::io::Read + Send>>, fn(Vec<u8>) -> Said);
     let (tell, listen) = channel();
     let pipes: [Pipe; 2] = [
         (child.stdout.take().map(|p| Box::new(p) as _), Said::Out),
@@ -720,11 +793,7 @@ fn run_child(
             let mut reader = std::io::BufReader::new(pipe);
             let mut bytes = Vec::new();
             while matches!(reader.read_until(b'\n', &mut bytes), Ok(n) if n > 0) {
-                let line = String::from_utf8_lossy(&bytes).trim().to_string();
-                bytes.clear();
-                if !line.is_empty() {
-                    let _ = tell.send(wrap(line));
-                }
+                let _ = tell.send(wrap(std::mem::take(&mut bytes)));
             }
             let _ = tell.send(Said::Closed);
         });
@@ -733,8 +802,20 @@ fn run_child(
     let mut complaint = Vec::new();
     while open > 0 {
         match listen.recv() {
-            Ok(Said::Out(line)) => heard(&line),
-            Ok(Said::Err(line)) => complaint.push(line),
+            Ok(Said::Out(raw)) => {
+                let line = String::from_utf8_lossy(&raw).trim().to_string();
+                heard(Heard::Out {
+                    raw: &raw,
+                    line: &line,
+                });
+            }
+            Ok(Said::Err(raw)) => {
+                heard(Heard::Err { raw: &raw });
+                let line = String::from_utf8_lossy(&raw).trim().to_string();
+                if !line.is_empty() {
+                    complaint.push(line);
+                }
+            }
             Ok(Said::Closed) => open -= 1,
             Err(_) => break,
         }
@@ -860,137 +941,6 @@ pub fn red_sentence(t: Tally, comma: bool) -> Option<String> {
             t.undersampled, t.unresolved
         ),
     })
-}
-
-/// The one sentence that says where the read-outs are in the photograph, from the renderer's line
-/// saying where it painted them, or `None` for any other line.
-///
-/// `sky-render` says one of
-///
-/// ```text
-/// read-outs: N line(s) on a panel inside the dark region, centred H degrees right of the opening view and E degrees up, each line S degrees high
-/// read-outs: N line(s) on a panel below the opening view, because <reason>
-/// ```
-///
-/// and the person reading the app's card wants to know where to look, not how many lines there
-/// are or how high. The panel carries every read-out (the watch, radius and distant clock, and the
-/// speed and heading of travel past each local reference observer), so the sentence names none of
-/// them. The reading is lenient: the line is recognised by its two key phrases, the angles are
-/// added where they read as numbers and left out where they do not, and a line with neither
-/// phrase - the renderer's other read-out lines, or a wording this program was not written for -
-/// is passed over in silence rather than guessed at.
-pub fn readout_sentence(line: &str, comma: bool) -> Option<String> {
-    let said = line.strip_prefix("read-outs:")?.trim();
-    const WHAT: &str = "The read-outs are written";
-    if let Some(at) = said.find("inside the dark region") {
-        let place = place(&said[at..], comma);
-        return Some(format!("{WHAT} inside the dark region of the hole{place}."));
-    }
-    if let Some(at) = said.find("below the opening view") {
-        let reason = said[at..]
-            .split_once("because ")
-            .map(|(_, why)| why.trim())
-            .filter(|why| !why.is_empty());
-        return Some(match reason {
-            Some(why) => full_stop(&format!("{WHAT} below the opening view, because {why}")),
-            None => format!("{WHAT} below the opening view."),
-        });
-    }
-    None
-}
-
-/// The one sentence that says where a mark of a direction of travel is on the sky, from the
-/// renderer's line saying that it drew it, or `None` for any other line.
-///
-/// `sky-render` says, for each mark it draws on a still,
-///
-/// ```text
-/// mark: a <shape> in <colour> at H degrees right of the opening view and E degrees up: <label>
-/// ```
-///
-/// with the label the panel gives that direction, such as "Direction of travel past the static
-/// observer". The sentence is this program's own - "A green ring marks the direction of travel past
-/// the static observer, 37 degrees right of the opening view." - with the angles to the whole
-/// degree as the read-outs' place is given. The reading is as lenient as [`readout_sentence`]'s:
-/// the angles are added where they read as numbers and left out where they do not; but a line
-/// without the shape, the colour or the label says nothing, because a sentence without them would
-/// not say which mark it is.
-pub fn mark_sentence(line: &str, comma: bool) -> Option<String> {
-    let said = line.strip_prefix("mark:")?.trim();
-    let (drawn, label) = said.split_once(": ")?;
-    let label = label.trim().trim_end_matches('.').trim_end();
-    let (sign, at) = drawn.split_once(" at ").unwrap_or((drawn, ""));
-    let sign = sign
-        .strip_prefix("a ")
-        .or_else(|| sign.strip_prefix("an "))?;
-    let (shape, colour) = sign.split_once(" in ")?;
-    let (shape, colour) = (shape.trim(), colour.trim());
-    if [shape, colour, label].iter().any(|s| s.is_empty()) {
-        return None;
-    }
-    let article = if colour.starts_with(['a', 'e', 'i', 'o', 'u', 'A', 'E', 'I', 'O', 'U']) {
-        "An"
-    } else {
-        "A"
-    };
-    // "Direction of travel ..." reads as "the direction of travel ..." in the middle of the
-    // sentence; a label that opens with a name or an initialism, such as "ZAMO", keeps its
-    // capitals, and one that brings its own article is not given another.
-    let first = label.split(' ').next().unwrap_or(label);
-    let ordinary = first.chars().next().is_some_and(char::is_uppercase)
-        && first.chars().skip(1).all(|c| !c.is_uppercase());
-    let label = if ordinary {
-        let mut chars = label.chars();
-        let initial = chars.next().map(|c| c.to_lowercase().to_string());
-        format!("{}{}", initial.unwrap_or_default(), chars.as_str())
-    } else {
-        label.to_string()
-    };
-    let the = if ["the ", "a ", "an "].iter().any(|a| label.starts_with(a)) {
-        ""
-    } else {
-        "the "
-    };
-    Some(format!(
-        "{article} {colour} {shape} marks {the}{label}{}.",
-        place(at, comma)
-    ))
-}
-
-/// Where the renderer says a thing is, as ", 37 degrees right of the opening view and 12 degrees
-/// up", from its "H degrees right of the opening view and E degrees up" anywhere in `said`: left
-/// for a negative H, "in line with the opening view" for an H that rounds to 0, the elevation only
-/// when it rounds to something else, and nothing at all when either angle does not read as a
-/// number. The angles are read with either decimal mark, and with a minus sign as well as a hyphen.
-fn place(said: &str, comma: bool) -> String {
-    let angle = |before: &str| -> Option<f64> {
-        let end = said.find(before)?;
-        let number = said[..end].rsplit(' ').next()?;
-        number
-            .replace(',', ".")
-            .replace('\u{2212}', "-")
-            .parse::<f64>()
-            .ok()
-            .filter(|x| x.is_finite())
-    };
-    let whole = |x: f64| number(x.abs(), 0, comma);
-    match (angle(" degrees right"), angle(" degrees up")) {
-        (Some(h), Some(e)) => {
-            let across = match whole(h).as_str() {
-                "0" => "in line with the opening view".to_string(),
-                n => format!(
-                    "{n} degrees {} of the opening view",
-                    if h < 0.0 { "left" } else { "right" }
-                ),
-            };
-            let up = match whole(e).as_str() {
-                "0" => String::new(),
-                n => format!(" and {n} degrees {}", if e < 0.0 { "down" } else { "up" }),
-            };
-            format!(", {across}{up}")
-        }
-        _ => String::new(),
-    }
 }
 
 /// `n` of `of` as a percentage to three significant figures, as `sky-render` writes it.

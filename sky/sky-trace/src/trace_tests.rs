@@ -637,7 +637,17 @@ fn test_the_percentage_traced_climbs_a_whole_point_at_a_time_to_100_across_the_f
     let scratch = Scratch::new("percent");
     let out = scratch.join("hover");
     let line: Vec<String> = [
-        "--hover", "6", "--spin", "0.5", "--frames", "3", "--grid", "64x32", "--out", &out,
+        "--hover",
+        "6",
+        "--spin",
+        "0.5",
+        "--frames",
+        "3",
+        "--grid",
+        "64x32",
+        "--out",
+        &out,
+        "--verbose",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -664,5 +674,29 @@ fn test_the_percentage_traced_climbs_a_whole_point_at_a_time_to_100_across_the_f
     assert!(
         rest[0] > 66,
         "counted from the two frames already traced: {rest:?}"
+    );
+}
+
+#[test]
+fn test_without_verbose_a_film_prints_its_progress_every_ten_percent_and_what_it_wrote() {
+    // Nothing the command line already says: no summary, no rate lines, no bundle report.
+    let scratch = Scratch::new("concise");
+    let out = scratch.join("hover");
+    let args: Vec<String> = [
+        "--hover", "6", "--spin", "0.5", "--frames", "3", "--grid", "64x32", "--out", &out,
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    let mut printed = Vec::new();
+    run(&args, &mut printed).expect("a film");
+    let printed = String::from_utf8(printed).expect("UTF-8");
+    let lines: Vec<&str> = printed.lines().collect();
+    let (last, progress) = lines.split_last().expect("some output");
+    let expected: Vec<String> = (1..=10).map(|k| format!("progress {}%", 10 * k)).collect();
+    assert_eq!(progress, expected, "{printed}");
+    assert!(
+        last.starts_with("wrote 3 frames in ") && last.ends_with(" s"),
+        "{printed}"
     );
 }

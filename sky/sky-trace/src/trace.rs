@@ -192,12 +192,15 @@ fn differing_setting(found: &Manifest, wanted: &Manifest) -> Option<&'static str
 
 /// Makes the film the options describe, printing the summary and progress to `out`.
 ///
-/// Progress comes in two kinds of line. Once a second or so, `frame <k> of <n>: ...`, for a person
-/// watching a long film. And `progress <p>%`, each time the whole percentage of the film's rays
-/// traced goes up - counted by rows finished, across frames, so a one-frame photograph gets its
-/// hundred steps too - which is the line `sky-look` reads to show how far a view has got. The
-/// percentage is printed from whichever tracing thread finishes the row that moves it on, under a
-/// lock held only for the comparison and the one line, which is why `out` must be `Send`.
+/// By default a run prints only `progress <p>%` each time the percentage of the film's rays traced
+/// passes a multiple of ten - counted by rows finished, across frames, so a one-frame photograph
+/// gets its ten steps too - which is the line `sky-look` reads to show how far a view has got, and
+/// at the end one line, `wrote <n> frame(s) in <s> s`. Everything else would restate the command
+/// line. With `--verbose` it prints the dry run's summary first, the percentage at every whole
+/// point, `frame <k> of <n>: ...` once a second or so for a person watching a long film, and the
+/// full report at the end. The percentage is printed from whichever tracing thread finishes the
+/// row that moves it on, under a lock held only for the comparison and the one line, which is why
+/// `out` must be `Send`.
 pub fn film(options: &Trace, out: &mut (dyn Write + Send)) -> Result<Summary, Failure> {
     let usage = Failure::Usage;
     let named = name_the_observer(&options.subject).map_err(usage)?;
@@ -267,7 +270,9 @@ pub fn film(options: &Trace, out: &mut (dyn Write + Send)) -> Result<Summary, Fa
         options.out.display()
     ));
     // Progress is a courtesy: a stdout that has gone away does not stop the run.
-    let _ = out.write_all(summary.as_bytes());
+    if options.verbose {
+        let _ = out.write_all(summary.as_bytes());
+    }
 
     let first = walked.events[0];
     let tau0 = film::frame_tau(worldline.tau0(), 0, options.rate, options.fps);
@@ -291,8 +296,9 @@ pub fn film(options: &Trace, out: &mut (dyn Write + Send)) -> Result<Summary, Fa
     let started = Instant::now();
     let mut last_report = started;
     let (mut written, mut skipped, mut unresolved) = (0u32, 0u32, 0u64);
-    // The last whole percentage printed; the first line is 1%.
+    // The last percentage printed, and the step between the ones printed.
     let mut percent = 0u32;
+    let step = if options.verbose { 1 } else { 10 };
     for (k, event) in walked.events.iter().enumerate() {
         let index = k as u32;
         if writer.is_complete(index) {
@@ -304,7 +310,7 @@ pub fn film(options: &Trace, out: &mut (dyn Write + Send)) -> Result<Summary, Fa
         let reporter = Mutex::new((&mut *out, percent));
         let rows_done = |rows: usize, of: usize| {
             let share = (frames_before + rows as f64 / of.max(1) as f64) / f64::from(frames);
-            let now = (100.0 * share).floor().clamp(0.0, 100.0) as u32;
+            let now = (100.0 * share).floor().clamp(0.0, 100.0) as u32 / step * step;
             // A poisoned lock is a panicking tracing thread, which the scope reports; the
             // percentage is only a courtesy.
             if let Ok(mut held) = reporter.lock() {
@@ -336,7 +342,7 @@ pub fn film(options: &Trace, out: &mut (dyn Write + Send)) -> Result<Summary, Fa
         written += 1;
 
         let done = written + skipped;
-        if last_report.elapsed() >= PROGRESS_EVERY || done == frames {
+        if options.verbose && (last_report.elapsed() >= PROGRESS_EVERY || done == frames) {
             last_report = Instant::now();
             let rate = f64::from(written) / started.elapsed().as_secs_f64();
             let left = f64::from(frames - done) / rate;
@@ -351,21 +357,34 @@ pub fn film(options: &Trace, out: &mut (dyn Write + Send)) -> Result<Summary, Fa
     }
 
     let elapsed = started.elapsed().as_secs_f64();
+    let plural = if written == 1 { "" } else { "s" };
+    let complete = if skipped > 0 {
+        format!("; {skipped} were already complete")
+    } else {
+        String::new()
+    };
+    if !options.verbose {
+        let _ = writeln!(
+            out,
+            "wrote {written} frame{plural} in {elapsed:.1} s{complete}"
+        );
+        return Ok(Summary {
+            frames,
+            written,
+            skipped,
+            unresolved,
+            end: walked.end,
+        });
+    }
     let size = size_on_disk(&options.out);
     let bundle = std::path::absolute(&options.out).unwrap_or_else(|_| options.out.clone());
     let mut report = format!(
-        "wrote {written} frame{} in {elapsed:.1} s ({:.3} frames a second){}\n",
-        if written == 1 { "" } else { "s" },
+        "wrote {written} frame{plural} in {elapsed:.1} s ({:.3} frames a second){complete}\n",
         if elapsed > 0.0 {
             f64::from(written) / elapsed
         } else {
             0.0
         },
-        if skipped > 0 {
-            format!("; {skipped} were already complete")
-        } else {
-            String::new()
-        }
     );
     report.push_str(&format!("the film ends: {}\n", walked.end));
     report.push_str(&format!(

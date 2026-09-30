@@ -3,22 +3,24 @@
 //! Every view gets a folder of its own in the views directory, named
 //!
 //! ```text
-//! 2026-09-27 21.35.03.456 UTC Bob at tau 12.345 M
+//! Bob_12.345
 //! ```
 //!
-//! the moment the view was made, then whose it is and the reading of that observer's watch (the
-//! proper time the app shows as τ) at the saved moment. The time comes first so that a listing by
-//! name is a listing by age, and it is UTC so that the order survives the clocks going back in the
-//! autumn, when an hour of local times repeats. Milliseconds tell apart two presses in one second;
-//! two in one millisecond (two copies of the app) are told apart by [`make_folder`], which never
-//! takes a folder that is there.
+//! whose view it is, as the app spells the observer's name, and the reading of that observer's
+//! watch (the proper time the app shows as τ) at the saved moment, in M to three decimals: the two
+//! things that say which view it is, and nothing else. The moment the view was made is not in the
+//! name. It made every name forty characters long and no two alike, and told the user nothing
+//! about the view that the folder's own date in a listing does not; the first line of `log.txt`
+//! records it, in UTC, for anybody who needs the exact moment. Two views from the same reading -
+//! the same save looked around from twice, or two copies of the app - are told apart by
+//! [`make_folder`], which never takes a folder that is there and adds ` (2)`, ` (3)` and so on.
 //!
 //! Everything of the view is in its folder, and nothing in it is ever deleted by this program or
 //! by the app, whether the view was made or not: the photograph, named as the folder is with
-//! `.jpg` after it so that a search across folders still reads; the save it was made from, with
-//! `.bhl`; the traced sky bundle in `bundle`; the commands that were run, in `commands.txt`; and
-//! every line of progress, in `log.txt`. A folder of its own rather than files side by side,
-//! because a view is now five things, and a bundle alone is a folder of its own already.
+//! `.jpg` after it so that a search across folders still reads, such as `Bob_12.345.jpg`; the save
+//! it was made from, `Bob_12.345.bhl`; the traced sky bundle in `bundle`; the commands that were
+//! run, in `commands.txt`; and every line of progress, in `log.txt`. A folder of its own rather
+//! than files side by side, because a view is five things, and a bundle alone is a folder already.
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -40,7 +42,7 @@ const MAX_NAME: usize = 40;
 /// A photograph in the Videos folder wants a reason, and the reason is history: until 2026-09-27
 /// a view was a video held still for a minute, with the photograph beside it, and the owner's
 /// earlier views are in this directory. Moving the new ones to the Pictures folder would split one
-/// collection of views, named to sort by the time they were made, into two places.
+/// collection of views into two places.
 pub fn out_dir(
     flag: Option<&Path>,
     env: Option<&std::ffi::OsStr>,
@@ -65,14 +67,17 @@ pub fn out_dir(
     }
 }
 
-/// The name of a view's file, without the extension: when, whose, and the watch's reading.
+/// The name of a view's folder and files, without an extension: `<observer>_<tau>`, such as
+/// `Bob_12.345`.
 ///
-/// `tau` is left out when the save did not say it (the tracer, which reads the save properly, has
-/// by then accepted it, so this is a save this program's lighter reading did not follow). The
-/// reading is written as the photograph's read-outs write the watch, to three decimals, with the
-/// decimal mark the app was set to.
-pub fn stem(when: SystemTime, who: &str, tau: Option<f64>, comma: bool) -> String {
-    let mut name = format!("{} {}", utc_stamp(when), safe_name(who));
+/// `tau` is left out, and the name is the observer's alone, when the save did not say it (the
+/// tracer, which reads the save properly, has by then accepted it, so this is a save this program's
+/// lighter reading did not follow). The reading is written as the photograph's read-outs write the
+/// watch, to three decimals, with the decimal mark the app was set to: `Bob_12,345` with the
+/// comma. An underscore joins the two, and not a space, so that a name is one word to every
+/// shell, and not a point or a comma, which the reading itself already holds.
+pub fn stem(who: &str, tau: Option<f64>, comma: bool) -> String {
+    let mut name = safe_name(who);
     if let Some(tau) = tau.filter(|t| t.is_finite()) {
         let reading = format!("{tau:.3}");
         let reading = if comma {
@@ -80,21 +85,23 @@ pub fn stem(when: SystemTime, who: &str, tau: Option<f64>, comma: bool) -> Strin
         } else {
             reading
         };
-        name.push_str(&format!(" at tau {reading} M"));
+        name.push('_');
+        name.push_str(&reading);
     }
     name
 }
 
-/// `YYYY-MM-DD HH.MM.SS.mmm UTC`: fixed width, so that names sort as times do, with no colon,
-/// which Windows does not allow in a file name.
+/// `YYYY-MM-DD HH:MM:SS.mmm UTC`, the moment a view was made as `log.txt` records it: UTC, so
+/// that two logs compare truly across the clocks going back in the autumn, when an hour of local
+/// times repeats.
 pub fn utc_stamp(when: SystemTime) -> String {
-    // A clock set before 1970 is written as 1970: the name still sorts, and is still a name.
+    // A clock set before 1970 is written as 1970: still a moment, and plainly a wrong one.
     let since = when.duration_since(UNIX_EPOCH).unwrap_or_default();
     let seconds = since.as_secs();
     let (year, month, day) = civil_from_days((seconds / 86_400) as i64);
     let of_day = seconds % 86_400;
     format!(
-        "{year:04}-{month:02}-{day:02} {:02}.{:02}.{:02}.{:03} UTC",
+        "{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02}.{:03} UTC",
         of_day / 3600,
         of_day / 60 % 60,
         of_day % 60,

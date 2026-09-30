@@ -54,6 +54,8 @@ FILMING A SAVE
                             frames it lacks. The settings must be the ones it was started with.
                             With no bundle there yet, a new one is started. Without --resume, an
                             existing bundle at --out is refused rather than written over.
+    --verbose               Print the whole report of the run, not only its progress and what it
+                            wrote (see PROGRESS).
     --help, -h              Print this and do nothing else.
 
 A HOVER TEST
@@ -74,9 +76,12 @@ A DRY RUN
     --frames <n>            The most frames. Default: until the worldline ends, at most 10000.
 
 PROGRESS
-    While it traces, the program prints a line `frame <k> of <n>: ...` about once a second, and a
-    line `progress <p>%` each time the whole percentage of the film's rows traced goes up, which
-    is what sky-look reads to say how far a view has got.
+    While it traces, the program prints a line `progress <p>%` each time the percentage of the
+    film's rows traced passes a multiple of ten, which is what sky-look reads to say how far a view
+    has got, and at the end one line saying how many frames it wrote and how long that took.
+    --verbose prints besides the dry run's summary before tracing, the percentage at every whole
+    point, a line `frame <k> of <n>: ...` about once a second, and at the end the bundle's size
+    and a command to render it.
 
 THE CAMERA
     The camera is tied to the hole, not carried by gyroscopes: at every frame it faces the hole
@@ -187,6 +192,10 @@ pub struct Trace {
     /// Threads to trace on; `None` for all the machine has.
     pub threads: Option<usize>,
     pub resume: bool,
+    /// `--verbose`: print the dry run's summary first, a progress line every percent and a rate
+    /// line every second, and the full report at the end; without it, only the progress every ten
+    /// percent and one line saying what was written (`trace::film`).
+    pub verbose: bool,
     /// How the read-outs are declared; physical unless `--units geometric`.
     pub units: Units,
 }
@@ -251,7 +260,7 @@ fn parse_info(args: &[String]) -> Result<Command, String> {
     while let Some(arg) = rest.next() {
         let flag = arg.as_str();
         if !VALUED.contains(&flag) {
-            if flag == "--resume" || TRACE_VALUED.contains(&flag) {
+            if flag == "--resume" || flag == "--verbose" || TRACE_VALUED.contains(&flag) {
                 return Err(format!(
                     "there is no option {flag} in a dry run, which traces nothing and writes \
                      nothing; leave out --info to film"
@@ -334,6 +343,7 @@ fn parse_trace(args: &[String]) -> Result<Command, String> {
     let mut given: Vec<(&str, &str)> = Vec::new();
     let mut save: Option<&str> = None;
     let mut resume = false;
+    let mut verbose = false;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         let flag = arg.as_str();
@@ -342,6 +352,8 @@ fn parse_trace(args: &[String]) -> Result<Command, String> {
                 return Err("--resume is given twice".into());
             }
             resume = true;
+        } else if flag == "--verbose" {
+            verbose = true;
         } else if TRACE_VALUED.contains(&flag) {
             // The next argument is the value whatever it looks like, so that `--spin -0.5` is
             // read as a spin, and refused as one.
@@ -525,6 +537,7 @@ fn parse_trace(args: &[String]) -> Result<Command, String> {
         frames,
         threads,
         resume,
+        verbose,
         units,
     }))
 }

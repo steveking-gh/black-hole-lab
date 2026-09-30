@@ -4,6 +4,12 @@
 # are built with, not what `cargo run` or `cargo test` mean at the repository root. The app's
 # workspace does not list these crates and these crates do not list the app.
 #
+# The one direction that is wanted is arranged another way: every build of the app runs
+# `cargo build --release` here first, from the app's build script (`../build.rs`, `build_sky`),
+# whenever a source under a crate of this workspace has changed. So `cargo run --release` at the
+# root runs the app with sky tools as fresh as itself, and a crate here that does not compile fails
+# the app's build. `cargo test` at the root still tests only the app; run it here for these crates.
+#
 # It was not always so. The first three crates were members of the app's workspace for a day, and
 # two more binaries among its default members left `cargo run` unable to choose one, which broke
 # the app's `cargo perf-check` and `cargo perf-baseline` aliases. A binary crate does not go into

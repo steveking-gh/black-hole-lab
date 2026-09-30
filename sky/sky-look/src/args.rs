@@ -62,10 +62,12 @@ USAGE
                             gives this for the temporary save it writes for each view.
     --shell                 When the run ends, however it ends, start a command prompt in the
                             view's folder, in this program's console window, and leave the
-                            prompt running there. Progress then goes to the console window even
-                            where standard output is redirected. The app gives this when Show
-                            Rendering Terminal is ticked, and starts this program in a console
-                            window of its own.
+                            prompt running there. The console window then shows only the
+                            commands this program runs and what those programs print, even
+                            where standard output is redirected; the sentences go to the status
+                            file and log.txt alone. The app gives this when Show Rendering
+                            Terminal is ticked, and starts this program in a console window of
+                            its own.
     --help, -h              Print this and do nothing else.
 
 OUTPUT
@@ -74,15 +76,19 @@ OUTPUT
     PowerShell line beginning with &. The last line of a run that succeeds is the photograph's
     full path. A refusal of the moment (the observer inside the inner horizon, being dragged, at
     the ring, not in the save) exits with code 2 and one sentence on standard error; any other
-    failure exits with code 1 and one sentence on standard error.
+    failure exits with code 1 and one sentence on standard error. With --shell, none of this
+    program's own lines are printed: only each command, and then what sky-trace and sky-render
+    print, on standard output and standard error as they printed it.
 
 THE VIEW'S FOLDER
-    Each view gets a folder of its own in the views directory, named by the time the view was
-    made (UTC), the observer, and the reading of the observer's watch (proper time, in M) at the
-    saved moment. In the folder: the photograph, named as the folder is, with .jpg after the
-    name; the save, with .bhl; the traced sky bundle, in bundle; commands.txt, the commands that
+    Each view gets a folder of its own in the views directory, named by the observer and the
+    reading of the observer's watch (proper time, in M, to three decimals) at the saved moment,
+    such as Bob_12.345; a second view from the same reading gets Bob_12.345 (2), and so on. In
+    the folder: the photograph, named as the folder is, with .jpg after the name, such as
+    Bob_12.345.jpg; the save, with .bhl; the traced sky bundle, in bundle; commands.txt, the commands that
     were run, which PowerShell runs again when they are pasted into it; and log.txt, every line
-    of progress and the line saying how the run ended. Nothing in the folder is ever deleted,
+    of progress, the first saying when the view was made (UTC), and the line saying how the run
+    ended. Nothing in the folder is ever deleted,
     whether or not the view was made: a run that failed leaves its folder to be looked into. A
     bundle of the default 4096x2048 grid takes about 90 MB on disk.
 

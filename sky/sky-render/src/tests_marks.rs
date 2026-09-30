@@ -904,7 +904,12 @@ fn test_a_unit_beginning_with_the_degree_sign_follows_its_number_with_no_space_i
     let decls = [
         decl("stopwatch", "Stopwatch", "s", 2),
         decl("v", "Speed past the ZAMO", "c", 4),
-        decl("h", "Heading of travel (diamond)", "° right of the hole", 1),
+        decl(
+            "h",
+            "Heading past the ZAMO (diamond)",
+            "° right of the hole",
+            1,
+        ),
     ];
     let frames = [values(&[("stopwatch", 0.0), ("v", 0.48), ("h", 44.0)])];
     let s = Series::new(&decls, &frames.iter().collect::<Vec<_>>());

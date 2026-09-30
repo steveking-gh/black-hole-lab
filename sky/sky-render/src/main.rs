@@ -42,6 +42,14 @@
 //! `text` rasterises the app's typefaces and `overlay` composites the panels over a finished
 //! frame. The I/O is in `load` (the EXR map and the bundle's frames), `encode` (ffmpeg and PNG),
 //! `output` (which files a run writes, and how each reaches its name) and here.
+//!
+//! What a run prints is short by default: its progress every ten percent, anything unexpected
+//! (frames the manifest lists that are not complete, texels that are not finite numbers, a
+//! photograph that will carry no read-outs), the count of red pixels when there are any, and one
+//! line naming the file it wrote, its size and the time the run took. Nothing the command line
+//! already says is said back. `--verbose` prints the whole report besides - the inputs, where the
+//! read-out panel and the marks went, the timings, the tallies, the colour model's assumptions and
+//! the map's credit - for whoever is examining a render rather than making one.
 
 mod bilinear;
 mod cli;
@@ -100,10 +108,10 @@ use tally::FilmTally;
 use timeline::{Pick, Timeline};
 use values::Series;
 
-/// NASA's credit line, which any published video made from the Deep Star Maps must carry
-/// (sky/maps/README.md, "Credit").
-/// How far a render has got, printed as `progress <p>%` whenever the whole percentage goes up:
-/// the line `sky-look` reads to show a view's progress.
+/// How far a render has got, printed as `progress <p>%`: the line `sky-look` reads to show a
+/// view's progress. By default a line each time the percentage passes a multiple of ten - ten
+/// lines a render, enough to see that it moves - and with `--verbose` each time the whole
+/// percentage goes up.
 ///
 /// A render is a few stages of very different lengths, and the percentage is the share of the
 /// wall-clock time of a photograph rendered by `sky-look` that is behind each stage, measured
@@ -113,9 +121,21 @@ use values::Series;
 /// is rough on purpose - a larger map or a film shifts the shares - and says only that the
 /// render is moving and roughly how far along it is. A film's frames share the drawing stage by
 /// count, and its encoding finishes with the last stage.
-struct Percent(u32);
+struct Percent {
+    /// The last percentage printed.
+    shown: u32,
+    /// The step between printed percentages: 1 with `--verbose`, else 10.
+    step: u32,
+}
 
 impl Percent {
+    fn new(verbose: bool) -> Self {
+        Self {
+            shown: 0,
+            step: if verbose { 1 } else { 10 },
+        }
+    }
+
     /// The map is read.
     const MAP_READ: f64 = 15.0;
     /// The rip-map and the colour tables are built.
@@ -125,13 +145,22 @@ impl Percent {
     /// Every picture is drawn and handed to the writer.
     const DRAWN: f64 = 90.0;
 
-    /// Print the percentage `at`, if its whole part is higher than the last one printed.
+    /// Print the percentage `at`, rounded down to the step, if that is higher than the last one
+    /// printed.
     fn at(&mut self, at: f64) {
-        let now = at.floor().clamp(0.0, 100.0) as u32;
-        if now > self.0 {
-            self.0 = now;
+        if let Some(now) = self.next(at) {
             println!("progress {now}%");
         }
+    }
+
+    /// The percentage to print for `at`, rounded down to the step, or None when that is no higher
+    /// than the last one.
+    fn next(&mut self, at: f64) -> Option<u32> {
+        let now = at.floor().clamp(0.0, 100.0) as u32 / self.step * self.step;
+        (now > self.shown).then(|| {
+            self.shown = now;
+            now
+        })
     }
 
     /// The drawing stage, `sent` pictures of `count` handed to the writer.
@@ -141,7 +170,10 @@ impl Percent {
     }
 }
 
-const CREDIT: &str = "NASA/Goddard Space Flight Center Scientific Visualization Studio. \
+/// NASA's credit line, which any published video made from the Deep Star Maps must carry
+/// (sky/maps/README.md, "Credit"). A licensing note rather than anything a run found out, so it is
+/// in `--help` always and in a run's output only with `--verbose`.
+pub const CREDIT: &str = "NASA/Goddard Space Flight Center Scientific Visualization Studio. \
 Gaia DR2: ESA/Gaia/DPAC. Constellation figures based on those developed for the IAU by Alan \
 MacRobert of Sky and Telescope magazine (Roger Sinnott and Rick Fienberg).";
 
@@ -154,7 +186,7 @@ fn main() {
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
     match cli::parse(&args) {
-        Ok(Request::Help) => print!("{USAGE}"),
+        Ok(Request::Help) => println!("{USAGE}{CREDIT}"),
         Ok(Request::Render(options)) => {
             if let Err(message) = run(&options) {
                 eprintln!("sky-render: {message}");
@@ -350,6 +382,8 @@ fn run(o: &Options) -> Result<(), String> {
     };
 
     match (&overlay, &script) {
+        // Each of these restates the command line, or what the manifest declares.
+        _ if !o.verbose => {}
         // Said once the panel has its place, which needs the frame's rays.
         (Some(_), _) if o.readout_in_dark => {}
         (Some(overlay), _) => println!(
@@ -382,7 +416,7 @@ fn run(o: &Options) -> Result<(), String> {
     }
 
     let clock = Instant::now();
-    let mut percent = Percent(0);
+    let mut percent = Percent::new(o.verbose);
     let image = load::read_map(&o.sky)?;
     percent.at(Percent::MAP_READ);
     let image_damaged = image.damaged;
@@ -423,14 +457,18 @@ fn run(o: &Options) -> Result<(), String> {
         texel: (2.0 * std::f64::consts::PI / sky.width() as f64)
             .min(std::f64::consts::PI / sky.height() as f64),
     });
-    println!(
-        "bundle {}: {} frames on a {} x {} grid, far sky {:?}",
-        o.bundle.display(),
-        complete.len(),
-        manifest.grid.width,
-        manifest.grid.height,
-        manifest.far_sky.name
-    );
+    // What the run is working from and how, restated from the command line and the manifest: for
+    // `--verbose` alone. Anything unexpected is said whatever the flag.
+    if o.verbose {
+        println!(
+            "bundle {}: {} frames on a {} x {} grid, far sky {:?}",
+            o.bundle.display(),
+            complete.len(),
+            manifest.grid.width,
+            manifest.grid.height,
+            manifest.far_sky.name
+        );
+    }
     let listed = manifest.frames.len();
     if complete.len() < listed {
         println!(
@@ -440,36 +478,38 @@ fn run(o: &Options) -> Result<(), String> {
         );
     }
     let (texel_bytes, kelvin_bytes) = sky.bytes();
-    println!(
-        "map {}: {} x {} {}, read in {read_seconds:.1} s, rip-map built in {pyramid_seconds:.1} s \
+    if o.verbose {
+        println!(
+            "map {}: {} x {} {}, read in {read_seconds:.1} s, rip-map built in {pyramid_seconds:.1} s \
          ({:.0} MB{})",
-        o.sky.display(),
-        sky.width(),
-        sky.height(),
-        map_frame.name(),
-        texel_bytes as f64 / 1e6,
-        if kelvin_bytes > 0 {
-            format!(
-                ", and {:.0} MB of each texel's temperature and tint, for the blackbody model",
-                kelvin_bytes as f64 / 1e6
-            )
-        } else {
-            String::new()
-        }
-    );
-    println!(
-        "colour: {}{}",
-        o.colour.name(),
-        match o.colour {
-            colour::ColourRule::Blackbody => {
-                " (each texel a blackbody at the temperature its colour implies, seen at g times it)"
+            o.sky.display(),
+            sky.width(),
+            sky.height(),
+            map_frame.name(),
+            texel_bytes as f64 / 1e6,
+            if kelvin_bytes > 0 {
+                format!(
+                    ", and {:.0} MB of each texel's temperature and tint, for the blackbody model",
+                    kelvin_bytes as f64 / 1e6
+                )
+            } else {
+                String::new()
             }
-            colour::ColourRule::Map => " (the map's colour times g^4, the old rule)",
-        }
-    );
-    if o.show_model_range {
-        for line in colour::legend() {
-            println!("{line}");
+        );
+        println!(
+            "colour: {}{}",
+            o.colour.name(),
+            match o.colour {
+                colour::ColourRule::Blackbody => {
+                    " (each texel a blackbody at the temperature its colour implies, seen at g times it)"
+                }
+                colour::ColourRule::Map => " (the map's colour times g^4, the old rule)",
+            }
+        );
+        if o.show_model_range {
+            for line in colour::legend() {
+                println!("{line}");
+            }
         }
     }
     if image_damaged > 0 {
@@ -478,14 +518,16 @@ fn run(o: &Options) -> Result<(), String> {
              read as black"
         );
     }
-    println!(
-        "under-sampled pixels: {}",
-        if o.mark_undersampled {
-            format!("marked in {}", tally::colour_name(o.undersampled))
-        } else {
-            "interpolated (--undersampled interpolate)".into()
-        }
-    );
+    if o.verbose {
+        println!(
+            "under-sampled pixels: {}",
+            if o.mark_undersampled {
+                format!("marked in {}", tally::colour_name(o.undersampled))
+            } else {
+                "interpolated (--undersampled interpolate)".into()
+            }
+        );
+    }
     // A still's video runs at its own low rate, the one picture repeated (`cli::DEFAULT_HOLD_RATE`
     // says why that rate). With `--encoder none` there is no video, and nothing is repeated.
     let (video_rate, repeats) = match (&o.still, &plan) {
@@ -494,6 +536,7 @@ fn run(o: &Options) -> Result<(), String> {
         (None, _) => (playback.frames_per_second.0, 1),
     };
     match (&o.still, &plan) {
+        _ if !o.verbose => {}
         (Some(still), Some(_)) => println!(
             "still: video frame {} of {total}, held {} s ({repeats} frame(s) at {video_rate} a \
              second), {} x {}, exposure {stops:+.2} stops, {} threads",
@@ -585,15 +628,18 @@ fn run(o: &Options) -> Result<(), String> {
                 size,
             )?);
         }
-        println!("{}", shadow::sentence(&placing, lines));
+        if o.verbose {
+            println!("{}", shadow::sentence(&placing, lines));
+        }
         // Said only when the marks moved the panel off the middle of the dark region.
-        if map.cleared() > 0
+        if o.verbose
+            && map.cleared() > 0
             && let (Placing::Inside { at, .. }, Some(middle)) = (placing, middle)
             && at != middle
         {
             println!("{}", shadow::beside_marks_line(at, middle));
         }
-        if took >= Duration::from_millis(20) {
+        if o.verbose && took >= Duration::from_millis(20) {
             println!(
                 "the panel's place took {:.2} s to find, {:.2} s of it finding which pixels are \
                  dark",
@@ -602,7 +648,7 @@ fn run(o: &Options) -> Result<(), String> {
             );
         }
     }
-    if let Some(pen) = pen {
+    if let (Some(pen), true) = (pen, o.verbose) {
         if o.still.is_some() {
             for line in marks::still_lines(&marks, &marks_at(range.start), pen) {
                 println!("{line}");
@@ -715,7 +761,7 @@ fn run(o: &Options) -> Result<(), String> {
             }
             sent += 1;
             percent.drawn(sent, count);
-            if last_report.elapsed() >= Duration::from_secs(1) || sent == count {
+            if o.verbose && (last_report.elapsed() >= Duration::from_secs(1) || sent == count) {
                 last_report = Instant::now();
                 let elapsed = loop_started.elapsed().as_secs_f64();
                 let rate = sent as f64 / elapsed;
@@ -745,25 +791,51 @@ fn run(o: &Options) -> Result<(), String> {
         // then: a failure before it leaves the old file as it was.
         let said = plan.finish(&o.ffmpeg, script.as_deref())?;
         let bytes = std::fs::metadata(&plan.video).map(|m| m.len()).unwrap_or(0);
-        println!(
-            "wrote {} ({:.1} MB), tagged as a 360-degree equirectangular video; ffmpeg took \
-             {drain:.1} s to finish after the last frame",
-            plan.video.display(),
-            bytes as f64 / 1e6
-        );
-        for line in said {
-            println!("{line}");
+        if o.verbose {
+            println!(
+                "wrote {} ({:.1} MB), tagged as a 360-degree equirectangular video; ffmpeg took \
+                 {drain:.1} s to finish after the last frame",
+                plan.video.display(),
+                bytes as f64 / 1e6
+            );
+            for line in said {
+                println!("{line}");
+            }
+        } else {
+            println!("{}", wrote_line(&plan.video, bytes, started.elapsed()));
         }
     }
     percent.at(100.0);
     if let Some(photo) = &photo_path {
         let bytes = std::fs::metadata(photo).map(|m| m.len()).unwrap_or(0);
-        println!(
-            "wrote {} ({:.1} MB), a JPEG marked as a 360-degree photograph, in {:.1} s",
-            photo.display(),
-            bytes as f64 / 1e6,
-            writer_times.photo.as_secs_f64()
-        );
+        if o.verbose {
+            println!(
+                "wrote {} ({:.1} MB), a JPEG marked as a 360-degree photograph, in {:.1} s",
+                photo.display(),
+                bytes as f64 / 1e6,
+                writer_times.photo.as_secs_f64()
+            );
+        } else {
+            println!("{}", wrote_line(photo, bytes, started.elapsed()));
+        }
+    }
+    if !o.verbose {
+        // The counts alone, and only when some pixel is drawn in the colour of what this program
+        // does not know: the line `sky-look` reads to explain the red. The explanation is in
+        // `--verbose` and `--help`.
+        let marked = counts.total.unresolved + counts.total.undersampled;
+        if let Some(line) = counts
+            .report(o.unresolved, o.undersampled, o.mark_undersampled)
+            .into_iter()
+            .next()
+            .filter(|_| marked > 0)
+        {
+            println!("{line}");
+        }
+        if sent < count {
+            return Err(format!("stopped after {sent} of {count} frames"));
+        }
+        return Ok(());
     }
     let per_frame = |d: Duration| d.as_secs_f64() / sent.max(1) as f64 * 1000.0;
     println!(
@@ -857,6 +929,18 @@ fn still_unheld_line(k: u64, total: u64, size: Size, stops: f64, threads: usize)
         "still: video frame {k} of {total}, not held, since --encoder none makes no video, {} x \
          {}, exposure {stops:+.2} stops, {threads} threads",
         size.width, size.height
+    )
+}
+
+/// The last line of a run without `--verbose`: `wrote <path> (9.5 MB) in 4.8 s`, the file, its size
+/// and how long the whole run took, which is all of the verbose report a person at a terminal
+/// has not already typed on the command line.
+fn wrote_line(path: &std::path::Path, bytes: u64, took: Duration) -> String {
+    format!(
+        "wrote {} ({:.1} MB) in {:.1} s",
+        path.display(),
+        bytes as f64 / 1e6,
+        took.as_secs_f64()
     )
 }
 

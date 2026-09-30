@@ -523,7 +523,7 @@ fn test_above_0_9999_c_the_lorentz_factor_is_given_instead_of_the_speed() {
     );
     let heading = (
         "heading_raindrop".to_string(),
-        "Heading of travel (triangle)".to_string(),
+        "Heading past the raindrop (triangle)".to_string(),
         RIGHT_OF_THE_HOLE.to_string(),
         1,
     );
@@ -556,7 +556,7 @@ fn test_a_still_gives_its_heading_as_a_magnitude_and_a_film_gives_it_signed() {
         let (declared, marks) = declarations(&[vec![p]]);
         let heading = declared.iter().find(|r| r.id == "heading_zamo").unwrap();
         assert_eq!(heading.unit, unit);
-        assert_eq!(heading.label, "Heading of travel (diamond)");
+        assert_eq!(heading.label, "Heading past the ZAMO (diamond)");
         assert_eq!(marks.len(), 1);
         assert_eq!(marks[0].id, "travel_zamo");
         assert_eq!(marks[0].label, "Direction of travel past the ZAMO");

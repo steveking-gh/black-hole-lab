@@ -29,18 +29,23 @@
 //!   `failed <sentence>` for anything else;
 //! * the file is UTF-8, every line ended by a line feed; a line found without its line feed has
 //!   been read too soon, and is left until the rest of it arrives;
-//! * with `--shell`, once the verdict is written, `sky-look` leaves a command prompt running in the
-//!   view's folder in its console window and exits. The window stays until the user closes it.
+//! * with `--shell`, the console window shows only the commands `sky-look` runs and what those
+//!   programs - the tracer and the renderer - print, as they print it, and none of `sky-look`'s own
+//!   sentences, which are on the card already; once the verdict is written, `sky-look` leaves a
+//!   command prompt running in the view's folder in its console window and exits. The window stays
+//!   until the user closes it.
 //!
-//! `sky-look` also exits 0, 1 or 2 for success, failure and refusal, and prints its progress on
-//! standard output, for a person or a script at a terminal. The app reads neither: the exit is
+//! `sky-look` also exits 0, 1 or 2 for success, failure and refusal, and without `--shell` prints
+//! its progress on standard output, for a person or a script at a terminal. The app reads neither: the exit is
 //! taken only as a sign that no verdict is coming, which means `sky-look` was stopped or crashed.
 //! A file rather than pipes because a pipe can only go one place: it had to be the app's, so the
 //! rendering terminal could never have shown the progress, and a pipe outlives the child whenever
 //! something the child started inherits it, which a verdict read from a file cannot be held up by.
 //!
 //! A separate process rather than a library call, for the rule the sky work is held to: it must
-//! not touch what the app costs or how the app builds. A process costs the app nothing until the
+//! not touch what the app costs or how the app builds. The other way round is arranged: the app's
+//! build script builds the sky workspace, so the program found here is never older than the app
+//! (`build.rs`, `build_sky`). A process costs the app nothing until the
 //! button is pressed, and while a view is being made it costs one read of a small file a frame.
 //! The tracer takes up to a minute on every core the machine has, and none of that is on this
 //! thread; the below-normal priority, which everything `sky-look` starts inherits, keeps the app

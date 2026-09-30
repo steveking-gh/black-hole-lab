@@ -936,3 +936,38 @@ fn test_a_missing_ffmpeg_is_reported_in_one_sentence() {
         "{message}"
     );
 }
+
+#[test]
+fn test_a_render_says_its_progress_every_ten_percent_unless_verbose_and_ends_with_what_it_wrote() {
+    // The stages of a still, in order, as `run` reports them: map read, tables built, rays
+    // loaded, the picture drawn, the file written.
+    let stages = [15.0, 65.0, 72.0, 90.0, 100.0];
+    let said = |verbose: bool| -> Vec<u32> {
+        let mut percent = crate::Percent::new(verbose);
+        stages.iter().filter_map(|&at| percent.next(at)).collect()
+    };
+    assert_eq!(said(false), [10, 60, 70, 90, 100]);
+    assert_eq!(said(true), [15, 65, 72, 90, 100]);
+    // A film's frames, one percent each, reach the console ten points at a time.
+    let mut percent = crate::Percent::new(false);
+    let steps: Vec<u32> = (0..=100)
+        .filter_map(|p| percent.next(f64::from(p)))
+        .collect();
+    assert_eq!(steps, (1..=10).map(|k| 10 * k).collect::<Vec<_>>());
+
+    assert_eq!(
+        crate::wrote_line(
+            Path::new("views/Bob_0.000/Bob_0.000.jpg"),
+            9_491_778,
+            std::time::Duration::from_millis(4_830)
+        ),
+        format!(
+            "wrote {} (9.5 MB) in 4.8 s",
+            Path::new("views/Bob_0.000/Bob_0.000.jpg").display()
+        )
+    );
+    // The credit goes with the help, and so does what the red pixels mean.
+    let help = format!("{}{}", crate::cli::USAGE, crate::CREDIT);
+    assert!(help.contains("NASA/Goddard") && help.contains("does not know how"));
+    assert!(crate::cli::USAGE.contains("--verbose"));
+}

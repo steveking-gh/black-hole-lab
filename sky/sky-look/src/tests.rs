@@ -12,10 +12,7 @@ use crate::args::{self, Request, Units, Who};
 use crate::find::{self, FETCH_SCRIPT, Names, SKY_MAP, SKY_MAP_ENV, Search};
 use crate::names;
 use crate::open::{self, Viewer};
-use crate::run::{
-    Tally, mark_sentence, parse_tally, percent_sentence, powershell_line, readout_sentence,
-    red_sentence,
-};
+use crate::run::{Tally, parse_tally, percent_sentence, powershell_line, red_sentence};
 use crate::save;
 use crate::shell;
 
@@ -264,62 +261,48 @@ fn test_each_missing_piece_has_its_own_sentence_saying_what_to_do() {
 }
 
 #[test]
-fn test_file_names_sort_as_the_times_they_were_made() {
-    // Times chosen across the boundaries a careless format gets wrong: a digit count changing (9
-    // to 10 o'clock, day 9 to 10), a month and a year turning, a leap day, the millisecond.
-    let at = |s: u64, ms: u64| UNIX_EPOCH + Duration::from_millis(s * 1000 + ms);
-    let times = [
-        at(0, 0),
-        at(951_782_400, 0),     // 2000-02-29 00:00
-        at(1_798_761_599, 999), // 2026-12-31 23:59:59.999
-        at(1_798_761_600, 0),   // 2027-01-01 00:00
-        at(1_798_794_000, 0),   // 2027-01-01 09:00
-        at(1_798_797_600, 0),   // 2027-01-01 10:00
-        at(1_799_539_200, 5),   // 2027-01-10 00:00:00.005
-    ];
-    let stems: Vec<String> = times
-        .iter()
-        .map(|&t| names::stem(t, "Bob", Some(1.0), false))
-        .collect();
-    let mut sorted = stems.clone();
-    sorted.sort();
-    assert_eq!(sorted, stems, "sorting the names sorts the times");
-    assert_eq!(names::utc_stamp(times[1]), "2000-02-29 00.00.00.000 UTC");
-    assert_eq!(names::utc_stamp(times[2]), "2026-12-31 23.59.59.999 UTC");
+fn test_a_view_is_named_by_its_observer_and_watch_reading_and_its_log_by_the_time() {
+    assert_eq!(names::stem("Bob", Some(0.0), false), "Bob_0.000");
+    assert_eq!(names::stem("Alice", Some(12.3456), false), "Alice_12.346");
     assert_eq!(
-        names::stem(times[6], "Alice", Some(12.3456), false),
-        "2027-01-10 00.00.00.005 UTC Alice at tau 12.346 M"
-    );
-    assert_eq!(
-        names::stem(times[6], "Alice", Some(12.3456), true),
-        "2027-01-10 00.00.00.005 UTC Alice at tau 12,346 M",
+        names::stem("Alice", Some(12.3456), true),
+        "Alice_12,346",
         "the decimal mark follows the app's setting"
     );
+    assert_eq!(names::stem("Bob", Some(-0.0004), false), "Bob_-0.000");
     assert_eq!(
-        names::stem(times[6], "Bob", None, false),
-        "2027-01-10 00.00.00.005 UTC Bob"
+        names::stem("Bob", None, false),
+        "Bob",
+        "no reading, no underscore"
+    );
+    assert_eq!(names::stem("Bob", Some(f64::NAN), false), "Bob");
+
+    // The time the log records, across the boundaries a careless format gets wrong: a digit count
+    // changing, a month and a year turning, a leap day, the millisecond.
+    let at = |s: u64, ms: u64| UNIX_EPOCH + Duration::from_millis(s * 1000 + ms);
+    assert_eq!(names::utc_stamp(at(0, 0)), "1970-01-01 00:00:00.000 UTC");
+    assert_eq!(
+        names::utc_stamp(at(951_782_400, 0)),
+        "2000-02-29 00:00:00.000 UTC"
+    );
+    assert_eq!(
+        names::utc_stamp(at(1_798_761_599, 999)),
+        "2026-12-31 23:59:59.999 UTC"
+    );
+    assert_eq!(
+        names::utc_stamp(at(1_799_539_200, 5)),
+        "2027-01-10 00:00:00.005 UTC"
     );
 }
 
 #[test]
-fn test_two_presses_in_one_second_make_two_folders_and_neither_uses_the_others() {
-    let second = UNIX_EPOCH + Duration::from_secs(1_790_000_000);
-    let (a, b) = (
-        second + Duration::from_millis(1),
-        second + Duration::from_millis(2),
-    );
-    assert_ne!(
-        names::stem(a, "Bob", Some(0.0), false),
-        names::stem(b, "Bob", Some(0.0), false)
-    );
-
-    // And two in the same millisecond, of two copies of the app, which name their views alike.
+fn test_two_views_from_one_reading_make_two_folders_and_neither_uses_the_others() {
     let root = scratch_dir("folders");
     let out = root.join("views");
     std::fs::create_dir_all(&out).expect("the views directory");
-    let stem = names::stem(a, "Bob", Some(0.0), false);
-    // An earlier view's photograph of the same name, from before views had folders, as the
-    // owner's are: a folder of that name is another thing, and making it touches nothing else.
+    let stem = names::stem("Bob", Some(0.0), false);
+    // An earlier view's photograph of the same name, from before views had folders: a folder of
+    // that name is another thing, and making it touches nothing else.
     let old_photo = out.join(format!("{stem}.jpg"));
     std::fs::write(&old_photo, "an earlier photograph").expect("an earlier view");
     let folders: Vec<PathBuf> = (0..3)
@@ -328,9 +311,9 @@ fn test_two_presses_in_one_second_make_two_folders_and_neither_uses_the_others()
     assert_eq!(
         folders,
         [
-            out.join(&stem),
-            out.join(format!("{stem} (2)")),
-            out.join(format!("{stem} (3)"))
+            out.join("Bob_0.000"),
+            out.join("Bob_0.000 (2)"),
+            out.join("Bob_0.000 (3)")
         ]
     );
     assert!(folders.iter().all(|f| f.is_dir()));
@@ -375,9 +358,8 @@ fn test_any_observer_name_makes_a_file_name_windows_accepts() {
         &"x".repeat(300),
     ];
     let root = scratch_dir("safe");
-    let when = UNIX_EPOCH + Duration::from_secs(1_790_000_000);
     for given in names_given {
-        let stem = names::stem(when, given, Some(1.5), false);
+        let stem = names::stem(given, Some(1.5), false);
         assert!(
             !stem
                 .chars()
@@ -642,148 +624,6 @@ fn test_the_command_line_needs_a_save_and_an_observer_and_refuses_what_the_tools
     ] {
         let why = parse(line).expect_err(line);
         assert!(why.contains(words) && why.ends_with('.'), "{line}: {why}");
-    }
-}
-
-#[test]
-fn test_the_renderers_line_on_the_read_outs_becomes_one_sentence_saying_where_they_are() {
-    let inside = "read-outs: 4 line(s) on a panel inside the dark region, centred 180 degrees right \
-                  of the opening view and -20 degrees up, each line 2 degrees high";
-    assert_eq!(
-        readout_sentence(inside, false).as_deref(),
-        Some(
-            "The read-outs are written inside the dark region of the hole, \
-             180 degrees right of the opening view and 20 degrees down."
-        )
-    );
-    let ahead = "read-outs: 4 line(s) on a panel inside the dark region, centred -0.2 degrees \
-                 right of the opening view and 0.3 degrees up, each line 2 degrees high";
-    assert_eq!(
-        readout_sentence(ahead, false).as_deref(),
-        Some(
-            "The read-outs are written inside the dark region of the hole, \
-             in line with the opening view."
-        )
-    );
-    let left = "read-outs: 3 line(s) on a panel inside the dark region, centred −35.6 degrees right \
-                of the opening view and 12 degrees up, each line 1.5 degrees high";
-    assert!(
-        readout_sentence(left, false)
-            .expect("a sentence")
-            .ends_with("hole, 36 degrees left of the opening view and 12 degrees up."),
-        "{:?}",
-        readout_sentence(left, false)
-    );
-    // Angles that do not read as numbers are left out, and the place is still said.
-    let odd = "read-outs: 4 line(s) on a panel inside the dark region, somewhere";
-    assert_eq!(
-        readout_sentence(odd, false).as_deref(),
-        Some("The read-outs are written inside the dark region of the hole.")
-    );
-    let below = "read-outs: 4 line(s) on a panel below the opening view, because the dark region \
-                 is 3 degrees across and the panel needs 9";
-    assert_eq!(
-        readout_sentence(below, false).as_deref(),
-        Some(
-            "The read-outs are written below the opening view, because the \
-             dark region is 3 degrees across and the panel needs 9."
-        )
-    );
-    assert_eq!(
-        readout_sentence(
-            "read-outs: 4 line(s) on a panel below the opening view",
-            false
-        )
-        .as_deref(),
-        Some("The read-outs are written below the opening view.")
-    );
-    // Any other line, the renderer's older read-out lines included, says nothing.
-    for line in [
-        "read-outs: 4 line(s) on 1 panel(s) painted on the sky, each line 2 degrees high",
-        "read-outs: off",
-        "map C:\\maps\\starmap_2020_8k_gal.exr: 8192 x 4096 galactic, read in 0.6 s",
-        "the region inside the dark region is dark",
-    ] {
-        assert_eq!(readout_sentence(line, false), None, "{line}");
-    }
-}
-
-#[test]
-fn test_each_mark_the_renderer_draws_becomes_one_sentence_saying_what_it_marks_and_where() {
-    let say = |line: &str| mark_sentence(line, false);
-    assert_eq!(
-        say(
-            "mark: a ring in green at 37.25 degrees right of the opening view and 0 degrees up: \
-             Direction of travel past the static observer"
-        )
-        .as_deref(),
-        Some(
-            "A green ring marks the direction of travel past the static observer, 37 degrees \
-             right of the opening view."
-        )
-    );
-    // Left for a negative angle, the elevation when it rounds to more than 0, and the ZAMO's
-    // capitals kept where they come after an ordinary word.
-    assert_eq!(
-        say(
-            "mark: a diamond in green at -141.6 degrees right of the opening view and 8.4 degrees \
-             up: Direction of travel past the ZAMO"
-        )
-        .as_deref(),
-        Some(
-            "A green diamond marks the direction of travel past the ZAMO, 142 degrees left of the \
-             opening view and 8 degrees up."
-        )
-    );
-    // Straight ahead, below the horizon, with a minus sign and the decimal comma.
-    assert_eq!(
-        say(
-            "mark: a triangle in green at 0,3 degrees right of the opening view and \u{2212}12,6 \
-             degrees up: Direction of travel past the raindrop"
-        )
-        .as_deref(),
-        Some(
-            "A green triangle marks the direction of travel past the raindrop, in line with the \
-             opening view and 13 degrees down."
-        )
-    );
-    // A label that opens with an initialism keeps its capitals; one with its own article is not
-    // given another; a colour that starts with a vowel takes "An".
-    assert_eq!(
-        say(
-            "mark: a ring in orange at 10 degrees right of the opening view and 0 degrees up: \
-             ZAMO's direction of travel."
-        )
-        .as_deref(),
-        Some(
-            "An orange ring marks the ZAMO's direction of travel, 10 degrees right of the opening \
-             view."
-        )
-    );
-    assert_eq!(
-        say("mark: a ring in green at 5 degrees right of the opening view and 0 degrees up: The way Bob goes")
-            .as_deref(),
-        Some("A green ring marks the way Bob goes, 5 degrees right of the opening view.")
-    );
-    // Angles that do not read as numbers are left out, and the mark is still named.
-    assert_eq!(
-        say("mark: a ring in green at somewhere: Direction of travel past the static observer")
-            .as_deref(),
-        Some("A green ring marks the direction of travel past the static observer.")
-    );
-    // A line without the shape, the colour or the label, or any other line, says nothing.
-    for line in [
-        "mark: a ring in green at 37 degrees right of the opening view and 0 degrees up",
-        "mark: a ring in green at 37 degrees right of the opening view and 0 degrees up: ",
-        "mark: ring in green at 37 degrees right of the opening view and 0 degrees up: Travel",
-        "mark: a ring at 37 degrees right of the opening view and 0 degrees up: Travel",
-        "mark: a  in green at 37 degrees right of the opening view and 0 degrees up: Travel",
-        "marks: 2 drawn",
-        "read-outs: 4 line(s) on a panel inside the dark region, centred 180 degrees right of the \
-         opening view and -20 degrees up, each line 2 degrees high",
-        "frame 0 (1/1), 1.00 frames/s, 0:00 left",
-    ] {
-        assert_eq!(say(line), None, "{line}");
     }
 }
 

@@ -60,6 +60,14 @@ usage: sky-render --bundle <dir> --sky <map.exr> --out <video.mkv> [options]
   --frames <a>..<b>          render only video frames a to b - 1 (a.. and ..b also work)
   --keep-frames <dir>        also write each frame as a 16-bit PNG into <dir>
   --overwrite                replace --out, its .ass file and --photo if they exist
+  --verbose                  also print what the run works from and how (the bundle, the map, the
+                             colour rule, the frames and exposure), a progress line every percent
+                             and every second, the time each stage took, the full count of marked
+                             pixels and what they mean, the spread of shifts, what the colour
+                             model assumes and gets wrong, and the credit below. Without it a run
+                             prints only its progress every ten percent, anything unexpected,
+                             where the read-out panel and the marks went, the count of red pixels
+                             when there are any, and the file it wrote
 
 read-outs (the bundle's numbers, the observer's stopwatch first):
   --readouts overlay|panel|off
@@ -109,6 +117,12 @@ a still (one moment's view, to look around in):
                              only with --readouts panel
 
   --help                     this text
+
+Pixels drawn in the unresolved or under-sampled colour are ones this program does not know how
+to draw: rays the tracer did not resolve, or places where the bundle's rays are too far apart to
+say which part of the sky the light came from.
+
+A published video or image made from NASA's star maps must carry this credit:
 ";
 
 /// The largest `--exposure` either way, in stops: the gain 2^stops is then a positive finite f32
@@ -257,6 +271,9 @@ pub struct Options {
     pub frames: Option<Range<u64>>,
     pub keep_frames: Option<PathBuf>,
     pub overwrite: bool,
+    /// `--verbose`: print the whole report of a run, not only its progress, its surprises and what
+    /// it wrote (`main`).
+    pub verbose: bool,
     /// Whether the read-out panel is painted on the picture: `--readouts panel`, or `on`.
     pub readouts: bool,
     /// Whether the read-outs are written as a subtitle track: `--readouts overlay`, the default.
@@ -319,6 +336,7 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
     let mut frames = None;
     let mut keep_frames = None;
     let mut overwrite = false;
+    let mut verbose = false;
     let mut mode = ReadoutMode::Overlay;
     let mut overlay_size = crate::subtitles::DEFAULT_PERCENT;
     let mut overlay_font = crate::subtitles::DEFAULT_FONT.to_string();
@@ -423,6 +441,7 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
             "--frames" => frames = Some(parse_range(value()?)?),
             "--keep-frames" => keep_frames = Some(PathBuf::from(value()?)),
             "--overwrite" => overwrite = true,
+            "--verbose" => verbose = true,
             "--readouts" => {
                 mode = match value()? {
                     "overlay" => ReadoutMode::Overlay,
@@ -663,6 +682,7 @@ pub fn parse(args: &[String]) -> Result<Request, String> {
         frames,
         keep_frames,
         overwrite,
+        verbose,
         readouts: mode == ReadoutMode::Panel,
         subtitles: mode == ReadoutMode::Overlay,
         overlay_size,

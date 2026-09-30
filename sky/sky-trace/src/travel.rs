@@ -452,6 +452,11 @@ fn passing_from(
 /// its speed; its Lorentz factor, if some frame is faster than [`FAST`]; and its heading and mark,
 /// if some frame has a direction.
 ///
+/// Every row names its reference observer, the heading's as the speed's does - "Speed past the
+/// ZAMO", "Heading past the ZAMO (diamond)" - so that a panel showing the rows of two observers
+/// never leaves a heading to be matched to its speed by position. The shape in brackets names the
+/// sign on the sky that the heading points at.
+///
 /// A film of one frame - a still, which is what the app's Look Around makes - declares its heading
 /// as a magnitude, with the unit saying which side: "35.2° left of the hole" reads better on a
 /// still than "-35.2° right of the hole". A heading that shows as 0.0 or 180.0 has no side, and is
@@ -506,7 +511,7 @@ pub fn declarations(frames: &[Vec<Passing>]) -> (Vec<ReadoutDecl>, Vec<MarkDecl>
             };
             readouts.push(ReadoutDecl {
                 id: reference.heading_id(),
-                label: format!("Heading of travel ({})", reference.shape()),
+                label: format!("Heading past {name} ({})", reference.shape()),
                 unit: unit.into(),
                 decimals: HEADING_DECIMALS,
                 display: None,

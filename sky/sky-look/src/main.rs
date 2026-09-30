@@ -25,8 +25,8 @@
 //!   view's folder, and then the save, moved into it (renamed, or copied and deleted across
 //!   volumes); a run stopped before that leaves the temporary save where it was, for the app to
 //!   delete;
-//! - every progress sentence goes on a line of its own to standard output, to the status file and
-//!   to `log.txt`, flushed after each; a sentence begins with a capital letter or a digit and ends
+//! - every progress sentence goes on a line of its own to the status file and to `log.txt`, and
+//!   to standard output unless `--shell` is given, flushed after each; a sentence begins with a capital letter or a digit and ends
 //!   with a full stop, and while the tracer and the renderer work it carries their percentage, as
 //!   in `Tracing the light that reaches Alice: 35%.`;
 //! - the last line of the status file, and only the last, is the verdict, one of
@@ -42,14 +42,20 @@
 //!   a reader that finds a line without its line feed has read it too soon, and waits for it. A
 //!   command line this program refuses still gets `failed <sentence>` in the file it names. A
 //!   status file with no verdict when this program has exited means it was stopped or crashed;
-//! - standard output also carries, just before each program is started, the command that starts
-//!   it (a PowerShell line beginning with `&`), and on success, last, the photograph's full path
-//!   and nothing else - followed, with `--shell`, by one line about the command prompt;
+//! - the console, which is not the app's to read, is split two ways (`run::Say`). With no
+//!   `--shell` - a person or a script at a terminal - standard output carries the sentences, and
+//!   just before each program is started the command that starts it (a PowerShell line beginning
+//!   with `&`), and on success, last, the photograph's full path and nothing else; standard error
+//!   carries a failure's one sentence. With `--shell` - the rendering terminal - the console
+//!   carries only each command, as above, and then what that program prints, standard output to
+//!   standard output and standard error to standard error, byte for byte as it arrives: nothing
+//!   of this program's own, since its sentences are on the app's card already. The tracer's and
+//!   the renderer's lines are read for the percentages and the rest the same way in both;
 //! - exit 0 on success; exit 2 when the moment is refused (the observer inside the inner horizon,
 //!   dragged, at the ring, frozen onto the inner horizon, not in the save; a hole spinning the
 //!   other way), with the tracer's own sentence on standard error; exit 1 on any other failure,
-//!   with one sentence on standard error saying what to do; nothing on standard error on a run
-//!   that succeeds. The codes are for a person or a script at a terminal: the app reads the
+//!   with one sentence on standard error saying what to do (without `--shell`); nothing of this
+//!   program's on standard error on a run that succeeds. The codes are for a person or a script at a terminal: the app reads the
 //!   verdict, and takes an exit only as a sign that no verdict is coming;
 //! - with `--shell`, once the verdict is written - whether the view was made, refused or failed -
 //!   a command prompt starts in the view's folder, in this program's console window, and this

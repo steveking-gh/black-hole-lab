@@ -2,7 +2,9 @@
 
 This directory holds the programs that make a 360-degree video of what an observer near a black
 hole sees. It is a cargo workspace of its own. Black Hole Lab, at the repository root, does not
-depend on anything here, and nothing here can change how the app builds or runs.
+depend on anything here, and nothing here can change how the app builds or runs; but every build
+of the app builds this workspace too, in release, so that the programs the app runs are never
+older than the app (see "Why a separate workspace").
 
 ## The parts
 
@@ -61,6 +63,14 @@ Cargo builds the members of a workspace together. Sharing the app's workspace wo
 crates change which features the app's dependencies are built with, add their dependencies to the
 app's lock file, and make `cargo run` at the repository root ambiguous between the app and the
 programs here. Kept apart, the app's manifest and lock file do not mention this directory.
+
+The other direction is wanted, and cargo has no way to say it, so the app's build script says it:
+`../build.rs` runs `cargo build --release` here, into `sky/target`, whenever a manifest or a `src`
+directory of a crate here has changed since the last build of the app. Every build of the app,
+`cargo run --release` and `cargo perf-check` included, therefore leaves `sky/target/release`
+fresh. A crate here that does not compile fails the app's build, with cargo's own error. Set
+`BLACK_HOLE_LAB_NO_SKY_BUILD` to build the app without this. A running `sky-look` holds its
+executable locked on Windows, and a build during a Look Around fails at the link; wait or cancel.
 
 Two crates in `../crates` are used from here, read-only: `kerr-equatorial`, so that the light
 traced here agrees with the app's geometry, and `readout`, so that numbers on the video are
