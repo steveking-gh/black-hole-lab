@@ -6,7 +6,7 @@
 
 Black Hole Lab is a physics simulation of a rotating black hole and two
 observers, Alice and Bob.  You can launch Alice and Bob on paths around or into
-the black hole and watch events play out.  The simulation let's you see a slice
+the black hole and watch events play out.  The simulation lets you see a slice
 of the physics with one or two dimensions of space plus one of time.  Alice and
 Bob also have a beacon that transmits a radio wave in all directions.  The
 simulation calculates and shows the wavefront of these signals, accounting for
@@ -23,8 +23,9 @@ deeply mathematical introduction from Matt Visser
 [here](https://arxiv.org/pdf/0706.0622).
 
 In some cases, the simulation stops calculations at a pre-defined limit, such as
-10 billion for the ratio of the coordinate time to Alice and Bob's proper time.
-These limits are unphysical, but keep internal numerical errors under control.
+10 billion for the rate of the coordinate time relative to Alice or Bob's proper
+time. These limits are unphysical, but keep internal numerical errors under
+control.
 
 While the predictions of general relativity have been proven correct countless
 times, physicists agree that general relativity *cannot* be the final word on
@@ -65,18 +66,18 @@ amber and mint dots respectively.  The black hole spins counter-clockwise.
 
 The middle pane of Black Hole Lab is the frame of reference view.  You can
 choose whether this pane shows Alice or Bob's frame of reference, or you can
-show a 1D+1 or a 2D+1 "foliation" chart.  First, let's discuss what we mean by
+show a 1D+1 or a 2D+1 "foliation" chart.  First, lets discuss what we mean by
 "frame of reference".
 
 ### What is a Frame of Reference?
 
 Your *frame of reference* (FoR) is your local reality where your experiments
 measure the speed of light as `c` in all directions.  Your FoR is the all
-important determinant of distance, time and the order of events.  For example,
-two stopwatches in different FoRs could measure the same event as taking a
-million years or a millisecond.  An established principle in physics is that the
-universe has no preferred FoR, so neither stopwatch is more correct than the
-other.
+important determinant of distance and time.  For example, two stopwatches in
+different FoRs could measure the same event as taking a million years or a
+millisecond.  An established principle in physics is that the universe has no
+preferred FoR, so neither stopwatch is more correct than the other.  *All*
+frames of reference will agree on the order of cause and effect.
 
 ### Frame of Reference vs Chart
 
@@ -91,19 +92,19 @@ understanding more than the surprising and unintuitive reality of a constant
 ### Coordinate Time vs Proper Time
 
 *Coordinate time* is the artificial "chart clock" used to step the mathematics
-of the simulation.  Fudging just slightly, one second of coordinate time is our
-common notion of one second.
+of this simulation, specifically we use Kerr-Schild time.  Fudging just
+slightly, one second of coordinate time is our common notion of one second.
 
 *Proper time* is the time measured in an observer's FoR, e.g. Bob's wristwatch.
 
 To get a sense of the difference, imagine Bob falling into the black hole while
-Alice observes from far away.  Let's compare Alice's proper time, Bob's proper
+Alice observes from far away.  Lets compare Alice's proper time, Bob's proper
 time and the coordinate time.
 
 * In her proper time, Alice sees Bob slow as he nears the event horizon and his
   watch ticking ever more slowly.  Wait as she might, Alice never sees Bob cross
-  the horizon as his light becomes too stretched (redshifted) to detect.  To
-  her, Bob's watch appears all but stopped.
+  the horizon.  His light eventually becomes too stretched (redshifted) to
+  detect before he crosses.  To her, Bob's watch appears all but stopped.
 * In his proper time, Bob dives through the event horizon and into the black
   hole at tremendous uninterrupted speed.  His watch says the whole trip took
   just a few minutes.
@@ -118,9 +119,9 @@ The default view in the FoR pane is the `Global Foliation Chart 1D+1`.
 
 The global foliation chart shows the simulation's view of events.  Notice the
 `1D+1` notation.  The `1D` means this view shows 1 dimension of space
-horizontally.  Physicists judiciously choose that dimension to be the radial
-separation from ring singularity.  The `+1` is the time dimension shown
-vertically.  Bob and Alice's FoR views share this `1D+1` style.
+horizontally.  We choose that dimension to be the radial coordinate `r` relative
+to the ring singularity.  The `+1` is the time dimension shown vertically.  Bob
+and Alice's FoR views share this `1D+1` style.
 
 The other unique view is the **Global Foliation Chart 2D+1**
 
@@ -144,7 +145,7 @@ perceive their *now*.
 All the graphs above feature cone shapes centered on the observers.  These are
 **light cones**.  Light cones provide a helpful way to reason about observers
 and are common in diagrams on relativity.  The cone *below* the observer shows
-the region of spacetime where light from *any past event* can reach the
+the region of spacetime where light from a past event can reach the
 observer.  The cone *above* the observer shows the region of spacetime where
 light from the observer can reach *any future event*.  As a universal
 convention, physicists use a 45 degree line to represent the speed of light:
@@ -153,7 +154,7 @@ travels one unit of space horizontally per one unit of time vertically.
 We pick on "light from an event" here, but this really means *any*
 cause-and-effect influence whatsoever.  An event outside your light cone
 *cannot* affect your present reality.  Naturally as time goes by, an event
-outside your light cone *now* might not be outside your light cone *later*.
+outside your light cone *now* might be inside your light cone *later*.
 
 ### Light Cone Tilting
 
@@ -185,7 +186,7 @@ here".
 ![Bob Static 1](assets/images/bob_static_1.png)
 
 Play the simulation for a bit and you'll see Bob transmitting.  The simulation
-only tracks the fixed number of Bob's transmission wavefronts as set by the
+only tracks only a fixed number of Bob's transmission wavefronts as set by the
 "Wavefronts kept" slider control.
 
 ![Bob Static 2](assets/images/bob_static_2.png)
@@ -201,18 +202,16 @@ In the `EQUATORIAL PLANE` view, zoom in to Bob with the mouse wheel.
 Here we can see the gravity and frame dragging of Sag A* pulling strongly on
 Bob's radio transmissions.  The `EQUATORIAL PLANE` *chart* shows the radio waves
 heading downstream with the flow of space moving much faster than those aimed
-away from the black hole.  Another observer checking the signal in various
-places from their own FoR would measure all wavefronts moving at speed `c`, but
-with the "fast" waves blueshifted and the "slow" waves redshifted.  Bob notices
-nothing special in his FoR and his transmission looks identical in all
-directions.
+away from the black hole.  An observer closer to the black hole sits in the
+"fast" flow and measures Bob's transmission as being blueshifted.  Likewise, an
+observer further out in the "slow" flow measures the waves redshifted.
 
 At this spot we also see from the `a_thrust` stat in Bob's info box that his
-rocket is accelerating at 188209 times earth gravity to keep him stationary
+rocket is accelerating at 188,209 times earth gravity to keep him stationary
 against the pull of gravity.  This is very analogous to swimming upstream
 against the fast current of space pouring into the black hole. On the other
 hand, we notice that the `Tidal` force on Bob, aka the famous
-*spaghettification* effect, is only 0.00001 g/m, which would be unnoticeable.
+*spaghettification* effect, is only 0.00001 g/m and thus too small to feel.
 
 ### Sending and Receiving Radio Signals
 
@@ -225,10 +224,9 @@ and Alice has so far received 3 of them.
 ![Signal Reception](assets/images/receiving_signal.png)
 
 The observer FoR and global foliation views also show signal receptions.  Here's
-Alice's FoR of the same simulation above.  We see 3 turquoise color wavefronts
+Alice's FoR of the same simulation above.  We see 3 mint color wavefronts
 have passed Alice and are now in her past.  Several more are in her future.
-Because this is an FoR, the waves move past Alice at the speed of light and
-appear as 45 degree angle lines by definition.
+Because this is an FoR, the waves move past Alice at the speed of light.
 
 ![Alice Reception](assets/images/alice_receive_1.png)
 
@@ -243,7 +241,7 @@ hover tip.
 One issue of particular importance: the simulation *cannot* track every photon
 of every transmission ever sent from Alice and Bob.  The **Wavefronts kept**
 slider sets the number of pulses tracked before discarding the oldest.  The
-**Wavefront points** slider set the number of "photons" tracked per pulse.
+**Wavefront points** slider sets the number of "photons" tracked per pulse.
 
 ### The Black Hole Ergosphere
 
@@ -252,7 +250,7 @@ black hole pulls the very vacuum of space around in the direction of spin, a
 phenomenon known as **frame dragging**.  Frame dragging affects space out to
 great distances, but the ergosphere marks the boundary where dragging pulls
 space *around* the black hole faster than the speed of light!  Objects can enter
-and escape the ergosphere, but *nothing* can stay motionless there.
+and escape the ergosphere, *nothing* can stay motionless there.
 
 More details:
 [Wikipedia](https://en.wikipedia.org/wiki/Ergosphere),
@@ -268,15 +266,17 @@ the event horizon going in, but cannot cross back into *our* universe.  Crossing
 the event horizon puts you in what physicists call `region II` of the black
 hole.
 
-Note that general relativity says spinning black holes have *two* event
-horizons, one outer and one inner.  The horizon we're discussing here is the
-*outer horizon* that physicists give the shorthand name `r+`.
+Note that general relativity says spinning black holes have *two* horizons, one
+outer [*event horizon*](https://en.wikipedia.org/wiki/Event_horizon) and one
+inner [*Cauchy horizon*](https://en.wikipedia.org/wiki/Cauchy_horizon).  The
+horizon we're discussing here is the *outer horizon* that physicists give the
+shorthand name `r+`.
 
 To put it mildly, interesting things happen at the outer event horizon.  For
 example, immediately after crossing, the event horizon stops being a place below
 you and becomes a moment in your past!  Inside, time itself (your future) points
-toward the middle of the black hole.  To get back out, you need rocket engines
-strong enough to prevent tomorrow from happening.
+inward to the inner horizon.  To escape back out, you need rocket engines strong
+enough to prevent tomorrow from happening.
 
 Complicating matters, physicists debate whether general relativity is the proper
 theory of an event horizon.  A future [Theory of
@@ -311,8 +311,7 @@ different parts of the same pulse can end up in very different places.
   accumulate in the prograde photon sphere, which results in the clump of
   transmission comets you see to the right of Bob inside the ergosphere.
 * Some parts of the pulse emitted prograde asymptotically approach the the inner
-  horizon, which you can see on Bob's left.  These photons contribute to the
-  "infinite blueshift" at the inner horizon.
+  horizon, which you can see on Bob's left.
 * Some parts of the pulse cross the inner horizon in finite coordinate time, but
   do not hit the ring singularity and rise to asymptotically approach the inner
   horizon from below.
@@ -343,16 +342,16 @@ that Bob's eyes rushed across the horizon to meet the trapped photons from his
 feet.  To put it more strongly, all of Bob's *physics* rushed across the
 horizon.
 
-Black hole lab can show that nothing strange happens in Bob's FoR as he crosses
+Black Hole Lab can show that nothing strange happens in Bob's FoR as he crosses
 the horizon.  She won't like it, but we'll use Alice as a stand-in for Bob's
 feet.  We start with Alice positioned just below Bob as his "feet" then let them
 fall together through the event horizon. You can load this setup in
 `demos/near_fall.bhl`.
 
 Alice and Bob are close enough to nearly share a frame of reference and Alice's
-radio pulses are equivalent to the light reflecting of Bob's feet.  The
+radio pulses are equivalent to the light reflecting off Bob's feet.  The
 `EQUATORIAL PLANE` view shows Bob continuing to receive Alice's transmissions
-(triangle shaped ticks) without interruption as the move across the horizon.
+(triangle shaped ticks) without interruption as they move across the horizon.
 
 [Bob feet equatorial](https://github.com/user-attachments/assets/4f4046f4-51cd-4b34-97f2-5f8fa198ee34)
 
@@ -360,15 +359,16 @@ In Bob's 1D+1 FoR view, we likewise see him receiving Alice's transmissions.
 
 [Bob feet 1d1](https://github.com/user-attachments/assets/15223301-369c-403b-8a39-76a3f1357a47)
 
-In Bob's FoR above, note the orange circle of Alice appears in Bob's past light
+In Bob's FoR above, note the amber circle of Alice appears in Bob's past light
 cone.  Here's a zoomed-in view:
 
 ![Bob feet Alice past 1d1](assets/images/bob_feet_alice_past.png)
 
 Let's unpack the information in this view:
 
-* Alice appears about 475ms in Bob's past as measured by Bob's watch.  That is
-  the light travel time to Bob as *he sees her*.
+* As he sees her, Alice appears about 475 "light-milliseconds" in Bob's past as
+  measured by Bob's watch.  That's about 140,000 km distant, but still small
+  relative to giant black hole like Sag A*.
 
 * Since Bob's only sees the light reflected off Alice, her inbound light moving
   at `c`, would naturally appear somewhere at perfect 45 degrees on Bob's *three
@@ -377,7 +377,7 @@ Let's unpack the information in this view:
   Alice using this triangulation style to indicate how far out of the radial
   dimension she sits relative to Bob.
 
-* Similarly to the "protractor view" of Alice's location, the incoming
+* Similarly to the triangulation view of Alice's location, the incoming
   transmission lines appear off the 45 degree line and on the line from Alice to
   Bob.  This is the same projection to 1D+1 issue and Bob sees the transmission
   passing him at `c`.
@@ -386,13 +386,13 @@ Let's unpack the information in this view:
 
 The next magenta colored ring inside the event horizon is the inner horizon.
 This horizon exists in spinning black holes, which is probably every real black
-hole in our universe.  Physicists use the shorthand name `r_` for the inner
+hole in our universe.  Physicists use the shorthand name `r-` for the inner
 horizon.  If the outer horizon is strange, the inner horizon is bizarre.
 
-First, the inner horizon is the boundary where the arrow of time stops pointing
-spacially inward and tilts back to point into the future.  Like the outer
-horizon, the inner horizon can be either a moment in time or a place in space
-depending on which side you find yourself.
+First, the inner horizon is the boundary where *inward* stops being a direction
+in time and becomes a direction in space again.  Like the outer horizon, the
+inner horizon can be either a moment in time or a place in space depending on
+which side you find yourself.
 
 The inner horizon has two *branches*, so to speak, which we'll call *left* and
 *right*.  There is nothing physical implied by these names, they simply take
@@ -406,13 +406,13 @@ inner horizon profoundly compresses incoming time.  With low angular momentum,
 you fall through the *left* branch of the horizon.  The different branches
 result in different fates!  Unfortunately, you would probably be fried in a bath
 of extremely energetic photons physicists call **infinite blueshift** in both
-cases.
+cases.  Black hole lab
 
 Our understanding of the physics at the inner horizon is much less clear than at
 the outer event horizon.  In our real universe, crossing the *outer* horizon may
 very well be a *smooth no drama* experience.  In contrast, crossing the *inner*
-horizon, if even possible, would be thrilling and not in a good way.  For
-reference, this paper assesses the survivability of a real physical object
+horizon, if doing so is even possible, would be thrilling and not in a good way.
+For reference, this paper assesses the survivability of a real physical object
 crossing the Cauchy horizon with a nod to the hit movie *Interstellar*.
 [Physical objects approaching the Cauchy horizon of a rapidly rotating Kerr
 black hole](https://arxiv.org/abs/1610.04355) by Mallary, Khanna, Burko in 2018.
@@ -420,7 +420,7 @@ Interestingly, the paper finds that the stress from spacetime curvature on a
 real physical object passing through the inner horizon might not be
 catastrophic.
 
-As before, Black Hole Lab let's our Kerr metric solution to general relativity
+As before, Black Hole Lab lets our Kerr metric solution to general relativity
 be the only word on the physics.
 
 #### The *right branch* of the Inner Horizon
@@ -436,20 +436,20 @@ demos/bob_right_branch.bhl to watch this case unfold.
 
 ![bob right branch](assets/images/bob_right_branch_1.png)
 
-Letting the simulation run shows Bob circling, getting slightly closer to `r_`
-as he circles around the inside of the black hole.  Eventually, the simulation
-cannot accurately track Bob as his circumstances grow more extreme. At that
-point, the simulation marks Bob as "Frozen: gliding on the r_ generator".
+Letting the simulation run shows Bob getting slightly closer to `r-` each time
+he circles the inside of the black hole.  Eventually, the simulation cannot
+accurately track Bob as his circumstances grow extreme. At that point, the
+simulation marks Bob as "Frozen: gliding on the r- generator".
 
-Here's a short video showing Bob frozen (no longer accurately simulated) on r_
-while Alice's sends her radio transmissions from outside the black hole.
+Here's a short video showing Bob frozen (no longer accurately simulated) on `r-`
+while Alice sends her radio transmissions from outside the black hole.
 
 [bob frozen](https://github.com/user-attachments/assets/0a5fdcae-b924-4613-acc8-7a23c5191d5f)
 
 Notice the simulation shows the radio waves with *three* possible paths here.
 All the rays approach from Bob's right, aka the *outward* direction and proceed
 *inward* toward the left.  Note that 'outward' and 'inward' may be improper
-terms in region II of the black hole, since *time* points radially 'inward'
+terms in `region II` of the black hole, since *time* points radially 'inward'
 here.  We would not be wrong to say the light rays approach from their past and
 head toward their future.
 
@@ -457,30 +457,33 @@ The first group of waves slows their radial descent as they asymptotically
 approach Bob from above.  Some rays in this group reach Bob and show a *finite*
 amount of time from the outside universe and are not wildly blueshifted in Bob's
 FoR.  These waves travel with Bob, so the relative energies are not dramatic.
-The remaining rays in this group stay above Bob forever as they approach r_.
+The remaining rays in this group stay above Bob forever as they approach `r-`.
 
 The second group of waves passes Bob and the inner horizon through the *left*
 branch, but then does not hit the ring singularity.  These waves climb back
-upward to the underside of the inner horizon in `Region III`.
+upward to the underside of the inner horizon in `region III`.
 
 The third group of waves is a bit harder to see at default comet settings.
 These waves have a steep inclination and speed past Bob through the left
-branch of r_ on their way to hit the ring singularity.
+branch of `r-` on their way to hit the ring singularity.
 
-#### Understanding the Cause of Infinite Blueshift
+Both the second and third group of waves end up frying Bob in extreme energy due
+to a phenomenon physicists call *infinite blueshift*.
+
+#### Infinite Blueshift
 
 A case that causes a mathematical infinity in a physical theory implies the
-theory broke down and no longer describes the real physics.  For example,
-general relativity has the famous singularity of infinite density in a black
-hole.  At the inner horizon, another fascinating infinity arises that physicists
-call *infinite blueshift*. Let's have a look.
+theory broke down and no longer describes real physics.  For example, general
+relativity predicts the famous infinitely dense singularity in a black hole.  At
+the inner horizon, another fascinating infinity arises called *infinite
+blueshift*. Let's have a look.
 
-In the interior region II of a black hole, recall that *time itself* points
-inward from the outer horizon `r+` "down" to the inner horizon `r_`.  In region
-II, the `r+` and `r_` horizons are not *places*, they are *moments* in the past
-and future respectively.  As Bob approaches the right branch of r_, we see his
+In the interior `region II` of a black hole, recall that *time itself* points
+inward from the outer horizon `r+` "down" to the inner horizon `r-`.  In region
+II, the `r+` and `r-` horizons are not *places*, they are *moments* in the past
+and future respectively.  As Bob approaches the right branch of `r-`, we see his
 *inward* time-like progress asymptotically slow.  Bob makes rapid progress
-through space as he circles the r_ horizon, but ever decreasing progress through
+through space as he circles the `r-` horizon, but ever decreasing progress through
 time.  Specifically, we're referring here to Bob's stall in *coordinate time*,
 which is equivalent to a distant clock.  We must wait for time = infinity to see
 Bob finally cross the horizon.
@@ -499,44 +502,49 @@ infinity, but in a mere 35 *microseconds*.  The asymptotic slowdown in
 of the inner horizon crams the coordinate time lines of the outside universe
 ever tighter into the remaining area between Bob and the horizon.  In this
 snapshot, the time between those distant clock lines is measured in minutes, not
-microseconds like Bob's clock lines.  The discrepancy between Bob's time and the
-outside universe grows unbounded!
+microseconds like Bob's clock lines.  This slow clock discrepancy between Bob
+and the outside universe grows unbounded!
 
-We've finally set the stage to describe the *infinite blueshift*.
+Now that we've explained Bob's clock slowing to a crawl as he nears the inner
+horizon, we've finally set the stage to describe the *infinite blueshift*.
+Consider Alice's distant radio broadcast arriving at Bob and suppose he counts
+wave crests for one second to measure the frequency.  In coordinate time, one
+second on Bob's slow watch is a *loooong* time and *many* wave crests pass Bob
+as he counts. However, in Bob's FoR, one second is just one second and Alice's
+radio signal passes him at exactly `c`.  In Bob's FoR, many wave crests per
+second is simply a higher frequency.  So, Bob measures Alice's signal as
+radically blueshifted.  In the screenshot above, the info box shows Alice's
+signal blueshifted by a factor of over 1 million when Bob is 35 microseconds
+away from the horizon.  As Bob gets ever closer to the horizon, the blueshift
+explodes *exponentially* like a fraction where the divisor approaches zero.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+In a real black hole, light from many sources would arrive at Bob, all of it
+blueshifted in this unbounded way.  For example, the low energy light of the
+[cosmic microwave
+background](https://en.wikipedia.org/wiki/Cosmic_microwave_background) gets
+blueshifted to gamma rays and beyond. Not just light, but gravitational waves
+get the same blueshift as light!  Bob may have a tough time in those last few
+nanoseconds before crossing.
 
 ### The Ring Singularity
 
 If you cross the inner horizon you enter what physicists call `region III` of
-the black hole.  This deep in a black hole arguably exists only in the math of
+the black hole.  This deep in a black hole probably exists only in the math of
 general relativity.  As in ancient maps with uncharted edges, "Here Be Dragons".
 
 Below you in `region III` is the *ring singularity*.  In the math, the ring
-singularity contains the mass of the black hole in a skinny spinning donut of
-infinite density.  In Black Hole Lab, the ring singularity is mathematically
-radius r = 0.  In `region III`, the arrow of time once again points toward the
-future and an observer can move around in 3 dimensions.
+singularity is a one-dimensional loop where spacetime curvature becomes
+infinite.  In Black Hole Lab, the ring singularity is mathematically radius r =
+0.  In `region III`, your radial coordinate r is just a direction in space and
+you can hover or move to large or smaller r values.
 
 If you enter `region III` with enough angular momentum, you swing back outward
 toward the underside of the inner horizon.  This approach is asymptotic in the
-simulation's coordinate time, so the simulation never shows a crossing back
-through r_.  However, in the proper time of the observer, this crossing happens
-quickly.  According to general relativity, the observer finds himself in an
-entirely different spacetime and *not* the black hole!
+simulation's coordinate time, so we cannot simulate a crossing back through
+`r-`. However, in the proper time of the observer, this crossing happens
+quickly. According to general relativity, the observer finds himself in a [white
+hole](https://en.wikipedia.org/wiki/White_hole) and being ejected into a new
+different universe.
 
 
 
