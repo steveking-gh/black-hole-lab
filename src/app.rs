@@ -177,7 +177,11 @@ impl SpacetimeApp {
         let loaded = crate::save::rebuild(&document)?;
 
         self.sim = loaded.sim;
+        // Show Rendering Terminal is a setting of this session, which no file carries: the panel
+        // the file describes is laid down with the box as the user left it.
+        let look_terminal = self.controls.look_terminal;
         self.controls = loaded.controls;
+        self.controls.look_terminal = look_terminal;
         self.controls.is_playing = false;
         crate::save::convert::apply_view_v1(
             &loaded.view,
@@ -362,7 +366,12 @@ impl SpacetimeApp {
                     Err(why) => failed(format!(
                         "Could not make {name}'s view: the save it starts from failed: {why}"
                     )),
-                    Ok(()) => match crate::look_around::Job::start(&program, save, who) {
+                    Ok(()) => match crate::look_around::Job::start(
+                        &program,
+                        save,
+                        who,
+                        self.controls.look_terminal,
+                    ) {
                         Ok(job) => {
                             self.look_around = Some(job);
                             LookStatus {
@@ -381,6 +390,28 @@ impl SpacetimeApp {
         };
         self.controls.look_status = Some(status);
         self.controls.look_making = self.look_around.as_ref().map(|job| job.who);
+    }
+
+    /// Stop the view being made, if one is, and say so on its card: the Cancel button.
+    ///
+    /// Dropping the job is the whole of it - `look_around::Job`'s `Drop` stops `sky-look` and
+    /// everything it started, and deletes the app's temporary files - and the card is told here,
+    /// because a dropped job has nothing left to report. A cancel that arrives with no view being
+    /// made (the view finished in the frame the button was pressed) changes nothing.
+    pub(crate) fn cancel_look_around(&mut self) {
+        let Some(job) = self.look_around.take() else { return };
+        let who = job.who;
+        drop(job);
+        self.controls.look_status = Some(LookStatus {
+            who,
+            text: format!(
+                "Cancelled {}'s view: Black Hole Lab stopped sky-look and every program sky-look \
+                 started.",
+                who.name()
+            ),
+            failed: false,
+        });
+        self.controls.look_making = None;
     }
 
     /// Bring the Look Around status up to date with the view being made, if one is, and say whether
@@ -687,6 +718,9 @@ impl eframe::App for SpacetimeApp {
         // the press, and never on a frame.
         if let Some(who) = self.controls.take_look_request() {
             self.look_around(who, crate::look_around::locate(), &std::env::temp_dir());
+        }
+        if self.controls.take_look_cancel() {
+            self.cancel_look_around();
         }
 
         // 4. Central Panel: Split View between Spacetime (t, r) and Spatial (x, y)

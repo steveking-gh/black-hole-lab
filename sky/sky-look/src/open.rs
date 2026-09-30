@@ -22,16 +22,17 @@
 //!
 //! # Holding nothing of this program's
 //!
-//! The app reads this program's standard output and error through pipes, and gives its verdict when
-//! both have closed. A pipe closes when every process holding an end of it has let go, and a
+//! A caller that reads this program's standard output and error through pipes - a script, and the
+//! app itself until it began reading a status file instead - learns that the run is over when both
+//! have closed. A pipe closes when every process holding an end of it has let go, and a
 //! process started from this one can be holding an end without anyone having meant it to: on
 //! Windows a child inherits every handle of its parent that is marked inheritable, not only the
 //! three it is given as its standard streams. This program's own standard output and error are
-//! such handles, inherited from the app. So the viewer is kept off them twice over: the viewer, or
+//! such handles, inherited from the caller. So the viewer is kept off them twice over: the viewer, or
 //! the shell that starts the system's default, is started with its standard streams set to null,
 //! and before that [`keep_own_pipes_to_ourselves`] has made this program's handles to the app's
 //! pipes uninheritable, so that no process started from here - the viewer, the tracer, the renderer
-//! or its ffmpeg - can hold the app's pipes open after this program has exited.
+//! or its ffmpeg - can hold the caller's pipes open after this program has exited.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

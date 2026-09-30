@@ -102,6 +102,45 @@ use values::Series;
 
 /// NASA's credit line, which any published video made from the Deep Star Maps must carry
 /// (sky/maps/README.md, "Credit").
+/// How far a render has got, printed as `progress <p>%` whenever the whole percentage goes up:
+/// the line `sky-look` reads to show a view's progress.
+///
+/// A render is a few stages of very different lengths, and the percentage is the share of the
+/// wall-clock time of a photograph rendered by `sky-look` that is behind each stage, measured
+/// 2026-09-27 on the owner's machine (8192 x 4096 from the default 4096 x 2048 grid, 3.9 s in
+/// all): reading the map 0.6 s, building its rip-map and the blackbody model's tables 1.9 s,
+/// loading the bundle's rays 0.3 s, drawing the picture 0.7 s, ffmpeg writing the JPEG 0.4 s. It
+/// is rough on purpose - a larger map or a film shifts the shares - and says only that the
+/// render is moving and roughly how far along it is. A film's frames share the drawing stage by
+/// count, and its encoding finishes with the last stage.
+struct Percent(u32);
+
+impl Percent {
+    /// The map is read.
+    const MAP_READ: f64 = 15.0;
+    /// The rip-map and the colour tables are built.
+    const TABLES_BUILT: f64 = 65.0;
+    /// The first frame's rays are loaded.
+    const BUNDLE_LOADED: f64 = 72.0;
+    /// Every picture is drawn and handed to the writer.
+    const DRAWN: f64 = 90.0;
+
+    /// Print the percentage `at`, if its whole part is higher than the last one printed.
+    fn at(&mut self, at: f64) {
+        let now = at.floor().clamp(0.0, 100.0) as u32;
+        if now > self.0 {
+            self.0 = now;
+            println!("progress {now}%");
+        }
+    }
+
+    /// The drawing stage, `sent` pictures of `count` handed to the writer.
+    fn drawn(&mut self, sent: u64, count: u64) {
+        let share = sent as f64 / count.max(1) as f64;
+        self.at(Self::BUNDLE_LOADED + (Self::DRAWN - Self::BUNDLE_LOADED) * share);
+    }
+}
+
 const CREDIT: &str = "NASA/Goddard Space Flight Center Scientific Visualization Studio. \
 Gaia DR2: ESA/Gaia/DPAC. Constellation figures based on those developed for the IAU by Alan \
 MacRobert of Sky and Telescope magazine (Roger Sinnott and Rick Fienberg).";
@@ -343,11 +382,14 @@ fn run(o: &Options) -> Result<(), String> {
     }
 
     let clock = Instant::now();
+    let mut percent = Percent(0);
     let image = load::read_map(&o.sky)?;
+    percent.at(Percent::MAP_READ);
     let image_damaged = image.damaged;
     let read_seconds = clock.elapsed().as_secs_f64();
     let clock = Instant::now();
     let sky = SkyMap::with_colour(image.width, image.height, image.texels, o.threads, o.colour);
+    percent.at(Percent::TABLES_BUILT);
     let pyramid_seconds = clock.elapsed().as_secs_f64();
     let picture = if o.show_model_range {
         Picture::ModelRange
@@ -502,6 +544,7 @@ fn run(o: &Options) -> Result<(), String> {
             o.threads,
         )?;
         load_time += clock.elapsed();
+        percent.at(Percent::BUNDLE_LOADED);
         let clock = Instant::now();
         let fields = (!timeline.before_first(k)).then(|| fields_of(timeline.pick(k), &loaded));
         let mut map = DarkMap::of(fields, size, o.threads);
@@ -624,6 +667,7 @@ fn run(o: &Options) -> Result<(), String> {
                 o.threads,
             )?;
             load_time += clock.elapsed();
+            percent.drawn(sent, count);
 
             let clock = Instant::now();
             let mut pixels = match returned.try_recv() {
@@ -670,6 +714,7 @@ fn run(o: &Options) -> Result<(), String> {
                 break;
             }
             sent += 1;
+            percent.drawn(sent, count);
             if last_report.elapsed() >= Duration::from_secs(1) || sent == count {
                 last_report = Instant::now();
                 let elapsed = loop_started.elapsed().as_secs_f64();
@@ -710,6 +755,7 @@ fn run(o: &Options) -> Result<(), String> {
             println!("{line}");
         }
     }
+    percent.at(100.0);
     if let Some(photo) = &photo_path {
         let bytes = std::fs::metadata(photo).map(|m| m.len()).unwrap_or(0);
         println!(

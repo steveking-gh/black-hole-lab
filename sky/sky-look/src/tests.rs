@@ -1,20 +1,23 @@
-//! The pure parts: the search for the pieces, the name and place of the photograph, the clearing
-//! of old intermediates, the reading of the save and of the renderer's lines, the choice of viewer
-//! and the command that starts the viewer. Each against files made for the test in a scratch
+//! The pure parts: the search for the pieces, the name of a view and its folder, the reading of the
+//! save and of the children's lines, the commands as PowerShell lines, the choice of viewer, and
+//! the commands that start the viewer and the prompt. Each against files made for the test in a scratch
 //! directory of its own, and none needing the real tools or starting a viewer.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
 
 use crate::args::{self, Request, Units, Who};
 use crate::find::{self, FETCH_SCRIPT, Names, SKY_MAP, SKY_MAP_ENV, Search};
 use crate::names;
 use crate::open::{self, Viewer};
-use crate::run::{Tally, mark_sentence, parse_tally, readout_sentence, red_sentence};
+use crate::run::{
+    Tally, mark_sentence, parse_tally, percent_sentence, powershell_line, readout_sentence,
+    red_sentence,
+};
 use crate::save;
-use crate::scratch::{self, STALE};
+use crate::shell;
 
 /// A directory of its own for one test, empty, in the system's temporary directory.
 pub fn scratch_dir(what: &str) -> PathBuf {
@@ -212,7 +215,8 @@ fn test_each_missing_piece_has_its_own_sentence_saying_what_to_do() {
     ];
     let mut sentences = Vec::new();
     for (piece, words) in missing {
-        let hidden = scratch::with_suffix(&piece, ".away");
+        let mut hidden = piece.clone().into_os_string();
+        hidden.push(".away");
         std::fs::rename(&piece, &hidden).expect("the piece is moved away");
         let why = find::find(&search, &names()).expect_err("a piece is missing");
         std::fs::rename(&hidden, &piece).expect("the piece is put back");
@@ -298,7 +302,7 @@ fn test_file_names_sort_as_the_times_they_were_made() {
 }
 
 #[test]
-fn test_two_presses_in_one_second_make_two_files_and_neither_writes_over_the_other() {
+fn test_two_presses_in_one_second_make_two_folders_and_neither_uses_the_others() {
     let second = UNIX_EPOCH + Duration::from_secs(1_790_000_000);
     let (a, b) = (
         second + Duration::from_millis(1),
@@ -309,40 +313,47 @@ fn test_two_presses_in_one_second_make_two_files_and_neither_writes_over_the_oth
         names::stem(b, "Bob", Some(0.0), false)
     );
 
-    // And two in the same millisecond, of two copies of the app, which name their files alike.
-    let root = scratch_dir("place");
+    // And two in the same millisecond, of two copies of the app, which name their views alike.
+    let root = scratch_dir("folders");
     let out = root.join("views");
     std::fs::create_dir_all(&out).expect("the views directory");
     let stem = names::stem(a, "Bob", Some(0.0), false);
-    // An earlier view's video in the same directory, as the owner's are: a photograph is one file,
-    // and placing one neither needs nor touches anything else there.
-    let old_video = out.join(format!("{stem}.mkv"));
-    std::fs::write(&old_video, "an earlier video").expect("an earlier view");
-    let mut placed = Vec::new();
-    for press in ["first", "second", "third"] {
-        let work = root.join(press);
-        std::fs::create_dir_all(&work).expect("a working directory");
-        let photo = work.join("view.jpg");
-        std::fs::write(&photo, format!("{press} photo")).expect("a photo");
-        placed.push((press, names::place(&photo, &out, &stem).expect("placed")));
-    }
-    for (press, file) in &placed {
-        assert_eq!(
-            std::fs::read_to_string(&file.photo).expect("the photo"),
-            format!("{press} photo")
-        );
-    }
-    assert_eq!(placed[0].1.photo, out.join(format!("{stem}.jpg")));
-    assert_eq!(placed[1].1.photo, out.join(format!("{stem} (2).jpg")));
-    assert_eq!(placed[2].1.photo, out.join(format!("{stem} (3).jpg")));
+    // An earlier view's photograph of the same name, from before views had folders, as the
+    // owner's are: a folder of that name is another thing, and making it touches nothing else.
+    let old_photo = out.join(format!("{stem}.jpg"));
+    std::fs::write(&old_photo, "an earlier photograph").expect("an earlier view");
+    let folders: Vec<PathBuf> = (0..3)
+        .map(|_| names::make_folder(&out, &stem).expect("a folder"))
+        .collect();
     assert_eq!(
-        std::fs::read_to_string(&old_video).expect("the earlier view"),
-        "an earlier video"
+        folders,
+        [
+            out.join(&stem),
+            out.join(format!("{stem} (2)")),
+            out.join(format!("{stem} (3)"))
+        ]
     );
+    assert!(folders.iter().all(|f| f.is_dir()));
     assert_eq!(
-        std::fs::read_dir(&out).expect("the views").count(),
-        4,
-        "three photographs and the earlier video, one file a press"
+        std::fs::read_to_string(&old_photo).expect("the earlier view"),
+        "an earlier photograph"
+    );
+
+    // A file moved into a folder arrives whole, and is no longer where it was; a name that is
+    // taken is refused rather than written over.
+    let save = root.join("the run.bhl");
+    std::fs::write(&save, "a save").expect("a save");
+    let moved = folders[0].join("view.bhl");
+    names::move_file(&save, &moved).expect("moved");
+    assert!(!save.exists(), "the save is no longer where it was");
+    assert_eq!(std::fs::read_to_string(&moved).expect("moved"), "a save");
+    std::fs::write(&save, "another save").expect("another save");
+    let taken = names::move_file(&save, &moved).expect_err("the name is taken");
+    assert_eq!(taken.kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(std::fs::read_to_string(&moved).expect("kept"), "a save");
+    assert!(
+        save.is_file(),
+        "a file that could not be moved stays where it was"
     );
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -434,118 +445,6 @@ fn test_the_views_go_to_the_flag_then_the_variable_then_videos_then_home() {
         "{why}"
     );
     let _ = std::fs::remove_dir_all(&root);
-}
-
-/// Sets the modification time of `path` itself - a file, a directory, or a link, not what a link
-/// points to - to `age` before now.
-fn backdate(path: &Path, age: Duration) {
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true);
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        // FILE_FLAG_BACKUP_SEMANTICS, to open a directory; FILE_FLAG_OPEN_REPARSE_POINT, to open a
-        // link rather than its target.
-        options.custom_flags(0x0200_0000 | 0x0020_0000);
-    }
-    #[cfg(not(windows))]
-    if path.is_dir() {
-        options.write(false).read(true);
-    }
-    let file = options
-        .open(path)
-        .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    file.set_modified(SystemTime::now() - age)
-        .expect("the time is set");
-}
-
-#[test]
-fn test_clearing_deletes_what_is_older_than_an_hour_in_its_own_directory_and_nothing_else() {
-    let temp = scratch_dir("stale");
-    let root = temp.join(scratch::ROOT);
-    let old = STALE + Duration::from_secs(60);
-    let young = STALE - Duration::from_secs(60);
-
-    // Inside: an old run's directory with a bundle in it, an old stray file, a young run's
-    // directory, a young file.
-    let old_run = root.join("run-1-2-0");
-    touch(&old_run.join("bundle/frames/000000.skyframe"));
-    touch(&old_run.join("view.jpg.partial"));
-    backdate(&old_run, old);
-    let old_file = root.join("stray.tmp");
-    touch(&old_file);
-    backdate(&old_file, old);
-    let young_run = root.join("run-3-4-0");
-    touch(&young_run.join("bundle/manifest.json"));
-    backdate(&young_run, young);
-    let young_file = root.join("young.tmp");
-    touch(&young_file);
-
-    // Outside: an old file beside the directory, and an old directory that a link inside points
-    // to. None of it may go.
-    let beside = temp.join("beside.bhl");
-    touch(&beside);
-    backdate(&beside, old);
-    let target = temp.join("elsewhere");
-    touch(&target.join("precious.jpg"));
-    backdate(&target, old);
-    let link = root.join("link-out");
-    #[cfg(windows)]
-    let linked = std::process::Command::new("cmd")
-        .args(["/C", "mklink", "/J"])
-        .arg(&link)
-        .arg(&target)
-        .stdout(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success());
-    #[cfg(unix)]
-    let linked = std::os::unix::fs::symlink(&target, &link).is_ok();
-    assert!(linked, "the link is made");
-    backdate(&link, old);
-
-    scratch::clear_stale(&root, SystemTime::now());
-
-    assert!(!old_run.exists(), "the old run's directory is gone");
-    assert!(!old_file.exists(), "the old file is gone");
-    assert!(
-        std::fs::symlink_metadata(&link).is_err(),
-        "the old link is gone"
-    );
-    assert!(
-        young_run.join("bundle/manifest.json").is_file(),
-        "a young run is left alone"
-    );
-    assert!(young_file.is_file(), "a young file is left alone");
-    assert!(root.is_dir(), "the directory itself stays");
-    assert!(beside.is_file(), "nothing beside the directory is touched");
-    assert!(
-        target.join("precious.jpg").is_file(),
-        "nothing a link points to is touched"
-    );
-    let _ = std::fs::remove_dir_all(&temp);
-}
-
-#[test]
-fn test_a_run_works_in_a_directory_of_its_own_which_goes_when_the_run_does() {
-    let temp = scratch_dir("own");
-    let (a, b) = (
-        scratch::Scratch::new(&temp).expect("one"),
-        scratch::Scratch::new(&temp).expect("two"),
-    );
-    assert_ne!(a.dir(), b.dir(), "two runs at once, two directories");
-    for s in [&a, &b] {
-        assert_eq!(s.dir().parent(), Some(temp.join(scratch::ROOT).as_path()));
-    }
-    touch(&a.dir().join("bundle/manifest.json"));
-    let dir = a.dir().to_path_buf();
-    drop(a);
-    assert!(
-        !dir.exists(),
-        "the run's directory is deleted with everything in it"
-    );
-    assert!(b.dir().is_dir(), "and the other run's is not");
-    drop(b);
-    let _ = std::fs::remove_dir_all(&temp);
 }
 
 #[test]
@@ -669,8 +568,23 @@ fn test_the_command_line_needs_a_save_and_an_observer_and_refuses_what_the_tools
         panic!("a look")
     };
     assert_eq!(
-        (o.who, o.open, o.keep, o.grid, o.viewer.as_deref()),
-        (Who::Alice, true, false, args::DEFAULT_GRID, None)
+        (o.who, o.open, o.grid, o.viewer.as_deref()),
+        (Who::Alice, true, args::DEFAULT_GRID, None)
+    );
+    assert_eq!(
+        (o.status.as_deref(), o.move_save, o.shell),
+        (None, false, false),
+        "nothing of the app's own unless it is asked for"
+    );
+    // What the app gives.
+    let Ok(Request::Look(o)) =
+        parse(r"x.bhl --observer bob --status C:\temp\x.status --move-save --open --shell")
+    else {
+        panic!("the app's command line")
+    };
+    assert_eq!(
+        (o.status, o.move_save, o.open, o.shell),
+        (Some(PathBuf::from(r"C:\temp\x.status")), true, true, true)
     );
     let Ok(Request::Look(o)) = parse(r"x.bhl --observer bob --open --viewer C:\tools\viewer.exe")
     else {
@@ -711,6 +625,9 @@ fn test_the_command_line_needs_a_save_and_an_observer_and_refuses_what_the_tools
             "--units is given twice",
         ),
         ("x.bhl --observer bob --fast", "no option --fast"),
+        // Every view keeps its bundle now, so the option that asked for that is gone.
+        ("x.bhl --observer bob --keep", "There is no option --keep;"),
+        ("x.bhl --observer bob --status", "--status needs a value"),
         // The held video is gone, and its option with it: refused as any unknown option is.
         (
             "x.bhl --observer bob --hold 60",
@@ -1144,5 +1061,81 @@ fn test_the_registry_answer_for_vlc_is_a_directory_or_nothing() {
     for dir in &found {
         assert!(dir.is_absolute(), "{}", dir.display());
         assert!(!dir.as_os_str().to_string_lossy().contains('\0'));
+    }
+}
+
+#[test]
+fn test_a_command_is_written_as_a_powershell_line_that_runs_as_it_stands() {
+    let args: Vec<OsString> = [
+        r"C:\Users\me\Videos\Black Hole Lab views\2026-09-30 10.00.00.000 UTC Bob at tau 1.500 M\2026-09-30 10.00.00.000 UTC Bob at tau 1.500 M.bhl",
+        "--out",
+        r"D:\Bob's views\bundle",
+        "--grid",
+        "4096x2048",
+        "--exposure",
+        "-1.5",
+        "--decimal-comma",
+        "a\u{2019}b",
+    ]
+    .iter()
+    .map(OsString::from)
+    .collect();
+    let line = powershell_line(Path::new(r"C:\sky\sky-trace.exe"), &args);
+    assert_eq!(
+        line,
+        concat!(
+            r"& 'C:\sky\sky-trace.exe' 'C:\Users\me\Videos\Black Hole Lab views\2026-09-30 ",
+            r"10.00.00.000 UTC Bob at tau 1.500 M\2026-09-30 10.00.00.000 UTC Bob at tau 1.500 ",
+            r"M.bhl' --out 'D:\Bob''s views\bundle' --grid 4096x2048 --exposure -1.5 ",
+            "--decimal-comma 'a\u{2019}\u{2019}b'"
+        )
+    );
+}
+
+#[test]
+fn test_a_childs_percentage_becomes_a_sentence_every_five_points_and_never_at_100() {
+    let mut shown = 0;
+    let mut said = Vec::new();
+    for p in 0..=100 {
+        if let Some(sentence) =
+            percent_sentence(&format!("progress {p}%"), &mut shown, || "Tracing".into())
+        {
+            said.push(sentence);
+        }
+    }
+    let expected: Vec<String> = (1..20).map(|k| format!("Tracing: {}%.", 5 * k)).collect();
+    assert_eq!(said, expected);
+    // Any other line is not a percentage, and a percentage that does not read is passed over.
+    for line in [
+        "frame 1 of 1",
+        "progress",
+        "progress x%",
+        "progress 50",
+        "wrote 50%",
+    ] {
+        assert_eq!(
+            percent_sentence(line, &mut 0, || "x".into()),
+            None,
+            "{line}"
+        );
+    }
+}
+
+#[test]
+fn test_the_prompt_starts_in_the_views_folder() {
+    let folder = Path::new("views").join("a view");
+    let command = shell::command(&folder);
+    assert_eq!(command.get_current_dir(), Some(folder.as_path()));
+    let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
+    if cfg!(windows) {
+        let program = Path::new(command.get_program())
+            .file_name()
+            .expect("a program")
+            .to_string_lossy()
+            .to_lowercase();
+        assert_eq!(program, "cmd.exe", "the command prompt");
+        assert_eq!(args, ["/K"], "which runs nothing and stays");
+    } else {
+        assert!(args.is_empty(), "{args:?}");
     }
 }

@@ -3,9 +3,10 @@
 //! Hand-rolled, as `sky-trace`'s is: a dozen flags do not need a parsing crate, and a crate would
 //! put its own wording on the refusals where this program wants to say what to do instead.
 //!
-//! The app always calls `sky-look <file.bhl> --observer bob|alice --open`; everything else is for
-//! a person at a terminal. A command line this program cannot use exits with code 1 and not 2,
-//! because the app's contract keeps 2 for a moment no view can be made from.
+//! The app always calls `sky-look <file.bhl> --observer bob|alice --status <file> --move-save
+//! --open`, with `--shell` after it when the user has ticked Show Rendering Terminal; everything
+//! else is for a person at a terminal. A command line this program cannot use exits with code 1 and
+//! not 2, because the app's contract keeps 2 for a moment no view can be made from.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -24,7 +25,8 @@ diamond or a triangle as the panel names them, mark those directions of travel.
 USAGE
     sky-look <file.bhl> --observer bob|alice [options]
 
-    <file.bhl>              The save. It is read and never changed.
+    <file.bhl>              The save. It is copied into the view's folder and never changed,
+                            unless --move-save asks for it to be moved there.
     --observer bob|alice    Whose view. Required.
     --open                  Open the photograph when it is made: in the program --viewer names,
                             else in the one the environment variable BLACK_HOLE_LAB_VIEWER
@@ -32,7 +34,8 @@ USAGE
                             system opens .jpg files with, which may show the photograph flat
                             where VLC lets you drag to look round.
     --viewer <program>      The full path of the program --open starts on the photograph.
-    --out-dir <dir>         Where the photograph goes. Default: the directory the environment
+    --out-dir <dir>         The views directory, in which each view gets a folder of its own
+                            (see THE VIEW'S FOLDER). Default: the directory the environment
                             variable BLACK_HOLE_LAB_VIEWS names, else a directory named
                             \"Black Hole Lab views\" in the user's Videos folder, else in the
                             user's home directory.
@@ -45,8 +48,6 @@ USAGE
                             seconds and kilometres as Black Hole Lab's panel shows them, or
                             geometric, in M. Default physical.
     --exposure <stops>      The exposure, passed to sky-render. Default: sky-render's.
-    --keep                  Keep the traced sky bundle, beside the photograph, and say where it
-                            is.
     --tools <dir>           The directory holding sky-trace and sky-render. Default: this
                             program's own directory.
     --ffmpeg <path>         The ffmpeg sky-render writes the photograph with. Default: ffmpeg
@@ -54,19 +55,43 @@ USAGE
     --sky <map.exr>         The star map. Default: the file the environment variable
                             BLACK_HOLE_LAB_SKY_MAP names, else maps/starmap_2020_8k_gal.exr in
                             the nearest sky directory at or above this program's directory.
+    --status <file>         Also append every progress sentence to this file, and at the end
+                            one line saying how the run ended (see STATUS FILE). The app names
+                            a file here and reads it while the view is being made.
+    --move-save             Move the save into the view's folder rather than copy it. The app
+                            gives this for the temporary save it writes for each view.
+    --shell                 When the run ends, however it ends, start a command prompt in the
+                            view's folder, in this program's console window, and leave the
+                            prompt running there. Progress then goes to the console window even
+                            where standard output is redirected. The app gives this when Show
+                            Rendering Terminal is ticked, and starts this program in a console
+                            window of its own.
     --help, -h              Print this and do nothing else.
 
 OUTPUT
-    Progress, one sentence a line, on standard output; the last line of a run that succeeds is
-    the photograph's full path. A refusal of the moment (the observer inside the inner horizon,
-    being dragged, at the ring, not in the save) exits with code 2 and one sentence on standard
-    error; any other failure exits with code 1 and one sentence on standard error.
+    Progress, one sentence a line, on standard output, with the percentage traced and rendered as
+    the two programs go; before each program is started, the command that starts it, as a
+    PowerShell line beginning with &. The last line of a run that succeeds is the photograph's
+    full path. A refusal of the moment (the observer inside the inner horizon, being dragged, at
+    the ring, not in the save) exits with code 2 and one sentence on standard error; any other
+    failure exits with code 1 and one sentence on standard error.
 
-    The photograph is named by the time it was made (UTC), the observer, and the reading of the
-    observer's watch (proper time, in M) at the saved moment. Intermediate files are kept in a
-    directory of this program's own under the system's temporary directory, and deleted at the
-    end of every run; what a run that was stopped left there is deleted by the first run an hour
-    or more later.
+THE VIEW'S FOLDER
+    Each view gets a folder of its own in the views directory, named by the time the view was
+    made (UTC), the observer, and the reading of the observer's watch (proper time, in M) at the
+    saved moment. In the folder: the photograph, named as the folder is, with .jpg after the
+    name; the save, with .bhl; the traced sky bundle, in bundle; commands.txt, the commands that
+    were run, which PowerShell runs again when they are pasted into it; and log.txt, every line
+    of progress and the line saying how the run ended. Nothing in the folder is ever deleted,
+    whether or not the view was made: a run that failed leaves its folder to be looked into. A
+    bundle of the default 4096x2048 grid takes about 90 MB on disk.
+
+STATUS FILE
+    The file --status names gets the progress sentences, each on a line of its own, and then one
+    last line saying how the run ended: done <the photograph's full path>, refused <sentence>,
+    or failed <sentence>. A progress sentence always begins with a capital letter or a digit, so
+    the last line is never taken for one. The lines are UTF-8, each ended by a line feed and each
+    written whole; a reader that finds a line without its line feed has read it too soon.
 ";
 
 /// The ray grid when `--grid` is not given. Measured 2026-09-27 on the owner's machine (16
@@ -147,7 +172,13 @@ pub struct Options {
     /// `--units`, physical unless it says otherwise.
     pub units: Units,
     pub open: bool,
-    pub keep: bool,
+    /// `--status <file>`: where the progress sentences, and last the line saying how the run
+    /// ended, are appended for the app to read.
+    pub status: Option<PathBuf>,
+    /// `--move-save`: move the save into the view's folder rather than copy it.
+    pub move_save: bool,
+    /// `--shell`: start a command prompt in the view's folder when the run ends.
+    pub shell: bool,
     pub out_dir: Option<PathBuf>,
     /// Columns and rows of rays, W = 2 H.
     pub grid: (u32, u32),
@@ -167,8 +198,9 @@ pub enum Request {
 }
 
 /// The flags that take a value.
-const VALUED: [&str; 9] = [
+const VALUED: [&str; 10] = [
     "--observer",
+    "--status",
     "--out-dir",
     "--grid",
     "--units",
@@ -199,13 +231,14 @@ pub fn parse(args: &[OsString]) -> Result<Request, String> {
     }
     let mut given: Vec<(&str, &str)> = Vec::new();
     let mut save: Option<&str> = None;
-    let (mut open, mut keep) = (false, false);
+    let (mut open, mut move_save, mut shell) = (false, false, false);
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         let flag = arg.as_str();
         match flag {
             "--open" => open = true,
-            "--keep" => keep = true,
+            "--move-save" => move_save = true,
+            "--shell" => shell = true,
             _ if VALUED.contains(&flag) => {
                 let Some(value) = rest.next() else {
                     return Err(format!(
@@ -283,7 +316,9 @@ pub fn parse(args: &[OsString]) -> Result<Request, String> {
         who,
         units,
         open,
-        keep,
+        status: value("--status").map(PathBuf::from),
+        move_save,
+        shell,
         out_dir: value("--out-dir").map(PathBuf::from),
         grid,
         exposure,
@@ -318,4 +353,17 @@ fn parse_grid(text: &str) -> Result<(u32, u32), String> {
         ));
     }
     Ok((w, h))
+}
+
+/// The file `--status` names, read off a command line without the rest of it: for a command line
+/// [`parse`] refuses, so that the refusal still reaches the app as the status file's last line.
+pub fn status_named(args: &[OsString]) -> Option<PathBuf> {
+    let at = args.iter().position(|a| a == "--status")?;
+    args.get(at + 1).map(PathBuf::from)
+}
+
+/// Whether `--shell` is on a command line, read without the rest of it: `main` has to know before
+/// anything is printed, to take this program's console window for its standard streams.
+pub fn wants_shell(args: &[OsString]) -> bool {
+    args.iter().any(|a| a == "--shell")
 }

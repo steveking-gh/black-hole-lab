@@ -2,7 +2,7 @@
 //! at the saved moment. It is the program behind the app's Look Around button:
 //!
 //! ```text
-//! sky-look <file.bhl> --observer bob|alice --open
+//! sky-look <file.bhl> --observer bob|alice --status <file> --move-save --open [--shell]
 //! ```
 //!
 //! It runs `sky-trace` on the one frame of the saved moment and `sky-render` on what that traced,
@@ -10,26 +10,55 @@
 //! dark region (or below the opening view when the dark region is too small to hold them) - the
 //! watch, radius and distant clock, in seconds and kilometres unless `--units geometric` asks for
 //! M, and the speed and heading of travel past each local reference observer there is where the
-//! observer is - and small green signs on the sky marking those directions of travel. It puts the
-//! photograph in the views directory, and with `--open` hands it to a viewer: VLC
-//! when it is installed, which pans a 360-degree photograph, before the system's default program
-//! for `.jpg` files, which may show it flat. The contract with the app, which
-//! `src/look_around.rs` at the repository root is built against:
+//! observer is - and small green signs on the sky marking those directions of travel. Each view
+//! gets a folder of its own in the views directory, holding the photograph, the save, the traced
+//! bundle, `commands.txt` and `log.txt`, and nothing in it is ever deleted (`names`). With `--open`
+//! it hands the photograph to a viewer: VLC when it is installed, which pans a 360-degree
+//! photograph, before the system's default program for `.jpg` files, which may show it flat.
 //!
-//! - progress on standard output, one complete short sentence a line, flushed after each;
-//! - exit 0 on success, the last line of standard output the photograph's full path and nothing
-//!   else;
-//! - exit 2 when the moment is refused (the observer inside the inner horizon, dragged, at the
-//!   ring, frozen onto the inner horizon, not in the save; a hole spinning the other way), with the
-//!   tracer's own sentence on standard error;
-//! - exit 1 on any other failure, with one sentence on standard error saying what to do;
-//! - nothing on standard error on a run that succeeds.
+//! The contract with the app, which `src/look_around.rs` at the repository root is built against:
+//!
+//! - the app writes a temporary save, creates an empty status file beside it, and starts this
+//!   program on the save with `--status` naming that file and `--move-save`, at below-normal
+//!   priority; with no console window, or with `--shell` in a console window of its own;
+//! - the first thing this program writes to disk, once it has found every piece it needs, is the
+//!   view's folder, and then the save, moved into it (renamed, or copied and deleted across
+//!   volumes); a run stopped before that leaves the temporary save where it was, for the app to
+//!   delete;
+//! - every progress sentence goes on a line of its own to standard output, to the status file and
+//!   to `log.txt`, flushed after each; a sentence begins with a capital letter or a digit and ends
+//!   with a full stop, and while the tracer and the renderer work it carries their percentage, as
+//!   in `Tracing the light that reaches Alice: 35%.`;
+//! - the last line of the status file, and only the last, is the verdict, one of
+//!
+//!   ```text
+//!   done <the photograph's full path>
+//!   refused <one sentence saying why the moment is refused>
+//!   failed <one sentence saying what went wrong and what to do>
+//!   ```
+//!
+//!   a lowercase word, one space and the rest of the line: which no sentence of progress can be
+//!   taken for. The status file is UTF-8, every line ended by a line feed and written in one piece;
+//!   a reader that finds a line without its line feed has read it too soon, and waits for it. A
+//!   command line this program refuses still gets `failed <sentence>` in the file it names. A
+//!   status file with no verdict when this program has exited means it was stopped or crashed;
+//! - standard output also carries, just before each program is started, the command that starts
+//!   it (a PowerShell line beginning with `&`), and on success, last, the photograph's full path
+//!   and nothing else - followed, with `--shell`, by one line about the command prompt;
+//! - exit 0 on success; exit 2 when the moment is refused (the observer inside the inner horizon,
+//!   dragged, at the ring, frozen onto the inner horizon, not in the save; a hole spinning the
+//!   other way), with the tracer's own sentence on standard error; exit 1 on any other failure,
+//!   with one sentence on standard error saying what to do; nothing on standard error on a run
+//!   that succeeds. The codes are for a person or a script at a terminal: the app reads the
+//!   verdict, and takes an exit only as a sign that no verdict is coming;
+//! - with `--shell`, once the verdict is written - whether the view was made, refused or failed -
+//!   a command prompt starts in the view's folder, in this program's console window, and this
+//!   program exits without waiting for it (`shell`).
 //!
 //! `args` reads the command line; `find` finds the pieces; `run` runs the two programs and turns
-//! what they print into sentences; `names` names and places the finished photograph; `scratch`
-//! keeps every intermediate in one directory of its own and clears what killed runs left; `save`
-//! reads the three facts this program takes from the save; `open` chooses the viewer and hands the
-//! photograph to it.
+//! what they print into sentences; `names` names the view and makes its folder; `save` reads the
+//! three facts this program takes from the save; `open` chooses the viewer and hands the
+//! photograph to it; `shell` takes the console and leaves the prompt in it.
 
 mod args;
 mod find;
@@ -37,7 +66,7 @@ mod names;
 mod open;
 mod run;
 mod save;
-mod scratch;
+mod shell;
 
 #[cfg(test)]
 mod tests;
@@ -45,10 +74,15 @@ mod tests;
 mod tests_run;
 
 fn main() {
-    // Before anything is started, so that nothing started from here can hold the app's pipes open
-    // after this program has exited (`open` says why that matters).
-    open::keep_own_pipes_to_ourselves();
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    // Before anything is printed, so that every line reaches the console window the app opened
+    // for this program rather than wherever the handles it was given point (`shell` says why).
+    if args::wants_shell(&args) {
+        shell::use_own_console();
+    }
+    // Before anything is started, so that nothing started from here holds this program's own
+    // standard streams (`open` says why that matters).
+    open::keep_own_pipes_to_ourselves();
     let env = run::Environment::of_this_process();
     let code = run::cli(&args, &env, &mut std::io::stdout(), &mut std::io::stderr());
     std::process::exit(code);

@@ -38,7 +38,7 @@ pub mod metric;
 pub mod observer;
 pub mod ray;
 
-pub use frame::{SkyFrame, trace_frame};
+pub use frame::{SkyFrame, trace_frame, trace_frame_reporting};
 pub use metric::{Constants, Kerr};
 pub use observer::{Observer, ScopeError, Triad};
 pub use ray::{Fate, Outcome, TraceOptions, trace_covector, trace_direction};

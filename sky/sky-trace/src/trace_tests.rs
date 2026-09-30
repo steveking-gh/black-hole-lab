@@ -628,3 +628,41 @@ fn test_a_resumed_film_writes_the_same_continuous_headings() {
         "the resumed bundle's manifest is the first one, to the bit"
     );
 }
+
+#[test]
+fn test_the_percentage_traced_climbs_a_whole_point_at_a_time_to_100_across_the_frames() {
+    // `sky-look` shows how far a view has got from these lines, so they must rise and end at 100:
+    // three frames of a hover test, each a few rows, and a resumed run that has one frame left to
+    // trace starts its count from the two already there.
+    let scratch = Scratch::new("percent");
+    let out = scratch.join("hover");
+    let line: Vec<String> = [
+        "--hover", "6", "--spin", "0.5", "--frames", "3", "--grid", "64x32", "--out", &out,
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    let percentages = |args: &[String]| -> Vec<u32> {
+        let mut printed = Vec::new();
+        run(args, &mut printed).expect("a film");
+        String::from_utf8(printed)
+            .expect("UTF-8")
+            .lines()
+            .filter_map(|l| l.strip_prefix("progress ")?.strip_suffix('%')?.parse().ok())
+            .collect()
+    };
+    let whole = percentages(&line);
+    assert_eq!(whole.last(), Some(&100), "{whole:?}");
+    assert!(whole.windows(2).all(|w| w[0] < w[1]), "rising: {whole:?}");
+    assert!(whole.len() > 10, "more than a line a frame: {whole:?}");
+
+    std::fs::remove_file(Path::new(&out).join("frames").join("000002.skyframe")).unwrap();
+    let mut resumed = line.clone();
+    resumed.push("--resume".into());
+    let rest = percentages(&resumed);
+    assert_eq!(rest.last(), Some(&100), "{rest:?}");
+    assert!(
+        rest[0] > 66,
+        "counted from the two frames already traced: {rest:?}"
+    );
+}

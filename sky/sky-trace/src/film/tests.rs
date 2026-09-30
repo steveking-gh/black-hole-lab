@@ -28,7 +28,7 @@ fn hover(r: f64, a: f64) -> (Kerr, Event) {
 
 /// A frame of H rows and 2H columns at an event.
 fn frame(kerr: &Kerr, event: &Event, height: u32) -> Frame {
-    let traced = trace(kerr, event, 0, 2 * height, height, 8).unwrap();
+    let traced = trace(kerr, event, 0, 2 * height, height, 8, &|_, _| {}).unwrap();
     assert_eq!(traced.unresolved, 0, "no ray unresolved");
     traced.frame
 }

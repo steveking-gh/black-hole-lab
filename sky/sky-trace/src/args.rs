@@ -73,6 +73,11 @@ A DRY RUN
     --step <tau>            The proper time between frames, in M. Default 0.1.
     --frames <n>            The most frames. Default: until the worldline ends, at most 10000.
 
+PROGRESS
+    While it traces, the program prints a line `frame <k> of <n>: ...` about once a second, and a
+    line `progress <p>%` each time the whole percentage of the film's rows traced goes up, which
+    is what sky-look reads to say how far a view has got.
+
 THE CAMERA
     The camera is tied to the hole, not carried by gyroscopes: at every frame it faces the hole
     (heading zero, the centre of the video frame, is the direction in the observer's rest space in

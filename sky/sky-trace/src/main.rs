@@ -56,7 +56,7 @@ fn main() {
 /// what a film wrote; `None` for help or a dry run.
 pub fn run(
     args: &[String],
-    out: &mut dyn std::io::Write,
+    out: &mut (dyn std::io::Write + Send),
 ) -> Result<Option<trace::Summary>, Failure> {
     match args::parse(args).map_err(Failure::Usage)? {
         Command::Help => {

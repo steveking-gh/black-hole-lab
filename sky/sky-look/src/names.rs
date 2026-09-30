@@ -1,17 +1,24 @@
-//! Where the finished photograph goes and what it is called.
+//! Where a view's files go and what they are called.
 //!
-//! A view is named
+//! Every view gets a folder of its own in the views directory, named
 //!
 //! ```text
-//! 2026-09-27 21.35.03.456 UTC Bob at tau 12.345 M.jpg
+//! 2026-09-27 21.35.03.456 UTC Bob at tau 12.345 M
 //! ```
 //!
 //! the moment the view was made, then whose it is and the reading of that observer's watch (the
 //! proper time the app shows as τ) at the saved moment. The time comes first so that a listing by
 //! name is a listing by age, and it is UTC so that the order survives the clocks going back in the
 //! autumn, when an hour of local times repeats. Milliseconds tell apart two presses in one second;
-//! two in one millisecond (two copies of the app) are told apart by [`place`], which never writes
-//! over a file that is there.
+//! two in one millisecond (two copies of the app) are told apart by [`make_folder`], which never
+//! takes a folder that is there.
+//!
+//! Everything of the view is in its folder, and nothing in it is ever deleted by this program or
+//! by the app, whether the view was made or not: the photograph, named as the folder is with
+//! `.jpg` after it so that a search across folders still reads; the save it was made from, with
+//! `.bhl`; the traced sky bundle in `bundle`; the commands that were run, in `commands.txt`; and
+//! every line of progress, in `log.txt`. A folder of its own rather than files side by side,
+//! because a view is now five things, and a bundle alone is a folder of its own already.
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -135,69 +142,50 @@ pub fn safe_name(who: &str) -> String {
     }
 }
 
-/// The file of one view, where it ended up.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Placed {
-    pub photo: PathBuf,
-}
-
-/// Moves a finished photograph from the scratch directory into `dir`, named `stem.jpg`, or
-/// `stem (2).jpg` and so on when that name is taken: a file already there is never written over.
+/// Makes the folder of one view in `dir`: `stem`, or `stem (2)` and so on when that name is taken.
+/// A folder already there is never used, so two views never share one.
 ///
-/// The file arrives whole or not at all. Within one volume it is hard-linked to its new name,
-/// which fails if the name is taken, and so claims the name and writes the file in one step with
-/// no moment at which another run could take it too; the scratch directory's link is deleted with
-/// the scratch directory. Across volumes (an output directory on another drive) the file is copied
-/// under a `.partial` name and renamed when it is whole, and the one thing a run stopped then can
-/// leave in the output directory is that `.partial` file.
-pub fn place(photo: &Path, dir: &Path, stem: &str) -> std::io::Result<Placed> {
+/// `create_dir` claims the name and makes the folder in one step, failing if the name is taken,
+/// so two runs racing for one name - two copies of the app pressed in the same millisecond - get
+/// two folders, with no moment at which both could think they had the same one.
+pub fn make_folder(dir: &Path, stem: &str) -> std::io::Result<PathBuf> {
     for n in 1..=1000u32 {
         let name = if n == 1 {
             stem.to_string()
         } else {
             format!("{stem} ({n})")
         };
-        let placed = Placed {
-            photo: dir.join(format!("{name}.jpg")),
-        };
-        if placed.photo.exists() {
-            continue;
-        }
-        match claim(photo, &placed.photo) {
-            Ok(()) => return Ok(placed),
+        let folder = dir.join(name);
+        match std::fs::create_dir(&folder) {
+            Ok(()) => return Ok(folder),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),
         }
     }
     Err(std::io::Error::other(format!(
-        "a thousand files in {} already start with {stem}",
+        "a thousand folders in {} already start with {stem}",
         dir.display()
     )))
 }
 
-/// Gives `from` the name `to`, failing with `AlreadyExists` if `to` is taken.
-fn claim(from: &Path, to: &Path) -> std::io::Result<()> {
-    match std::fs::hard_link(from, to) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(e),
-        // Another volume, or a file system without hard links: copy, whole, then rename. The
-        // check and the rename are not one step, so two runs racing for one name across volumes
-        // could meet here; the millisecond in the name makes that a race nobody runs.
-        Err(_) => {
-            let partial = crate::scratch::with_suffix(to, ".partial");
-            let copied = std::fs::copy(from, &partial).and_then(|_| {
-                if to.exists() {
-                    Err(std::io::ErrorKind::AlreadyExists.into())
-                } else {
-                    std::fs::rename(&partial, to)
-                }
-            });
-            if copied.is_err() {
-                let _ = std::fs::remove_file(&partial);
-            }
-            copied
-        }
+/// Moves the file `from` to `to`, a name that must not be taken: renamed within a volume, and
+/// across volumes (the temporary directory on one drive, the views on another) copied and then
+/// deleted. A copy that fails part-way is removed and `from` is left as it was, so the file is in
+/// one place or the other and never lost.
+pub fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    if to.exists() {
+        return Err(std::io::ErrorKind::AlreadyExists.into());
     }
+    if std::fs::rename(from, to).is_ok() {
+        return Ok(());
+    }
+    if let Err(e) = std::fs::copy(from, to) {
+        let _ = std::fs::remove_file(to);
+        return Err(e);
+    }
+    // The copy is whole; a source that cannot be deleted is left for whoever owns it.
+    let _ = std::fs::remove_file(from);
+    Ok(())
 }
 
 /// The user's Videos folder, where the system says it is: on Windows the known folder, which

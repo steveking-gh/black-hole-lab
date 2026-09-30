@@ -4,25 +4,47 @@
 //! The view is traced and rendered by `sky-look`, a program of the sky tools under `sky/`, which
 //! is a cargo workspace of its own. Nothing of that pipeline is linked in here. What this module
 //! does is the whole of the app's side of the arrangement: find the program, hand it a save of the
-//! present moment, read what it prints without ever waiting on it, and clean up after it. The
-//! contract it is written against is:
+//! present moment, read how far it has got without ever waiting on it, stop it when the user
+//! cancels, and clean up after it. The contract it is written against, which `sky/sky-look/src/
+//! main.rs` states from the other side, is:
 //!
 //! ```text
-//! sky-look <file.bhl> --observer bob|alice --open
+//! sky-look <file.bhl> --observer bob|alice --status <file> --move-save --open [--shell]
 //! ```
 //!
-//! * progress on standard output, one complete short sentence a line, flushed after each;
-//! * exit 0 on success, with the full path of the photograph (a 360-degree JPEG) as the last line
-//!   of standard output, and the photograph already handed to a viewer because of `--open`: VLC
-//!   when it is installed, else the system's default program for `.jpg` files;
-//! * exit 2 when it refuses the moment - an observer inside r₋, on the ring, being dragged - with
-//!   one sentence on standard error saying why;
-//! * exit 1 on any other failure, with one sentence on standard error.
+//! * the app writes the save and an empty status file beside it in the temporary directory, and
+//!   starts `sky-look` at below-normal priority: with no window, or, with `--shell` when Show
+//!   Rendering Terminal is ticked, in a console window of its own;
+//! * `sky-look` makes the view's folder in the views directory and moves the save into it before it
+//!   does anything else it can be stopped part-way through; everything else of the view - the
+//!   photograph, the traced bundle, `commands.txt`, `log.txt` - goes into that folder too, and
+//!   nothing in it is ever deleted, by either program, whether or not the view was made;
+//! * every progress sentence is appended to the status file on a line of its own, and while the
+//!   tracer and the renderer work a sentence carries their percentage (`Tracing the light that
+//!   reaches Alice: 35%.`); a sentence begins with a capital letter or a digit;
+//! * the last line of the status file is the verdict: `done <the photograph's full path>` once the
+//!   photograph is made and handed to a viewer because of `--open` (VLC when it is installed, else
+//!   the system's default program for `.jpg` files), `refused <sentence>` when the moment is one no
+//!   view can be made from (an observer inside r₋, on the ring, being dragged), or
+//!   `failed <sentence>` for anything else;
+//! * the file is UTF-8, every line ended by a line feed; a line found without its line feed has
+//!   been read too soon, and is left until the rest of it arrives;
+//! * with `--shell`, once the verdict is written, `sky-look` leaves a command prompt running in the
+//!   view's folder in its console window and exits. The window stays until the user closes it.
+//!
+//! `sky-look` also exits 0, 1 or 2 for success, failure and refusal, and prints its progress on
+//! standard output, for a person or a script at a terminal. The app reads neither: the exit is
+//! taken only as a sign that no verdict is coming, which means `sky-look` was stopped or crashed.
+//! A file rather than pipes because a pipe can only go one place: it had to be the app's, so the
+//! rendering terminal could never have shown the progress, and a pipe outlives the child whenever
+//! something the child started inherits it, which a verdict read from a file cannot be held up by.
 //!
 //! A separate process rather than a library call, for the rule the sky work is held to: it must
 //! not touch what the app costs or how the app builds. A process costs the app nothing until the
-//! button is pressed, and while a view is being made it costs one non-blocking poll a frame. The
-//! tracer can take a minute on every core the machine has, and none of that is on this thread.
+//! button is pressed, and while a view is being made it costs one read of a small file a frame.
+//! The tracer takes up to a minute on every core the machine has, and none of that is on this
+//! thread; the below-normal priority, which everything `sky-look` starts inherits, keeps the app
+//! and the rest of the desktop responsive while it does.
 //!
 //! # What the app does not know
 //!
@@ -31,23 +53,20 @@
 //! what it can see for itself (`gui::controls::look_around_blocked`) and otherwise shows the
 //! tracer's own sentence.
 //!
-//! # When the app closes while a view is being made
+//! # Cancelling, and closing the app while a view is being made
 //!
-//! `sky-look` is stopped, and so is anything it started, and the temporary save is deleted: see
-//! `Job`'s `Drop`. Letting it run on was the other choice, and it was turned down. A view finished
-//! after the app has gone opens a viewer out of nowhere, up to a minute after the user closed the
-//! program they asked it from, with no status line left to say what it is; and the temporary save
-//! cannot be deleted while a program that has not yet read it is still running, so letting the
-//! child outlive the app would mean leaving a multi-megabyte file in the temporary directory every
-//! time.
+//! Either way `sky-look` is stopped, and so is anything it started, and the app's two temporary
+//! files are deleted: see `Job`'s `Drop`. The view's folder, if `sky-look` got as far as making
+//! it, is left as it stood, with the save in it. Letting the child run on after the app closes was
+//! the other choice, and it was turned down: a view finished after the app has gone opens a viewer
+//! out of nowhere, up to a minute after the user closed the program they asked it from, with no
+//! status line left to say what it is.
 
-use std::ffi::OsStr;
-use std::io::BufRead;
+use std::ffi::{OsStr, OsString};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::time::{Duration, Instant};
 
 use crate::physics::observer::Who;
 
@@ -59,27 +78,37 @@ pub const SKY_LOOK_ENV: &str = "BLACK_HOLE_LAB_SKY_LOOK";
 /// The program's file name on this platform.
 pub const SKY_LOOK_FILE: &str = if cfg!(windows) { "sky-look.exe" } else { "sky-look" };
 
+/// Whether this platform can show the rendering terminal: a console window of its own for a
+/// program is a Windows notion, and elsewhere there is no terminal for the app to open.
+pub const TERMINAL_AVAILABLE: bool = cfg!(windows);
+
+/// The extension of a press's status file, beside its save.
+pub const STATUS_EXTENSION: &str = "status";
+
 /// Where a release build of the sky tools puts its programs, relative to the repository root: the
 /// sky workspace's own target directory, because the sky tools are built from `sky/` and not from
 /// the root.
 const SKY_RELEASE_DIR: &str = "sky/target/release";
-
-/// How long the app goes on reading after `sky-look` has exited, for the lines it printed just
-/// before it did.
-///
-/// The exit and the last line race: the child flushes its last line and exits, and the thread
-/// reading the pipe may not have handed that line over by the frame that sees the exit. So the
-/// verdict waits for both pipes to close. It does not wait for ever, because a pipe outlives the
-/// child when something the child started inherited it - a viewer launched by `--open` can hold
-/// standard output open for as long as it shows the photograph - and a view that finished must not
-/// wait on that.
-const PIPE_GRACE: Duration = Duration::from_secs(2);
 
 /// Windows' `CREATE_NO_WINDOW` process creation flag. A console program started from a windowed
 /// program gets a console window of its own unless it is told not to, and a black window flashing
 /// up over the app on every press is not something the user asked for.
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Windows' `CREATE_NEW_CONSOLE`: the program gets a console window of its own, whatever console
+/// the app has. This is the rendering terminal; on a Windows 11 whose default terminal is Windows
+/// Terminal the window opens there.
+#[cfg(windows)]
+const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+
+/// Windows' `BELOW_NORMAL_PRIORITY_CLASS`. The tracer runs on every core, and at normal priority
+/// it competes with the app's own frames and the rest of the desktop for all of them; one class
+/// below normal, those win whenever they want a core and the tracer has the rest. A child started
+/// without a class of its own inherits this one, so the tracer, the renderer and its ffmpeg all run
+/// below normal too.
+#[cfg(windows)]
+const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
 
 /// Where `sky-look` is, or a sentence saying it could not be found and how to get it.
 ///
@@ -147,14 +176,36 @@ pub fn scratch_save_path(dir: &Path) -> PathBuf {
     ))
 }
 
-/// One thing a reading thread has to report.
-enum Said {
-    /// A line of standard output: progress, or at the end the path of the photograph.
-    Out(String),
-    /// A line of standard error: the reason for a refusal or a failure.
-    Err(String),
-    /// One of the two pipes has closed.
-    Closed,
+/// The status file of the press whose save is `save`: the same name with `STATUS_EXTENSION`, so
+/// that it is as unique as the save's own, and is named before `sky-look` has chosen the view's
+/// folder.
+pub fn status_path_for(save: &Path) -> PathBuf {
+    save.with_extension(STATUS_EXTENSION)
+}
+
+/// The command line the app gives `sky-look`, after the program's name.
+pub fn arguments(save: &Path, status: &Path, who: Who, terminal: bool) -> Vec<OsString> {
+    let mut args: Vec<OsString> = vec![
+        save.into(),
+        "--observer".into(),
+        who.name().to_lowercase().into(),
+        "--status".into(),
+        status.into(),
+        "--move-save".into(),
+        "--open".into(),
+    ];
+    if terminal {
+        args.push("--shell".into());
+    }
+    args
+}
+
+/// The Windows process creation flags for `sky-look`: a console window of its own for the
+/// rendering terminal, else none, and below-normal priority either way.
+#[cfg(windows)]
+pub fn creation_flags(terminal: bool) -> u32 {
+    let window = if terminal { CREATE_NEW_CONSOLE } else { CREATE_NO_WINDOW };
+    window | BELOW_NORMAL_PRIORITY_CLASS
 }
 
 /// Where a view has got to, as `Job::poll` reports it.
@@ -165,112 +216,214 @@ pub enum Progress {
     Finished { text: String, failed: bool },
 }
 
-/// A view being made: the running `sky-look`, what it has said so far, and the save it was given.
+/// The last line of a status file, parsed.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Verdict {
+    /// `done <path>`: the photograph's full path.
+    Done(String),
+    /// `refused <sentence>`.
+    Refused(String),
+    /// `failed <sentence>`.
+    Failed(String),
+}
+
+impl Verdict {
+    /// The verdict a line states, or None for a line of progress: see the module's contract.
+    pub fn of(line: &str) -> Option<Verdict> {
+        if let Some(path) = line.strip_prefix("done ") {
+            Some(Verdict::Done(path.to_string()))
+        } else if let Some(why) = line.strip_prefix("refused ") {
+            Some(Verdict::Refused(why.to_string()))
+        } else {
+            line.strip_prefix("failed ").map(|why| Verdict::Failed(why.to_string()))
+        }
+    }
+
+    /// What the card says of a view that ended so, for the observer named `name`.
+    fn progress(&self, name: &str) -> Progress {
+        let (text, failed) = match self {
+            Verdict::Done(photo) => (format!("Made {name}'s view and opened it: {photo}"), false),
+            Verdict::Refused(why) => (format!("No view from {name}'s place: {why}"), true),
+            Verdict::Failed(why) => (format!("Could not make {name}'s view: {why}"), true),
+        };
+        Progress::Finished { text, failed }
+    }
+}
+
+/// The reading end of a status file: each call to `lines` hands over the complete lines written
+/// since the last, and never blocks.
 ///
-/// Its `Drop` is the cleanup, whichever way the job ends - finished and polled, replaced, or
+/// The file is opened on the first read that finds it (the app creates it before `sky-look`
+/// starts, so that is the first read) and kept open, and read from where the last read stopped. A
+/// line without its line feed yet is kept back until the rest of it arrives, so a sentence is
+/// never shown cut in half; `rest` gives it up once the writer has gone and nothing more is coming.
+pub struct StatusTail {
+    path: PathBuf,
+    file: Option<std::fs::File>,
+    /// Bytes read after the last line feed.
+    partial: Vec<u8>,
+}
+
+impl StatusTail {
+    pub fn new(path: PathBuf) -> Self {
+        Self { path, file: None, partial: Vec::new() }
+    }
+
+    /// The complete lines written since the last call, their line endings (`\r` included) trimmed,
+    /// and blank lines left out. Bytes that are not UTF-8 are decoded leniently: a line that is not
+    /// is still a line of progress.
+    pub fn lines(&mut self) -> Vec<String> {
+        if self.file.is_none() {
+            self.file = std::fs::File::open(&self.path).ok();
+        }
+        let Some(file) = self.file.as_mut() else { return Vec::new() };
+        // The file's own cursor is where the last read stopped: nothing else reads this handle.
+        // A read that fails part-way keeps what it did read, which the cursor has passed, and the
+        // rest is read on the next frame.
+        let mut fresh = Vec::new();
+        let _ = file.read_to_end(&mut fresh);
+        self.partial.extend_from_slice(&fresh);
+        let Some(end) = self.partial.iter().rposition(|&b| b == b'\n') else {
+            return Vec::new();
+        };
+        let complete: Vec<u8> = self.partial.drain(..=end).collect();
+        split_lines(&complete)
+    }
+
+    /// Whatever is left without a line feed, as a line, once nothing more will be written.
+    pub fn rest(&mut self) -> Option<String> {
+        let rest = split_lines(&std::mem::take(&mut self.partial));
+        rest.into_iter().next_back()
+    }
+}
+
+/// `bytes` as lines: split at line feeds, decoded leniently, trimmed, blank lines left out.
+fn split_lines(bytes: &[u8]) -> Vec<String> {
+    bytes
+        .split(|&b| b == b'\n')
+        .map(|line| String::from_utf8_lossy(line).trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+/// A view being made: the running `sky-look`, what its status file has said so far, and the two
+/// temporary files the app made for it.
+///
+/// Its `Drop` is the cleanup, whichever way the job ends - finished and polled, cancelled, or
 /// dropped with the app mid-run - so that no path out of a view leaves the child running or the
-/// save on disk.
+/// app's files on disk.
 pub struct Job {
     pub who: Who,
     child: Child,
-    heard: Receiver<Said>,
-    /// How many of the two pipes are still open.
-    open_pipes: u8,
-    /// The latest line of standard output, which is the status while the view is being made and
-    /// the path of the photograph once it is made.
+    tail: StatusTail,
+    /// The latest line of progress, which is the status while the view is being made.
     last_line: Option<String>,
-    /// Every line of standard error, in order.
-    complaint: Vec<String>,
-    /// The temporary save the child was handed, deleted when the job is dropped.
+    /// How the run ended, once the status file has said.
+    verdict: Option<Verdict>,
+    /// The temporary save the child was handed. `sky-look` moves it into the view's folder as its
+    /// first act; the path is deleted when the job is dropped all the same, which removes nothing
+    /// once it has been moved and removes the save when `sky-look` stopped before moving it.
     save: PathBuf,
-    /// The child's exit and when the app saw it, once it has.
-    exited: Option<(ExitStatus, Instant)>,
+    /// The status file, the app's own, deleted when the job is dropped.
+    status: PathBuf,
+    /// Whether the app has seen the child exit.
+    exited: bool,
 }
 
 impl Job {
-    /// Start `program` on `save` for `who`, and return at once.
+    /// Start `program` on `save` for `who`, with a console window of its own when `terminal` asks
+    /// for the rendering terminal and the platform has one, and return at once.
     ///
     /// The job owns the save from here on, so a child that will not start deletes it on the way
-    /// out, and so does everything after that.
-    pub fn start(program: &Path, save: PathBuf, who: Who) -> std::io::Result<Job> {
+    /// out, and so does everything after that. The status file is made here, empty, before the
+    /// child starts, so that it is there to be read from the first frame and is the app's to
+    /// delete.
+    pub fn start(program: &Path, save: PathBuf, who: Who, terminal: bool) -> std::io::Result<Job> {
+        let status = status_path_for(&save);
+        let discard = |cause: std::io::Error| {
+            let _ = std::fs::remove_file(&save);
+            let _ = std::fs::remove_file(&status);
+            cause
+        };
+        std::fs::File::create(&status).map_err(discard)?;
+        let terminal = terminal && TERMINAL_AVAILABLE;
         let mut command = Command::new(program);
+        // Standard output and error go nowhere the app reads: the status file is the app's channel.
+        // In the rendering terminal `sky-look` opens its own console window's streams by name,
+        // since whatever handles the app passed on would lead back to the app's console, if any,
+        // and not to the new window.
         command
-            .arg(&save)
-            .arg("--observer")
-            .arg(who.name().to_lowercase())
-            .arg("--open")
+            .args(arguments(&save, &status, who, terminal))
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            command.creation_flags(CREATE_NO_WINDOW);
+            command.creation_flags(creation_flags(terminal));
         }
-        let mut child = match command.spawn() {
-            Ok(child) => child,
-            Err(cause) => {
-                let _ = std::fs::remove_file(&save);
-                return Err(cause);
-            }
-        };
-
-        // One thread a pipe, each reading lines and handing them over. Two because a child that
-        // fills the pipe the app is not reading blocks on it, and a single reader of one pipe can
-        // then wait for ever on a child stuck writing to the other. The threads are not joined:
-        // each ends when its pipe closes, or at the first line after the job has been dropped.
-        let (tell, heard) = channel();
-        if let Some(out) = child.stdout.take() {
-            read_lines(out, tell.clone(), Said::Out);
-        }
-        if let Some(err) = child.stderr.take() {
-            read_lines(err, tell, Said::Err);
-        }
+        let child = command.spawn().map_err(discard)?;
         Ok(Job {
             who,
             child,
-            heard,
-            open_pipes: 2,
+            tail: StatusTail::new(status.clone()),
             last_line: None,
-            complaint: Vec::new(),
+            verdict: None,
             save,
-            exited: None,
+            status,
+            exited: false,
         })
     }
 
-    /// Take in whatever the child has said since the last call, and say where the view has got to.
-    /// Never blocks: a frame calls this once.
+    /// Take in whatever the status file has said since the last call, and say where the view has
+    /// got to. Never blocks: a frame calls this once.
+    ///
+    /// The exit is asked for before the file is read, so that a child which wrote its verdict and
+    /// exited between the two is found with its verdict, and never taken for one that stopped
+    /// without saying why.
     pub fn poll(&mut self) -> Progress {
-        while let Ok(said) = self.heard.try_recv() {
-            match said {
-                Said::Out(line) => self.last_line = Some(line),
-                Said::Err(line) => self.complaint.push(line),
-                Said::Closed => self.open_pipes = self.open_pipes.saturating_sub(1),
+        let exit = match self.child.try_wait() {
+            Ok(exit) => exit,
+            Err(cause) => {
+                return Progress::Finished {
+                    text: format!(
+                        "Lost track of sky-look while it made {}'s view: {cause}",
+                        self.who.name()
+                    ),
+                    failed: true,
+                };
+            }
+        };
+        for line in self.tail.lines() {
+            self.take(line);
+        }
+        if exit.is_some() {
+            self.exited = true;
+            if let Some(line) = self.tail.rest() {
+                self.take(line);
             }
         }
-        if self.exited.is_none() {
-            match self.child.try_wait() {
-                Ok(Some(status)) => self.exited = Some((status, Instant::now())),
-                Ok(None) => return self.running(),
-                Err(cause) => {
-                    return Progress::Finished {
-                        text: format!(
-                            "Lost track of sky-look while it made {}'s view: {cause}",
-                            self.who.name()
-                        ),
-                        failed: true,
-                    };
-                }
-            }
+        if let Some(verdict) = &self.verdict {
+            return verdict.progress(self.who.name());
         }
-        let Some((status, at)) = self.exited else { return self.running() };
-        if self.open_pipes > 0 && at.elapsed() < PIPE_GRACE {
-            return self.running();
+        match exit {
+            None => self.running(),
+            Some(status) => stopped_without_verdict(self.who, status),
         }
-        verdict(self.who, status.code(), self.last_line.as_deref(), &self.complaint)
     }
 
-    /// The status of a view still being made: the child's latest line, or before it has printed
+    /// One line of the status file: the verdict, or the latest progress.
+    fn take(&mut self, line: String) {
+        if self.verdict.is_some() {
+            return;
+        }
+        match Verdict::of(&line) {
+            Some(verdict) => self.verdict = Some(verdict),
+            None => self.last_line = Some(line),
+        }
+    }
+
+    /// The status of a view still being made: the child's latest line, or before it has written
     /// one, that it has been started.
     fn running(&self) -> Progress {
         Progress::Running(
@@ -283,43 +436,33 @@ impl Job {
 
 impl Drop for Job {
     fn drop(&mut self) {
-        // A child that has not exited is stopped, with whatever it started: see the module's
-        // own note on closing the app mid-view.
-        if self.exited.is_none() && !matches!(self.child.try_wait(), Ok(Some(_))) {
+        // A child that has not exited and has not given its verdict is stopped, with whatever it
+        // started: see the module's own note on cancelling. One that has given its verdict is left
+        // to exit by itself, since all it may still be doing is starting the command prompt that
+        // the user asked to be left running.
+        if !self.exited
+            && self.verdict.is_none()
+            && !matches!(self.child.try_wait(), Ok(Some(_)))
+        {
             stop(&mut self.child);
         }
         let _ = std::fs::remove_file(&self.save);
+        let _ = std::fs::remove_file(&self.status);
     }
 }
 
-/// Read `pipe` a line at a time on a thread of its own, sending each line as `wrap` makes it and
-/// then `Said::Closed`.
-///
-/// Lines are read as bytes and decoded leniently, because a line that is not UTF-8 is still a line
-/// of progress and must not stop the reading; the line ending is trimmed, `\r` included, and blank
-/// lines are skipped rather than shown as an empty status.
-fn read_lines(
-    pipe: impl std::io::Read + Send + 'static,
-    tell: Sender<Said>,
-    wrap: fn(String) -> Said,
-) {
-    std::thread::spawn(move || {
-        let mut reader = std::io::BufReader::new(pipe);
-        let mut bytes = Vec::new();
-        loop {
-            bytes.clear();
-            match reader.read_until(b'\n', &mut bytes) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {
-                    let line = String::from_utf8_lossy(&bytes).trim().to_string();
-                    if !line.is_empty() && tell.send(wrap(line)).is_err() {
-                        return;
-                    }
-                }
-            }
-        }
-        let _ = tell.send(Said::Closed);
-    });
+/// What the card says of a `sky-look` that exited without a verdict: stopped from outside, or
+/// crashed.
+fn stopped_without_verdict(who: Who, status: ExitStatus) -> Progress {
+    let name = who.name();
+    let text = match status.code() {
+        Some(code) => format!(
+            "Could not make {name}'s view: sky-look stopped with exit code {code} without saying \
+             why."
+        ),
+        None => format!("sky-look was stopped before it finished {name}'s view."),
+    };
+    Progress::Finished { text, failed: true }
 }
 
 /// Stop `child` and everything it started, and reap it.
@@ -347,32 +490,6 @@ fn stop(child: &mut Child) {
         let _ = child.kill();
     }
     let _ = child.wait();
-}
-
-/// What a finished view says on the card, from how `sky-look` exited and what it printed.
-fn verdict(who: Who, code: Option<i32>, last_line: Option<&str>, complaint: &[String]) -> Progress {
-    let name = who.name();
-    let reason = complaint.join(" ");
-    let (text, failed) = match code {
-        Some(0) => match last_line {
-            Some(photo) => (format!("Made {name}'s view and opened it: {photo}"), false),
-            None => (
-                format!("sky-look finished {name}'s view without saying where the photograph is."),
-                true,
-            ),
-        },
-        Some(2) if !reason.is_empty() => (format!("No view from {name}'s place: {reason}"), true),
-        Some(code) if reason.is_empty() => (
-            format!(
-                "Could not make {name}'s view: sky-look stopped with exit code {code} and gave no \
-                 reason."
-            ),
-            true,
-        ),
-        Some(_) => (format!("Could not make {name}'s view: {reason}"), true),
-        None => (format!("sky-look was stopped before it finished {name}'s view."), true),
-    };
-    Progress::Finished { text, failed }
 }
 
 #[cfg(test)]

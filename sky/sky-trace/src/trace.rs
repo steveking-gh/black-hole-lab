@@ -9,6 +9,7 @@
 
 use std::io::Write;
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use kerr_equatorial::KerrSchild;
@@ -190,7 +191,14 @@ fn differing_setting(found: &Manifest, wanted: &Manifest) -> Option<&'static str
 }
 
 /// Makes the film the options describe, printing the summary and progress to `out`.
-pub fn film(options: &Trace, out: &mut dyn Write) -> Result<Summary, Failure> {
+///
+/// Progress comes in two kinds of line. Once a second or so, `frame <k> of <n>: ...`, for a person
+/// watching a long film. And `progress <p>%`, each time the whole percentage of the film's rays
+/// traced goes up - counted by rows finished, across frames, so a one-frame photograph gets its
+/// hundred steps too - which is the line `sky-look` reads to show how far a view has got. The
+/// percentage is printed from whichever tracing thread finishes the row that moves it on, under a
+/// lock held only for the comparison and the one line, which is why `out` must be `Send`.
+pub fn film(options: &Trace, out: &mut (dyn Write + Send)) -> Result<Summary, Failure> {
     let usage = Failure::Usage;
     let named = name_the_observer(&options.subject).map_err(usage)?;
     let metric = named.metric;
@@ -283,6 +291,8 @@ pub fn film(options: &Trace, out: &mut dyn Write) -> Result<Summary, Failure> {
     let started = Instant::now();
     let mut last_report = started;
     let (mut written, mut skipped, mut unresolved) = (0u32, 0u32, 0u64);
+    // The last whole percentage printed; the first line is 1%.
+    let mut percent = 0u32;
     for (k, event) in walked.events.iter().enumerate() {
         let index = k as u32;
         if writer.is_complete(index) {
@@ -290,7 +300,33 @@ pub fn film(options: &Trace, out: &mut dyn Write) -> Result<Summary, Failure> {
             continue;
         }
         let tau = film::frame_tau(worldline.tau0(), k, options.rate, options.fps);
-        let traced = film::trace(&kerr, event, index, options.width, options.height, threads)
+        let frames_before = f64::from(written + skipped);
+        let reporter = Mutex::new((&mut *out, percent));
+        let rows_done = |rows: usize, of: usize| {
+            let share = (frames_before + rows as f64 / of.max(1) as f64) / f64::from(frames);
+            let now = (100.0 * share).floor().clamp(0.0, 100.0) as u32;
+            // A poisoned lock is a panicking tracing thread, which the scope reports; the
+            // percentage is only a courtesy.
+            if let Ok(mut held) = reporter.lock() {
+                let (out, shown) = &mut *held;
+                if now > *shown {
+                    *shown = now;
+                    let _ = writeln!(out, "progress {now}%");
+                    let _ = out.flush();
+                }
+            }
+        };
+        let traced = film::trace(
+            &kerr,
+            event,
+            index,
+            options.width,
+            options.height,
+            threads,
+            &rows_done,
+        );
+        percent = reporter.into_inner().map_or(percent, |(_, shown)| shown);
+        let traced = traced
             .map_err(|why| Failure::Write(format!("frame {k} could not be traced: {why}")))?;
         unresolved += traced.unresolved as u64;
         let entry = film::entry(index, tau, tau0, event, &plan);

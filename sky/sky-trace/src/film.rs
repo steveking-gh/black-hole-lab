@@ -79,7 +79,7 @@
 use std::f64::consts::FRAC_PI_2;
 
 use kerr_equatorial::KerrSchild;
-use kerr_sky::{Kerr, Observer, TraceOptions, Triad, trace_frame};
+use kerr_sky::{Kerr, Observer, TraceOptions, Triad, trace_frame_reporting};
 use sky_format::{
     Display, FORMAT, FarSky, Frame, FrameEntry, Geometry, GridSpec, Manifest, MarkDecl, Num,
     Playback, Position, ReadoutDecl, STOPWATCH, Source, TimeUnit, VERSION, WriterInfo, fate,
@@ -244,7 +244,9 @@ pub struct Traced {
     pub steps: u64,
 }
 
-/// Traces frame `index` of a W x H grid at an event on `threads` threads.
+/// Traces frame `index` of a W x H grid at an event on `threads` threads, telling `rows_done` after
+/// each row how many of the frame's rows are traced and how many there are
+/// (`kerr_sky::trace_frame_reporting`).
 ///
 /// `kerr_sky` hands back the planes already in the format's types - f32 directions and shifts,
 /// the winding as i16 clamped to [-32767, 32767] - with NaN and 0 wherever the fate is not 1.
@@ -258,9 +260,10 @@ pub fn trace(
     width: u32,
     height: u32,
     threads: usize,
+    rows_done: &(dyn Fn(usize, usize) + Sync),
 ) -> Result<Traced, String> {
     let triad = triad(kerr, event)?;
-    let sky = trace_frame(
+    let sky = trace_frame_reporting(
         kerr,
         &triad,
         width as usize,
@@ -268,6 +271,7 @@ pub fn trace(
         &TraceOptions::default(),
         threads,
         true,
+        rows_done,
     );
     let frame = Frame {
         width,

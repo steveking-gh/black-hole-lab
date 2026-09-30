@@ -10,17 +10,16 @@
 //! have to be built for the purpose.
 //!
 //! The program runs in-process through `run::cli`, with the arguments, the environment and both
-//! output streams handed in, so that a test reads exactly what it wrote where and the exit code it
-//! chose. The system's temporary directory is replaced by the test's own, so that the checks that
-//! intermediates are gone look at a directory nothing else uses.
+//! output streams handed in, so that a test reads exactly what it wrote where - standard output,
+//! standard error, the status file and the view's folder - and the exit code it chose. The views
+//! directory is the test's own, so that what a run leaves in it is all there is to look at.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::find::Names;
-use crate::run::{Environment, cli};
-use crate::scratch;
+use crate::run::{BUNDLE_DIR, COMMANDS_FILE, Environment, LOG_FILE, cli};
 use crate::tests::scratch_dir;
 
 /// One thing a stand-in does after its work on the disk.
@@ -118,11 +117,14 @@ fn renderer_work() -> Vec<&'static str> {
 /// What a real renderer says on a run that works, near enough: two marks of directions of travel
 /// among the rest, one before the line on the read-outs and one after the counts, to show that
 /// the order of the sentences is this program's and not the renderer's.
-const RENDERER_SAYS: [&str; 8] = [
+const RENDERER_SAYS: [&str; 11] = [
+    "progress 15%",
+    "progress 65%",
     "mark: a ring in green at 37.25 degrees right of the opening view and 0 degrees up: Direction of travel past the static observer",
     "read-outs: 6 line(s) on a panel inside the dark region, centred 180 degrees right of the opening view and -20 degrees up, each line 2 degrees high",
     "map C:\\maps\\starmap_2020_8k_gal.exr: 8192 x 4096 galactic, read in 0.6 s",
     "frame 0 (1/1), 1.00 frames/s, 0:00 left",
+    "progress 100%",
     "wrote view.jpg (7.3 MB), a JPEG marked as a 360-degree photograph, in 0.4 s",
     "pixels drawn over the 1 frame(s): unresolved 0 (0 %), under-sampled 16888 (0.0503 %), dark 20422816 (60.9 %)",
     "mark: a diamond in green at -141.6 degrees right of the opening view and 8.4 degrees up: Direction of travel past the ZAMO",
@@ -142,14 +144,14 @@ const REFUSAL: &str = "Bob is at r = 0.3 M, at or inside the inner horizon r- = 
                        there sees light that came through the ring and from the other sheet of r-, \
                        which this program cannot yet trace";
 
-/// A layout for one run: the tools, a map and an ffmpeg to be found, a save, a views directory
-/// and a temporary directory of the run's own.
+/// A layout for one run: the tools, a map and an ffmpeg to be found, a save, a views directory,
+/// and the status file a run is told to write when a test gives it `--status`.
 struct Case {
     root: PathBuf,
     tools: PathBuf,
     save: PathBuf,
     out: PathBuf,
-    temp: PathBuf,
+    status: PathBuf,
     map: PathBuf,
     ffmpeg: PathBuf,
 }
@@ -161,14 +163,12 @@ impl Case {
             tools: root.join("tools"),
             save: root.join("the run.bhl"),
             out: root.join("views"),
-            temp: root.join("temp"),
+            status: root.join("the run.status"),
             map: root.join("map.exr"),
             ffmpeg: root.join("ffmpeg.exe"),
             root,
         };
-        for dir in [&case.tools, &case.temp] {
-            std::fs::create_dir_all(dir).expect("a directory");
-        }
+        std::fs::create_dir_all(&case.tools).expect("a directory");
         std::fs::write(&case.save, save).expect("the save");
         std::fs::write(&case.map, b"").expect("a map");
         std::fs::write(&case.ffmpeg, b"").expect("an ffmpeg");
@@ -195,13 +195,11 @@ impl Case {
             vlc: Vec::new(),
             videos: None,
             home: None,
-            temp: self.temp.clone(),
             names: Names {
                 trace: program("sky-trace"),
                 render: program("sky-render"),
                 ffmpeg: "ffmpeg.exe".into(),
             },
-            threads: 16,
         }
     }
 
@@ -234,20 +232,45 @@ impl Case {
         std::fs::read_to_string(self.tools.join(format!("{name}.args"))).ok()
     }
 
-    /// Whatever is left in this program's own temporary directory.
-    fn left_over(&self) -> Vec<PathBuf> {
-        match std::fs::read_dir(self.temp.join(scratch::ROOT)) {
-            Ok(listing) => listing.map(|e| e.expect("an entry").path()).collect(),
-            Err(_) => Vec::new(),
-        }
-    }
-
     /// Whatever is in the views directory.
     fn views(&self) -> Vec<PathBuf> {
         match std::fs::read_dir(&self.out) {
             Ok(listing) => listing.map(|e| e.expect("an entry").path()).collect(),
             Err(_) => Vec::new(),
         }
+    }
+
+    /// The one folder the run made in the views directory.
+    fn folder(&self) -> PathBuf {
+        let views = self.views();
+        assert_eq!(views.len(), 1, "one folder for the one view: {views:?}");
+        assert!(views[0].is_dir(), "{views:?}");
+        views[0].clone()
+    }
+
+    /// The names in `dir`, sorted.
+    fn listing(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .expect("a directory")
+            .map(|e| {
+                e.expect("an entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// The status file's lines.
+    fn status_lines(&self) -> Vec<String> {
+        let text = std::fs::read_to_string(&self.status).expect("the status file");
+        assert!(
+            text.is_empty() || text.ends_with('\n'),
+            "every line ends in a line feed: {text:?}"
+        );
+        text.lines().map(str::to_string).collect()
     }
 }
 
@@ -268,6 +291,12 @@ fn fingerprint(path: &Path) -> (Vec<u8>, SystemTime) {
     (bytes, modified)
 }
 
+/// The progress lines of standard output: everything but the commands, which begin with `& `,
+/// and, on a run that succeeds, the path on the last line.
+fn progress_of(out: &str) -> Vec<&str> {
+    out.lines().filter(|l| !l.starts_with("& ")).collect()
+}
+
 /// Every progress line is a complete sentence: it starts with a capital or a digit and ends with
 /// a full stop, and none of it is a line a child printed.
 fn assert_sentences(lines: &[&str]) {
@@ -284,31 +313,62 @@ fn assert_sentences(lines: &[&str]) {
     }
 }
 
-#[test]
-fn test_a_view_that_is_made_ends_with_its_path_says_nothing_on_standard_error_and_leaves_nothing_behind()
- {
-    let case = Case::new("made", SAVE);
-    case.tracer(&[
+/// A tracer that says how far it has got, as the real one does, and succeeds.
+fn tracing_steps() -> Vec<Step<'static>> {
+    vec![
+        Step::Say("progress 1%"),
+        Step::Say("progress 50%"),
+        Step::Say("progress 52%"),
         Step::Say("frame 1 of 1: 0.14 frames a second, about 0 s left, 0 unresolved rays so far"),
+        Step::Say("progress 100%"),
         // A child's standard error on a run that works is not passed on.
         Step::Complain("a warning the tracer printed"),
         Step::Exit(0),
-    ]);
+    ]
+}
+
+/// A renderer that says what the real one says, and succeeds.
+fn rendering_steps() -> Vec<Step<'static>> {
     let mut steps: Vec<Step> = RENDERER_SAYS.iter().map(|l| Step::Say(l)).collect();
     steps.push(Step::Exit(0));
-    case.renderer(&steps);
+    steps
+}
+
+#[test]
+fn test_a_view_that_is_made_is_a_folder_holding_everything_and_ends_with_the_photographs_path() {
+    let case = Case::new("made", SAVE);
+    case.tracer(&tracing_steps());
+    case.renderer(&rendering_steps());
     let before = fingerprint(&case.save);
 
     let (code, out, err) = case.run(&[]);
     assert_eq!(code, 0, "out: {out}\nerr: {err}");
     assert_eq!(err, "", "nothing on standard error");
-    let lines: Vec<&str> = out.lines().collect();
+    let lines = progress_of(&out);
     let (last, progress) = lines.split_last().expect("some output");
     assert_sentences(progress);
-    assert!(
-        progress[0].starts_with("Tracing the light that reaches Bob"),
+    let folder = case.folder();
+    assert_eq!(
+        progress[0],
+        format!("Making Bob's view in {}.", folder.display()),
         "{out}"
     );
+    assert!(
+        progress[1].starts_with("Tracing the light that reaches Bob from every direction"),
+        "{out}"
+    );
+    // The children's percentages, as sentences, five points apart at least and never 100.
+    for said in [
+        "Tracing the light that reaches Bob: 50%.",
+        "Rendering Bob's view: 15%.",
+        "Rendering Bob's view: 65%.",
+    ] {
+        assert!(progress.contains(&said), "{said}: {out}");
+    }
+    for unsaid in ["52%", "100%", ": 1%."] {
+        assert!(!out.contains(unsaid), "{unsaid}: {out}");
+    }
+    assert!(!out.contains("this takes about"), "no estimates: {out}");
     assert!(
         progress
             .iter()
@@ -346,16 +406,18 @@ fn test_a_view_that_is_made_ends_with_its_path_says_nothing_on_standard_error_an
     );
     assert!(!out.contains("video"), "nothing is said of a video: {out}");
 
-    // The last line is the path, whole, of the photograph, which is there and alone.
+    // The last line is the path, whole, of the photograph, which is in the view's folder and
+    // named as the folder is.
     let photo = PathBuf::from(last);
     assert!(photo.is_absolute() && photo.is_file(), "{last}");
-    assert_eq!(photo.parent(), Some(case.out.as_path()));
-    let name = photo
+    assert_eq!(photo.parent(), Some(folder.as_path()));
+    assert!(folder.parent() == Some(case.out.as_path()));
+    let name = folder
         .file_name()
         .expect("a name")
         .to_string_lossy()
         .into_owned();
-    assert!(name.ends_with(" UTC Bob at tau 1.500 M.jpg"), "{name}");
+    assert!(name.ends_with(" UTC Bob at tau 1.500 M"), "{name}");
     assert_eq!(
         std::fs::read_to_string(&photo)
             .expect("the photograph")
@@ -363,11 +425,48 @@ fn test_a_view_that_is_made_ends_with_its_path_says_nothing_on_standard_error_an
         "a photograph",
         "the file the renderer wrote"
     );
+
+    // Everything of the view, and nothing else, is in the folder: the photograph, a copy of the
+    // save (the save itself untouched), the bundle, the commands and the log.
     assert_eq!(
-        case.views(),
-        std::slice::from_ref(&photo),
-        "the photograph, nothing else"
+        Case::listing(&folder),
+        [
+            format!("{name}.bhl"),
+            format!("{name}.jpg"),
+            BUNDLE_DIR.to_string(),
+            COMMANDS_FILE.to_string(),
+            LOG_FILE.to_string(),
+        ]
     );
+    assert!(folder.join(BUNDLE_DIR).join("manifest.json").is_file());
+    assert_eq!(
+        std::fs::read(folder.join(format!("{name}.bhl"))).expect("the copy"),
+        before.0,
+        "a copy of the save"
+    );
+    assert_eq!(fingerprint(&case.save), before, "the save is untouched");
+
+    // The two commands, on standard output before each program ran and in commands.txt after a
+    // header, as PowerShell lines naming the files in the folder.
+    let commands: Vec<&str> = out.lines().filter(|l| l.starts_with("& ")).collect();
+    assert_eq!(commands.len(), 2, "{out}");
+    assert!(commands[0].contains("sky-trace") && commands[1].contains("sky-render"));
+    let quoted = |path: &Path| format!("'{}'", path.display());
+    assert!(
+        commands[0].contains(&quoted(&folder.join(format!("{name}.bhl"))))
+            && commands[0].contains(&quoted(&folder.join(BUNDLE_DIR))),
+        "{}",
+        commands[0]
+    );
+    assert!(commands[1].contains(&quoted(&photo)), "{}", commands[1]);
+    let recorded = std::fs::read_to_string(folder.join(COMMANDS_FILE)).expect("the commands");
+    let (header, lines): (Vec<&str>, Vec<&str>) =
+        recorded.lines().partition(|l| l.starts_with("# "));
+    assert!(
+        !header.is_empty() && recorded.starts_with("# "),
+        "{recorded}"
+    );
+    assert_eq!(lines, commands);
 
     // What the two programs were asked for.
     let traced = case.args_of("sky-trace").expect("the tracer ran");
@@ -382,7 +481,7 @@ fn test_a_view_that_is_made_ends_with_its_path_says_nothing_on_standard_error_an
     let rendered = case.args_of("sky-render").expect("the renderer ran");
     assert!(rendered.starts_with("--photo "), "{rendered}");
     for word in [
-        "view.jpg",
+        ".jpg",
         "--encoder none",
         "--still",
         "--readouts panel",
@@ -394,13 +493,67 @@ fn test_a_view_that_is_made_ends_with_its_path_says_nothing_on_standard_error_an
     for word in ["--decimal-comma", "--hold", "--out ", "overlay"] {
         assert!(!rendered.contains(word), "{word}: {rendered}");
     }
+}
 
+#[test]
+fn test_the_status_file_gets_every_sentence_and_last_the_verdict_and_the_log_is_the_same() {
+    let case = Case::new("status", SAVE);
+    case.tracer(&tracing_steps());
+    case.renderer(&rendering_steps());
+    let status = case.status.display().to_string();
+    let (code, out, err) = case.run(&["--status", &status]);
+    assert_eq!((code, err.as_str()), (0, ""), "{out}");
+
+    let lines = case.status_lines();
+    let (verdict, said) = lines.split_last().expect("a verdict");
+    let printed = progress_of(&out);
+    let (path, progress) = printed.split_last().expect("some output");
     assert_eq!(
-        case.left_over(),
-        Vec::<PathBuf>::new(),
-        "the intermediates are gone"
+        verdict,
+        &format!("done {path}"),
+        "the verdict names the photograph"
     );
-    assert_eq!(fingerprint(&case.save), before, "the save is untouched");
+    assert_eq!(
+        said, progress,
+        "the same sentences as standard output, in order"
+    );
+    // A verdict is never a sentence, and a sentence never a verdict.
+    for line in said {
+        assert!(
+            !["done ", "refused ", "failed "]
+                .iter()
+                .any(|w| line.starts_with(w)),
+            "{line}"
+        );
+    }
+    let log = std::fs::read_to_string(case.folder().join(LOG_FILE)).expect("the log");
+    assert_eq!(
+        log,
+        std::fs::read_to_string(&case.status).expect("the status file"),
+        "the log is the status file, kept"
+    );
+}
+
+#[test]
+fn test_move_save_moves_the_save_into_the_views_folder() {
+    let case = Case::new("move", SAVE);
+    case.tracer(&[Step::Exit(0)]);
+    case.renderer(&[Step::Exit(0)]);
+    let (code, out, err) = case.run(&["--move-save"]);
+    assert_eq!((code, err.as_str()), (0, ""), "{out}");
+    let folder = case.folder();
+    let name = folder.file_name().expect("a name").to_string_lossy();
+    assert!(!case.save.exists(), "the save is no longer where it was");
+    assert_eq!(
+        std::fs::read_to_string(folder.join(format!("{name}.bhl"))).expect("the save, moved"),
+        SAVE
+    );
+    assert!(
+        case.args_of("sky-trace")
+            .expect("the tracer ran")
+            .contains(&folder.display().to_string()),
+        "the tracer read the save in the folder"
+    );
 }
 
 #[test]
@@ -415,24 +568,46 @@ fn test_the_tracers_refusal_comes_through_as_code_2_with_its_sentence_unchanged(
     case.renderer(&[Step::Exit(0)]);
     let before = fingerprint(&case.save);
 
-    let (code, out, err) = case.run(&[]);
+    let status = case.status.display().to_string();
+    let (code, out, err) = case.run(&["--status", &status]);
     assert_eq!(code, 2, "out: {out}\nerr: {err}");
     assert_eq!(
         err,
         format!("{REFUSAL}\n"),
         "the tracer's sentence, and nothing else"
     );
-    assert_sentences(&out.lines().collect::<Vec<_>>());
+    assert_sentences(&progress_of(&out));
     assert!(
         !out.contains("the dry run's summary"),
         "the tracer's output is not passed on: {out}"
     );
     assert_eq!(case.args_of("sky-render"), None, "nothing is rendered");
-    assert_eq!(case.views(), Vec::<PathBuf>::new(), "no files are made");
     assert_eq!(
-        case.left_over(),
-        Vec::<PathBuf>::new(),
-        "the intermediates are gone"
+        case.status_lines().last(),
+        Some(&format!("refused {REFUSAL}")),
+        "the verdict"
+    );
+    // The folder stays, with what the run had made - the save, the command and the log, which
+    // says that it is kept - and no photograph. (The stand-in tracer makes its bundle before it
+    // refuses, which the real one does not, so the bundle is neither here nor there.)
+    let folder = case.folder();
+    let name = folder
+        .file_name()
+        .expect("a name")
+        .to_string_lossy()
+        .into_owned();
+    let listing = Case::listing(&folder);
+    for kept in [format!("{name}.bhl"), COMMANDS_FILE.into(), LOG_FILE.into()] {
+        assert!(listing.contains(&kept), "{kept}: {listing:?}");
+    }
+    assert!(!listing.iter().any(|f| f.ends_with(".jpg")), "{listing:?}");
+    let log = std::fs::read_to_string(folder.join(LOG_FILE)).expect("the log");
+    assert!(
+        log.contains(&format!(
+            "The files of this run are kept in {}.",
+            folder.display()
+        )),
+        "{log}"
     );
     assert_eq!(fingerprint(&case.save), before, "the save is untouched");
 }
@@ -455,15 +630,10 @@ fn test_a_save_the_tracer_cannot_read_is_a_failure_and_not_a_refusal_of_the_mome
         "{err}"
     );
     assert_eq!(err.lines().count(), 1, "{err}");
-    assert_eq!(
-        case.left_over(),
-        Vec::<PathBuf>::new(),
-        "the intermediates are gone"
-    );
 }
 
 #[test]
-fn test_a_failure_of_the_renderer_comes_through_as_code_1_and_leaves_nothing_behind() {
+fn test_a_failure_of_the_renderer_comes_through_as_code_1_and_leaves_the_folder_to_look_into() {
     let case = Case::new("render-fails", SAVE);
     case.tracer(&[Step::Exit(0)]);
     case.renderer(&[
@@ -475,20 +645,35 @@ fn test_a_failure_of_the_renderer_comes_through_as_code_1_and_leaves_nothing_beh
         Step::Exit(1),
     ]);
     let before = fingerprint(&case.save);
-    let (code, out, err) = case.run(&[]);
+    let status = case.status.display().to_string();
+    let (code, out, err) = case.run(&["--status", &status]);
     assert_eq!(code, 1, "out: {out}\nerr: {err}");
+    let sentence = "sky-render could not make Bob's view: ffmpeg stopped while writing the \
+                    photograph: There is not enough space on the disk.";
+    assert_eq!(err, format!("{sentence}\n"));
+    assert_sentences(&progress_of(&out));
     assert_eq!(
-        err,
-        "sky-render could not make Bob's view: ffmpeg stopped while writing the photograph: There \
-         is not enough space on the disk.\n"
+        case.status_lines().last(),
+        Some(&format!("failed {sentence}"))
     );
-    assert_sentences(&out.lines().collect::<Vec<_>>());
-    assert_eq!(case.views(), Vec::<PathBuf>::new(), "no files are made");
-    assert_eq!(
-        case.left_over(),
-        Vec::<PathBuf>::new(),
-        "the intermediates are gone"
-    );
+    // Nothing of the run is deleted: the save, the bundle, the commands and the log, and whatever
+    // the renderer left.
+    let folder = case.folder();
+    let name = folder
+        .file_name()
+        .expect("a name")
+        .to_string_lossy()
+        .into_owned();
+    let listing = Case::listing(&folder);
+    for kept in [
+        format!("{name}.bhl"),
+        BUNDLE_DIR.into(),
+        COMMANDS_FILE.into(),
+        LOG_FILE.into(),
+    ] {
+        assert!(listing.contains(&kept), "{kept}: {listing:?}");
+    }
+    assert!(folder.join(BUNDLE_DIR).join("manifest.json").is_file());
     assert_eq!(fingerprint(&case.save), before, "the save is untouched");
 }
 
@@ -497,7 +682,8 @@ fn test_a_missing_piece_stops_the_run_before_anything_is_started_or_written() {
     let case = Case::new("missing", SAVE);
     case.tracer(&[Step::Exit(0)]);
     // No renderer.
-    let (code, out, err) = case.run(&[]);
+    let status = case.status.display().to_string();
+    let (code, out, err) = case.run(&["--status", &status, "--move-save"]);
     assert_eq!(code, 1);
     assert_eq!(out, "", "nothing was started, so there is no progress");
     assert!(
@@ -510,41 +696,26 @@ fn test_a_missing_piece_stops_the_run_before_anything_is_started_or_written() {
         None,
         "the tracer was not started"
     );
+    assert!(!case.out.exists(), "no folder was made");
     assert!(
-        !case.temp.join(scratch::ROOT).exists(),
-        "no working directory was made"
+        case.save.is_file(),
+        "the save is where it was, to be deleted by its owner"
+    );
+    assert_eq!(
+        case.status_lines(),
+        [format!("failed {}", err.trim_end())],
+        "the verdict and nothing else"
     );
 }
 
 #[test]
-fn test_keep_moves_the_bundle_beside_the_photograph_and_says_where() {
-    let case = Case::new("keep", SAVE);
-    case.tracer(&[Step::Exit(0)]);
-    case.renderer(&[Step::Exit(0)]);
-    let (code, out, err) = case.run(&["--keep"]);
-    assert_eq!((code, err.as_str()), (0, ""), "{out}");
-    let photo = PathBuf::from(out.lines().last().expect("a path"));
-    assert!(photo.is_file(), "{out}");
-    let kept = case.out.join(format!(
-        "{} bundle",
-        photo.file_stem().expect("a stem").to_string_lossy()
-    ));
-    assert!(
-        kept.join("manifest.json").is_file(),
-        "the bundle is kept: {out}"
-    );
-    assert!(
-        out.contains(&format!(
-            "Kept the traced sky bundle in {}.",
-            kept.display()
-        )),
-        "{out}"
-    );
-    assert_eq!(
-        case.left_over(),
-        Vec::<PathBuf>::new(),
-        "the intermediates are gone"
-    );
+fn test_a_command_line_refused_still_ends_the_status_file_with_the_reason() {
+    let case = Case::new("refused-line", SAVE);
+    let status = case.status.display().to_string();
+    let (code, out, err) = case.run(&["--status", &status, "--grid", "100x100"]);
+    assert_eq!(code, 1, "{err}");
+    assert_eq!(out, "");
+    assert_eq!(case.status_lines(), [format!("failed {}", err.trim_end())]);
 }
 
 #[test]
@@ -592,9 +763,7 @@ fn test_a_save_set_to_the_decimal_comma_gets_comma_read_outs_and_names() {
         &SAVE.replace("\"decimal_is_comma\":false", "\"decimal_is_comma\":true"),
     );
     case.tracer(&[Step::Exit(0)]);
-    let mut steps: Vec<Step> = RENDERER_SAYS.iter().map(|l| Step::Say(l)).collect();
-    steps.push(Step::Exit(0));
-    case.renderer(&steps);
+    case.renderer(&rendering_steps());
     let (code, out, err) = case.run(&[]);
     assert_eq!((code, err.as_str()), (0, ""), "{out}");
     assert!(
@@ -626,8 +795,10 @@ fn test_a_viewer_named_wrongly_fails_the_opening_and_says_where_the_view_that_wa
     let (code, out, err) = case.run(&["--open", "--viewer", &nowhere_text]);
     assert_eq!(code, 1, "out: {out}\nerr: {err}");
     assert_eq!(err.lines().count(), 1, "{err}");
-    let photo = case.views().pop().expect("the photograph was made");
-    assert_eq!(case.views().len(), 1);
+    let folder = case.folder();
+    let name = folder.file_name().expect("a name").to_string_lossy();
+    let photo = folder.join(format!("{name}.jpg"));
+    assert!(photo.is_file(), "the photograph was made");
     assert!(
         err.starts_with(&format!(
             "Made Bob's view at {}, but --viewer names ",
@@ -637,7 +808,7 @@ fn test_a_viewer_named_wrongly_fails_the_opening_and_says_where_the_view_that_wa
             && err.trim_end().ends_with('.'),
         "{err}"
     );
-    assert_sentences(&out.lines().collect::<Vec<_>>());
+    assert_sentences(&progress_of(&out));
     assert!(!out.contains("Opened"), "nothing was opened: {out}");
 }
 
@@ -654,7 +825,7 @@ fn test_open_starts_the_named_viewer_on_the_photograph_and_names_the_program() {
     let viewer_text = viewer.display().to_string();
     let (code, out, err) = case.run(&["--open", "--viewer", &viewer_text]);
     assert_eq!((code, err.as_str()), (0, ""), "{out}");
-    let lines: Vec<&str> = out.lines().collect();
+    let lines = progress_of(&out);
     let (last, progress) = lines.split_last().expect("some output");
     assert_sentences(progress);
     assert_eq!(

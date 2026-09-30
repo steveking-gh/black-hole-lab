@@ -76,9 +76,42 @@ pub fn trace_frame(
     threads: usize,
     symmetry: bool,
 ) -> SkyFrame {
+    trace_frame_reporting(
+        kerr,
+        triad,
+        width,
+        height,
+        options,
+        threads,
+        symmetry,
+        &|_, _| {},
+    )
+}
+
+/// [`trace_frame`], telling `rows_done` after every row a thread finishes how many rows of the
+/// frame are finished and how many there are to trace in all (half the grid, or a little over, with
+/// the mirror).
+///
+/// The count is a second shared counter beside the one that hands the rows out: that one counts
+/// rows *started*, and a row started is up to a row's work away from being done. `rows_done` is
+/// called on the tracing thread, once a row - a few hundred to a few thousand times a frame, each
+/// after a row of rays that took milliseconds - so a caller that prints from it costs the tracing
+/// nothing it could measure, provided it does its own throttling and takes no lock for long.
+#[allow(clippy::too_many_arguments)]
+pub fn trace_frame_reporting(
+    kerr: &Kerr,
+    triad: &Triad,
+    width: usize,
+    height: usize,
+    options: &TraceOptions,
+    threads: usize,
+    symmetry: bool,
+    rows_done: &(dyn Fn(usize, usize) + Sync),
+) -> SkyFrame {
     let mirror = symmetry && triad.is_reflection_symmetric();
     let rows = if mirror { height.div_ceil(2) } else { height };
     let next = AtomicUsize::new(0);
+    let finished = AtomicUsize::new(0);
     let mut traced: Vec<(usize, Vec<Outcome>)> = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..threads.max(1))
             .map(|_| {
@@ -100,6 +133,7 @@ pub fn trace_frame(
                             })
                             .collect();
                         mine.push((j, row));
+                        rows_done(finished.fetch_add(1, Ordering::Relaxed) + 1, rows);
                     }
                     mine
                 })
@@ -240,6 +274,33 @@ mod tests {
             );
             assert_eq!(counts[0], 0, "no ray unresolved");
             assert!(counts[1] > 0);
+        }
+    }
+    #[test]
+    fn test_the_row_count_reaches_every_row_to_trace_once_and_in_order_of_finishing() {
+        // Each finished row is counted exactly once, whichever thread finished it, so the counts
+        // the callback sees are 1 to the number of rows traced, each once, and the last is all of
+        // them: with the mirror, half the grid rounded up.
+        let kerr = Kerr::new(1.0, 0.9);
+        let obs = Observer::stationary(&kerr, 6.0, 0.4).unwrap();
+        let triad = Triad::new(&kerr, &obs, std::f64::consts::PI);
+        let (w, h) = (16usize, 9usize);
+        for (symmetry, rows) in [(false, h), (true, h.div_ceil(2))] {
+            let seen = std::sync::Mutex::new(Vec::new());
+            trace_frame_reporting(
+                &kerr,
+                &triad,
+                w,
+                h,
+                &TraceOptions::default(),
+                3,
+                symmetry,
+                &|done, of| seen.lock().unwrap().push((done, of)),
+            );
+            let mut seen = seen.into_inner().unwrap();
+            seen.sort_unstable();
+            let expected: Vec<(usize, usize)> = (1..=rows).map(|k| (k, rows)).collect();
+            assert_eq!(seen, expected, "symmetry {symmetry}");
         }
     }
 }

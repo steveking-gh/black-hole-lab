@@ -1,16 +1,23 @@
-//! A run: find the pieces, trace, render, put the photograph in place, say what was made and
-//! where on it to look for the read-outs and the marks of the directions of travel.
+//! A run: find the pieces, make the view's folder and put the save in it, trace, render, say what
+//! was made and where on it to look for the read-outs and the marks of the directions of travel.
 //!
 //! The two programs run as child processes, found beside this one: `sky-render` has no library to
 //! call, and a child can be stopped with everything it started, which is what the app does to this
-//! program when it closes. Their standard output and error are read here, a thread a pipe, and
-//! never passed through: what the user sees is the sentences this program writes from them.
+//! program when the user cancels or closes it. Their standard output and error are read here, a
+//! thread a pipe, and never passed through: what the user sees is the sentences this program writes
+//! from them, among them the percentage each program says it has done.
+//!
+//! Everything a run makes goes straight into the view's folder (`names`), and nothing is deleted:
+//! the bundle is traced into the folder, the photograph rendered into it, and a run that fails
+//! leaves the folder as it stood, to be looked into. So the commands written to `commands.txt`
+//! name the files that are really there, and run again as they stand.
 //!
 //! [`cli`] is the whole program with the process around it taken out - the arguments, the
 //! environment and the two streams are handed in - so that the tests run it in-process against
 //! stand-in tools and read exactly what it wrote where, and the exit code it chose.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
+use std::fs::File;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -22,11 +29,12 @@ use crate::find::{self, Names, Pieces, Search};
 use crate::names;
 use crate::open::{self, ViewerSearch};
 use crate::save;
-use crate::scratch::{self, Scratch};
+use crate::shell;
 
-/// Windows' `CREATE_NO_WINDOW`: a console program started without a console window. The app
-/// starts this program so, and this program starts its own children so, because each console
-/// program started from a windowed one would otherwise flash up a black window of its own.
+/// Windows' `CREATE_NO_WINDOW`: a console program started without a console window. This program
+/// starts its own children so, because each console program started from a windowed one would
+/// otherwise flash up a black window of its own, and the tracer's and renderer's output is read
+/// here and never shown as it stands.
 #[cfg(windows)]
 pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -35,24 +43,28 @@ pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// of the picture.
 pub const PHOTO_SIZE: (u64, u64) = (8192, 4096);
 
-/// What tracing one ray costs, in seconds of one thread, measured on the owner's machine: 13 µs at
-/// the saved moment of demos/near_fall.bhl, 23 µs later in the fall, where more of the light has
-/// circled the hole. The estimate a user is given spans the two.
-const RAY_COST: (f64, f64) = (13e-6, 23e-6);
+/// The least rise in a child's percentage that is passed on as a sentence. The tracer and the
+/// renderer each print every whole percent; a sentence every five is a line about every half
+/// second on the owner's machine, which is as often as anybody reads a progress line, and twenty
+/// lines a program rather than a hundred in the rendering terminal.
+const PERCENT_STEP: u32 = 5;
 
-/// What rendering the photograph costs on the owner's machine at 8192 x 4096, by the wall clock:
-/// 4.1 to 4.3 s. Measured 2026-09-27 on demos/near_fall.bhl, Bob at the saved moment traced on
-/// the default 4096 x 2048 grid, with `sky-render --photo view.jpg --encoder none --still
-/// --readouts panel` and the arguments this program adds, six renders; of that, 0.6 s reads the
-/// map, 1.9 s builds its rip-map and the blackbody model's tables, 0.3 s loads the bundle, 0.7 s
-/// draws the picture and 0.4 s has ffmpeg write the JPEG. Those six were without
-/// `--readout-at dark`; with it, the same day, Alice's and Bob's views of that save each rendered
-/// in 4.2 s, of which placing the panel in the dark region is 0.1 s. (The render used to encode a
-/// video held for a minute as well, which took it to 8.8 s.)
-const RENDER_COST: f64 = 4.2;
+/// The file in the view's folder that holds the commands this program ran.
+pub const COMMANDS_FILE: &str = "commands.txt";
 
-/// What drawing is left after the renderer says it has drawn the picture: ffmpeg writing the JPEG.
-const WRITE_COST: f64 = 0.4;
+/// The file in the view's folder that holds every progress sentence and the verdict.
+pub const LOG_FILE: &str = "log.txt";
+
+/// The folder in the view's folder that the tracer writes the sky bundle into.
+pub const BUNDLE_DIR: &str = "bundle";
+
+/// What `commands.txt` says before the commands.
+const COMMANDS_HEADER: &str = "\
+# The commands sky-look ran to make this view, in order, as PowerShell reads them: paste a line
+# into PowerShell to run it again. sky-trace will not write over the bundle folder that is here
+# (give it --resume, or another --out), and sky-render will not write over the photograph (give
+# it --overwrite, or another --photo). sky-render runs ffmpeg itself to write the photograph.
+";
 
 /// Where this program is and what surrounds it: everything [`cli`] would otherwise read from the
 /// process.
@@ -71,11 +83,7 @@ pub struct Environment {
     pub vlc: Vec<PathBuf>,
     pub videos: Option<PathBuf>,
     pub home: Option<PathBuf>,
-    /// The system's temporary directory, inside which [`scratch::ROOT`] is kept.
-    pub temp: PathBuf,
     pub names: Names,
-    /// The threads the tracer will trace on, for the estimate of how long it takes.
-    pub threads: usize,
 }
 
 impl Environment {
@@ -94,9 +102,7 @@ impl Environment {
             vlc: open::vlc_places_here(),
             videos: names::videos_folder(home.as_deref()),
             home,
-            temp: std::env::temp_dir(),
             names: Names::native(),
-            threads: std::thread::available_parallelism().map_or(1, |n| n.get()),
         }
     }
 }
@@ -123,25 +129,106 @@ impl Failure {
             Self::Refused(s) | Self::Failed(s) => s,
         }
     }
+
+    /// The word the status file's last line opens with for this failure.
+    pub fn word(&self) -> &'static str {
+        match self {
+            Self::Refused(_) => "refused",
+            Self::Failed(_) => "failed",
+        }
+    }
 }
 
-/// Writes progress: one line at a time, flushed after each, because the app shows each line as it
-/// arrives. A standard output that has gone away (the app closed) is not a reason to stop: the app
-/// kills this program when it wants it stopped.
+/// Writes progress: one line at a time, flushed after each, to standard output, to the status
+/// file when `--status` names one, and to `log.txt` in the view's folder once there is a folder -
+/// with every line said before then written there first, so the log is the whole run.
+///
+/// A line goes to the status file in one write of the whole line and its line feed, so that the
+/// app, which reads the file while it grows, finds either the whole line or none of it in all but
+/// the rarest case, and waits for the line feed in that one. None of the three is a reason to stop
+/// if it goes away: the app stops this program when it wants it stopped.
 pub struct Say<'a> {
     out: &'a mut dyn Write,
+    status: Option<File>,
+    log: Option<File>,
+    /// Every line written to the status file so far, for `log.txt` when the folder is made.
+    said: Vec<String>,
+    /// The view's folder, once it is made.
+    folder: Option<PathBuf>,
 }
 
-impl Say<'_> {
+impl<'a> Say<'a> {
+    /// Progress to `out`, and to the file at `status` too when there is one: opened to append, and
+    /// made if it is not there.
+    pub fn new(out: &'a mut dyn Write, status: Option<&Path>) -> std::io::Result<Self> {
+        let status = match status {
+            Some(path) => Some(
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(path)?,
+            ),
+            None => None,
+        };
+        Ok(Self {
+            out,
+            status,
+            log: None,
+            said: Vec::new(),
+            folder: None,
+        })
+    }
+
+    /// A sentence of progress, everywhere progress goes.
     pub fn line(&mut self, line: &str) {
+        self.console(line);
+        self.record(line);
+    }
+
+    /// A line for standard output alone: a command, or the photograph's path at the end, which are
+    /// for a person or a script at a terminal and are not sentences of progress.
+    pub fn console(&mut self, line: &str) {
         let _ = writeln!(self.out, "{line}");
         let _ = self.out.flush();
+    }
+
+    /// The last line of the status file and the log: `word`, a space, and `text` on one line.
+    pub fn verdict(&mut self, word: &str, text: &str) {
+        self.record(&format!("{word} {}", one_line(text)));
+    }
+
+    /// A line for the status file and the log.
+    fn record(&mut self, line: &str) {
+        let whole = format!("{line}\n");
+        for file in [&mut self.status, &mut self.log].into_iter().flatten() {
+            let _ = file.write_all(whole.as_bytes());
+        }
+        self.said.push(line.to_string());
+    }
+
+    /// From now on the log is kept in `folder`, beginning with every line said so far.
+    fn keep_in(&mut self, folder: &Path) -> std::io::Result<()> {
+        let mut log = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(folder.join(LOG_FILE))?;
+        for line in &self.said {
+            log.write_all(format!("{line}\n").as_bytes())?;
+        }
+        self.log = Some(log);
+        self.folder = Some(folder.to_path_buf());
+        Ok(())
+    }
+
+    /// The view's folder, if the run got as far as making it.
+    pub fn folder(&self) -> Option<&Path> {
+        self.folder.as_deref()
     }
 }
 
 /// The program: parses `args`, runs, writes progress and the photograph's path to `out` and a
-/// failure's one sentence to `err`, and returns the exit code. Nothing reaches `err` on a run that
-/// succeeds.
+/// failure's one sentence to `err`, writes the verdict to the status file, starts the prompt that
+/// `--shell` asks for, and returns the exit code. Nothing reaches `err` on a run that succeeds.
 pub fn cli(args: &[OsString], env: &Environment, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     let options = match args::parse(args) {
         Ok(Request::Help) => {
@@ -151,23 +238,65 @@ pub fn cli(args: &[OsString], env: &Environment, out: &mut dyn Write, err: &mut 
         }
         Ok(Request::Look(options)) => options,
         Err(sentence) => {
+            // A command line that names a status file still gets its verdict there, so that the
+            // app shows this sentence rather than a program that stopped without saying why.
+            if let Some(path) = args::status_named(args)
+                && let Ok(mut say) = Say::new(&mut std::io::sink(), Some(&path))
+            {
+                say.verdict("failed", &sentence);
+            }
             let _ = writeln!(err, "{sentence}");
             return 1;
         }
     };
-    let mut say = Say { out };
-    match look(&options, env, &mut say) {
+    let mut say = match Say::new(out, options.status.as_deref()) {
+        Ok(say) => say,
+        Err(e) => {
+            let _ = writeln!(
+                err,
+                "Could not open the status file {} ({e}); name a file in a directory that can be \
+                 written to.",
+                options.status.as_deref().unwrap_or(Path::new("")).display()
+            );
+            return 1;
+        }
+    };
+    let code = match look(&options, env, &mut say) {
         Ok(photo) => {
-            // The contract's last line: the full path, and nothing else on it.
-            say.line(&photo.display().to_string());
+            let path = photo.display().to_string();
+            say.verdict("done", &path);
+            // The contract's last line of standard output: the full path, and nothing else on it.
+            say.console(&path);
             0
         }
         Err(failure) => {
+            say.verdict(failure.word(), failure.sentence());
             let _ = writeln!(err, "{}", one_line(failure.sentence()));
             let _ = err.flush();
             failure.code()
         }
+    };
+    if options.shell {
+        // After the verdict, so that the app has its answer before the prompt starts, and on the
+        // console alone, since the sentence is about this window. With no folder - the run
+        // stopped before one was made - the prompt starts where this program was started.
+        let dir = say
+            .folder()
+            .map(Path::to_path_buf)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."));
+        match shell::start(&dir) {
+            Ok(()) => say.console(&format!(
+                "Started a command prompt in {}; close this window when you are done with it.",
+                dir.display()
+            )),
+            Err(e) => say.console(&format!(
+                "Could not start a command prompt in {} ({e}).",
+                dir.display()
+            )),
+        }
     }
+    code
 }
 
 /// Makes the view, and returns the photograph's full path.
@@ -199,23 +328,16 @@ pub fn look(o: &Options, env: &Environment, say: &mut Say) -> Result<PathBuf, Fa
         env.home.as_deref(),
     )
     .map_err(Failure::Failed)?;
-    // Made now rather than at the end, so that a directory that cannot be made is found before
-    // half a minute of work and not after it.
-    std::fs::create_dir_all(&out_dir).map_err(|e| {
+    let out_dir = std::path::absolute(&out_dir).unwrap_or(out_dir);
+    let cannot_make = |e: std::io::Error| {
         Failure::Failed(format!(
-            "Could not create {} for the view ({e}); name another directory with --out-dir <dir> \
-             or {}.",
+            "Could not create a folder for the view in {} ({e}); name another directory with \
+             --out-dir <dir> or {}.",
             out_dir.display(),
             names::VIEWS_ENV
         ))
-    })?;
-    let out_dir = std::path::absolute(&out_dir).unwrap_or(out_dir);
-    let scratch = Scratch::new(&env.temp).map_err(|e| {
-        Failure::Failed(format!(
-            "Could not make a working directory in {} ({e}); check that the disk has room.",
-            env.temp.join(scratch::ROOT).display()
-        ))
-    })?;
+    };
+    std::fs::create_dir_all(&out_dir).map_err(cannot_make)?;
     let facts = save::facts(&o.save, o.who);
     let comma = facts.comma;
     let stem = names::stem(
@@ -224,39 +346,47 @@ pub fn look(o: &Options, env: &Environment, say: &mut Say) -> Result<PathBuf, Fa
         facts.tau,
         comma,
     );
-    let bundle = scratch.dir().join("bundle");
+    let folder = names::make_folder(&out_dir, &stem).map_err(cannot_make)?;
+    // The folder's own name, which is `stem` unless another view already had it.
+    let name = folder
+        .file_name()
+        .map_or_else(|| stem.clone(), |n| n.to_string_lossy().into_owned());
+    say.keep_in(&folder).map_err(|e| {
+        Failure::Failed(format!(
+            "Could not write {LOG_FILE} in {} ({e}); check that the disk has room.",
+            folder.display()
+        ))
+    })?;
+    say.line(&format!("Making {who}'s view in {}.", folder.display()));
 
-    let result = make(
-        o, env, say, &pieces, &scratch, &bundle, &out_dir, &stem, comma,
-    );
-
-    // The bundle is kept whether or not the view was made: after a failure it is what there is
-    // to look at. It is moved out of the scratch directory, which is about to be deleted.
-    if o.keep && bundle.is_dir() {
-        let kept_stem = match &result {
-            Ok(placed) => placed
-                .photo
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| stem.clone()),
-            Err(_) => stem.clone(),
-        };
-        let kept = out_dir.join(format!("{kept_stem} bundle"));
-        match scratch::move_dir(&bundle, &kept) {
-            Ok(()) => say.line(&format!(
-                "Kept the traced sky bundle in {}.",
-                kept.display()
-            )),
-            Err(e) => say.line(&format!(
-                "Could not keep the traced sky bundle ({e}); it is deleted with the other \
-                 intermediate files."
-            )),
+    // The save goes into the folder first of all, so that every command after this names the
+    // copy that stays with the view, and the app's temporary save, moved, is no longer the app's
+    // to delete.
+    let save = folder.join(format!("{name}.bhl"));
+    let placed = if o.move_save {
+        names::move_file(&o.save, &save)
+    } else {
+        std::fs::copy(&o.save, &save).map(drop)
+    };
+    let result = placed
+        .map_err(|e| {
+            Failure::Failed(format!(
+                "Could not put the save {} in {} ({e}); check that the disk has room.",
+                o.save.display(),
+                folder.display()
+            ))
+        })
+        .and_then(|()| make(o, say, &pieces, &folder, &save, &name, comma));
+    let photo = match result {
+        Ok(photo) => photo,
+        Err(failure) => {
+            say.line(&format!(
+                "The files of this run are kept in {}.",
+                folder.display()
+            ));
+            return Err(failure);
         }
-    }
-    // The intermediates go before the last line is written, so that a caller who sees the path
-    // sees a run that has finished with the disk.
-    drop(scratch);
-    let placed = result?;
+    };
 
     say.line(&format!(
         "Made {who}'s view in {} seconds: a 360-degree photograph.",
@@ -273,55 +403,50 @@ pub fn look(o: &Options, env: &Environment, say: &mut Say) -> Result<PathBuf, Fa
         let viewer = open::choose(&search).map_err(|why| {
             Failure::Failed(format!(
                 "Made {who}'s view at {}, but {why}.",
-                placed.photo.display()
+                photo.display()
             ))
         })?;
-        open::open(&viewer, &placed.photo).map_err(|e| {
+        open::open(&viewer, &photo).map_err(|e| {
             Failure::Failed(format!(
                 "Made {who}'s view at {}, but could not start {} to show it ({e}); open the file \
                  yourself.",
-                placed.photo.display(),
+                photo.display(),
                 open::viewer_name(&viewer)
             ))
         })?;
         say.line(&open::opened_sentence(&viewer));
     }
-    Ok(placed.photo)
+    Ok(photo)
 }
 
-/// Trace, render, and put the photograph in place; everything that happens inside the scratch
-/// directory.
-#[allow(clippy::too_many_arguments)]
+/// Trace and render into `folder`, from the `save` already there, and return the photograph's
+/// path: `name.jpg` in the folder.
 fn make(
     o: &Options,
-    env: &Environment,
     say: &mut Say,
     pieces: &Pieces,
-    scratch: &Scratch,
-    bundle: &Path,
-    out_dir: &Path,
-    stem: &str,
+    folder: &Path,
+    save: &Path,
+    name: &str,
     comma: bool,
-) -> Result<names::Placed, Failure> {
+) -> Result<PathBuf, Failure> {
     let who = o.who.name();
     let (w, h) = o.grid;
+    let bundle = folder.join(BUNDLE_DIR);
+    let mut commands = Commands::new(folder);
 
     // Trace.
-    let rays = f64::from(w) * f64::from(h);
-    let threads = env.threads.max(1) as f64;
     say.line(&format!(
-        "Tracing the light that reaches {who} from every direction, {w} x {h} rays; this takes \
-         about {}.",
-        span(rays * RAY_COST.0 / threads, rays * RAY_COST.1 / threads)
+        "Tracing the light that reaches {who} from every direction, {w} x {h} rays."
     ));
     let clock = Instant::now();
     // The bundle directory third, for the tests' stand-in scripts, as below. `--units` decides
     // what the tracer writes into the bundle for the read-outs, which the renderer then paints as
     // they are.
     let trace_args: Vec<OsString> = vec![
-        o.save.clone().into(),
+        save.into(),
         "--out".into(),
-        bundle.into(),
+        bundle.clone().into(),
         "--observer".into(),
         o.who.flag().into(),
         "--frames".into(),
@@ -331,14 +456,23 @@ fn make(
         "--units".into(),
         o.units.flag().into(),
     ];
-    let traced = run_child(&pieces.trace, &trace_args, |_| {}).map_err(|e| {
+    commands.ran(say, &pieces.trace, &trace_args);
+    let mut shown = 0;
+    let traced = run_child(&pieces.trace, &trace_args, |line| {
+        if let Some(sentence) = percent_sentence(line, &mut shown, || {
+            format!("Tracing the light that reaches {who}")
+        }) {
+            say.line(&sentence);
+        }
+    })
+    .map_err(|e| {
         Failure::Failed(format!(
             "{} could not be started ({e}); build the sky tools again with cargo build --release \
              in the sky directory.",
             pieces.trace.display()
         ))
     })?;
-    trace_verdict(&traced, &o.save, &env.temp)?;
+    trace_verdict(&traced, save, folder)?;
     say.line(&format!(
         "Traced the light that reaches {who} in {} seconds.",
         number(clock.elapsed().as_secs_f64(), 1, comma)
@@ -350,13 +484,10 @@ fn make(
     // dark region, where it hides none of the sky, or below the opening view when the dark region
     // is too small to hold it. The renderer draws the marks of the directions of travel on the
     // sky of a still by itself, and says where each one is.
-    let photo = scratch.dir().join("view.jpg");
+    let photo = folder.join(format!("{name}.jpg"));
     say.line(&format!(
-        "Rendering {who}'s view over the star map as a 360-degree photograph of {} x {} pixels; \
-         this takes about {}.",
-        PHOTO_SIZE.0,
-        PHOTO_SIZE.1,
-        seconds(RENDER_COST)
+        "Rendering {who}'s view over the star map as a 360-degree photograph of {} x {} pixels.",
+        PHOTO_SIZE.0, PHOTO_SIZE.1,
     ));
     let clock = Instant::now();
     // In this order so that the tests' stand-in scripts find the two paths they act on as their
@@ -386,15 +517,14 @@ fn make(
     if comma {
         render_args.push("--decimal-comma".into());
     }
+    commands.ran(say, &pieces.render, &render_args);
     let (mut tally, mut readouts, mut marks) = (None, None, Vec::new());
+    let mut shown = 0;
     let rendered = run_child(&pieces.render, &render_args, |line| {
-        if line.starts_with("map ") {
-            say.line(&format!("Read the star map; drawing {who}'s view."));
-        } else if line.starts_with("frame ") {
-            say.line(&format!(
-                "Drew {who}'s view; writing the photograph, which takes about {}.",
-                seconds(WRITE_COST)
-            ));
+        if let Some(sentence) =
+            percent_sentence(line, &mut shown, || format!("Rendering {who}'s view"))
+        {
+            say.line(&sentence);
         } else if let Some(counts) = parse_tally(line) {
             tally = Some(counts);
         } else if let Some(sentence) = readout_sentence(line, comma) {
@@ -427,13 +557,6 @@ fn make(
         number(clock.elapsed().as_secs_f64(), 1, comma)
     ));
 
-    let placed = names::place(&photo, out_dir, stem).map_err(|e| {
-        Failure::Failed(format!(
-            "Could not put {who}'s view in {} ({e}); check that the disk has room and that the \
-             directory can be written to.",
-            out_dir.display()
-        ))
-    })?;
     // Where to look, the panel and then the marks the panel names, before what could not be drawn.
     if let Some(sentence) = readouts {
         say.line(&sentence);
@@ -444,7 +567,104 @@ fn make(
     if let Some(sentence) = tally.and_then(|t| red_sentence(t, comma)) {
         say.line(&sentence);
     }
-    Ok(placed)
+    Ok(photo)
+}
+
+/// The commands a run has started, written to `commands.txt` in the view's folder and printed on
+/// standard output, each just before it is run, so that a run that fails part-way still has the
+/// command that failed on record.
+struct Commands {
+    file: PathBuf,
+    /// Whether the file has its header yet.
+    begun: bool,
+}
+
+impl Commands {
+    fn new(folder: &Path) -> Self {
+        Self {
+            file: folder.join(COMMANDS_FILE),
+            begun: false,
+        }
+    }
+
+    /// `program` is about to be started with `args`.
+    fn ran(&mut self, say: &mut Say, program: &Path, args: &[OsString]) {
+        let line = powershell_line(program, args);
+        say.console(&line);
+        let mut text = String::new();
+        if !self.begun {
+            text.push_str(COMMANDS_HEADER);
+            self.begun = true;
+        }
+        text.push_str(&line);
+        text.push('\n');
+        // The record is a courtesy: a folder that takes the log takes this, and a failure to
+        // write it is no reason to refuse the view.
+        let _ = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&self.file)
+            .and_then(|mut file| file.write_all(text.as_bytes()));
+    }
+}
+
+/// `program` and `args` as one line PowerShell runs as it stands: `& 'C:\...\sky-trace.exe' ...`.
+///
+/// The call operator `&` first, because PowerShell reads a line that opens with a quoted string as
+/// the string and not as a program to run. An argument made only of letters, digits and `-`, `_`,
+/// `.` and `+` goes as it is: PowerShell passes every such word to a program unchanged. Anything
+/// else - every path, with its spaces, colons and backslashes - goes in single quotes, inside
+/// which PowerShell reads nothing as syntax but the quote itself, which is doubled; PowerShell
+/// takes the typographic single quotes for quotes too, so they are doubled as well.
+pub fn powershell_line(program: &Path, args: &[OsString]) -> String {
+    let mut line = format!("& {}", powershell_word(program.as_os_str()));
+    for arg in args {
+        line.push(' ');
+        line.push_str(&powershell_word(arg));
+    }
+    line
+}
+
+fn powershell_word(word: &OsStr) -> String {
+    let word = word.to_string_lossy();
+    let plain = !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_.+".contains(c));
+    if plain {
+        return word.into_owned();
+    }
+    let mut quoted = String::from("'");
+    for c in word.chars() {
+        if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}') {
+            quoted.push(c);
+        }
+        quoted.push(c);
+    }
+    quoted.push('\'');
+    quoted
+}
+
+/// The sentence a child's `progress <p>%` line becomes - `what`, a colon and the percentage - or
+/// `None` for any other line, or for a percentage less than [`PERCENT_STEP`] above the last one
+/// `shown`. 100 % is never said: the sentence after it says the stage is done, and how long it
+/// took.
+pub fn percent_sentence(
+    line: &str,
+    shown: &mut u32,
+    what: impl FnOnce() -> String,
+) -> Option<String> {
+    let p: u32 = line
+        .strip_prefix("progress ")?
+        .strip_suffix('%')?
+        .trim()
+        .parse()
+        .ok()?;
+    if p >= 100 || p < *shown + PERCENT_STEP {
+        return None;
+    }
+    *shown = p;
+    Some(format!("{}: {p}%.", what()))
 }
 
 /// How a child process ended.
@@ -459,9 +679,9 @@ struct Ended {
 /// Runs `program` with `args`, handing each line of its standard output to `heard` as it comes and
 /// keeping its standard error, and waits for it.
 ///
-/// A thread a pipe, as the app reads this program: a child that fills the pipe nobody is reading
-/// stops, and one reader could wait for ever on one pipe while the child waits on the other. Lines
-/// are read as bytes and decoded leniently; the line ending, `\r` included, is trimmed.
+/// A thread a pipe: a child that fills the pipe nobody is reading stops, and one reader could wait
+/// for ever on one pipe while the child waits on the other. Lines are read as bytes and decoded
+/// leniently; the line ending, `\r` included, is trimmed.
 fn run_child(
     program: &Path,
     args: &[OsString],
@@ -536,7 +756,7 @@ fn run_child(
 /// a failure, exit 1. Every other refusal is passed on unchanged but for the tracer's `sky-trace: `
 /// prefix: it is physics this program did not compute, in the tracer's own words. Exit 1 from the
 /// tracer is a bundle whose writing failed, which is a disk to see to.
-fn trace_verdict(ended: &Ended, save: &Path, temp: &Path) -> Result<(), Failure> {
+fn trace_verdict(ended: &Ended, save: &Path, folder: &Path) -> Result<(), Failure> {
     let said = complaint(ended, "sky-trace: ", "sky-trace");
     match ended.code {
         Some(0) => Ok(()),
@@ -547,7 +767,7 @@ fn trace_verdict(ended: &Ended, save: &Path, temp: &Path) -> Result<(), Failure>
         Some(1) => Err(Failure::Failed(format!(
             "sky-trace could not write the traced light ({said}); check that the disk holding {} \
              has room, and try again.",
-            temp.display()
+            folder.display()
         ))),
         _ => Err(Failure::Failed(full_stop(&said))),
     }
@@ -784,24 +1004,4 @@ fn percent(n: u64, of: u64, comma: bool) -> String {
 fn number(x: f64, decimals: usize, comma: bool) -> String {
     let text = format!("{x:.decimals$}");
     if comma { text.replace('.', ",") } else { text }
-}
-
-/// An estimated duration, rounded to the whole second: "a second", "9 seconds".
-fn seconds(s: f64) -> String {
-    let s = s.round().max(1.0);
-    if s == 1.0 {
-        "a second".into()
-    } else {
-        format!("{s} seconds")
-    }
-}
-
-/// An estimated range of durations: "7 to 12 seconds", or one figure when they round together.
-fn span(low: f64, high: f64) -> String {
-    let (low, high) = (low.round().max(1.0), high.round().max(1.0));
-    if low == high {
-        seconds(low)
-    } else {
-        format!("{low} to {high} seconds")
-    }
 }

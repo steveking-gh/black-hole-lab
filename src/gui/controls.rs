@@ -587,6 +587,20 @@ pub struct AppControls {
     /// both Look Around buttons out and say why: the child process lives on the app, which is not
     /// `Clone`, and this panel is.
     pub look_making: Option<Who>,
+    /// Standing request from the Cancel button of the card whose view is being made, consumed once
+    /// in `SpacetimeApp::ui` through `take_look_cancel`: the child process lives on the app, and
+    /// only the app can stop it. A transient, like `look_request`.
+    pub look_cancel: bool,
+    /// Show Rendering Terminal: whether the next view is made with `sky-look` in a console window
+    /// of its own, which stays open with a command prompt in the view's folder when the view is
+    /// done. One setting, shown on both cards, because it is about how views are made and not
+    /// about either observer.
+    ///
+    /// A setting of this session and not of the run: `crate::save` does not write it, and a Load,
+    /// which replaces the rest of the panel with the file's, keeps it as it stood
+    /// (`SpacetimeApp::load_from`). A console window opening on every press is a way of working at
+    /// this computer, which a file handed to somebody else has no business turning on.
+    pub look_terminal: bool,
 }
 
 impl Default for AppControls {
@@ -631,6 +645,10 @@ impl Default for AppControls {
             look_request: None,
             look_status: None,
             look_making: None,
+            look_cancel: false,
+            // Off: the status line on the card says how the view is going, and a window opening
+            // over the app is for a user who has asked to see the commands at work.
+            look_terminal: false,
         }
     }
 }
@@ -906,7 +924,28 @@ const BOB_CARD: ObserverCard = ObserverCard {
 /// program has to know what it is called. "The same seconds and kilometres" is literal: sky-look
 /// converts from M with `kerr_equatorial::GM_SUN_OVER_C3_SECONDS` and `C_KM_PER_S`, as this app
 /// does.
-const LOOK_AROUND_TIP: &str = "Make a 360-degree photograph of the whole sky as this observer sees the sky at this moment. Black Hole Lab writes the run to a temporary save and hands that save to sky-look, a program of the sky tools that runs beside Black Hole Lab. sky-look traces the light that reaches this observer from every direction, along the paths the hole bends that light onto, and renders the photograph from that light. sky-look opens the photograph in VLC when this computer has VLC, and otherwise in the program the system opens .jpg files with; that program may show the photograph flat. In VLC, drag with the mouse to look in every direction. sky-look writes the observer's watch, radius and distant clock, the same readings Black Hole Lab shows, in the same seconds and kilometres, on a panel inside the dark region of the hole, where the panel hides none of the sky; when the dark region is too small to hold the panel, sky-look puts the panel below the opening view. The panel also gives this observer's speed and heading of travel past each local reference observer present at this observer's place: past the static observer and the ZAMO, or past the raindrop inside the outer horizon. Small green signs on the sky mark the directions of travel, and the panel names the sign for each direction: a ring, a diamond or a triangle. Making the photograph takes from a few seconds to a minute. Black Hole Lab changes nothing about the run meanwhile: a paused run stays paused, a playing run plays on, and the photograph shows the moment of the press. The line under this card's title follows sky-look's progress and, at the end, names the photograph's file. Black Hole Lab greys this button out while this observer is out of the simulation, while a marker drag holds this observer, and while sky-look is still making another view. sky-look refuses some moments by itself, for example an observer inside the inner horizon, and the line under the title then gives sky-look's reason.";
+const LOOK_AROUND_TIP: &str = "Make a 360-degree photograph of the whole sky as this observer sees the sky at this moment. Black Hole Lab writes the run to a temporary save and hands that save to sky-look, a program of the sky tools that runs beside Black Hole Lab. sky-look traces the light that reaches this observer from every direction, along the paths the hole bends that light onto, and renders the photograph from that light. sky-look opens the photograph in VLC when this computer has VLC, and otherwise in the program the system opens .jpg files with; that program may show the photograph flat. In VLC, drag with the mouse to look in every direction. sky-look writes the observer's watch, radius and distant clock, the same readings Black Hole Lab shows, in the same seconds and kilometres, on a panel inside the dark region of the hole, where the panel hides none of the sky; when the dark region is too small to hold the panel, sky-look puts the panel below the opening view. The panel also gives this observer's speed and heading of travel past each local reference observer present at this observer's place: past the static observer and the ZAMO, or past the raindrop inside the outer horizon. Small green signs on the sky mark the directions of travel, and the panel names the sign for each direction: a ring, a diamond or a triangle. sky-look gives each view a folder of its own inside the folder Black Hole Lab views, which sky-look keeps in your Videos folder unless the environment variable BLACK_HOLE_LAB_VIEWS names another place, and names each view's folder after the time of the press, the observer and the reading of the observer's watch. The view's folder holds the photograph, the save the photograph came from, the traced light (the sky bundle), the commands sky-look ran and a log of the run. Neither program deletes anything in the view's folder, even after a refusal or a failure. Making the photograph takes from a few seconds to a minute, at a priority below the computer's other work, so that Black Hole Lab and the desktop stay responsive. Black Hole Lab changes nothing about the run meanwhile: a paused run stays paused, a playing run plays on, and the photograph shows the moment of the press. The line under this card's title follows sky-look's progress, gives how far the tracing and then the rendering have got as a percentage, and at the end names the photograph's file. While sky-look makes this observer's view, a Cancel button takes the place of this button. Tick Show Rendering Terminal to watch sky-look at work in a window of sky-look's own. Black Hole Lab greys this button out while this observer is out of the simulation, while a marker drag holds this observer, and while sky-look is still making another view. sky-look refuses some moments by itself, for example an observer inside the inner horizon, and the line under the title then gives sky-look's reason.";
+
+/// What the Cancel button that stands in for Look Around, while this observer's view is being
+/// made, says it does. "Every program sky-look started" is literal: the app ends the whole process
+/// tree (`look_around::Job`'s `Drop`).
+const LOOK_CANCEL_TIP: &str = "Stop making this observer's view. Black Hole Lab stops sky-look and every program sky-look started. The view's folder keeps whatever sky-look had put in the folder by then, the save included, and the line under this card's title reports the view as cancelled.";
+
+/// What the Show Rendering Terminal box says it does. "Until you close the window" is literal: the
+/// command prompt keeps the console window open, and nothing of Black Hole Lab's closes the window.
+const LOOK_TERMINAL_TIP: &str = "Make each view from now on with sky-look in a terminal window of sky-look's own. The terminal shows sky-look's progress, and each command sky-look runs, as sky-look works. When sky-look finishes, whether sky-look made the view, refused the moment or failed, a command prompt starts in the terminal, in the view's own folder, ready for commands such as dir or type log.txt. Each terminal stays open until you close the terminal's window, so the terminals add up, one for every view. The setting covers both observers and lasts until Black Hole Lab closes; saved files leave the setting out.";
+
+/// What the Show Rendering Terminal box says on a system that has no terminal to show.
+const LOOK_TERMINAL_UNAVAILABLE_TIP: &str = "The rendering terminal is a Windows feature. On this system sky-look always works without a window, and the line under the card's title reports sky-look's progress.";
+
+/// What an observer card's Look Around row asked for this frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LookAction {
+    /// Look Around was pressed: make a view from this observer.
+    Make,
+    /// Cancel was pressed: stop the view being made from this observer.
+    Cancel,
+}
 
 /// Why a Look Around button is greyed out, or None when the app can see no reason to refuse.
 ///
@@ -954,10 +993,11 @@ impl ObserverCard {
     /// simulation as a user moving the slider, which an edge-triggered `Response::changed` would
     /// not: it would answer the click and ignore the write.
     ///
-    /// Returns whether the card's Look Around button was pressed. The card only reports the press:
-    /// the view starts from a save of the whole app, which the card cannot write. `look_making` and
-    /// `look_status` are the two things the card is told about a view; see
-    /// `AppControls::look_making`.
+    /// Returns what the card's Look Around row asked for, if anything. The card only reports the
+    /// press: the view starts from a save of the whole app, which the card cannot write, and the
+    /// process it would cancel lives on the app. `look_making` and `look_status` are the two things
+    /// the card is told about a view; see `AppControls::look_making`. `look_terminal` is the one
+    /// Show Rendering Terminal setting that both cards show.
     #[allow(clippy::too_many_arguments)]
     fn show(
         &self,
@@ -970,12 +1010,13 @@ impl ObserverCard {
         use_physical_units: bool,
         look_making: Option<Who>,
         look_status: Option<&LookStatus>,
-    ) -> bool {
+        look_terminal: &mut bool,
+    ) -> Option<LookAction> {
         ui.group(|ui| {
             // The title, with the one action that belongs to this observer at the other end of the
             // same row: on the card it acts for, and above the Enable box so that it stays in the
             // same place, greyed out, on a card whose observer has been taken out of the run.
-            let mut look_pressed = false;
+            let mut look_action = None;
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(format!("OBSERVER {}", self.name.to_uppercase()))
@@ -983,6 +1024,18 @@ impl ObserverCard {
                         .color(self.colour),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // While this observer's view is being made, Cancel stands where Look Around
+                    // stood, which is where the user's eye already is; the other card keeps its
+                    // Look Around, greyed out, with the reason.
+                    if look_making == Some(self.who) {
+                        let button = egui::Button::new("Cancel")
+                            .corner_radius(TRANSPORT_CORNER)
+                            .stroke(egui::Stroke::new(1.2, Theme::CHIP_OUTLINE));
+                        if ui.add(button).on_hover_text(numbers::text(LOOK_CANCEL_TIP)).clicked() {
+                            look_action = Some(LookAction::Cancel);
+                        }
+                        return;
+                    }
                     let blocked =
                         look_around_blocked(self.name, settings, obs.as_ref(), look_making);
                     let button = egui::Button::new("Look Around")
@@ -1003,9 +1056,22 @@ impl ObserverCard {
                         }),
                         None => response,
                     };
-                    look_pressed = response.clicked();
+                    if response.clicked() {
+                        look_action = Some(LookAction::Make);
+                    }
                 });
             });
+            // How the next view is made, under the button it is about. Never greyed out by a view
+            // being made: the box speaks for the next press, not the one in progress.
+            let terminal = ui.add_enabled(
+                crate::look_around::TERMINAL_AVAILABLE,
+                egui::Checkbox::new(look_terminal, "Show Rendering Terminal"),
+            );
+            if crate::look_around::TERMINAL_AVAILABLE {
+                terminal.on_hover_text(numbers::text(LOOK_TERMINAL_TIP));
+            } else {
+                terminal.on_disabled_hover_text(numbers::text(LOOK_TERMINAL_UNAVAILABLE_TIP));
+            }
             // What the view from this observer has come to, for as long as nothing newer replaces
             // it. Drawn in the colours of the file status line, and for its reason: a refusal stays
             // until the next view, so that it cannot be missed by looking away.
@@ -1027,7 +1093,7 @@ impl ObserverCard {
                         .small()
                         .color(Theme::TEXT_MUTED),
                 );
-                return look_pressed;
+                return look_action;
             }
             let obs = obs.get_or_insert_with(|| {
                 // Ticked back on part-way through a run: dropped afresh from this card at the
@@ -1293,7 +1359,7 @@ impl ObserverCard {
                     settings.worldline_params(metric),
                 );
             }
-            look_pressed
+            look_action
         })
         .inner
     }
@@ -1604,6 +1670,13 @@ impl AppControls {
     /// `take_file_request`'s reason.
     pub fn take_look_request(&mut self) -> Option<Who> {
         self.look_request.take()
+    }
+
+    /// Whether a Cancel button has asked for the view being made to be stopped since this was last
+    /// called, clearing the request. Called once a frame by `SpacetimeApp::ui`, after the panel has
+    /// run, for `take_file_request`'s reason.
+    pub fn take_look_cancel(&mut self) -> bool {
+        std::mem::take(&mut self.look_cancel)
     }
 
     /// The gap between the two releases, which is the Δt the blueshift scale exp(κ₋Δt) is quoted
@@ -2266,13 +2339,16 @@ impl AppControls {
         // code twice: see `ObserverCard`.
         //
         // A Look Around press is a request, like Save's, taken by the app after the panel: see
-        // `look_request`.
-        if BOB_CARD.show(ui, &sim.metric, &mut self.bob, &mut sim.bob, &mut sim.bob_signal, sim.clock, self.use_physical_units, self.look_making, self.look_status.as_ref()) {
-            self.look_request = Some(Who::Bob);
-        }
+        // `look_request`; and so is a Cancel, `look_cancel`.
+        let bob = BOB_CARD.show(ui, &sim.metric, &mut self.bob, &mut sim.bob, &mut sim.bob_signal, sim.clock, self.use_physical_units, self.look_making, self.look_status.as_ref(), &mut self.look_terminal);
         ui.add_space(4.0);
-        if ALICE_CARD.show(ui, &sim.metric, &mut self.alice, &mut sim.alice, &mut sim.alice_signal, sim.clock, self.use_physical_units, self.look_making, self.look_status.as_ref()) {
-            self.look_request = Some(Who::Alice);
+        let alice = ALICE_CARD.show(ui, &sim.metric, &mut self.alice, &mut sim.alice, &mut sim.alice_signal, sim.clock, self.use_physical_units, self.look_making, self.look_status.as_ref(), &mut self.look_terminal);
+        for (who, action) in [(Who::Bob, bob), (Who::Alice, alice)] {
+            match action {
+                Some(LookAction::Make) => self.look_request = Some(who),
+                Some(LookAction::Cancel) => self.look_cancel = true,
+                None => {}
+            }
         }
 
         ui.add_space(6.0);
