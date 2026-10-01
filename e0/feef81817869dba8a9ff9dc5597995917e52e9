@@ -1,0 +1,44 @@
+src/look_around/tests.rs
+  s_eab993b6e839ea::t_578a567e602376 208-209,212
+  s_eab993b6e839ea::t_f6c02adcdb7cc3 223-235
+sky/maps/fetch-sky.ps1
+  s_eab993b6e839ea::t_ed474c88650066 4-5,21-22,114-118,155
+sky/sky-look/src/find.rs
+  s_eab993b6e839ea::t_58a330a220cdc0 120-123,128-134
+  s_eab993b6e839ea::t_29d1adf6b3cef0 217,247,252,257-262
+  s_eab993b6e839ea::t_00bd1b154b902a 169
+  s_eab993b6e839ea::t_aa1a61443dbc5a 175-176
+  s_eab993b6e839ea::t_e17cf22a0facca 23-42
+  s_eab993b6e839ea::t_4a5ed993eb4fe4 210,212-216,218-219,221-246,248-251,253,263
+  s_eab993b6e839ea::t_e8efdcf872b3ce 264
+sky/sky-look/src/args.rs
+  s_eab993b6e839ea::t_c7dfad8885807d 57-59
+src/look_around.rs
+  s_eab993b6e839ea::t_010aaee5c44af5 160-170
+  s_eab993b6e839ea::t_f822dcfbb6ca62 132-135
+sky/sky-look/src/tests.rs
+  s_eab993b6e839ea::t_f7cd9a7f1829c3 239,266-272
+  s_eab993b6e839ea::t_13fefddd4fb732 12,45-46,52,246-265,273-284,286-288
+  s_eab993b6e839ea::t_e89fc46de4a04c 240
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e0feef81817869dba8a9ff9dc5597995917e52e9",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_eab993b6e839ea": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "506a3453-7463-4d75-8088-b6596eca7307",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
