@@ -1,0 +1,60 @@
+sky/sky-trace/src/trace.rs
+  s_ac462c24b1b149::t_18a7ff8c48b006 238
+sky/sky-trace/src/travel/tests.rs
+  s_ac462c24b1b149::t_b191beb06efb5b 164,762
+sky/sky-trace/src/horizon.rs
+  s_ac462c24b1b149::t_c74f4370db3a99 57-58,87-88,93-97
+  s_ac462c24b1b149::t_18a7ff8c48b006 15-16
+  s_ac462c24b1b149::t_4fbfb168f67479 1-14,17-56,59-86,89-92,98-151
+sky/sky-trace/src/horizon/tests.rs
+  s_ac462c24b1b149::t_8b3ae1f36cc2b2 50
+  s_ac462c24b1b149::t_4d39788b4a4d1b 1-49,53-55,57-60,70,75-95,100-137,139-170,172-194,196,198
+  s_ac462c24b1b149::t_c74f4370db3a99 138,171,195,197
+  s_ac462c24b1b149::t_39d828a7fe3621 56,61-65
+  s_ac462c24b1b149::t_3519618c59e23e 51-52,66-69,71-74,96-99
+sky/sky-trace/src/trace_tests.rs
+  s_ac462c24b1b149::t_8c0939545a9712 717-722,725-736,741-747,749-758,763-765,770-778
+  s_ac462c24b1b149::t_df660609fce7f3 737-740
+  s_ac462c24b1b149::t_0a0e5b1a74faa7 456-457,459-460,500
+  s_ac462c24b1b149::t_bc10b1bf70ed51 12,139-144,208-209
+  s_ac462c24b1b149::t_3519618c59e23e 759-762,766-769
+  s_ac462c24b1b149::t_456ff6b1e1155c 723-724
+  s_ac462c24b1b149::t_18a7ff8c48b006 11,131-132,137-138,147,205,210-212,216-218,499,584,748
+sky/sky-trace/src/lib.rs
+  s_ac462c24b1b149::t_c74f4370db3a99 15-17,21
+sky/sky-look/src/main.rs
+  s_ac462c24b1b149::t_df660609fce7f3 11-12
+  s_ac462c24b1b149::t_d613c226ba7508 13
+src/gui/controls.rs
+  s_ac462c24b1b149::t_df660609fce7f3 927
+sky/sky-trace/src/film.rs
+  s_ac462c24b1b149::t_3519618c59e23e 478-482
+  s_ac462c24b1b149::t_df660609fce7f3 404-409
+  s_ac462c24b1b149::t_18a7ff8c48b006 64-72,107-108,339-340,345,351-353,370,377-378,387-393,403,527,550-552,567-573,583
+  s_ac462c24b1b149::t_ac7a96a3e80423 96,110-115,428-477,483-510,544-549,559,586-587
+  s_ac462c24b1b149::t_d613c226ba7508 73
+sky/sky-look/src/args.rs
+  s_ac462c24b1b149::t_df660609fce7f3 20-22
+  s_ac462c24b1b149::t_d613c226ba7508 23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ca3ee221a319f294f9e20b20ad21a3ed9415ae7d",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_ac462c24b1b149": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c0649cd5-e007-4aed-9bec-62f282c94701",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
