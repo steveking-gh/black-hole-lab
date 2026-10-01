@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, UNIX_EPOCH};
 
 use crate::args::{self, Request, Units, Who};
-use crate::find::{self, FETCH_SCRIPT, Names, SKY_MAP, SKY_MAP_ENV, Search};
+use crate::find::{self, FETCH_SCRIPT, Names, SKY_MAP, SKY_MAP_ENV, SKY_MAP_URL, Search};
 use crate::names;
 use crate::open::{self, Viewer};
 use crate::run::{Tally, parse_tally, percent_sentence, powershell_line, red_sentence};
@@ -42,13 +42,14 @@ fn names() -> Names {
     }
 }
 
-/// A repository with a release build of the sky tools, the star map in `sky/maps`, and ffmpeg in
-/// a directory of its own named by the returned PATH value.
+/// A repository with a release build of the sky tools, the star map and the script that fetches
+/// it in `sky/maps`, and ffmpeg in a directory of its own named by the returned PATH value.
 fn layout(root: &Path) -> (PathBuf, OsString) {
     let release = root.join("repo/sky/target/release");
     touch(&release.join("sky-trace.exe"));
     touch(&release.join("sky-render.exe"));
     touch(&root.join("repo/sky").join(SKY_MAP));
+    touch(&root.join("repo/sky").join(FETCH_SCRIPT));
     let bin = root.join("ffmpeg/bin");
     touch(&bin.join("ffmpeg.exe"));
     let path = std::env::join_paths([root.join("empty"), bin]).expect("a PATH");
@@ -235,26 +236,56 @@ fn test_each_missing_piece_has_its_own_sentence_saying_what_to_do() {
         sentences[3].contains(
             &root
                 .join("repo/sky")
-                .join(FETCH_SCRIPT)
+                .join("maps")
+                .join("fetch-sky.ps1")
                 .display()
                 .to_string()
         )
     );
 
-    // No sky directory anywhere above: the sentence still names the script.
-    let bare = root.join("bare/bin");
-    touch(&bare.join("sky-trace.exe"));
-    touch(&bare.join("sky-render.exe"));
-    let why = find::find(
-        &Search {
-            exe_dir: Some(bare),
-            ..search
-        },
-        &names(),
-    )
-    .expect_err("no map anywhere");
+    // A downloaded copy, with no sky directory anywhere above: the map is looked for beside the
+    // program, and the sentence gives the address to download it from and the folder to put it
+    // in, and names no script, since none is there.
+    let copy = root.join("downloaded/Black Hole Lab");
+    touch(&copy.join("sky-trace.exe"));
+    touch(&copy.join("sky-render.exe"));
+    let installed = Search {
+        exe_dir: Some(copy.clone()),
+        ..search
+    };
+    let why = find::find(&installed, &names()).expect_err("no map anywhere");
+    let maps = copy.join("maps").display().to_string();
     assert!(
-        why.contains("sky/maps/fetch-sky.ps1") && why.contains("no sky directory"),
+        why.contains(SKY_MAP_URL) && why.contains(&maps) && !why.contains("fetch-sky.ps1"),
+        "{why}"
+    );
+    // With the script extracted beside the map's place, the sentence names it where it is.
+    touch(&copy.join(FETCH_SCRIPT));
+    let why = find::find(&installed, &names()).expect_err("no map anywhere");
+    assert!(
+        why.contains(
+            &copy
+                .join("maps")
+                .join("fetch-sky.ps1")
+                .display()
+                .to_string()
+        ) && why.contains(SKY_MAP_URL),
+        "{why}"
+    );
+    // The map, once it is there, is found.
+    touch(&copy.join(SKY_MAP));
+    assert_eq!(
+        find::find(&installed, &names()).expect("found").sky,
+        copy.join(SKY_MAP)
+    );
+    // A tool missing from a downloaded copy is a file missing from an archive, not a program to
+    // build.
+    std::fs::remove_file(copy.join("sky-render.exe")).expect("the renderer is taken away");
+    let why = find::find(&installed, &names()).expect_err("no renderer");
+    assert!(
+        why.contains("sky-render.exe was not found")
+            && why.contains("incomplete")
+            && !why.contains("cargo"),
         "{why}"
     );
     let _ = std::fs::remove_dir_all(&root);

@@ -129,6 +129,10 @@ const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
 /// 3. `sky/target/release/SKY_LOOK_FILE` under `exe_dir` or the nearest directory above it that has
 ///    one, which is where a developer's release build of the sky tools lands: the app runs from
 ///    `target/release` or `target/probe/release` of the same repository.
+///
+/// The sentence for a program found nowhere depends on whether there is a `sky` directory at or
+/// above `exe_dir`: a checkout is told how to build the program, and a downloaded copy, which has
+/// nothing to build from, that the copy is incomplete.
 pub fn find_sky_look(from_env: Option<&OsStr>, exe_dir: Option<&Path>) -> Result<PathBuf, String> {
     if let Some(named) = from_env.filter(|value| !value.is_empty()) {
         let named = PathBuf::from(named);
@@ -152,6 +156,17 @@ pub fn find_sky_look(from_env: Option<&OsStr>, exe_dir: Option<&Path>) -> Result
             .find(|candidate| candidate.is_file())
         {
             return Ok(built);
+        }
+        // A copy that was downloaded has no `sky` directory above it to build in, and telling its
+        // user to run cargo sends them after a compiler for what is a file missing from an
+        // archive.
+        if !dir.ancestors().any(|above| above.join("sky").is_dir()) {
+            return Err(format!(
+                "{SKY_LOOK_FILE} was not found beside Black Hole Lab in {}, so this copy of Black \
+                 Hole Lab is incomplete. Download Black Hole Lab again and extract every file of \
+                 the archive into one folder, or set {SKY_LOOK_ENV} to the program's full path.",
+                dir.display()
+            ));
         }
     }
     Err(format!(

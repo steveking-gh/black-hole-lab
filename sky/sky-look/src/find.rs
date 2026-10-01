@@ -20,6 +20,26 @@ pub const SKY_MAP: &str = "maps/starmap_2020_8k_gal.exr";
 /// The script that fetches the maps, relative to the `sky` directory.
 pub const FETCH_SCRIPT: &str = "maps/fetch-sky.ps1";
 
+/// Where NASA serves the default star map: the address `fetch-sky.ps1` downloads it from, for a
+/// reader of a sentence who has no PowerShell to run that script with.
+pub const SKY_MAP_URL: &str =
+    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004851/starmap_2020_8k_gal.exr";
+
+/// The size of the default star map as a reader is told it: 160 735 772 bytes, in the binary
+/// megabytes `fetch-sky.ps1` and a file manager both count in.
+pub const SKY_MAP_SIZE: &str = "153 MB";
+
+/// How ffmpeg is got on the platform this program was built for, as the words that follow
+/// "install ffmpeg". A sentence that names another system's package manager sends its reader to
+/// look for a program that is not there.
+const FFMPEG_INSTALL: &str = if cfg!(windows) {
+    "with winget install Gyan.FFmpeg"
+} else if cfg!(target_os = "macos") {
+    "with brew install ffmpeg, which needs Homebrew (https://brew.sh)"
+} else {
+    "with the system's package manager, for example sudo apt install ffmpeg"
+};
+
 /// The file names of the programs, as this platform spells them. The tests put scripts in their
 /// place, which on Windows cannot be named `.exe`, so the names are part of the search rather than
 /// constants inside it.
@@ -97,10 +117,21 @@ fn tools(search: &Search, names: &Names) -> Result<(PathBuf, PathBuf), String> {
             );
         }
     };
+    // A copy that was downloaded has no source to build from, and telling its user to run cargo
+    // sends them after a compiler for what is a file missing from an archive. `--tools` is given
+    // by a person at a terminal, who is told how to build.
+    let installed = search.tools.is_none() && nearest_sky_dir(&dir).is_none();
     let program = |name: &str| {
         let path = dir.join(name);
         if path.is_file() {
             Ok(path)
+        } else if installed {
+            Err(format!(
+                "{name} was not found in {}, {how}, so this copy of Black Hole Lab is incomplete; \
+                 download Black Hole Lab again and extract every file of the archive into one \
+                 folder, or name the directory that holds the sky tools with --tools <dir>.",
+                dir.display()
+            ))
         } else {
             Err(format!(
                 "{name} was not found in {}, {how}; build the sky tools with cargo build --release \
@@ -135,20 +166,14 @@ fn ffmpeg(search: &Search, names: &Names) -> Result<PathBuf, String> {
         .ok_or_else(|| {
             format!(
                 "{} was not found on the PATH, and sky-render needs it to write the photograph; \
-                 install ffmpeg (on Windows: winget install Gyan.FFmpeg), or name it with \
-                 --ffmpeg <path>.",
+                 install ffmpeg {FFMPEG_INSTALL}, or name it with --ffmpeg <path>.",
                 names.ffmpeg
             )
         })
 }
 
-/// The star map: `--sky`, else the variable, else [`SKY_MAP`] in the nearest `sky` directory at
-/// or above this program's directory.
-///
-/// "A `sky` directory at or above" is read both ways a layout can have it: a directory above that
-/// is itself named `sky` (this program runs from `sky/target/release`), and a directory above that
-/// holds one named `sky` (a program beside the app, in the repository's `target/release`). At each
-/// level going up, the first is tried before the second, so the nearest wins.
+/// The star map: `--sky`, else the variable, else [`SKY_MAP`] where [`default_map`] says this
+/// layout keeps it.
 fn sky_map(search: &Search) -> Result<PathBuf, String> {
     if let Some(named) = &search.sky {
         return if named.is_file() {
@@ -182,25 +207,59 @@ fn sky_map(search: &Search) -> Result<PathBuf, String> {
              it with --sky <map.exr> or {SKY_MAP_ENV}."
         ));
     };
-    let Some(sky_dir) = nearest_sky_dir(exe_dir) else {
-        return Err(format!(
-            "The star map was not found: there is no sky directory at or above {}. Fetch the map \
-             with the script sky/{FETCH_SCRIPT} of the Black Hole Lab repository, or name a map \
-             with --sky <map.exr> or {SKY_MAP_ENV}.",
-            exe_dir.display()
-        ));
-    };
-    let map = sky_dir.join(SKY_MAP);
+    let map = default_map(exe_dir);
     if map.is_file() {
-        Ok(map)
-    } else {
-        Err(format!(
-            "The star map {} is not there; fetch it once with pwsh {}, which downloads NASA's \
-             maps, or name another map with --sky <map.exr> or {SKY_MAP_ENV}.",
-            map.display(),
-            sky_dir.join(FETCH_SCRIPT).display()
-        ))
+        return Ok(map);
     }
+    // The script is named only where it is: a copy that was downloaded may have been extracted
+    // without it. The address serves a reader who has no PowerShell, script or no script.
+    let maps = map.parent().unwrap_or(exe_dir);
+    let script = under(maps.parent().unwrap_or(exe_dir), FETCH_SCRIPT);
+    let by_script = if script.is_file() {
+        format!("fetch it once with pwsh {}, or ", script.display())
+    } else {
+        String::new()
+    };
+    Err(format!(
+        "The star map {} is not there; {by_script}download {SKY_MAP_URL} ({SKY_MAP_SIZE}, one of \
+         NASA's Deep Star Maps) into {}, or name another map with --sky <map.exr> or \
+         {SKY_MAP_ENV}.",
+        map.display(),
+        maps.display()
+    ))
+}
+
+/// Where the default star map is kept for a program in `exe_dir`, whether or not it is there.
+///
+/// Two layouts, told apart by whether there is a `sky` directory at or above the program:
+///
+/// - a checkout of the repository, where there is one, and the map is [`SKY_MAP`] inside it. "A
+///   `sky` directory at or above" is read both ways a checkout can have it: a directory above
+///   that is itself named `sky` (this program runs from `sky/target/release`), and a directory
+///   above that holds one named `sky` (a program beside the app, in the repository's
+///   `target/release`). At each level going up, the first is tried before the second, so the
+///   nearest wins;
+/// - a copy that was downloaded, where there is none, and the map is [`SKY_MAP`] beside the
+///   program: the archive is one folder, and its `maps` folder is where the fetch script is.
+///
+/// A map beside the program is used wherever it is found, checkout or not, as the nearer one.
+pub fn default_map(exe_dir: &Path) -> PathBuf {
+    let beside = under(exe_dir, SKY_MAP);
+    if beside.is_file() {
+        return beside;
+    }
+    match nearest_sky_dir(exe_dir) {
+        Some(sky_dir) => under(&sky_dir, SKY_MAP),
+        None => beside,
+    }
+}
+
+/// `relative`, one of this module's paths written with `/`, under `base`, joined a name at a time
+/// so that the path is shown to its reader with one kind of separator.
+fn under(base: &Path, relative: &str) -> PathBuf {
+    relative
+        .split('/')
+        .fold(base.to_path_buf(), |path, name| path.join(name))
 }
 
 /// The nearest directory at or above `dir` that is named `sky`, or that is the `sky` inside one.

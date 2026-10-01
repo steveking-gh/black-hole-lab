@@ -1,7 +1,8 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-    Downloads one of NASA's Deep Star Maps 2020 into sky/maps/ and verifies its SHA-256.
+    Downloads one of NASA's Deep Star Maps 2020 into the folder this script is in and verifies
+    its SHA-256.
 
 .DESCRIPTION
     The maps come from the NASA Goddard Scientific Visualization Studio, entry 4851
@@ -17,7 +18,8 @@
     sha256sum writes. When no checksum is on record for the chosen file, the script prints the
     hash it computed and succeeds with a warning.
 
-    The script needs PowerShell 7 and curl.exe, and nothing else.
+    The script needs PowerShell 7 and curl (curl.exe on Windows), and nothing else. It runs on
+    Windows, macOS and Linux.
 
 .PARAMETER Product
     "starmap" is the full map: the Milky Way background from Gaia DR2 plus the bright stars from
@@ -109,8 +111,11 @@ try {
             'Run the script again with -Force to download a file this large.')
     }
 
-    if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue)) {
-        Stop-WithMessage 'curl.exe was not found on PATH, and this script needs curl.exe to download.'
+    # The program itself and never an alias: "curl.exe" on Windows, "curl" on macOS and Linux.
+    $curl = Get-Command curl.exe, curl -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if (-not $curl) {
+        Stop-WithMessage 'curl was not found on PATH, and this script needs curl to download.'
     }
 
     $dir = $PSScriptRoot
@@ -147,7 +152,7 @@ try {
 
     Write-Host "Downloading $name ($(Format-Bytes $bytes)) from $url"
     if (Test-Path -LiteralPath $partial) { Remove-Item -LiteralPath $partial -Force }
-    & curl.exe --fail --location --retry 3 --progress-bar --output $partial $url
+    & $curl.Source --fail --location --retry 3 --progress-bar --output $partial $url
     if ($LASTEXITCODE -ne 0) {
         if (Test-Path -LiteralPath $partial) { Remove-Item -LiteralPath $partial -Force }
         Stop-WithMessage "The download of $url failed (curl exit code $LASTEXITCODE)."

@@ -54,8 +54,9 @@ USAGE
     --ffmpeg <path>         The ffmpeg sky-render writes the photograph with. Default: ffmpeg
                             on the PATH.
     --sky <map.exr>         The star map. Default: the file the environment variable
-                            BLACK_HOLE_LAB_SKY_MAP names, else maps/starmap_2020_8k_gal.exr in
-                            the nearest sky directory at or above this program's directory.
+                            BLACK_HOLE_LAB_SKY_MAP names, else maps/starmap_2020_8k_gal.exr
+                            beside this program, else that file in the nearest sky directory
+                            at or above this program's directory.
     --status <file>         Also append every progress sentence to this file, and at the end
                             one line saying how the run ended (see STATUS FILE). The app names
                             a file here and reads it while the view is being made.

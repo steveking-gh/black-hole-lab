@@ -205,9 +205,11 @@ fn test_the_search_for_sky_look_takes_the_variable_then_the_app_folder_then_the_
     std::fs::create_dir_all(decoy_dir.join(SKY_LOOK_FILE)).expect("a directory named like it");
     assert!(find_sky_look(None, Some(&decoy_dir)).is_err());
 
-    // Nothing anywhere: one plain sentence, which says how to get the program.
+    // Nothing anywhere in a checkout whose sky tools were never built: one plain sentence, which
+    // says how to build the program.
     let bare = root.join("bare/target/release");
     std::fs::create_dir_all(&bare).expect("an app with no sky tools");
+    std::fs::create_dir_all(root.join("bare/sky")).expect("the sky sources");
     for exe_dir in [Some(bare.as_path()), None] {
         let why = find_sky_look(None, exe_dir).expect_err("there is no program to find");
         assert!(
@@ -218,6 +220,19 @@ fn test_the_search_for_sky_look_takes_the_variable_then_the_app_folder_then_the_
             "{why}"
         );
     }
+
+    // Nothing beside a downloaded copy, which has no sky directory above it to build in: the
+    // sentence says the copy is incomplete, and does not send its reader after a compiler.
+    let copy = root.join("downloaded/Black Hole Lab");
+    std::fs::create_dir_all(&copy).expect("a downloaded copy");
+    let why = find_sky_look(None, Some(&copy)).expect_err("there is no program to find");
+    assert!(
+        why.contains("was not found beside Black Hole Lab")
+            && why.contains("incomplete")
+            && why.contains(SKY_LOOK_ENV)
+            && !why.contains("cargo"),
+        "{why}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
