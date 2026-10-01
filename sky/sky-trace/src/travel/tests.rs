@@ -161,7 +161,7 @@ fn test_the_hover_tests_observer_is_at_rest_past_the_static_observer_and_retrogr
     assert_eq!(zamo.direction.unwrap()[2], 0.0);
 
     // What a film of it writes: no static mark or heading, a speed of 0, and the ZAMO's.
-    let plan = film::plan(&kerr, &[e], &[0.0], 20.44, Units::Physical).unwrap();
+    let plan = film::plan(&kerr, "Bob", &[e], &[0.0], 20.44, Units::Physical).unwrap();
     let entry = film::entry(0, 0.0, 0.0, &e, &plan);
     assert_eq!(entry.readouts["speed_static"].0, 0.0);
     assert!(!entry.readouts.contains_key("heading_static"));
@@ -759,7 +759,7 @@ fn test_bob_past_the_raindrop_between_the_horizons_keeps_one_sign_at_180() {
     let taus: Vec<f64> = (0..60)
         .map(|k| film::frame_tau(bob.tau0(), k, 1.98, 30.0))
         .collect();
-    let plan = film::plan(&kerr, &film.events, &taus, 20.44, Units::Physical).unwrap();
+    let plan = film::plan(&kerr, "Bob", &film.events, &taus, 20.44, Units::Physical).unwrap();
     let raw: Vec<f64> = plan.passing[46..]
         .iter()
         .map(|p| past(p, Reference::Raindrop).heading().unwrap())

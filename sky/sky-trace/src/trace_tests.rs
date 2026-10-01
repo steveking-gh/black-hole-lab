@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use kerr_equatorial::KerrSchild;
 use sky_format::{BundleReader, Num, STOPWATCH};
 use sky_trace::bhl;
-use sky_trace::film::{self, DISTANT_CLOCK, RADIUS, WATCH};
+use sky_trace::film::{self, COORDINATE_TIME, HORIZON_DISTANCE, WATCH};
+use sky_trace::horizon;
 use sky_trace::travel;
 use sky_trace::worldline::Worldline;
 
@@ -127,15 +128,23 @@ fn test_a_save_is_filmed_at_the_promised_proper_times_with_the_right_read_outs()
         .iter()
         .map(|r| (r.id.as_str(), r.label.as_str(), r.unit.as_str(), r.decimals))
         .collect();
+    // The clocks, the watch under Bob's name; then, Bob being outside r+ on every frame, the
+    // distance from it and no time since crossing it; the chart's radius is not a read-out.
     assert_eq!(
         declared[..4],
         [
             (STOPWATCH, "Stopwatch", "M", 3),
-            (WATCH, "Watch", "M", 3),
-            (RADIUS, "Radius", "M", 3),
-            (DISTANT_CLOCK, "Distant clock", "M", 2),
+            (WATCH, "Bob's Watch", "M", 3),
+            (COORDINATE_TIME, "Coordinate time", "M", 2),
+            (
+                HORIZON_DISTANCE,
+                "Proper distance from the outer event horizon",
+                "M",
+                3
+            ),
         ]
     );
+    assert!(declared.iter().all(|d| d.0 != "radius"));
     // The travel read-outs follow: Bob starts at 2.27 M, outside the static limit, and in six
     // frames of 1/120 M is nowhere near it, so the static observer and the ZAMO are both there.
     let ids: Vec<&str> = declared[4..].iter().map(|d| d.0).collect();
@@ -193,16 +202,20 @@ fn test_a_save_is_filmed_at_the_promised_proper_times_with_the_right_read_outs()
             entry.proper_time.0 - m.frames[0].proper_time.0
         );
         assert!((readout(STOPWATCH) - k as f64 / 120.0).abs() < 1e-15);
-        // The watch and the distant clock are the app's own: the observer's proper time and the
+        // The watch and the coordinate time are the app's own: the observer's proper time and the
         // chart's time as the save counts them, not since the film's first frame.
         assert_eq!(readout(WATCH), entry.proper_time.0);
-        assert!((readout(RADIUS) - e.r).abs() < 1e-12, "frame {k}");
-        assert!((readout(DISTANT_CLOCK) - e.t).abs() < 1e-12, "frame {k}");
+        let d = horizon::proper_distance_from_outer_horizon(&metric, e.r).unwrap();
+        assert!((readout(HORIZON_DISTANCE) - d).abs() < 1e-12, "frame {k}");
+        assert!((readout(COORDINATE_TIME) - e.t).abs() < 1e-12, "frame {k}");
+        // The chart's radius is carried by the position alone.
+        assert!(!entry.readouts.contains_key("radius"));
         let position = entry.position.as_ref().unwrap();
         assert_eq!(position.chart, "kerr-schild");
         let [t, r, theta, phi] = position.coords.map(|c| c.0);
-        assert_eq!((r, theta), (readout(RADIUS), std::f64::consts::FRAC_PI_2));
-        assert_eq!(t, readout(DISTANT_CLOCK));
+        assert!((r - e.r).abs() < 1e-12, "frame {k}");
+        assert_eq!(theta, std::f64::consts::FRAC_PI_2);
+        assert_eq!(t, readout(COORDINATE_TIME));
         assert!((phi - e.phi).abs() < 1e-12);
 
         // The travel past each reference observer, as `travel` computes it at the event.
@@ -440,10 +453,11 @@ fn test_each_bad_command_line_is_refused_with_its_own_sentence() {
 #[test]
 fn test_the_read_outs_are_displayed_in_seconds_and_kilometres_unless_geometric_is_asked_for() {
     // The same film twice, --units physical by default and --units geometric: the values stored
-    // are the same to the bit, and only the declarations differ, by a display on each of the four
-    // clocks and the ruler. Bob's six frames at Sagittarius A* span 0.04 M of proper time, so
+    // are the same to the bit, and only the declarations differ, by a display on each of the three
+    // clocks and the two rulers. Bob's six frames at Sagittarius A* span 0.04 M of proper time, so
     // the stopwatch and the watch are shown in the unit of one M, 20.44 s: seconds; the distant
-    // clock, t from 0 to 0.06 M, in seconds too. The radius, 2.27 M, is 13.89 million km.
+    // clock, t from 0 to 0.06 M, in seconds too. The radius, 2.27 M, is 13.89 million km, and the
+    // proper distance from r+ there, 2.92 M, 17.9 million km.
     let scratch = Scratch::new("units");
     let save = repo_file("demos/near_fall.bhl")
         .to_string_lossy()
@@ -482,8 +496,8 @@ fn test_the_read_outs_are_displayed_in_seconds_and_kilometres_unless_geometric_i
         [
             (STOPWATCH, "s", seconds, 2),
             (WATCH, "s", seconds, 2),
-            (RADIUS, "million km", million_km, 2),
-            (DISTANT_CLOCK, "s", seconds, 2),
+            (COORDINATE_TIME, "s", seconds, 2),
+            (HORIZON_DISTANCE, "million km", million_km, 2),
         ]
     );
     assert!(physical.readouts[4..].iter().all(|r| r.display.is_none()));
@@ -567,7 +581,7 @@ fn test_a_still_of_bob_says_which_side_its_headings_are_on() {
     .outer_horizon();
     let mut seen = [false; 3];
     for entry in &m.frames {
-        let r = entry.readouts[RADIUS].0;
+        let r = entry.position.as_ref().unwrap().coords[1].0;
         let quoted = [
             entry.readouts.contains_key("speed_static"),
             entry.readouts.contains_key("speed_zamo"),
@@ -698,5 +712,67 @@ fn test_without_verbose_a_film_prints_its_progress_every_ten_percent_and_what_it
     assert!(
         last.starts_with("wrote 3 frames in ") && last.ends_with(" s"),
         "{printed}"
+    );
+}
+
+#[test]
+fn test_a_film_through_r_plus_gives_the_distance_outside_and_the_time_since_crossing_inside() {
+    // Bob's fall in the demonstration save, a tenth of an M of his time a frame, from 2.27 M through
+    // r+ = 1.44 M until the film ends before r-. Each frame carries one of the two read-outs, the one
+    // for its side of r+; the time since the crossing runs as his watch does; and the crossing it
+    // counts from lies between the last frame outside and the first inside, while the distance
+    // falls toward 0 frame by frame on the way down to r+.
+    let scratch = Scratch::new("through-r-plus");
+    let out = scratch.join("fall");
+    let save = repo_file("demos/near_fall.bhl")
+        .to_string_lossy()
+        .into_owned();
+    quiet(&[
+        &save, "--out", &out, "--grid", "8x4", "--frames", "40", "--rate", "3",
+    ])
+    .unwrap()
+    .unwrap();
+    let m = BundleReader::open(&out).unwrap().manifest().clone();
+    let ids: Vec<&str> = m.readouts.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(
+        ids[2..5],
+        [COORDINATE_TIME, HORIZON_DISTANCE, film::HORIZON_TIME]
+    );
+    let r_plus = bhl::read_file(Path::new(&save))
+        .unwrap()
+        .hole
+        .metric()
+        .outer_horizon();
+    let (mut outside, mut inside) = (Vec::new(), Vec::new());
+    for entry in &m.frames {
+        let r = entry.position.as_ref().unwrap().coords[1].0;
+        let has = |id: &str| entry.readouts.contains_key(id);
+        let tau = entry.proper_time.0;
+        if r > r_plus {
+            assert!(has(HORIZON_DISTANCE) && !has(film::HORIZON_TIME), "r = {r}");
+            outside.push((tau, entry.readouts[HORIZON_DISTANCE].0));
+        } else {
+            assert!(has(film::HORIZON_TIME) && !has(HORIZON_DISTANCE), "r = {r}");
+            inside.push((tau, entry.readouts[film::HORIZON_TIME].0));
+        }
+    }
+    assert!(
+        outside.len() >= 3 && inside.len() >= 3,
+        "{outside:?} {inside:?}"
+    );
+    // The distance falls toward 0; the time rises as the watch does, by the same amounts.
+    assert!(outside.windows(2).all(|w| w[1].1 < w[0].1));
+    for w in inside.windows(2) {
+        assert!(
+            ((w[1].1 - w[0].1) - (w[1].0 - w[0].0)).abs() < 1e-9,
+            "{w:?}"
+        );
+    }
+    let crossing = inside[0].0 - inside[0].1;
+    let last_outside = outside.last().unwrap().0;
+    assert!(
+        last_outside < crossing && crossing < inside[0].0,
+        "the crossing at tau = {crossing} lies between the frames at {last_outside} and {}",
+        inside[0].0
     );
 }

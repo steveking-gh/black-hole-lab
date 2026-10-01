@@ -12,10 +12,13 @@
 //!
 //! `units` chooses the seconds and kilometres a renderer shows the clock and ruler read-outs in,
 //! and `travel` the direction and speed of the observer's travel past each local reference
-//! observer, which the bundle carries as read-outs and as marks on the sky.
+//! observer, which the bundle carries as read-outs and as marks on the sky. `horizon` gives the
+//! observer's proper distance from the outer horizon outside it, and the proper time since crossing
+//! it between the horizons.
 
 pub mod bhl;
 pub mod film;
+pub mod horizon;
 pub mod travel;
 pub mod units;
 pub mod worldline;

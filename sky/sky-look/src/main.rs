@@ -8,8 +8,9 @@
 //! It runs `sky-trace` on the one frame of the saved moment and `sky-render` on what that traced,
 //! as a 360-degree photograph with the observer's read-outs painted on a panel inside the hole's
 //! dark region (or below the opening view when the dark region is too small to hold them) - the
-//! watch, radius and distant clock, in seconds and kilometres unless `--units geometric` asks for
-//! M, and the speed and heading of travel past each local reference observer there is where the
+//! observer's watch, the coordinate time (the app's distant clock), and the proper distance from
+//! the outer horizon (or between the horizons the proper time since crossing it), in seconds and kilometres unless
+//! `--units geometric` asks for M, and the speed and heading of travel past each local reference observer there is where the
 //! observer is - and small green signs on the sky marking those directions of travel. Each view
 //! gets a folder of its own in the views directory, holding the photograph, the save, the traced
 //! bundle, `commands.txt` and `log.txt`, and nothing in it is ever deleted (`names`). With `--open`

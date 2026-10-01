@@ -235,6 +235,7 @@ pub fn film(options: &Trace, out: &mut (dyn Write + Send)) -> Result<Summary, Fa
         .collect();
     let plan = film::plan(
         &kerr,
+        &who,
         &walked.events,
         &taus,
         named.save.hole.seconds_per_unit(),

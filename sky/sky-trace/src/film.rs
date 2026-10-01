@@ -61,9 +61,16 @@
 //!
 //! # The read-outs and the marks
 //!
-//! Every film declares four clock and ruler read-outs - stopwatch, watch, radius, distant clock -
-//! stored in M, each with a display in seconds or kilometres and their multiples unless
-//! `--units geometric` asks for none (`units`). Then, for each local reference observer that the
+//! Every film declares three clock read-outs - the stopwatch, the observer's watch, the coordinate
+//! time - stored in M, each with a display in seconds and their multiples unless
+//! `--units geometric` asks for none (`units`). The chart's radius is not among them: it is a
+//! coordinate, not a length anyone measures, and the frame's `position` carries it for whoever
+//! wants it. After the clocks comes the frame's place relative to the outer horizon (`horizon`):
+//! on a frame outside r+ the proper distance from it, a ruler reading in kilometres and their
+//! multiples; on a frame between the horizons the proper time since the observer's worldline
+//! crossed it, a clock reading displayed as the watch is. A frame carries the one for its side,
+//! and a film that falls through r+ declares both. Then, for each local
+//! reference observer that the
 //! film passes - the static observer, the ZAMO, the raindrop - the speed past it (or the Lorentz
 //! factor above 0.9999 c), the heading of travel past it, and a mark on the sky where the observer
 //! sees itself going (`travel`). All of it is decided by [`plan`] from the walk of the whole
@@ -86,6 +93,7 @@ use sky_format::{
 };
 
 use crate::bhl::{self, Mode, Release, SavedObserver, TrailPoint};
+use crate::horizon;
 use crate::travel::{self, Passing};
 use crate::units::{self, Units};
 use crate::worldline::{End, Event, Film, Worldline};
@@ -96,11 +104,15 @@ pub const PROGRAM: &str = "sky-trace";
 /// The id of the watch read-out: the observer's proper time as the app counts it.
 pub const WATCH: &str = "watch";
 
-/// The id of the radius read-out.
-pub const RADIUS: &str = "radius";
+/// The id of the coordinate-time read-out: the chart's time t, which the app's distant clock shows.
+pub const COORDINATE_TIME: &str = "coordinate_time";
 
-/// The id of the distant-clock read-out: the chart's time as the app's clock shows it.
-pub const DISTANT_CLOCK: &str = "distant_clock";
+/// The id of the read-out of the proper distance from the outer horizon, on frames outside it.
+pub const HORIZON_DISTANCE: &str = "horizon_distance";
+
+/// The id of the read-out of the proper time since crossing the outer horizon, on frames between
+/// the horizons.
+pub const HORIZON_TIME: &str = "horizon_time";
 
 /// The mass of Sagittarius A*, in solar masses: the default of `--solar-masses` for a hover test,
 /// and the mass of the repository's demonstration save.
@@ -324,22 +336,21 @@ pub fn check_rays(frame: &Frame) -> Result<(), String> {
     Ok(())
 }
 
-/// How each of the four clock and ruler read-outs is displayed: stopwatch, watch, radius and
-/// distant clock, in the order drawn. `None` shows the value in M, as stored.
+/// How each of the three clock read-outs is displayed: stopwatch, watch and coordinate time, in
+/// the order drawn. `None` shows the value in M, as stored.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Displays {
     pub stopwatch: Option<Display>,
     pub watch: Option<Display>,
-    pub radius: Option<Display>,
-    pub distant_clock: Option<Display>,
+    pub coordinate_time: Option<Display>,
 }
 
 /// The displays of a film's read-outs (specification 6.1, and the module `units`).
 ///
 /// Each read-out's unit is chosen once, from the largest magnitude it takes over the film's
-/// frames: the stopwatch's |tau_k - tau_0|, the watch's |tau_k|, the radius's r and the distant
-/// clock's |t|, with `taus[k]` the proper time of frame k ([`frame_tau`]) and `events[k]` its
-/// event. `Units::Geometric` gives no displays at all.
+/// frames: the stopwatch's |tau_k - tau_0|, the watch's |tau_k| and the coordinate time's |t|,
+/// with `taus[k]` the proper time of frame k ([`frame_tau`]) and `events[k]` its event.
+/// `Units::Geometric` gives no displays at all.
 pub fn displays(units: Units, seconds_per_m: f64, taus: &[f64], events: &[Event]) -> Displays {
     if units == Units::Geometric {
         return Displays::default();
@@ -356,19 +367,15 @@ pub fn displays(units: Units, seconds_per_m: f64, taus: &[f64], events: &[Event]
             largest(&mut taus.iter().copied()),
             seconds_per_m,
         )),
-        radius: Some(units::length_display(
-            largest(&mut events.iter().map(|e| e.r)),
-            seconds_per_m,
-        )),
-        distant_clock: Some(units::time_display(
+        coordinate_time: Some(units::time_display(
             largest(&mut events.iter().map(|e| e.t)),
             seconds_per_m,
         )),
     }
 }
 
-/// The four clock and ruler read-outs every film of this program declares, in the order drawn,
-/// each with its display.
+/// The three clock read-outs every film of this program declares, in the order drawn, each with
+/// its display; `who` is the observer's name, which labels the watch ("Bob's Watch").
 ///
 /// Two of them read the observer's own clock, and they are not the same thing. The stopwatch is
 /// the format's: proper time since the film's first frame, zero where the film starts. The watch
@@ -377,9 +384,13 @@ pub fn displays(units: Units, seconds_per_m: f64, taus: &[f64], events: &[Event]
 /// by a constant along a film. A view of one moment has no elapsed time to show, which is why a
 /// renderer leaves the stopwatch out of a still; the watch is what says which moment it is.
 ///
-/// The distant clock is likewise the app's clock, the chart's time t, and not the time since the
-/// first frame.
-pub fn readouts(displays: &Displays) -> Vec<ReadoutDecl> {
+/// The coordinate time is the chart's t at the frame's event, the same number the app's distant
+/// clock shows, and not the time since the first frame. The chart is ingoing Kerr-Schild, whose t
+/// is a Killing time: along any static worldline a difference of t is the proper time a clock at
+/// rest at infinity records, which is why the app calls it the distant clock. It is not
+/// Boyer-Lindquist t, which differs from it by a function of r alone and agrees only far from the
+/// hole.
+pub fn readouts(displays: &Displays, who: &str) -> Vec<ReadoutDecl> {
     let declare = |id: &str, label: &str, decimals: u32, display: &Option<Display>| ReadoutDecl {
         id: id.into(),
         label: label.into(),
@@ -389,9 +400,13 @@ pub fn readouts(displays: &Displays) -> Vec<ReadoutDecl> {
     };
     vec![
         declare(STOPWATCH, "Stopwatch", 3, &displays.stopwatch),
-        declare(WATCH, "Watch", 3, &displays.watch),
-        declare(RADIUS, "Radius", 3, &displays.radius),
-        declare(DISTANT_CLOCK, "Distant clock", 2, &displays.distant_clock),
+        declare(WATCH, &format!("{who}'s Watch"), 3, &displays.watch),
+        declare(
+            COORDINATE_TIME,
+            "Coordinate time",
+            2,
+            &displays.coordinate_time,
+        ),
     ]
 }
 
@@ -410,6 +425,89 @@ pub struct Plan {
     /// The heading each of frame k's passings is written with (`travel::written_headings`):
     /// continuous along the film.
     pub headings: Vec<Vec<Option<f64>>>,
+    /// Frame k's place relative to the outer horizon ([`Horizon`]).
+    pub horizon: Vec<Horizon>,
+}
+
+/// Where a frame's event stands relative to the outer horizon r+, as its read-out gives it: a
+/// distance outside, a time inside (the module `horizon`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Horizon {
+    /// Outside r+: the proper distance from r+, in M; infinite for an extremal hole.
+    Distance(f64),
+    /// At or inside r+: the proper time since the observer's worldline crossed r+, in M; NaN where
+    /// the crossing could not be found, which the renderer shows as a value it does not know
+    /// rather than a guess.
+    Time(f64),
+}
+
+impl Horizon {
+    /// Frame `event`'s, around `metric`. The crossing of r+ is the same event for every frame of a
+    /// worldline's fall, so `crossing` keeps the first one found and the frames after it are not
+    /// integrated back again.
+    fn of(metric: &KerrSchild, event: &Event, crossing: &mut Option<Option<f64>>) -> Horizon {
+        match horizon::proper_distance_from_outer_horizon(metric, event.r) {
+            Some(d) => Horizon::Distance(d),
+            None => {
+                let tau = *crossing.get_or_insert_with(|| horizon::crossing_tau(metric, event));
+                Horizon::Time(tau.map_or(f64::NAN, |tau| event.tau - tau))
+            }
+        }
+    }
+
+    /// The read-out's id and value.
+    fn readout(self) -> (&'static str, f64) {
+        match self {
+            Horizon::Distance(d) => (HORIZON_DISTANCE, d),
+            Horizon::Time(t) => (HORIZON_TIME, t),
+        }
+    }
+}
+
+/// The declarations of the horizon read-outs a film's frames carry, each only if some frame
+/// carries it: the distance on frames outside r+, the time on frames inside, so a film that falls
+/// through r+ declares both and shows each on its own side. The distance is a ruler reading and is
+/// displayed as the radius is, in kilometres and their multiples, to three decimals of M; the time
+/// is a clock reading and is displayed as the watch is. Each unit is chosen from the largest value
+/// the read-out takes over the film, leaving out an infinite distance, which no unit shows better
+/// than another.
+fn horizon_readouts(horizon: &[Horizon], units: Units, seconds_per_m: f64) -> Vec<ReadoutDecl> {
+    let largest = |pick: fn(&Horizon) -> Option<f64>| -> Option<f64> {
+        let mut values = horizon.iter().filter_map(pick).peekable();
+        values.peek()?;
+        Some(
+            values
+                .filter(|v| v.is_finite())
+                .fold(0.0f64, |m, v| m.max(v.abs())),
+        )
+    };
+    let physical = units == Units::Physical;
+    let mut out = Vec::new();
+    if let Some(d) = largest(|h| match h {
+        Horizon::Distance(d) => Some(*d),
+        Horizon::Time(_) => None,
+    }) {
+        out.push(ReadoutDecl {
+            id: HORIZON_DISTANCE.into(),
+            label: "Proper distance from the outer event horizon".into(),
+            unit: "M".into(),
+            decimals: 3,
+            display: physical.then(|| units::length_display(d, seconds_per_m)),
+        });
+    }
+    if let Some(t) = largest(|h| match h {
+        Horizon::Time(t) => Some(*t),
+        Horizon::Distance(_) => None,
+    }) {
+        out.push(ReadoutDecl {
+            id: HORIZON_TIME.into(),
+            label: "Proper time from outer event horizon".into(),
+            unit: "M".into(),
+            decimals: 3,
+            display: physical.then(|| units::time_display(t, seconds_per_m)),
+        });
+    }
+    out
 }
 
 impl Plan {
@@ -426,6 +524,7 @@ impl Plan {
 /// is refused now, with the frame's number, and not hours into the tracing.
 pub fn plan(
     kerr: &Kerr,
+    who: &str,
     events: &[Event],
     taus: &[f64],
     seconds_per_m: f64,
@@ -442,13 +541,22 @@ pub fn plan(
         .collect::<Result<Vec<_>, String>>()?;
     let (travel_readouts, marks) = travel::declarations(&passing);
     let headings = travel::written_headings(&passing);
-    let mut readouts = readouts(&displays(units, seconds_per_m, taus, events));
+    let metric = kerr.equatorial();
+    let mut crossing = None;
+    let horizon: Vec<Horizon> = events
+        .iter()
+        .map(|event| Horizon::of(&metric, event, &mut crossing))
+        .collect();
+    // The clocks, then the place relative to the outer horizon, then the travel.
+    let mut readouts = readouts(&displays(units, seconds_per_m, taus, events), who);
+    readouts.extend(horizon_readouts(&horizon, units, seconds_per_m));
     readouts.extend(travel_readouts);
     Ok(Plan {
         readouts,
         marks,
         passing,
         headings,
+        horizon,
     })
 }
 
@@ -456,12 +564,13 @@ pub fn plan(
 /// [`frame_tau`]), in a film whose frame 0 is at proper time `tau0` and whose plan is `plan`.
 ///
 /// The stopwatch is `tau - tau0`, which is the specification's definition to the bit (6: a frame's
-/// stopwatch equals its proper time less frame 0's). The watch is `tau` itself and the distant
-/// clock the chart's t, both as the app counts them (see [`readouts`]). The radius is the chart's
-/// r, and the position the event in ingoing Kerr-Schild (t, r, theta, phi) with theta = pi/2 on
-/// the plane. Then the speed, or the Lorentz factor, past each reference observer that exists at
-/// the event, and the heading and mark of travel past each wherever there is a direction
-/// (`travel::values`).
+/// stopwatch equals its proper time less frame 0's). The watch is `tau` itself and the coordinate
+/// time the chart's t, both as the app counts them (see [`readouts`]). The position is the event
+/// in ingoing Kerr-Schild (t, r, theta, phi) with theta = pi/2 on the plane, which is where the
+/// chart's r is kept: it is not a read-out. Then the frame's distance from the outer horizon or its
+/// time since crossing it, whichever its side of r+ has ([`Horizon`]), and the speed, or the
+/// Lorentz factor, past each reference observer that exists at the event, and the heading and mark
+/// of travel past each wherever there is a direction (`travel::values`).
 pub fn entry(index: u32, tau: f64, tau0: f64, event: &Event, plan: &Plan) -> FrameEntry {
     let mut entry = FrameEntry {
         position: Some(Position {
@@ -471,10 +580,11 @@ pub fn entry(index: u32, tau: f64, tau0: f64, event: &Event, plan: &Plan) -> Fra
         ..FrameEntry::new(index, tau)
             .with_readout(STOPWATCH, tau - tau0)
             .with_readout(WATCH, tau)
-            .with_readout(RADIUS, event.r)
-            .with_readout(DISTANT_CLOCK, event.t)
+            .with_readout(COORDINATE_TIME, event.t)
     };
     let k = index as usize;
+    let (id, value) = plan.horizon[k].readout();
+    entry = entry.with_readout(id, value);
     let (readouts, marks) = travel::values(&plan.passing[k], &plan.headings[k]);
     for (id, value) in readouts {
         entry = entry.with_readout(&id, value);

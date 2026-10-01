@@ -17,9 +17,10 @@ sky-look: makes a 360-degree photograph of the whole sky as one observer of a Bl
 sees it at the saved moment. It runs sky-trace and then sky-render, and is what the app's Look
 Around button starts. The observer's read-outs are written on a panel inside the black hole's
 dark region, where they hide none of the sky, or below the opening view when the dark region is
-too small to hold them: the watch, radius and distant clock, and the speed and heading of travel
-past each local reference observer there is where the observer is (the static observer and the
-ZAMO, or the raindrop inside the outer horizon). Small hollow green signs on the sky, a ring, a
+too small to hold them: the observer's watch, the coordinate time (the app's distant clock), the
+proper distance from the outer event horizon (or, between the horizons, the proper time since the
+observer crossed it), and the speed and heading of travel past each local reference observer there is where the observer is
+(the static observer and the ZAMO, or the raindrop inside the outer horizon). Small hollow green signs on the sky, a ring, a
 diamond or a triangle as the panel names them, mark those directions of travel.
 
 USAGE
