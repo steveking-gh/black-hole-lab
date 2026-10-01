@@ -51,6 +51,20 @@
 //! thread; the below-normal priority, which everything `sky-look` starts inherits, keeps the app
 //! and the rest of the desktop responsive while it does.
 //!
+//! # What a view needs, and the piece the app can supply
+//!
+//! A view needs `sky-look` and the two programs beside it, ffmpeg, and a star map, and a copy of
+//! the app that was downloaded has the first of those and neither of the others. Rather than let
+//! the first press find that out, the app asks `sky-look --check` once when it starts, on a thread
+//! of its own, and the panel says what is missing above the two cards (`Readiness`,
+//! `gui::controls::LookSetup`). The star map is the one piece the app can supply: `sky-look
+//! --fetch-map` downloads it from NASA, and the panel offers that as a button, which is the user's
+//! consent to a download of 153 MB - nothing is fetched by a press of Look Around (`MapFetch`).
+//! ffmpeg is installed by the system's package manager, which is the user's to run: the panel
+//! gives the command. The question is asked again when a download or a view ends, and when the
+//! app's window gets the focus back while something is missing, which is when a user who went
+//! away to install ffmpeg comes back.
+//!
 //! # What the app does not know
 //!
 //! Whether a view *can* be made from a given moment is the tracer's judgement: it follows the
@@ -510,6 +524,188 @@ fn stop(child: &mut Child) {
         let _ = child.kill();
     }
     let _ = child.wait();
+}
+
+/// What Look Around needs that this computer has not got, as `sky-look --check` reports it: the
+/// app asks when it starts, so that the panel can say what is missing before a view is asked for
+/// instead of after a press has failed.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Readiness {
+    /// One sentence for each piece that is missing and that the app cannot supply: each says what
+    /// to do, in `sky-look`'s words, or in the app's when it is `sky-look` that is missing.
+    pub missing: Vec<String>,
+    /// Whether the default star map is missing from its own place, which is the one piece the app
+    /// can supply: `sky-look --fetch-map` downloads it.
+    pub map_fetchable: bool,
+}
+
+impl Readiness {
+    /// Whether nothing is missing.
+    pub fn complete(&self) -> bool {
+        self.missing.is_empty() && !self.map_fetchable
+    }
+
+    /// What the standard output of `sky-look --check` says. It is three lines, for `tools`,
+    /// `ffmpeg` and `map`: the word, a space, and `ok`, or `missing <sentence>`, or for a star map
+    /// a download would supply, `fetchable <sentence>`, whose sentence is left out here because
+    /// the panel offers the download in its place.
+    ///
+    /// A line that is none of these is passed over, and so is output that is not there at all,
+    /// which is what a `sky-look` older than `--check` gives: the answer then is that nothing is
+    /// known to be missing, and a press finds out as it always did.
+    pub fn of(check_output: &str) -> Readiness {
+        let mut readiness = Readiness::default();
+        for line in check_output.lines() {
+            let mut words = line.trim().splitn(3, ' ');
+            let (Some(_piece), Some(state)) = (words.next(), words.next()) else { continue };
+            match (state, words.next()) {
+                ("missing", Some(why)) => readiness.missing.push(why.to_string()),
+                ("fetchable", _) => readiness.map_fetchable = true,
+                _ => {}
+            }
+        }
+        readiness
+    }
+}
+
+/// Ask `program` what Look Around is missing, and wait for the answer: `sky-look --check`, which
+/// looks at a few files and exits. Called on a thread of its own and never on a frame
+/// (`SpacetimeApp::start_look_check`).
+///
+/// A `sky-look` that cannot be started is itself the missing piece, and said to be.
+pub fn check(program: &Path) -> Readiness {
+    let mut command = Command::new(program);
+    command.arg("--check").stdin(Stdio::null()).stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    match command.output() {
+        Ok(output) => Readiness::of(&String::from_utf8_lossy(&output.stdout)),
+        Err(cause) => Readiness {
+            missing: vec![format!("Could not start sky-look ({}): {cause}", program.display())],
+            map_fetchable: false,
+        },
+    }
+}
+
+/// `check` for this process: on the `sky-look` that `locate` finds, or with the sentence saying
+/// that there is none.
+pub fn check_here() -> Readiness {
+    match locate() {
+        Ok(program) => check(&program),
+        Err(why) => Readiness { missing: vec![why], map_fetchable: false },
+    }
+}
+
+/// The star map being downloaded: a running `sky-look --fetch-map --status <file>`, and what its
+/// status file has said so far.
+///
+/// The arrangement is a view's (`Job`) with nothing handed over: the app makes an empty status
+/// file, `sky-look` appends its sentences of progress and last `done <the map's full path>` or
+/// `failed <sentence>`, and the app reads the file once a frame. Its `Drop` is the cleanup, as
+/// `Job`'s is: a download not yet finished is stopped, with the curl it started wherever `stop`
+/// can end a whole process tree, and the status file is deleted. What a stopped download leaves is a file named `.part` beside the map's
+/// place, which the search never takes for the map and the next download replaces.
+pub struct MapFetch {
+    child: Child,
+    tail: StatusTail,
+    last_line: Option<String>,
+    verdict: Option<Verdict>,
+    status: PathBuf,
+    exited: bool,
+}
+
+impl MapFetch {
+    /// Start `program` on the download, with its status file in `dir`, and return at once.
+    pub fn start(program: &Path, dir: &Path) -> std::io::Result<MapFetch> {
+        let status = status_path_for(&scratch_save_path(dir));
+        std::fs::File::create(&status)?;
+        let mut command = Command::new(program);
+        command
+            .arg("--fetch-map")
+            .arg("--status")
+            .arg(&status)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        let child = command.spawn().inspect_err(|_| {
+            let _ = std::fs::remove_file(&status);
+        })?;
+        Ok(MapFetch {
+            child,
+            tail: StatusTail::new(status.clone()),
+            last_line: None,
+            verdict: None,
+            status,
+            exited: false,
+        })
+    }
+
+    /// Take in whatever the status file has said since the last call, and say where the download
+    /// has got to. Never blocks. The exit is asked for before the file is read, for the reason
+    /// `Job::poll` gives.
+    pub fn poll(&mut self) -> Progress {
+        let failed = |text: String| Progress::Finished { text, failed: true };
+        let exit = match self.child.try_wait() {
+            Ok(exit) => exit,
+            Err(cause) => {
+                return failed(format!(
+                    "Lost track of sky-look while it downloaded the star map: {cause}"
+                ));
+            }
+        };
+        let mut lines = self.tail.lines();
+        if exit.is_some() {
+            self.exited = true;
+            lines.extend(self.tail.rest());
+        }
+        for line in lines {
+            if self.verdict.is_none() {
+                match Verdict::of(&line) {
+                    Some(verdict) => self.verdict = Some(verdict),
+                    None => self.last_line = Some(line),
+                }
+            }
+        }
+        match (&self.verdict, exit) {
+            (Some(Verdict::Done(map)), _) => Progress::Finished {
+                text: format!("Downloaded the star map: {map}"),
+                failed: false,
+            },
+            (Some(Verdict::Refused(why) | Verdict::Failed(why)), _) => {
+                failed(format!("Could not download the star map: {why}"))
+            }
+            (None, None) => Progress::Running(
+                self.last_line
+                    .clone()
+                    .unwrap_or_else(|| "Starting sky-look to download the star map.".to_string()),
+            ),
+            (None, Some(status)) => failed(match status.code() {
+                Some(code) => format!(
+                    "Could not download the star map: sky-look stopped with exit code {code} \
+                     without saying why."
+                ),
+                None => "sky-look was stopped before it finished downloading the star map."
+                    .to_string(),
+            }),
+        }
+    }
+}
+
+impl Drop for MapFetch {
+    fn drop(&mut self) {
+        if !self.exited && !matches!(self.child.try_wait(), Ok(Some(_))) {
+            stop(&mut self.child);
+        }
+        let _ = std::fs::remove_file(&self.status);
+    }
 }
 
 #[cfg(test)]

@@ -77,6 +77,8 @@ pub struct Search {
     pub sky: Option<PathBuf>,
     /// The value of [`SKY_MAP_ENV`].
     pub sky_env: Option<OsString>,
+    /// Directories ffmpeg is installed into, looked in after the PATH: [`ffmpeg_places_here`].
+    pub ffmpeg_places: Vec<PathBuf>,
 }
 
 /// The pieces, every one of them a file that is there.
@@ -93,13 +95,66 @@ pub struct Pieces {
 pub fn find(search: &Search, names: &Names) -> Result<Pieces, String> {
     let (trace, render) = tools(search, names)?;
     let ffmpeg = ffmpeg(search, names)?;
-    let sky = sky_map(search)?;
+    let sky = sky_map(search).map_err(|no_map| no_map.why)?;
     Ok(Pieces {
         trace,
         render,
         ffmpeg,
         sky,
     })
+}
+
+/// What `--check` reports: for each piece, the sentence [`find`] would give for it if it were the
+/// first one missing, or `None` for a piece that is there. Every piece is looked for, where
+/// [`find`] stops at the first, because the app shows what is missing before a view is asked for,
+/// and a user told of one piece at a time finds out about the next only after getting the first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Report {
+    /// `sky-trace` and `sky-render`.
+    pub tools: Option<String>,
+    pub ffmpeg: Option<String>,
+    pub map: Option<String>,
+    /// Whether the map that is missing is the default one in its own place, which `--fetch-map`
+    /// puts there; false for a map `--sky` or the variable names, which only its owner can supply.
+    pub map_fetchable: bool,
+}
+
+impl Report {
+    /// Whether every piece is there.
+    pub fn complete(&self) -> bool {
+        self.tools.is_none() && self.ffmpeg.is_none() && self.map.is_none()
+    }
+
+    /// The report as `--check` prints it, a piece a line: the piece's word (`tools`, `ffmpeg`,
+    /// `map`), a space, and `ok`, or `missing` and the sentence, or for a map `--fetch-map` would
+    /// supply, `fetchable` and the sentence.
+    pub fn lines(&self) -> Vec<String> {
+        let line = |piece: &str, missing: &Option<String>, word: &str| match missing {
+            None => format!("{piece} ok"),
+            Some(why) => format!("{piece} {word} {why}"),
+        };
+        let map_word = if self.map_fetchable {
+            "fetchable"
+        } else {
+            "missing"
+        };
+        vec![
+            line("tools", &self.tools, "missing"),
+            line("ffmpeg", &self.ffmpeg, "missing"),
+            line("map", &self.map, map_word),
+        ]
+    }
+}
+
+/// Looks for every piece and says of each whether it is there: see [`Report`].
+pub fn check(search: &Search, names: &Names) -> Report {
+    let map = sky_map(search).err();
+    Report {
+        tools: tools(search, names).err(),
+        ffmpeg: ffmpeg(search, names).err(),
+        map_fetchable: map.as_ref().is_some_and(|no_map| no_map.fetchable),
+        map: map.map(|no_map| no_map.why),
+    }
 }
 
 /// `sky-trace` and `sky-render`, from `--tools` or beside this program. Not looked for anywhere
@@ -143,7 +198,7 @@ fn tools(search: &Search, names: &Names) -> Result<(PathBuf, PathBuf), String> {
     Ok((program(&names.trace)?, program(&names.render)?))
 }
 
-/// ffmpeg: `--ffmpeg`, or the first on the PATH.
+/// ffmpeg: `--ffmpeg`, or the first on the PATH, or the first in `search.ffmpeg_places`.
 fn ffmpeg(search: &Search, names: &Names) -> Result<PathBuf, String> {
     if let Some(named) = &search.ffmpeg {
         return if named.is_file() {
@@ -161,6 +216,7 @@ fn ffmpeg(search: &Search, names: &Names) -> Result<PathBuf, String> {
         .as_deref()
         .into_iter()
         .flat_map(std::env::split_paths)
+        .chain(search.ffmpeg_places.iter().cloned())
         .map(|dir| dir.join(&names.ffmpeg))
         .find(|candidate| candidate.is_file())
         .ok_or_else(|| {
@@ -172,19 +228,88 @@ fn ffmpeg(search: &Search, names: &Names) -> Result<PathBuf, String> {
         })
 }
 
+/// The directories ffmpeg is installed into on this platform by the means its missing sentence
+/// names, whether or not the PATH this program was given holds them.
+///
+/// It often does not. An installer adds its directory to the PATH of programs started afterwards,
+/// and the app that starts this program was started before: without these places a user who
+/// installs ffmpeg as the sentence says, and presses Look Around again, is told again that ffmpeg
+/// is missing, until they think to restart the app. On macOS a program started from the Finder is
+/// given a PATH without Homebrew's directory at all.
+///
+/// - Windows: winget's `Links` directory, and the `bin` of each version of the `Gyan.FFmpeg`
+///   package under winget's `Packages`, the newest name first;
+/// - macOS: Homebrew's two directories, for Apple silicon and for Intel, and MacPorts';
+/// - elsewhere: the directories a package manager and a local install put programs in.
+pub fn ffmpeg_places_here() -> Vec<PathBuf> {
+    if cfg!(windows) {
+        let Some(winget) = std::env::var_os("LOCALAPPDATA")
+            .filter(|v| !v.is_empty())
+            .map(|local| PathBuf::from(local).join("Microsoft").join("WinGet"))
+        else {
+            return Vec::new();
+        };
+        let mut versions: Vec<PathBuf> = subdirectories(&winget.join("Packages"))
+            .into_iter()
+            .filter(|package| {
+                package
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("Gyan.FFmpeg"))
+            })
+            .flat_map(|package| subdirectories(&package))
+            .collect();
+        versions.sort();
+        versions.reverse();
+        std::iter::once(winget.join("Links"))
+            .chain(versions.into_iter().map(|version| version.join("bin")))
+            .collect()
+    } else if cfg!(target_os = "macos") {
+        ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"]
+            .map(PathBuf::from)
+            .to_vec()
+    } else {
+        ["/usr/bin", "/usr/local/bin", "/snap/bin"]
+            .map(PathBuf::from)
+            .to_vec()
+    }
+}
+
+/// The directories directly inside `dir`, or none when it cannot be read.
+fn subdirectories(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect()
+}
+
+/// A star map that is not there.
+struct NoMap {
+    /// The sentence saying so, and what to do.
+    why: String,
+    /// Whether it is the default map in its own place, which `--fetch-map` puts there.
+    fetchable: bool,
+}
+
 /// The star map: `--sky`, else the variable, else [`SKY_MAP`] where [`default_map`] says this
 /// layout keeps it.
-fn sky_map(search: &Search) -> Result<PathBuf, String> {
+fn sky_map(search: &Search) -> Result<PathBuf, NoMap> {
+    let named_wrongly = |why: String| NoMap {
+        why,
+        fetchable: false,
+    };
     if let Some(named) = &search.sky {
         return if named.is_file() {
             Ok(named.clone())
         } else {
-            Err(format!(
+            Err(named_wrongly(format!(
                 "--sky names {}, and there is no star map there; give the path of an \
-                 equirectangular .exr map, or fetch the default one with {FETCH_SCRIPT} in the sky \
-                 directory.",
+                 equirectangular .exr map, or leave --sky out to use the default map, which \
+                 sky-look --fetch-map downloads.",
                 named.display()
-            ))
+            )))
         };
     }
     if let Some(named) = search.sky_env.as_deref().filter(|v| !v.is_empty()) {
@@ -194,18 +319,18 @@ fn sky_map(search: &Search) -> Result<PathBuf, String> {
         return if named.is_file() {
             Ok(named)
         } else {
-            Err(format!(
+            Err(named_wrongly(format!(
                 "{SKY_MAP_ENV} names {}, and there is no star map there; correct the variable, or \
-                 remove it to use {SKY_MAP} in the sky directory.",
+                 remove it to use the default map.",
                 named.display()
-            ))
+            )))
         };
     }
     let Some(exe_dir) = &search.exe_dir else {
-        return Err(format!(
+        return Err(named_wrongly(format!(
             "sky-look cannot tell which directory it is in, so it cannot find the star map; name \
              it with --sky <map.exr> or {SKY_MAP_ENV}."
-        ));
+        )));
     };
     let map = default_map(exe_dir);
     if map.is_file() {
@@ -216,17 +341,21 @@ fn sky_map(search: &Search) -> Result<PathBuf, String> {
     let maps = map.parent().unwrap_or(exe_dir);
     let script = under(maps.parent().unwrap_or(exe_dir), FETCH_SCRIPT);
     let by_script = if script.is_file() {
-        format!("fetch it once with pwsh {}, or ", script.display())
+        format!("run pwsh {}, or ", script.display())
     } else {
         String::new()
     };
-    Err(format!(
-        "The star map {} is not there; {by_script}download {SKY_MAP_URL} ({SKY_MAP_SIZE}, one of \
-         NASA's Deep Star Maps) into {}, or name another map with --sky <map.exr> or \
-         {SKY_MAP_ENV}.",
-        map.display(),
-        maps.display()
-    ))
+    Err(NoMap {
+        why: format!(
+            "The star map {} is not there; download it ({SKY_MAP_SIZE}, one of NASA's Deep Star \
+             Maps) with the Download Star Map button of Black Hole Lab or with sky-look \
+             --fetch-map, or {by_script}put {SKY_MAP_URL} into {} by hand, or name another map \
+             with --sky <map.exr> or {SKY_MAP_ENV}.",
+            map.display(),
+            maps.display()
+        ),
+        fetchable: true,
+    })
 }
 
 /// Where the default star map is kept for a program in `exe_dir`, whether or not it is there.

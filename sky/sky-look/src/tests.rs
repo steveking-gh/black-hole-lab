@@ -14,6 +14,7 @@ use crate::names;
 use crate::open::{self, Viewer};
 use crate::run::{Tally, parse_tally, percent_sentence, powershell_line, red_sentence};
 use crate::save;
+use crate::sha256;
 use crate::shell;
 
 /// A directory of its own for one test, empty, in the system's temporary directory.
@@ -1009,4 +1010,127 @@ fn test_the_prompt_starts_in_the_views_folder() {
     } else {
         assert!(args.is_empty(), "{args:?}");
     }
+}
+
+#[test]
+fn test_the_check_reports_every_piece_and_says_which_map_a_download_would_supply() {
+    let root = scratch_dir("check");
+    let (release, path) = layout(&root);
+    let search = Search {
+        exe_dir: Some(release),
+        path: Some(path),
+        ..Search::default()
+    };
+    let report = find::check(&search, &names());
+    assert!(report.complete(), "{report:?}");
+    assert_eq!(report.lines(), ["tools ok", "ffmpeg ok", "map ok"]);
+
+    // Everything missing at once, where `find` would stop at the tools: each piece has its line,
+    // and the default map in its own place is one a download would supply.
+    let copy = root.join("downloaded/Black Hole Lab");
+    std::fs::create_dir_all(&copy).expect("a downloaded copy");
+    let bare = Search {
+        exe_dir: Some(copy),
+        ..Search::default()
+    };
+    let report = find::check(&bare, &names());
+    assert!(!report.complete() && report.map_fetchable, "{report:?}");
+    let lines = report.lines();
+    assert!(
+        lines[0].starts_with("tools missing sky-trace.exe was not found"),
+        "{lines:#?}"
+    );
+    assert!(
+        lines[1].starts_with("ffmpeg missing ffmpeg.exe was not found"),
+        "{lines:#?}"
+    );
+    assert!(
+        lines[2].starts_with("map fetchable The star map"),
+        "{lines:#?}"
+    );
+    assert!(find::find(&bare, &names()).is_err());
+
+    // A map named outright that is not there is one only whoever named it can supply.
+    let named = Search {
+        sky_env: Some(root.join("nowhere.exr").into()),
+        ..bare
+    };
+    let report = find::check(&named, &names());
+    assert!(!report.map_fetchable, "{report:?}");
+    assert!(
+        report.lines()[2].starts_with(&format!("map missing {SKY_MAP_ENV} names")),
+        "{report:?}"
+    );
+
+    // ffmpeg that is on no PATH is found in a place it is installed to.
+    let installed = root.join("winget/bin");
+    touch(&installed.join("ffmpeg.exe"));
+    let report = find::check(
+        &Search {
+            ffmpeg_places: vec![root.join("empty"), installed],
+            ..named
+        },
+        &names(),
+    );
+    assert_eq!(report.ffmpeg, None);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_the_two_command_lines_that_make_no_view_take_only_their_own_options() {
+    let parse = |args: &[&str]| args::parse(&args.iter().map(OsString::from).collect::<Vec<_>>());
+    assert_eq!(
+        parse(&["--check"]),
+        Ok(Request::Check(args::CheckOptions::default()))
+    );
+    assert_eq!(
+        parse(&["--sky", "m.exr", "--check", "--ffmpeg", "f"]),
+        Ok(Request::Check(args::CheckOptions {
+            tools: None,
+            ffmpeg: Some("f".into()),
+            sky: Some("m.exr".into()),
+        }))
+    );
+    assert_eq!(
+        parse(&["--fetch-map"]),
+        Ok(Request::FetchMap { status: None })
+    );
+    assert_eq!(
+        parse(&["--fetch-map", "--status", "s.txt"]),
+        Ok(Request::FetchMap {
+            status: Some("s.txt".into())
+        })
+    );
+    for (args, word) in [
+        (&["--check", "run.bhl"][..], "not run.bhl"),
+        (&["--check", "--observer", "bob"][..], "not --observer"),
+        (&["--fetch-map", "--sky", "m.exr"][..], "not --sky"),
+        (&["--fetch-map", "--status"][..], "--status needs a value"),
+    ] {
+        let why = parse(args).expect_err("refused");
+        assert!(why.contains(word) && why.ends_with('.'), "{args:?}: {why}");
+    }
+}
+
+#[test]
+fn test_the_sha_256_is_the_standards_for_its_own_examples() {
+    let hex = |bytes: &[u8]| sha256::hex_of(&mut &bytes[..]).expect("a slice reads");
+    assert_eq!(
+        hex(b""),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+    assert_eq!(
+        hex(b"abc"),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+    // Two blocks' worth, which the padding spills into a third.
+    assert_eq!(
+        hex(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
+        "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+    );
+    // A million bytes, read in pieces that do not end on a block.
+    assert_eq!(
+        hex(&vec![b'a'; 1_000_000]),
+        "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
+    );
 }

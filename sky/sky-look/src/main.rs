@@ -62,17 +62,36 @@
 //!   a command prompt starts in the view's folder, in this program's console window, and this
 //!   program exits without waiting for it (`shell`).
 //!
+//! Two more command lines make no view, and are what the app uses to say what a view needs before
+//! one is asked for, and to supply the piece it can:
+//!
+//! ```text
+//! sky-look --check
+//! sky-look --fetch-map --status <file>
+//! ```
+//!
+//! - `--check` looks for every piece a view needs and prints three lines on standard output, for
+//!   `tools`, `ffmpeg` and `map` in that order: the word, a space, and `ok`, or `missing
+//!   <sentence>`, or for a default star map that `--fetch-map` would supply, `fetchable
+//!   <sentence>`. It exits 0 when all three are `ok`, else 1;
+//! - `--fetch-map` downloads the default star map with curl to where this program looks for it,
+//!   and checks its size and SHA-256 before putting it there (`fetch`). Its status file is a
+//!   view's: sentences of progress carrying the percentage downloaded, and last `done <the map's
+//!   full path>` or `failed <sentence>`.
+//!
 //! `args` reads the command line; `find` finds the pieces; `run` runs the two programs and turns
 //! what they print into sentences; `names` names the view and makes its folder; `save` reads the
 //! three facts this program takes from the save; `open` chooses the viewer and hands the
 //! photograph to it; `shell` takes the console and leaves the prompt in it.
 
 mod args;
+mod fetch;
 mod find;
 mod names;
 mod open;
 mod run;
 mod save;
+mod sha256;
 mod shell;
 
 #[cfg(test)]

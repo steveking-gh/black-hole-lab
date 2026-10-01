@@ -25,6 +25,8 @@ diamond or a triangle as the panel names them, mark those directions of travel.
 
 USAGE
     sky-look <file.bhl> --observer bob|alice [options]
+    sky-look --check [--tools <dir>] [--ffmpeg <path>] [--sky <map.exr>]
+    sky-look --fetch-map [--status <file>]
 
     <file.bhl>              The save. It is copied into the view's folder and never changed,
                             unless --move-save asks for it to be moved there.
@@ -70,6 +72,15 @@ USAGE
                             file and log.txt alone. The app gives this when Show Rendering
                             Terminal is ticked, and starts this program in a console window of
                             its own.
+    --check                 Make no view: look for everything a view needs - sky-trace and
+                            sky-render, ffmpeg, the star map - and print what was found (see
+                            CHECK). The app runs this when it starts, to say what is missing
+                            before a view is asked for.
+    --fetch-map             Make no view: download the default star map, 153 MB, one of NASA's
+                            Deep Star Maps 2020 (https://svs.gsfc.nasa.gov/4851), with curl,
+                            to where this program looks for it, and check its size and its
+                            SHA-256 before putting it there. A map already there and whole is
+                            left alone. The app's Download Star Map button runs this.
     --help, -h              Print this and do nothing else.
 
 OUTPUT
@@ -81,6 +92,18 @@ OUTPUT
     failure exits with code 1 and one sentence on standard error. With --shell, none of this
     program's own lines are printed: only each command, and then what sky-trace and sky-render
     print, on standard output and standard error as they printed it.
+
+CHECK
+    --check prints three lines on standard output, one for each of tools (sky-trace and
+    sky-render), ffmpeg and map, in that order: the word, a space, and ok, or missing and one
+    sentence saying what to do, or, for a default star map that --fetch-map would supply,
+    fetchable and the sentence. It exits with code 0 when all three are ok and with 1 otherwise.
+
+FETCHING THE MAP
+    --fetch-map prints its progress as sentences on standard output, with the percentage
+    downloaded, and last the map's full path; a failure exits with code 1 and one sentence on
+    standard error. With --status, the sentences go to that file too, and its last line is
+    done <the map's full path> or failed <sentence>.
 
 THE VIEW'S FOLDER
     Each view gets a folder of its own in the views directory, named by the observer and the
@@ -198,11 +221,25 @@ pub struct Options {
     pub viewer: Option<PathBuf>,
 }
 
+/// `--check`, with the three places a person can name outright.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CheckOptions {
+    pub tools: Option<PathBuf>,
+    pub ffmpeg: Option<PathBuf>,
+    pub sky: Option<PathBuf>,
+}
+
 /// What the command line asks for.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
     Help,
     Look(Box<Options>),
+    /// `--check`: say which pieces are there.
+    Check(CheckOptions),
+    /// `--fetch-map`: download the default star map, with `--status <file>` if one is named.
+    FetchMap {
+        status: Option<PathBuf>,
+    },
 }
 
 /// The flags that take a value.
@@ -236,6 +273,21 @@ pub fn parse(args: &[OsString]) -> Result<Request, String> {
         .collect::<Result<_, _>>()?;
     if args.iter().any(|a| a == "--help" || a == "-h") {
         return Ok(Request::Help);
+    }
+    if args.iter().any(|a| a == "--check") {
+        let given = alone("--check", &["--tools", "--ffmpeg", "--sky"], &args)?;
+        let value = |flag: &str| given.iter().find(|(f, _)| *f == flag).map(|(_, v)| *v);
+        return Ok(Request::Check(CheckOptions {
+            tools: value("--tools").map(PathBuf::from),
+            ffmpeg: value("--ffmpeg").map(PathBuf::from),
+            sky: value("--sky").map(PathBuf::from),
+        }));
+    }
+    if args.iter().any(|a| a == "--fetch-map") {
+        let given = alone("--fetch-map", &["--status"], &args)?;
+        return Ok(Request::FetchMap {
+            status: given.first().map(|(_, v)| PathBuf::from(v)),
+        });
     }
     let mut given: Vec<(&str, &str)> = Vec::new();
     let mut save: Option<&str> = None;
@@ -335,6 +387,46 @@ pub fn parse(args: &[OsString]) -> Result<Request, String> {
         sky: value("--sky").map(PathBuf::from),
         viewer: value("--viewer").map(PathBuf::from),
     })))
+}
+
+/// The command line of `mode`, a flag that makes no view: the values of the flags in `valued`,
+/// which are all it may be given with. Anything else is refused, because a `--check` or a
+/// `--fetch-map` that quietly ignored a save or an observer would look as if it had used them.
+fn alone<'a>(
+    mode: &str,
+    valued: &[&'a str],
+    args: &'a [String],
+) -> Result<Vec<(&'a str, &'a str)>, String> {
+    let mut given: Vec<(&str, &str)> = Vec::new();
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        if arg == mode {
+            continue;
+        }
+        let Some(flag) = valued.iter().find(|flag| *flag == arg) else {
+            return Err(format!(
+                "{mode} makes no view and takes only {}, not {arg}; sky-look --help lists the \
+                 options.",
+                if valued.is_empty() {
+                    "no other option".to_string()
+                } else {
+                    valued.join(", ")
+                }
+            ));
+        };
+        let Some(value) = rest.next() else {
+            return Err(format!(
+                "{flag} needs a value after it; sky-look --help lists the options."
+            ));
+        };
+        if given.iter().any(|(f, _)| f == flag) {
+            return Err(format!(
+                "{flag} is given twice; give it once, with the value you mean."
+            ));
+        }
+        given.push((flag, value.as_str()));
+    }
+    Ok(given)
 }
 
 /// `<W>x<H>`, both at least 1, W twice H, and no more rays than the tracer takes: checked here so

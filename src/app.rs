@@ -59,6 +59,20 @@ pub struct SpacetimeApp {
     /// on the panel because a running child process is not something `AppControls` can be cloned
     /// with. See `crate::look_around`.
     pub(crate) look_around: Option<crate::look_around::Job>,
+    /// What Look Around needs that this computer has not got, as far as the app has been told:
+    /// nothing, until the first answer comes. See `crate::look_around::Readiness`.
+    pub(crate) look_readiness: crate::look_around::Readiness,
+    /// The answer to `sky-look --check` that a thread is fetching, or None while none is.
+    look_check: Option<std::sync::mpsc::Receiver<crate::look_around::Readiness>>,
+    /// Whether `sky-look --check` is to be asked on the next frame: true from the start, so that
+    /// the first frame asks, and set again by whatever may have changed the answer.
+    pub(crate) look_check_wanted: bool,
+    /// Whether the app's window had the focus on the last frame, to see the focus come back.
+    had_focus: bool,
+    /// The star map being downloaded for the Download Star Map button, or None.
+    pub(crate) map_fetch: Option<crate::look_around::MapFetch>,
+    /// What the last download of the star map came to, or how far the one in progress has got.
+    pub(crate) map_fetch_status: Option<crate::gui::controls::FileStatus>,
 }
 
 impl Default for SpacetimeApp {
@@ -90,6 +104,12 @@ impl Default for SpacetimeApp {
             last_update: Instant::now(),
             fixed_frame_dt: None,
             look_around: None,
+            look_readiness: crate::look_around::Readiness::default(),
+            look_check: None,
+            look_check_wanted: true,
+            had_focus: true,
+            map_fetch: None,
+            map_fetch_status: None,
         }
     }
 }
@@ -434,10 +454,125 @@ impl SpacetimeApp {
         };
         if !running {
             self.look_around = None;
+            // A view that failed may have failed for a missing piece, and one that was made shows
+            // that none is: either way the panel's account of what is missing is brought up to
+            // date.
+            self.look_check_wanted = true;
         }
         self.controls.look_status = Some(LookStatus { who, text, failed });
         self.controls.look_making = running.then_some(who);
         running
+    }
+}
+
+impl SpacetimeApp {
+    /// Ask `sky-look --check` what Look Around is missing, on a thread of its own, when the answer
+    /// is wanted and no thread is already asking; and take the answer when it has come.
+    ///
+    /// Wanted on the first frame, after a view or a download ends, and when the window gets the
+    /// focus back while something is missing - a user who left to install ffmpeg has come back.
+    /// The thread wakes the app when it has the answer, so that an idle app shows it without
+    /// waiting for the mouse. Never blocks: a frame costs one test of an Option.
+    pub(crate) fn poll_look_check(&mut self, ctx: &egui::Context) {
+        let focus = ctx.input(|input| input.focused);
+        if focus && !self.had_focus && !self.look_readiness.complete() {
+            self.look_check_wanted = true;
+        }
+        self.had_focus = focus;
+        if let Some(answer) = &self.look_check {
+            match answer.try_recv() {
+                Ok(readiness) => {
+                    self.look_readiness = readiness;
+                    self.look_check = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.look_check = None,
+            }
+        }
+        if self.look_check_wanted && self.look_check.is_none() {
+            self.look_check_wanted = false;
+            let (tell, answer) = std::sync::mpsc::channel();
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let _ = tell.send(crate::look_around::check_here());
+                ctx.request_repaint();
+            });
+            self.look_check = Some(answer);
+        }
+    }
+
+    /// Start downloading the star map with `program`, its status file in `dir`: the Download Star
+    /// Map button. `program` and `dir` are parameters for `look_around`'s reason. A press while a
+    /// download is running does nothing.
+    pub(crate) fn fetch_star_map(
+        &mut self,
+        program: Result<std::path::PathBuf, String>,
+        dir: &std::path::Path,
+    ) {
+        if self.map_fetch.is_some() {
+            return;
+        }
+        let failed = |text: String| FileStatus { text, failed: true };
+        self.map_fetch_status = Some(match program {
+            Err(why) => failed(format!("Could not download the star map: {why}")),
+            Ok(program) => match crate::look_around::MapFetch::start(&program, dir) {
+                Ok(fetch) => {
+                    self.map_fetch = Some(fetch);
+                    FileStatus {
+                        text: "Starting sky-look to download the star map.".to_string(),
+                        failed: false,
+                    }
+                }
+                Err(why) => failed(format!(
+                    "Could not start sky-look ({}) to download the star map: {why}",
+                    program.display()
+                )),
+            },
+        });
+    }
+
+    /// Stop the download of the star map, if one is running, and say so: the Cancel button beside
+    /// the download's progress. Dropping the download is the whole of it (`MapFetch`'s `Drop`).
+    pub(crate) fn cancel_map_fetch(&mut self) {
+        if self.map_fetch.take().is_some() {
+            self.map_fetch_status = Some(FileStatus {
+                text: "Cancelled the download of the star map.".to_string(),
+                failed: false,
+            });
+        }
+    }
+
+    /// Bring the download's status up to date, hand the panel what it shows of Look Around's
+    /// needs, and say whether a download is still running. Called once a frame, before the panel
+    /// is drawn; it never blocks.
+    ///
+    /// The panel's copy is written every frame, as `poll_look_around` writes the status of a view,
+    /// because a Load replaces the whole panel.
+    pub(crate) fn poll_look_setup(&mut self) -> bool {
+        if let Some(fetch) = self.map_fetch.as_mut() {
+            let (text, failed, running) = match fetch.poll() {
+                Progress::Running(line) => (line, false, true),
+                Progress::Finished { text, failed } => (text, failed, false),
+            };
+            self.map_fetch_status = Some(FileStatus { text, failed });
+            if !running {
+                self.map_fetch = None;
+                self.look_check_wanted = true;
+                // The map is there now, whatever the answer in hand says: the button goes at
+                // once, and does not wait for the question to be asked again.
+                if !failed {
+                    self.look_readiness.map_fetchable = false;
+                }
+            }
+        }
+        let fetching = self.map_fetch.is_some();
+        self.controls.look_setup = crate::gui::controls::LookSetup {
+            missing: self.look_readiness.missing.clone(),
+            map_wanted: self.look_readiness.map_fetchable,
+            fetching,
+            fetch_status: self.map_fetch_status.clone(),
+        };
+        fetching
     }
 }
 
@@ -674,6 +809,12 @@ impl eframe::App for SpacetimeApp {
         if self.poll_look_around() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
+        // What Look Around needs that is missing, and the download of the star map if one is
+        // running: asked and read the same way, before the panel draws them.
+        self.poll_look_check(&ctx);
+        if self.poll_look_setup() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
 
         // 3. Left Dock Panel: Controls
         egui::Panel::left("controls_panel").default_size(300.0).show(ui, |ui| {
@@ -721,6 +862,13 @@ impl eframe::App for SpacetimeApp {
         }
         if self.controls.take_look_cancel() {
             self.cancel_look_around();
+        }
+        match self.controls.take_look_setup_action() {
+            Some(crate::gui::controls::LookSetupAction::FetchMap) => {
+                self.fetch_star_map(crate::look_around::locate(), &std::env::temp_dir());
+            }
+            Some(crate::gui::controls::LookSetupAction::CancelFetch) => self.cancel_map_fetch(),
+            None => {}
         }
 
         // 4. Central Panel: Split View between Spacetime (t, r) and Spatial (x, y)

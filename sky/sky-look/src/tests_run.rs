@@ -18,8 +18,9 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use crate::fetch::{self, Download};
 use crate::find::Names;
-use crate::run::{BUNDLE_DIR, COMMANDS_FILE, Environment, LOG_FILE, cli};
+use crate::run::{BUNDLE_DIR, COMMANDS_FILE, Environment, LOG_FILE, Say, cli};
 use crate::tests::scratch_dir;
 
 /// One thing a stand-in does after its work on the disk.
@@ -181,6 +182,7 @@ impl Case {
             views_env: None,
             viewer_env: None,
             vlc: Vec::new(),
+            ffmpeg_places: Vec::new(),
             videos: None,
             home: None,
             names: Names {
@@ -939,4 +941,102 @@ fn test_a_failure_in_the_rendering_terminal_is_the_programs_own_words_there_and_
         case.folder().join(PROMPT_MARK).is_file(),
         "a prompt all the same"
     );
+}
+
+/// What the curl stand-in does to the disk: copies the file its third argument names, which the
+/// test passes as the address, to the path its second argument names.
+fn curl_work() -> Vec<&'static str> {
+    if cfg!(windows) {
+        vec!["copy /y \"%~3\" \"%~2\" >nul"]
+    } else {
+        vec!["cp \"$3\" \"$2\""]
+    }
+}
+
+#[test]
+fn test_a_download_is_put_in_place_only_when_its_size_and_hash_are_the_ones_on_record() {
+    let root = scratch_dir("download");
+    std::fs::create_dir_all(&root).expect("the scratch directory");
+    // What "NASA" serves: three bytes whose SHA-256 is the standard's own example.
+    let served = root.join("served.exr");
+    std::fs::write(&served, b"abc").expect("the served file");
+    let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    stand_in(&root, "curl", &curl_work(), &[]);
+    let target = root.join("copy/maps/map.exr");
+    let part = root.join("copy/maps/map.exr.part");
+    let good = Download {
+        curl: root.join(program("curl")),
+        url: served.display().to_string(),
+        target: target.clone(),
+        bytes: 3,
+        sha256: abc.into(),
+    };
+    let run = |download: &Download| {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let mut say = Say::new(&mut out, &mut err, false, None).expect("no status file to open");
+        let result = fetch::download(download, &mut say);
+        (result, String::from_utf8_lossy(&out).into_owned())
+    };
+
+    // A wrong hash and a wrong size each leave nothing at the target and no partial file.
+    for (what, wrong, word) in [
+        (
+            "hash",
+            Download {
+                sha256: "0".repeat(64),
+                ..good.clone()
+            },
+            "SHA-256",
+        ),
+        (
+            "size",
+            Download {
+                bytes: 4,
+                ..good.clone()
+            },
+            "gave 3 bytes where the record has 4",
+        ),
+    ] {
+        let (result, _) = run(&wrong);
+        let why = result.expect_err(what);
+        assert!(why.contains(word), "{what}: {why}");
+        assert!(!target.exists() && !part.exists(), "{what} leaves nothing");
+    }
+
+    // A curl that fails is reported with what it said.
+    stand_in(
+        &root,
+        "curl-down",
+        &[],
+        &[
+            Step::Complain("curl: (6) Could not resolve host"),
+            Step::Exit(6),
+        ],
+    );
+    let (result, _) = run(&Download {
+        curl: root.join(program("curl-down")),
+        ..good.clone()
+    });
+    let why = result.expect_err("no network");
+    assert!(why.contains("Could not resolve host"), "{why}");
+    assert!(
+        !target.exists() && !part.exists(),
+        "a failure leaves nothing"
+    );
+
+    // The whole file with the right hash is renamed into place, and said to be on its way.
+    let (result, out) = run(&good);
+    assert_eq!(result, Ok(target.clone()));
+    assert_eq!(std::fs::read(&target).expect("the map"), b"abc");
+    assert!(!part.exists(), "the partial name is gone");
+    assert!(out.contains("Downloading the star map map.exr"), "{out}");
+
+    // A map already there and whole is left alone: curl is not run again.
+    let ran = root.join("curl.args");
+    std::fs::remove_file(&ran).expect("the record of the last run");
+    let (result, out) = run(&good);
+    assert_eq!(result, Ok(target));
+    assert!(!ran.exists(), "curl was not run");
+    assert!(out.contains("already at"), "{out}");
+    let _ = std::fs::remove_dir_all(&root);
 }

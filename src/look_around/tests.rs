@@ -692,3 +692,145 @@ fn test_the_card_whose_view_is_being_made_offers_cancel_where_look_around_was() 
     std::fs::write(&go_on, b"").expect("the handshake");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn test_the_check_output_becomes_the_sentences_to_show_and_whether_a_download_would_help() {
+    // Everything there: nothing to say.
+    assert!(Readiness::of("tools ok\nffmpeg ok\nmap ok\n").complete());
+
+    // A missing piece gives its sentence, whole, spaces and all; a star map a download would
+    // supply gives the offer of the download in place of its sentence.
+    let readiness = Readiness::of(
+        "tools ok\r\nffmpeg missing ffmpeg.exe was not found on the PATH; install ffmpeg.\r\n\
+         map fetchable The star map is not there.\r\n",
+    );
+    assert_eq!(
+        readiness,
+        Readiness {
+            missing: vec!["ffmpeg.exe was not found on the PATH; install ffmpeg.".to_string()],
+            map_fetchable: true,
+        }
+    );
+
+    // A star map only its owner can supply is a sentence like any other.
+    let readiness = Readiness::of("tools ok\nffmpeg ok\nmap missing The variable names nothing.\n");
+    assert_eq!(readiness.missing, ["The variable names nothing."]);
+    assert!(!readiness.map_fetchable);
+
+    // A sky-look older than --check prints nothing on standard output, and lines that are not the
+    // report's are passed over: nothing is known to be missing.
+    for output in ["", "\n", "There is no option --check.\n", "tools\n", "map missing\n"] {
+        assert!(Readiness::of(output).complete(), "{output:?}");
+    }
+}
+
+/// Write a stand-in for `sky-look --fetch-map --status <file>` into `dir`: it appends `first` to
+/// the status file, its third argument, waits for the file `go` to appear, appends `last`, and
+/// exits. The lines hold nothing either shell would read as syntax but `%`, which `cmd` has
+/// doubled.
+fn fetch_stand_in(dir: &Path, first: &str, go: &Path, last: &str) -> PathBuf {
+    let script = if cfg!(windows) {
+        format!(
+            "@echo off\r\n>>\"%~3\" echo {}\r\n:wait\r\nif not exist \"{}\" goto wait\r\n\
+             >>\"%~3\" echo {}\r\n",
+            first.replace('%', "%%"),
+            go.display(),
+            last.replace('%', "%%")
+        )
+    } else {
+        format!(
+            "#!/bin/sh\necho '{first}' >> \"$3\"\nwhile [ ! -e '{}' ]; do sleep 0.01; done\n\
+             echo '{last}' >> \"$3\"\n",
+            go.display()
+        )
+    };
+    let name = if cfg!(windows) { "fetch-stand-in.cmd" } else { "fetch-stand-in" };
+    let program = dir.join(name);
+    std::fs::write(&program, script).expect("the stand-in");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+            .expect("the stand-in is executable");
+    }
+    program
+}
+
+/// Run the app's once-a-frame poll of the download until `done` says so, and fail the test rather
+/// than hang it.
+fn poll_setup_until(app: &mut SpacetimeApp, what: &str, done: impl Fn(&SpacetimeApp) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        app.poll_look_setup();
+        if done(app) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "waited 30 s for {what}; the setup is {:?}",
+            app.controls.look_setup
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn test_the_star_map_download_shows_its_progress_then_its_verdict_and_cancel_stops_it() {
+    let progress = "Downloading the star map from NASA: 40%.";
+    let shows = |app: &SpacetimeApp, text: &str| {
+        app.controls.look_setup.fetch_status.as_ref().is_some_and(|status| status.text == text)
+    };
+
+    // A download that succeeds: the panel follows the progress, then names the map, the button
+    // goes, and the question of what is missing is asked again.
+    let dir = scratch_dir("fetch-done");
+    let go = dir.join("go");
+    let program = fetch_stand_in(&dir, progress, &go, "done the-map.exr");
+    let mut app = SpacetimeApp::default();
+    app.look_readiness.map_fetchable = true;
+    app.look_check_wanted = false;
+    app.fetch_star_map(Ok(program), &dir);
+    poll_setup_until(&mut app, "the progress line", |app| shows(app, progress));
+    let setup = &app.controls.look_setup;
+    assert!(setup.fetching && setup.map_wanted, "{setup:?}");
+    std::fs::write(&go, b"").expect("the signal to finish");
+    poll_setup_until(&mut app, "the verdict", |app| !app.controls.look_setup.fetching);
+    assert!(shows(&app, "Downloaded the star map: the-map.exr"));
+    let setup = &app.controls.look_setup;
+    assert!(!setup.map_wanted && !setup.fetch_status.as_ref().is_some_and(|s| s.failed));
+    assert!(app.look_check_wanted, "the check is asked again");
+    assert!(nothing_left_in(&dir), "the status file is gone");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // A download that fails: sky-look's sentence, marked as a failure, and the button stays.
+    let dir = scratch_dir("fetch-failed");
+    let go = dir.join("go");
+    std::fs::write(&go, b"").expect("no waiting");
+    let program = fetch_stand_in(&dir, progress, &go, "failed The download failed; try again.");
+    let mut app = SpacetimeApp::default();
+    app.look_readiness.map_fetchable = true;
+    app.fetch_star_map(Ok(program), &dir);
+    poll_setup_until(&mut app, "the verdict", |app| !app.controls.look_setup.fetching);
+    assert!(shows(&app, "Could not download the star map: The download failed; try again."));
+    let setup = &app.controls.look_setup;
+    assert!(setup.map_wanted && setup.fetch_status.as_ref().is_some_and(|s| s.failed));
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // Cancel stops the download and says so, and leaves no status file.
+    let dir = scratch_dir("fetch-cancel");
+    let program = fetch_stand_in(&dir, progress, &dir.join("never"), "done nothing");
+    let mut app = SpacetimeApp::default();
+    app.fetch_star_map(Ok(program), &dir);
+    poll_setup_until(&mut app, "the progress line", |app| shows(app, progress));
+    app.cancel_map_fetch();
+    assert!(!app.poll_look_setup(), "no download is running");
+    assert!(shows(&app, "Cancelled the download of the star map."));
+    assert!(nothing_left_in(&dir), "the status file is gone");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // No sky-look to run: nothing is started, and the panel says why.
+    let mut app = SpacetimeApp::default();
+    app.fetch_star_map(Err("sky-look was not found.".to_string()), &std::env::temp_dir());
+    assert!(!app.poll_look_setup());
+    assert!(shows(&app, "Could not download the star map: sky-look was not found."));
+}

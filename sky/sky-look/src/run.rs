@@ -24,7 +24,8 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::channel;
 use std::time::{Instant, SystemTime};
 
-use crate::args::{self, Options, Request};
+use crate::args::{self, CheckOptions, Options, Request};
+use crate::fetch;
 use crate::find::{self, Names, Pieces, Search};
 use crate::names;
 use crate::open::{self, ViewerSearch};
@@ -82,6 +83,8 @@ pub struct Environment {
     pub viewer_env: Option<OsString>,
     /// Where VLC would be, in the order to try (`open::vlc_places`).
     pub vlc: Vec<PathBuf>,
+    /// Where ffmpeg is installed to, looked in after the PATH (`find::ffmpeg_places_here`).
+    pub ffmpeg_places: Vec<PathBuf>,
     pub videos: Option<PathBuf>,
     pub home: Option<PathBuf>,
     pub names: Names,
@@ -104,6 +107,7 @@ impl Environment {
             views_env: std::env::var_os(names::VIEWS_ENV),
             viewer_env: std::env::var_os(open::VIEWER_ENV),
             vlc: open::vlc_places_here(),
+            ffmpeg_places: find::ffmpeg_places_here(),
             videos: names::videos_folder(home.as_deref()),
             home,
             names: Names::native(),
@@ -308,6 +312,8 @@ pub fn cli(args: &[OsString], env: &Environment, out: &mut dyn Write, err: &mut 
             let _ = out.flush();
             return 0;
         }
+        Ok(Request::Check(options)) => return check(&options, env, out),
+        Ok(Request::FetchMap { status }) => return fetch_map(status.as_deref(), env, out, err),
         Ok(Request::Look(options)) => options,
         Err(sentence) => {
             // A command line that names a status file still gets its verdict there, so that the
@@ -370,6 +376,61 @@ pub fn cli(args: &[OsString], env: &Environment, out: &mut dyn Write, err: &mut 
     code
 }
 
+/// `--check`: the report of [`find::check`] on `out`, a piece a line, and 0 when nothing is
+/// missing, else 1. Nothing is written anywhere else and nothing is started.
+fn check(o: &CheckOptions, env: &Environment, out: &mut dyn Write) -> i32 {
+    let search = Search {
+        exe_dir: env.exe_dir.clone(),
+        tools: o.tools.clone(),
+        ffmpeg: o.ffmpeg.clone(),
+        path: env.path.clone(),
+        sky: o.sky.clone(),
+        sky_env: env.sky_env.clone(),
+        ffmpeg_places: env.ffmpeg_places.clone(),
+    };
+    let report = find::check(&search, &env.names);
+    for line in report.lines() {
+        write_line(out, &one_line(&line));
+    }
+    if report.complete() { 0 } else { 1 }
+}
+
+/// `--fetch-map`: the download's sentences on `out` and in the status file, and the verdict there
+/// as a view's is - `done <the map's full path>` or `failed <sentence>` - with the path last on
+/// `out`, or the sentence on `err`. 0 for a map that is there at the end, else 1.
+fn fetch_map(
+    status: Option<&Path>,
+    env: &Environment,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> i32 {
+    let mut say = match Say::new(out, err, false, status) {
+        Ok(say) => say,
+        Err(e) => {
+            let _ = writeln!(
+                err,
+                "Could not open the status file {} ({e}); name a file in a directory that can be \
+                 written to.",
+                status.unwrap_or(Path::new("")).display()
+            );
+            return 1;
+        }
+    };
+    match fetch::fetch_default(env, &mut say) {
+        Ok(map) => {
+            let path = map.display().to_string();
+            say.verdict("done", &path);
+            say.result(&path);
+            0
+        }
+        Err(sentence) => {
+            say.verdict("failed", &sentence);
+            say.complain(&one_line(&sentence));
+            1
+        }
+    }
+}
+
 /// Makes the view, and returns the photograph's full path.
 pub fn look(o: &Options, env: &Environment, say: &mut Say) -> Result<PathBuf, Failure> {
     let started = Instant::now();
@@ -384,6 +445,7 @@ pub fn look(o: &Options, env: &Environment, say: &mut Say) -> Result<PathBuf, Fa
         path: env.path.clone(),
         sky: o.sky.clone(),
         sky_env: env.sky_env.clone(),
+        ffmpeg_places: env.ffmpeg_places.clone(),
     };
     let pieces = find::find(&search, &env.names).map_err(Failure::Failed)?;
     if !o.save.is_file() {
