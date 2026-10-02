@@ -29,16 +29,60 @@ pub const SKY_MAP_URL: &str =
 /// megabytes `fetch-sky.ps1` and a file manager both count in.
 pub const SKY_MAP_SIZE: &str = "153 MB";
 
-/// How ffmpeg is got on the platform this program was built for, as the words that follow
-/// "install ffmpeg". A sentence that names another system's package manager sends its reader to
-/// look for a program that is not there.
-const FFMPEG_INSTALL: &str = if cfg!(windows) {
-    "with winget install Gyan.FFmpeg"
-} else if cfg!(target_os = "macos") {
-    "with brew install ffmpeg, which needs Homebrew (https://brew.sh)"
-} else {
-    "with the system's package manager, for example sudo apt install ffmpeg"
-};
+/// The command that installs ffmpeg on this system, as a user types it into a terminal, or `None`
+/// where this program cannot tell which package manager the system has.
+///
+/// A command that names another system's package manager sends its reader to look for a program
+/// that is not there, so the command is the one for the platform this program was built for, and
+/// on Linux for the distribution that `os_release`, the text of `/etc/os-release`, names: `ID`
+/// is the distribution and `ID_LIKE` the ones it derives from, so that Mint is taken for the
+/// Ubuntu it is built on and Rocky for the Fedora. Fedora's own repositories carry ffmpeg as
+/// `ffmpeg-free`; the package named `ffmpeg` there is RPM Fusion's, which a clean system has not
+/// been told about.
+pub fn ffmpeg_install_command(os_release: Option<&str>) -> Option<&'static str> {
+    if cfg!(windows) {
+        return Some("winget install Gyan.FFmpeg");
+    }
+    if cfg!(target_os = "macos") {
+        return Some("brew install ffmpeg");
+    }
+    linux_install_command(os_release?)
+}
+
+/// The command that installs ffmpeg on the Linux distribution `os_release` describes, or `None`
+/// for one whose package manager this program does not know.
+pub fn linux_install_command(os_release: &str) -> Option<&'static str> {
+    let family: Vec<String> = os_release
+        .lines()
+        .filter_map(|line| line.trim().split_once('='))
+        .filter(|(key, _)| matches!(*key, "ID" | "ID_LIKE"))
+        .flat_map(|(_, value)| {
+            value
+                .trim_matches(|c| c == '"' || c == '\'')
+                .split_whitespace()
+                .map(str::to_ascii_lowercase)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let is = |names: &[&str]| family.iter().any(|name| names.contains(&name.as_str()));
+    if is(&["debian", "ubuntu"]) {
+        Some("sudo apt install ffmpeg")
+    } else if is(&["fedora", "rhel", "centos"]) {
+        Some("sudo dnf install ffmpeg-free")
+    } else if is(&["arch"]) {
+        Some("sudo pacman -S ffmpeg")
+    } else if is(&["suse", "opensuse"]) {
+        Some("sudo zypper install ffmpeg")
+    } else {
+        None
+    }
+}
+
+/// The text of `/etc/os-release`, which says which Linux distribution this is; `None` on a system
+/// that has no such file.
+pub fn os_release_here() -> Option<String> {
+    std::fs::read_to_string("/etc/os-release").ok()
+}
 
 /// The file names of the programs, as this platform spells them. The tests put scripts in their
 /// place, which on Windows cannot be named `.exe`, so the names are part of the search rather than
@@ -79,6 +123,8 @@ pub struct Search {
     pub sky_env: Option<OsString>,
     /// Directories ffmpeg is installed into, looked in after the PATH: [`ffmpeg_places_here`].
     pub ffmpeg_places: Vec<PathBuf>,
+    /// The text of `/etc/os-release`, for the command that installs ffmpeg: [`os_release_here`].
+    pub os_release: Option<String>,
 }
 
 /// The pieces, every one of them a file that is there.
@@ -113,6 +159,9 @@ pub struct Report {
     /// `sky-trace` and `sky-render`.
     pub tools: Option<String>,
     pub ffmpeg: Option<String>,
+    /// The command that installs ffmpeg on this system, when ffmpeg is missing and the command is
+    /// known: for the app to show by itself, where it can be copied.
+    pub ffmpeg_command: Option<&'static str>,
     pub map: Option<String>,
     /// Whether the map that is missing is the default one in its own place, which `--fetch-map`
     /// puts there; false for a map `--sky` or the variable names, which only its owner can supply.
@@ -127,7 +176,8 @@ impl Report {
 
     /// The report as `--check` prints it, a piece a line: the piece's word (`tools`, `ffmpeg`,
     /// `map`), a space, and `ok`, or `missing` and the sentence, or for a map `--fetch-map` would
-    /// supply, `fetchable` and the sentence.
+    /// supply, `fetchable` and the sentence. A fourth line, `ffmpeg-install` and the command,
+    /// follows when ffmpeg is missing and the command that installs it here is known.
     pub fn lines(&self) -> Vec<String> {
         let line = |piece: &str, missing: &Option<String>, word: &str| match missing {
             None => format!("{piece} ok"),
@@ -138,20 +188,28 @@ impl Report {
         } else {
             "missing"
         };
-        vec![
+        let mut lines = vec![
             line("tools", &self.tools, "missing"),
             line("ffmpeg", &self.ffmpeg, "missing"),
             line("map", &self.map, map_word),
-        ]
+        ];
+        if let Some(command) = self.ffmpeg_command {
+            lines.push(format!("ffmpeg-install {command}"));
+        }
+        lines
     }
 }
 
 /// Looks for every piece and says of each whether it is there: see [`Report`].
 pub fn check(search: &Search, names: &Names) -> Report {
     let map = sky_map(search).err();
+    let ffmpeg = ffmpeg(search, names).err();
     Report {
         tools: tools(search, names).err(),
-        ffmpeg: ffmpeg(search, names).err(),
+        ffmpeg_command: ffmpeg
+            .as_ref()
+            .and_then(|_| ffmpeg_install_command(search.os_release.as_deref())),
+        ffmpeg,
         map_fetchable: map.as_ref().is_some_and(|no_map| no_map.fetchable),
         map: map.map(|no_map| no_map.why),
     }
@@ -220,9 +278,13 @@ fn ffmpeg(search: &Search, names: &Names) -> Result<PathBuf, String> {
         .map(|dir| dir.join(&names.ffmpeg))
         .find(|candidate| candidate.is_file())
         .ok_or_else(|| {
+            let how = match ffmpeg_install_command(search.os_release.as_deref()) {
+                Some(command) => format!("with {command}"),
+                None => "with the system's package manager".to_string(),
+            };
             format!(
                 "{} was not found on the PATH, and sky-render needs it to write the photograph; \
-                 install ffmpeg {FFMPEG_INSTALL}, or name it with --ffmpeg <path>.",
+                 install ffmpeg {how}, or name it with --ffmpeg <path>.",
                 names.ffmpeg
             )
         })

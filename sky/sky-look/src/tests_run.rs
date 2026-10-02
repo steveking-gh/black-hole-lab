@@ -18,7 +18,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::fetch::{self, Download};
+use crate::fetch::{self, Download, Tool};
 use crate::find::Names;
 use crate::run::{BUNDLE_DIR, COMMANDS_FILE, Environment, LOG_FILE, Say, cli};
 use crate::tests::scratch_dir;
@@ -183,6 +183,7 @@ impl Case {
             viewer_env: None,
             vlc: Vec::new(),
             ffmpeg_places: Vec::new(),
+            os_release: None,
             videos: None,
             home: None,
             names: Names {
@@ -965,7 +966,7 @@ fn test_a_download_is_put_in_place_only_when_its_size_and_hash_are_the_ones_on_r
     let target = root.join("copy/maps/map.exr");
     let part = root.join("copy/maps/map.exr.part");
     let good = Download {
-        curl: root.join(program("curl")),
+        tool: Tool::Curl(root.join(program("curl"))),
         url: served.display().to_string(),
         target: target.clone(),
         bytes: 3,
@@ -1014,7 +1015,7 @@ fn test_a_download_is_put_in_place_only_when_its_size_and_hash_are_the_ones_on_r
         ],
     );
     let (result, _) = run(&Download {
-        curl: root.join(program("curl-down")),
+        tool: Tool::Curl(root.join(program("curl-down"))),
         ..good.clone()
     });
     let why = result.expect_err("no network");
@@ -1030,6 +1031,20 @@ fn test_a_download_is_put_in_place_only_when_its_size_and_hash_are_the_ones_on_r
     assert_eq!(std::fs::read(&target).expect("the map"), b"abc");
     assert!(!part.exists(), "the partial name is gone");
     assert!(out.contains("Downloading the star map map.exr"), "{out}");
+
+    // Where there is no curl, wget is given the same file and address in the same places.
+    stand_in(&root, "wget", &curl_work(), &[]);
+    std::fs::remove_file(&target).expect("the map is taken away");
+    let (result, _) = run(&Download {
+        tool: Tool::Wget(root.join(program("wget"))),
+        ..good.clone()
+    });
+    assert_eq!(result, Ok(target.clone()));
+    let wget_args = std::fs::read_to_string(root.join("wget.args")).expect("wget's arguments");
+    assert!(
+        wget_args.starts_with("-O ") && wget_args.contains("--no-verbose"),
+        "{wget_args}"
+    );
 
     // A map already there and whole is left alone: curl is not run again.
     let ran = root.join("curl.args");

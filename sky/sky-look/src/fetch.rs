@@ -5,8 +5,9 @@
 //! script remains the way to the other maps and sizes.
 //!
 //! The download is curl's, started as a child: curl is part of Windows 10 and 11 and of macOS, and
-//! is on all but the barest Linux, and it brings its own TLS, which this program would otherwise
-//! have to link. The file is written under a name ending in `.part` and renamed only once its size
+//! it brings its own TLS, which this program would otherwise have to link. Where there is no curl,
+//! wget does the same work: a clean Ubuntu desktop has wget and not curl, and a first download
+//! that began by asking for another program to be installed would not be one. The file is written under a name ending in `.part` and renamed only once its size
 //! and its SHA-256 are the ones on record, so a download that was stopped, cut short or corrupted
 //! is never found by the search and taken for the map.
 //!
@@ -33,13 +34,51 @@ pub const SKY_MAP_SHA256: &str = "d70924422d3e0159764b16a19658784befcf73b97e06e5
 /// and the renderer's percentages are passed on at.
 const PERCENT_STEP: u64 = 5;
 
-/// How often the partial file's size is read while curl works.
+/// The program that does the download.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Tool {
+    Curl(PathBuf),
+    Wget(PathBuf),
+}
+
+impl Tool {
+    /// The program's path.
+    fn program(&self) -> &Path {
+        match self {
+            Self::Curl(program) | Self::Wget(program) => program,
+        }
+    }
+
+    /// The program's name, for a sentence.
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Curl(_) => "curl",
+            Self::Wget(_) => "wget",
+        }
+    }
+
+    /// The first of curl and wget that is in a directory of `path`, the value of `PATH`.
+    fn on(path: Option<&std::ffi::OsStr>) -> Option<Tool> {
+        let exe = std::env::consts::EXE_SUFFIX;
+        let find = |name: &str| {
+            path.into_iter()
+                .flat_map(std::env::split_paths)
+                .map(|dir| dir.join(format!("{name}{exe}")))
+                .find(|candidate| candidate.is_file())
+        };
+        find("curl")
+            .map(Tool::Curl)
+            .or_else(|| find("wget").map(Tool::Wget))
+    }
+}
+
+/// How often the partial file's size is read while the download runs.
 const POLL: Duration = Duration::from_millis(200);
 
 /// One download: what to fetch, with what, to where, and what the file must turn out to be.
 #[derive(Debug, Clone)]
 pub struct Download {
-    pub curl: PathBuf,
+    pub tool: Tool,
     pub url: String,
     pub target: PathBuf,
     pub bytes: u64,
@@ -60,23 +99,15 @@ pub fn fetch_default(env: &Environment, say: &mut Say) -> Result<PathBuf, String
         "put {SKY_MAP_URL} into {} by hand",
         target.parent().unwrap_or(exe_dir).display()
     );
-    let curl_name = format!("curl{}", std::env::consts::EXE_SUFFIX);
-    let curl = env
-        .path
-        .as_deref()
-        .into_iter()
-        .flat_map(std::env::split_paths)
-        .map(|dir| dir.join(&curl_name))
-        .find(|candidate| candidate.is_file())
-        .ok_or_else(|| {
-            format!(
-                "{curl_name} was not found on the PATH, and sky-look downloads the star map with \
-                 curl; install curl, or {by_hand}."
-            )
-        })?;
+    let tool = Tool::on(env.path.as_deref()).ok_or_else(|| {
+        format!(
+            "Neither curl nor wget was found on the PATH, and sky-look downloads the star map \
+             with one of them; install curl, or {by_hand}."
+        )
+    })?;
     download(
         &Download {
-            curl,
+            tool,
             url: SKY_MAP_URL.into(),
             target,
             bytes: SKY_MAP_BYTES,
@@ -121,16 +152,26 @@ pub fn download(d: &Download, say: &mut Say) -> Result<PathBuf, String> {
         "Downloading the star map {name} ({SKY_MAP_SIZE}) from NASA into {}.",
         folder.display()
     ));
-    // `--output` and the address first, so that a stand-in for curl reads them as its second and
-    // third arguments whatever follows. `--silent --show-error` leaves standard error holding only
-    // the reason for a failure, which is short enough to be read after curl has exited.
-    let mut command = Command::new(&d.curl);
+    // The output's flag, the partial file and the address first, so that a stand-in for either
+    // program reads the last two as its second and third arguments whatever follows. curl's
+    // `--silent --show-error` and wget's `--no-verbose` leave standard error holding little but the
+    // reason for a failure, which is short enough to be read after the program has exited.
+    let tool = d.tool.name();
+    let mut command = Command::new(d.tool.program());
+    match &d.tool {
+        Tool::Curl(_) => command
+            .arg("--output")
+            .arg(&partial)
+            .arg(&d.url)
+            .args(["--fail", "--location", "--silent", "--show-error"])
+            .args(["--retry", "3", "--connect-timeout", "30"]),
+        Tool::Wget(_) => command.arg("-O").arg(&partial).arg(&d.url).args([
+            "--no-verbose",
+            "--tries=3",
+            "--timeout=30",
+        ]),
+    };
     command
-        .arg("--output")
-        .arg(&partial)
-        .arg(&d.url)
-        .args(["--fail", "--location", "--silent", "--show-error"])
-        .args(["--retry", "3", "--connect-timeout", "30"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
@@ -141,13 +182,13 @@ pub fn download(d: &Download, say: &mut Say) -> Result<PathBuf, String> {
     }
     let mut child = command
         .spawn()
-        .map_err(|e| format!("Could not start {} ({e})", d.curl.display()))?;
+        .map_err(|e| format!("Could not start {} ({e})", d.tool.program().display()))?;
     let mut shown = 0;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {}
-            Err(e) => return Err(discard(format!("Lost track of curl ({e})"))),
+            Err(e) => return Err(discard(format!("Lost track of {tool} ({e})"))),
         }
         let percent = (size_of(&partial).saturating_mul(100) / d.bytes.max(1)).min(99);
         if percent >= shown + PERCENT_STEP {
@@ -164,8 +205,8 @@ pub fn download(d: &Download, say: &mut Say) -> Result<PathBuf, String> {
         let said = said.lines().last().unwrap_or("").trim().to_string();
         let reason = if said.is_empty() {
             match status.code() {
-                Some(code) => format!("curl exit code {code}"),
-                None => "curl was stopped".into(),
+                Some(code) => format!("{tool} exit code {code}"),
+                None => format!("{tool} was stopped"),
             }
         } else {
             said

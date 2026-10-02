@@ -85,6 +85,8 @@ pub struct Environment {
     pub vlc: Vec<PathBuf>,
     /// Where ffmpeg is installed to, looked in after the PATH (`find::ffmpeg_places_here`).
     pub ffmpeg_places: Vec<PathBuf>,
+    /// The text of `/etc/os-release`, where there is one (`find::os_release_here`).
+    pub os_release: Option<String>,
     pub videos: Option<PathBuf>,
     pub home: Option<PathBuf>,
     pub names: Names,
@@ -108,6 +110,7 @@ impl Environment {
             viewer_env: std::env::var_os(open::VIEWER_ENV),
             vlc: open::vlc_places_here(),
             ffmpeg_places: find::ffmpeg_places_here(),
+            os_release: find::os_release_here(),
             videos: names::videos_folder(home.as_deref()),
             home,
             names: Names::native(),
@@ -387,6 +390,7 @@ fn check(o: &CheckOptions, env: &Environment, out: &mut dyn Write) -> i32 {
         sky: o.sky.clone(),
         sky_env: env.sky_env.clone(),
         ffmpeg_places: env.ffmpeg_places.clone(),
+        os_release: env.os_release.clone(),
     };
     let report = find::check(&search, &env.names);
     for line in report.lines() {
@@ -446,6 +450,7 @@ pub fn look(o: &Options, env: &Environment, say: &mut Say) -> Result<PathBuf, Fa
         sky: o.sky.clone(),
         sky_env: env.sky_env.clone(),
         ffmpeg_places: env.ffmpeg_places.clone(),
+        os_release: env.os_release.clone(),
     };
     let pieces = find::find(&search, &env.names).map_err(Failure::Failed)?;
     if !o.save.is_file() {

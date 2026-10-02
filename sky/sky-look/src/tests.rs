@@ -1134,3 +1134,54 @@ fn test_the_sha_256_is_the_standards_for_its_own_examples() {
         "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
     );
 }
+
+#[test]
+fn test_the_command_that_installs_ffmpeg_is_the_distributions_own() {
+    let command = find::linux_install_command;
+    // Ubuntu and what derives from it or from Debian: apt.
+    let ubuntu = "PRETTY_NAME=\"Ubuntu 24.04.1 LTS\"\nNAME=\"Ubuntu\"\nID=ubuntu\nID_LIKE=debian\n";
+    assert_eq!(command(ubuntu), Some("sudo apt install ffmpeg"));
+    assert_eq!(command("ID=debian\n"), Some("sudo apt install ffmpeg"));
+    assert_eq!(
+        command("ID=linuxmint\nID_LIKE=\"ubuntu debian\"\n"),
+        Some("sudo apt install ffmpeg")
+    );
+    // Fedora and what derives from it: dnf, and the package Fedora's own repositories carry.
+    assert_eq!(
+        command("NAME=\"Fedora Linux\"\nID=fedora\nVERSION_ID=42\n"),
+        Some("sudo dnf install ffmpeg-free")
+    );
+    assert_eq!(
+        command("ID=\"rocky\"\nID_LIKE=\"rhel centos fedora\"\n"),
+        Some("sudo dnf install ffmpeg-free")
+    );
+    assert_eq!(command("ID=arch\n"), Some("sudo pacman -S ffmpeg"));
+    assert_eq!(
+        command("ID=\"opensuse-tumbleweed\"\nID_LIKE=\"opensuse suse\"\n"),
+        Some("sudo zypper install ffmpeg")
+    );
+    // A distribution this program does not know, and a name that only looks like one it does.
+    assert_eq!(command("ID=nixos\n"), None);
+    assert_eq!(command("NAME=fedora\nVERSION_ID=ubuntu\n"), None);
+    assert_eq!(command(""), None);
+
+    // The sentence carries the command, and the check gives it a line of its own.
+    let root = scratch_dir("install");
+    let search = Search {
+        exe_dir: Some(root.clone()),
+        os_release: Some("ID=fedora\n".into()),
+        ..Search::default()
+    };
+    let report = find::check(&search, &names());
+    let expected = find::ffmpeg_install_command(Some("ID=fedora\n")).expect("a command");
+    assert_eq!(report.ffmpeg_command, Some(expected));
+    assert!(
+        report
+            .ffmpeg
+            .as_ref()
+            .is_some_and(|why| why.contains(expected)),
+        "{report:?}"
+    );
+    assert_eq!(report.lines()[3], format!("ffmpeg-install {expected}"));
+    let _ = std::fs::remove_dir_all(&root);
+}

@@ -73,7 +73,8 @@
 //! - `--check` looks for every piece a view needs and prints three lines on standard output, for
 //!   `tools`, `ffmpeg` and `map` in that order: the word, a space, and `ok`, or `missing
 //!   <sentence>`, or for a default star map that `--fetch-map` would supply, `fetchable
-//!   <sentence>`. It exits 0 when all three are `ok`, else 1;
+//!   <sentence>`; and when ffmpeg is missing and the command that installs it on this system is
+//!   known, a fourth line, `ffmpeg-install <command>`. It exits 0 when all three are `ok`, else 1;
 //! - `--fetch-map` downloads the default star map with curl to where this program looks for it,
 //!   and checks its size and SHA-256 before putting it there (`fetch`). Its status file is a
 //!   view's: sentences of progress carrying the percentage downloaded, and last `done <the map's

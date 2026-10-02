@@ -8,7 +8,8 @@ use crate::gui::spacetime_canvas::{KEEP_SURFACE_FRAMED_TIP, REST_FRAME_TIP, Spac
 use crate::gui::spatial_canvas::{FrontStyle, SpatialCanvas};
 use crate::gui::volume_canvas::VolumeCanvas;
 use crate::gui::theme::Theme;
-use crate::look_around::Progress;
+use crate::gui::look_dialog::{DialogAction, LookDialog};
+use crate::look_around::{MapFetch, Progress, Readiness};
 use crate::physics::kerr_schild::KerrSchild;
 use crate::physics::observer::Who;
 use crate::physics::simulation::Simulation;
@@ -59,20 +60,12 @@ pub struct SpacetimeApp {
     /// on the panel because a running child process is not something `AppControls` can be cloned
     /// with. See `crate::look_around`.
     pub(crate) look_around: Option<crate::look_around::Job>,
-    /// What Look Around needs that this computer has not got, as far as the app has been told:
-    /// nothing, until the first answer comes. See `crate::look_around::Readiness`.
-    pub(crate) look_readiness: crate::look_around::Readiness,
-    /// The answer to `sky-look --check` that a thread is fetching, or None while none is.
-    look_check: Option<std::sync::mpsc::Receiver<crate::look_around::Readiness>>,
-    /// Whether `sky-look --check` is to be asked on the next frame: true from the start, so that
-    /// the first frame asks, and set again by whatever may have changed the answer.
-    pub(crate) look_check_wanted: bool,
-    /// Whether the app's window had the focus on the last frame, to see the focus come back.
-    had_focus: bool,
-    /// The star map being downloaded for the Download Star Map button, or None.
-    pub(crate) map_fetch: Option<crate::look_around::MapFetch>,
-    /// What the last download of the star map came to, or how far the one in progress has got.
-    pub(crate) map_fetch_status: Option<crate::gui::controls::FileStatus>,
+    /// The dialog a press of Look Around put up because a piece the view needs is missing, or
+    /// None. See `crate::gui::look_dialog` and `press_look_around`.
+    pub(crate) look_dialog: Option<LookDialog>,
+    /// The star map being downloaded because the dialog's OK was pressed, or None. Here for the
+    /// reason `look_around` is: a running child process.
+    pub(crate) map_fetch: Option<MapFetch>,
 }
 
 impl Default for SpacetimeApp {
@@ -104,12 +97,8 @@ impl Default for SpacetimeApp {
             last_update: Instant::now(),
             fixed_frame_dt: None,
             look_around: None,
-            look_readiness: crate::look_around::Readiness::default(),
-            look_check: None,
-            look_check_wanted: true,
-            had_focus: true,
+            look_dialog: None,
             map_fetch: None,
-            map_fetch_status: None,
         }
     }
 }
@@ -454,10 +443,6 @@ impl SpacetimeApp {
         };
         if !running {
             self.look_around = None;
-            // A view that failed may have failed for a missing piece, and one that was made shows
-            // that none is: either way the panel's account of what is missing is brought up to
-            // date.
-            self.look_check_wanted = true;
         }
         self.controls.look_status = Some(LookStatus { who, text, failed });
         self.controls.look_making = running.then_some(who);
@@ -466,56 +451,61 @@ impl SpacetimeApp {
 }
 
 impl SpacetimeApp {
-    /// Ask `sky-look --check` what Look Around is missing, on a thread of its own, when the answer
-    /// is wanted and no thread is already asking; and take the answer when it has come.
+    /// A press of Look Around for `who`: make the view if nothing it needs is missing, and
+    /// otherwise put up the dialog that says what is and asks whether to download it.
     ///
-    /// Wanted on the first frame, after a view or a download ends, and when the window gets the
-    /// focus back while something is missing - a user who left to install ffmpeg has come back.
-    /// The thread wakes the app when it has the answer, so that an idle app shows it without
-    /// waiting for the mouse. Never blocks: a frame costs one test of an Option.
-    pub(crate) fn poll_look_check(&mut self, ctx: &egui::Context) {
-        let focus = ctx.input(|input| input.focused);
-        if focus && !self.had_focus && !self.look_readiness.complete() {
-            self.look_check_wanted = true;
+    /// `program` is the result of the search for `sky-look` and `dir` the directory for temporary
+    /// files, parameters for the reason `look_around` gives. The question of what is missing is
+    /// put to `sky-look --check` here, on the press, and waited for: it looks at a few files. A
+    /// `sky-look` that is not there at all is a missing piece like any other, and gets the dialog.
+    ///
+    /// A press while a view is being made or the dialog is up does nothing.
+    pub(crate) fn press_look_around(
+        &mut self,
+        who: Who,
+        program: Result<std::path::PathBuf, String>,
+        dir: &std::path::Path,
+    ) {
+        if self.look_around.is_some() || self.look_dialog.is_some() {
+            return;
         }
-        self.had_focus = focus;
-        if let Some(answer) = &self.look_check {
-            match answer.try_recv() {
-                Ok(readiness) => {
-                    self.look_readiness = readiness;
-                    self.look_check = None;
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {}
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.look_check = None,
-            }
-        }
-        if self.look_check_wanted && self.look_check.is_none() {
-            self.look_check_wanted = false;
-            let (tell, answer) = std::sync::mpsc::channel();
-            let ctx = ctx.clone();
-            std::thread::spawn(move || {
-                let _ = tell.send(crate::look_around::check_here());
-                ctx.request_repaint();
-            });
-            self.look_check = Some(answer);
+        let needs = Self::look_needs(&program);
+        if needs.complete() {
+            self.look_around(who, program, dir);
+        } else {
+            self.look_dialog = Some(LookDialog::new(who, needs));
         }
     }
 
-    /// Start downloading the star map with `program`, its status file in `dir`: the Download Star
-    /// Map button. `program` and `dir` are parameters for `look_around`'s reason. A press while a
-    /// download is running does nothing.
-    pub(crate) fn fetch_star_map(
+    /// What Look Around is missing, by asking `program`; with no program to ask, the program.
+    fn look_needs(program: &Result<std::path::PathBuf, String>) -> Readiness {
+        match program {
+            Ok(program) => crate::look_around::check(program),
+            Err(why) => Readiness { tools: Some(why.clone()), ..Readiness::default() },
+        }
+    }
+
+    /// The dialog's OK: start the download of the star map if the map is missing and no download
+    /// is running, ask again what is missing, and make the view if nothing is.
+    ///
+    /// The download starts whether or not ffmpeg is there: the map is needed either way, and OK
+    /// is the consent to fetch it. With ffmpeg still missing the dialog stays up and says so
+    /// (`LookDialog::reminder`), and no view is made until an OK finds ffmpeg installed. With only
+    /// the download outstanding the dialog stays up too, and `poll_look_dialog` makes the view
+    /// when the download ends.
+    pub(crate) fn look_dialog_ok(
         &mut self,
         program: Result<std::path::PathBuf, String>,
         dir: &std::path::Path,
     ) {
-        if self.map_fetch.is_some() {
-            return;
-        }
-        let failed = |text: String| FileStatus { text, failed: true };
-        self.map_fetch_status = Some(match program {
-            Err(why) => failed(format!("Could not download the star map: {why}")),
-            Ok(program) => match crate::look_around::MapFetch::start(&program, dir) {
+        let Some(dialog) = self.look_dialog.as_mut() else { return };
+        dialog.asked = true;
+        dialog.needs = Self::look_needs(&program);
+        if dialog.needs.map_fetchable
+            && self.map_fetch.is_none()
+            && let Ok(program) = &program
+        {
+            dialog.fetch = Some(match MapFetch::start(program, dir) {
                 Ok(fetch) => {
                     self.map_fetch = Some(fetch);
                     FileStatus {
@@ -523,56 +513,65 @@ impl SpacetimeApp {
                         failed: false,
                     }
                 }
-                Err(why) => failed(format!(
-                    "Could not start sky-look ({}) to download the star map: {why}",
-                    program.display()
-                )),
-            },
-        });
-    }
-
-    /// Stop the download of the star map, if one is running, and say so: the Cancel button beside
-    /// the download's progress. Dropping the download is the whole of it (`MapFetch`'s `Drop`).
-    pub(crate) fn cancel_map_fetch(&mut self) {
-        if self.map_fetch.take().is_some() {
-            self.map_fetch_status = Some(FileStatus {
-                text: "Cancelled the download of the star map.".to_string(),
-                failed: false,
+                Err(why) => FileStatus {
+                    text: format!(
+                        "Could not start sky-look ({}) to download the star map: {why}",
+                        program.display()
+                    ),
+                    failed: true,
+                },
             });
+            dialog.fetching = self.map_fetch.is_some();
+        }
+        if dialog.needs.complete() {
+            let who = dialog.who;
+            self.look_dialog = None;
+            self.look_around(who, program, dir);
         }
     }
 
-    /// Bring the download's status up to date, hand the panel what it shows of Look Around's
-    /// needs, and say whether a download is still running. Called once a frame, before the panel
-    /// is drawn; it never blocks.
+    /// The dialog's Cancel: take the dialog down, stop the download if one is running, and make
+    /// no view. Dropping the download is the whole of stopping it (`MapFetch`'s `Drop`).
+    pub(crate) fn look_dialog_cancel(&mut self) {
+        self.look_dialog = None;
+        self.map_fetch = None;
+    }
+
+    /// Bring the dialog up to date with the download of the star map, if one is running, and say
+    /// whether one still is. Called once a frame, before the dialog is drawn; it never blocks
+    /// while the download runs.
     ///
-    /// The panel's copy is written every frame, as `poll_look_around` writes the status of a view,
-    /// because a Load replaces the whole panel.
-    pub(crate) fn poll_look_setup(&mut self) -> bool {
-        if let Some(fetch) = self.map_fetch.as_mut() {
-            let (text, failed, running) = match fetch.poll() {
-                Progress::Running(line) => (line, false, true),
-                Progress::Finished { text, failed } => (text, failed, false),
-            };
-            self.map_fetch_status = Some(FileStatus { text, failed });
-            if !running {
-                self.map_fetch = None;
-                self.look_check_wanted = true;
-                // The map is there now, whatever the answer in hand says: the button goes at
-                // once, and does not wait for the question to be asked again.
-                if !failed {
-                    self.look_readiness.map_fetchable = false;
-                }
-            }
-        }
-        let fetching = self.map_fetch.is_some();
-        self.controls.look_setup = crate::gui::controls::LookSetup {
-            missing: self.look_readiness.missing.clone(),
-            map_wanted: self.look_readiness.map_fetchable,
-            fetching,
-            fetch_status: self.map_fetch_status.clone(),
+    /// When the download ends well, `sky-look` is asked again what is missing - `program` finds
+    /// it, and is called then and on no other frame - and if nothing is, and OK has been pressed,
+    /// the dialog goes and the view the press asked for is made. A download that fails leaves its
+    /// sentence in the dialog, and the next OK starts another.
+    pub(crate) fn poll_look_dialog(
+        &mut self,
+        program: impl FnOnce() -> Result<std::path::PathBuf, String>,
+        dir: &std::path::Path,
+    ) -> bool {
+        let Some(fetch) = self.map_fetch.as_mut() else { return false };
+        let (text, failed, running) = match fetch.poll() {
+            Progress::Running(line) => (line, false, true),
+            Progress::Finished { text, failed } => (text, failed, false),
         };
-        fetching
+        if !running {
+            self.map_fetch = None;
+        }
+        let Some(dialog) = self.look_dialog.as_mut() else { return running };
+        dialog.fetch = Some(FileStatus { text, failed });
+        dialog.fetching = running;
+        if running || failed {
+            return running;
+        }
+        let program = program();
+        dialog.needs = Self::look_needs(&program);
+        if dialog.asked && dialog.needs.complete() {
+            let who = dialog.who;
+            self.look_dialog = None;
+            self.look_around(who, program, dir);
+        }
+        false
     }
 }
 
@@ -809,10 +808,8 @@ impl eframe::App for SpacetimeApp {
         if self.poll_look_around() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
-        // What Look Around needs that is missing, and the download of the star map if one is
-        // running: asked and read the same way, before the panel draws them.
-        self.poll_look_check(&ctx);
-        if self.poll_look_setup() {
+        // The download of the star map that the Look Around dialog started, read the same way.
+        if self.poll_look_dialog(crate::look_around::locate, &std::env::temp_dir()) {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
 
@@ -858,17 +855,10 @@ impl eframe::App for SpacetimeApp {
         // the whole app, which only the app can write. The search for the program is made here, on
         // the press, and never on a frame.
         if let Some(who) = self.controls.take_look_request() {
-            self.look_around(who, crate::look_around::locate(), &std::env::temp_dir());
+            self.press_look_around(who, crate::look_around::locate(), &std::env::temp_dir());
         }
         if self.controls.take_look_cancel() {
             self.cancel_look_around();
-        }
-        match self.controls.take_look_setup_action() {
-            Some(crate::gui::controls::LookSetupAction::FetchMap) => {
-                self.fetch_star_map(crate::look_around::locate(), &std::env::temp_dir());
-            }
-            Some(crate::gui::controls::LookSetupAction::CancelFetch) => self.cancel_map_fetch(),
-            None => {}
         }
 
         // 4. Central Panel: Split View between Spacetime (t, r) and Spatial (x, y)
@@ -1066,6 +1056,17 @@ impl eframe::App for SpacetimeApp {
                         ui.label(numbers::text("Ingoing light follows the principal null rays, lines of constant advanced time v = t + r, running at dr/dt = -1 everywhere in this chart. The ingoing Kerr-Schild chart is regular on the branch of r₋ that an infalling observer actually crosses, so Alice and Bob cross it at finite t and finite v: no signal stacks up there, and the exterior universe's whole future does not arrive as one flash. The shift they measure for that ingoing light is ν_obs/ν_∞ = -k·u = uᵗ + uʳ - a u^φ, finite and positive everywhere shown; for a Schwarzschild raindrop it is 1/(1 + √(2M/r)), exactly 1/2 at the horizon, a redshift, because running away from the light beats the gravitational blueshift. The infinite blueshift of Penrose and of Poisson-Israel lives on the OTHER branch of r₋, reached only as v → ∞, which this chart does not cover and which an infalling geodesic of finite v never reaches. In a real collapse that instability (mass inflation) is expected to turn r₋ into a singular surface, but that is a statement about the full spacetime, not about the worldlines drawn here."));
                     });
                 });
+        }
+
+        // The dialog a press of Look Around put up for a missing piece, over everything drawn
+        // above. Its buttons are answered here, after the frame has been drawn as it stood.
+        let asked = self.look_dialog.as_ref().and_then(|dialog| dialog.show(&ctx));
+        match asked {
+            Some(DialogAction::Ok) => {
+                self.look_dialog_ok(crate::look_around::locate(), &std::env::temp_dir());
+            }
+            Some(DialogAction::Cancel) => self.look_dialog_cancel(),
+            None => {}
         }
     }
 }

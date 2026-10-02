@@ -97,7 +97,9 @@ CHECK
     --check prints three lines on standard output, one for each of tools (sky-trace and
     sky-render), ffmpeg and map, in that order: the word, a space, and ok, or missing and one
     sentence saying what to do, or, for a default star map that --fetch-map would supply,
-    fetchable and the sentence. It exits with code 0 when all three are ok and with 1 otherwise.
+    fetchable and the sentence. When ffmpeg is missing and this program knows the command that
+    installs ffmpeg on this system, a fourth line gives it: ffmpeg-install and the command. It
+    exits with code 0 when all three are ok and with 1 otherwise.
 
 FETCHING THE MAP
     --fetch-map prints its progress as sentences on standard output, with the percentage

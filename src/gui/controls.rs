@@ -601,15 +601,6 @@ pub struct AppControls {
     /// (`SpacetimeApp::load_from`). A console window opening on every press is a way of working at
     /// this computer, which a file handed to somebody else has no business turning on.
     pub look_terminal: bool,
-    /// What Look Around needs that this computer has not got, and how the download of the star
-    /// map is going: drawn above the two cards, and nothing at all when nothing is missing.
-    /// Written by `SpacetimeApp::ui` once a frame, before the panel is drawn, for `look_making`'s
-    /// reason: the answer and the download live on the app. A transient, like `look_status`.
-    pub look_setup: LookSetup,
-    /// Standing request from the Download Star Map button or the Cancel beside the download's
-    /// progress, consumed once in `SpacetimeApp::ui` through `take_look_setup_action`. A
-    /// transient, like `look_request`.
-    pub look_setup_action: Option<LookSetupAction>,
 }
 
 impl Default for AppControls {
@@ -655,8 +646,6 @@ impl Default for AppControls {
             look_status: None,
             look_making: None,
             look_cancel: false,
-            look_setup: LookSetup::default(),
-            look_setup_action: None,
             // Off: the status line on the card says how the view is going, and a window opening
             // over the app is for a user who has asked to see the commands at work.
             look_terminal: false,
@@ -1488,41 +1477,6 @@ pub struct LookStatus {
     pub failed: bool,
 }
 
-/// What the panel shows of Look Around's needs, above the two observer cards: see
-/// `AppControls::look_setup`.
-#[derive(Debug, Clone, Default)]
-pub struct LookSetup {
-    /// One sentence for each missing piece that only the user can supply, saying what to do.
-    pub missing: Vec<String>,
-    /// Whether the default star map is missing, which the Download Star Map button supplies.
-    pub map_wanted: bool,
-    /// Whether the star map is being downloaded at this moment.
-    pub fetching: bool,
-    /// How far the download has got, or what the last one came to.
-    pub fetch_status: Option<FileStatus>,
-}
-
-/// What the Look Around setup lines asked for this frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LookSetupAction {
-    /// Download Star Map was pressed.
-    FetchMap,
-    /// Cancel Download was pressed.
-    CancelFetch,
-}
-
-/// The line that says the star map is missing, above the button that downloads the star map.
-const LOOK_MAP_WANTED: &str = "Look Around draws the stars from one of NASA's star maps, and this computer has no copy of the star map yet.";
-
-/// What the Download Star Map button says it does. "Only when both match" is literal: sky-look
-/// writes the download under a name ending in .part and renames the file after the two checks
-/// (`sky/sky-look/src/fetch.rs`).
-const LOOK_MAP_TIP: &str = "Download the star map that Look Around draws behind the black hole: starmap_2020_8k_gal.exr, 153 MB, one of the Deep Star Maps 2020 of the NASA Goddard Scientific Visualization Studio (https://svs.gsfc.nasa.gov/4851). Black Hole Lab starts sky-look, and sky-look runs curl, a download program that Windows, macOS and most Linux systems include, to fetch the file from NASA's server into the folder where sky-look looks for the star map. sky-look compares the size and the SHA-256 of the download with the values on record and keeps the file only when both match. The line above this button follows the download as a percentage, and a Cancel Download button takes the place of this button until the download ends. The download is one file from one address, and Black Hole Lab sends nothing. Black Hole Lab downloads the star map only on a press of this button: a press of Look Around downloads nothing.";
-
-/// What the Cancel Download button says it does. The unfinished file is curl's `.part` file,
-/// which the search for the star map never takes for the map.
-const LOOK_MAP_CANCEL_TIP: &str = "Stop downloading the star map. Black Hole Lab stops sky-look, and sky-look keeps no star map from a cancelled download. The unfinished file stays in the star map's folder under a name ending in .part until the next download replaces the unfinished file; sky-look never uses an unfinished file as a star map.";
-
 /// What the Save button says it does.
 const SAVE_TIP: &str = "Write the whole run to a file: the clock, both observers with their trails, \
 every wavefront in flight with every ray and every arrival, the panel's settings, and what each of \
@@ -1723,69 +1677,6 @@ impl AppControls {
     /// run, for `take_file_request`'s reason.
     pub fn take_look_cancel(&mut self) -> bool {
         std::mem::take(&mut self.look_cancel)
-    }
-
-    /// What the Look Around setup lines have asked for since this was last called, clearing the
-    /// request. Called once a frame by `SpacetimeApp::ui`, after the panel has run, for
-    /// `take_file_request`'s reason.
-    pub fn take_look_setup_action(&mut self) -> Option<LookSetupAction> {
-        self.look_setup_action.take()
-    }
-
-    /// The lines above the two observer cards that say what Look Around needs and has not got,
-    /// with the button that downloads the star map; nothing when nothing is missing and no
-    /// download has been asked for.
-    ///
-    /// Above the cards and once, rather than on each card, because what is missing is missing for
-    /// both observers. The Look Around buttons are left as they are: a press with a piece missing
-    /// reports that piece on the card, in sky-look's own sentence, as before, and a button greyed
-    /// out on an answer that has gone stale - ffmpeg installed a moment ago - would be worse than
-    /// a press that says what is wrong.
-    fn show_look_setup(&mut self, ui: &mut egui::Ui) {
-        let setup = &self.look_setup;
-        if setup.missing.is_empty() && !setup.map_wanted && setup.fetch_status.is_none() {
-            return;
-        }
-        let mut action = None;
-        ui.group(|ui| {
-            ui.label(egui::RichText::new("LOOK AROUND SETUP").strong().color(Theme::TEXT_MUTED));
-            let small = |text: &str, colour| egui::RichText::new(text).small().color(colour);
-            for why in &setup.missing {
-                ui.label(small(why, Theme::WARNING_RED));
-            }
-            if setup.map_wanted && !setup.fetching {
-                ui.label(small(LOOK_MAP_WANTED, Theme::WARNING_RED));
-            }
-            if let Some(status) = &setup.fetch_status {
-                let colour = if status.failed { Theme::WARNING_RED } else { Theme::TEXT_MUTED };
-                ui.label(small(&status.text, colour));
-            }
-            let button = |label: &str| {
-                egui::Button::new(label)
-                    .corner_radius(TRANSPORT_CORNER)
-                    .stroke(egui::Stroke::new(1.2, Theme::CHIP_OUTLINE))
-            };
-            if setup.fetching {
-                if ui
-                    .add(button("Cancel Download"))
-                    .on_hover_text(numbers::text(LOOK_MAP_CANCEL_TIP))
-                    .clicked()
-                {
-                    action = Some(LookSetupAction::CancelFetch);
-                }
-            } else if setup.map_wanted
-                && ui
-                    .add(button("Download Star Map (153 MB)"))
-                    .on_hover_text(numbers::text(LOOK_MAP_TIP))
-                    .clicked()
-            {
-                action = Some(LookSetupAction::FetchMap);
-            }
-        });
-        ui.add_space(4.0);
-        if action.is_some() {
-            self.look_setup_action = action;
-        }
     }
 
     /// The gap between the two releases, which is the Δt the blueshift scale exp(κ₋Δt) is quoted
@@ -2449,7 +2340,6 @@ impl AppControls {
         //
         // A Look Around press is a request, like Save's, taken by the app after the panel: see
         // `look_request`; and so is a Cancel, `look_cancel`.
-        self.show_look_setup(ui);
         let bob = BOB_CARD.show(ui, &sim.metric, &mut self.bob, &mut sim.bob, &mut sim.bob_signal, sim.clock, self.use_physical_units, self.look_making, self.look_status.as_ref(), &mut self.look_terminal);
         ui.add_space(4.0);
         let alice = ALICE_CARD.show(ui, &sim.metric, &mut self.alice, &mut sim.alice, &mut sim.alice_signal, sim.clock, self.use_physical_units, self.look_making, self.look_status.as_ref(), &mut self.look_terminal);

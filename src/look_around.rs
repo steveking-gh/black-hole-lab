@@ -54,16 +54,25 @@
 //! # What a view needs, and the piece the app can supply
 //!
 //! A view needs `sky-look` and the two programs beside it, ffmpeg, and a star map, and a copy of
-//! the app that was downloaded has the first of those and neither of the others. Rather than let
-//! the first press find that out, the app asks `sky-look --check` once when it starts, on a thread
-//! of its own, and the panel says what is missing above the two cards (`Readiness`,
-//! `gui::controls::LookSetup`). The star map is the one piece the app can supply: `sky-look
-//! --fetch-map` downloads it from NASA, and the panel offers that as a button, which is the user's
-//! consent to a download of 153 MB - nothing is fetched by a press of Look Around (`MapFetch`).
-//! ffmpeg is installed by the system's package manager, which is the user's to run: the panel
-//! gives the command. The question is asked again when a download or a view ends, and when the
-//! app's window gets the focus back while something is missing, which is when a user who went
-//! away to install ffmpeg comes back.
+//! the app that was downloaded has the first of those and neither of the others. So a press of
+//! Look Around first asks `sky-look --check` what is missing (`Readiness`), which looks at a few
+//! files and answers at once, and when something is, no view is started: the app puts up a dialog
+//! over the whole window, `gui::look_dialog`, which names each missing piece and asks whether to
+//! download what can be downloaded. A dialog and not a line on the card, because the user cannot
+//! have what they asked for until they have answered it.
+//!
+//! - The star map is the one piece the app can supply: OK starts `sky-look --fetch-map`
+//!   (`MapFetch`), which downloads the map from NASA, and the dialog follows the download. Nothing
+//!   is downloaded before OK, and Cancel downloads nothing and stops a download that is running.
+//! - ffmpeg is installed by the system's package manager, which is the user's to run and may ask
+//!   for a password. The dialog gives the command for this system, which `sky-look --check`
+//!   reports, and OK asks again whether ffmpeg is there: while ffmpeg is still missing the dialog
+//!   stays, says so, and no view is made. The star map is downloaded meanwhile.
+//! - Once OK has been pressed and nothing is missing any more, the dialog goes and the view that
+//!   was asked for is made, as if Look Around had been pressed then.
+//!
+//! The Look Around buttons are not greyed out for a missing piece: a button that will not press
+//! says nothing about why, and the dialog says everything.
 //!
 //! # What the app does not know
 //!
@@ -526,14 +535,22 @@ fn stop(child: &mut Child) {
     let _ = child.wait();
 }
 
-/// What Look Around needs that this computer has not got, as `sky-look --check` reports it: the
-/// app asks when it starts, so that the panel can say what is missing before a view is asked for
-/// instead of after a press has failed.
+/// What Look Around needs that this computer has not got, as `sky-look --check` reports it. The
+/// app asks on a press of Look Around, and again on each OK of the dialog that a missing piece
+/// puts up.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Readiness {
-    /// One sentence for each piece that is missing and that the app cannot supply: each says what
-    /// to do, in `sky-look`'s words, or in the app's when it is `sky-look` that is missing.
-    pub missing: Vec<String>,
+    /// The sentence for `sky-trace` and `sky-render` when one is missing, or for a `sky-look` that
+    /// could not be asked: a copy of the app that is incomplete, which no download here mends.
+    pub tools: Option<String>,
+    /// The sentence for ffmpeg when ffmpeg is missing.
+    pub ffmpeg: Option<String>,
+    /// The command that installs ffmpeg on this system, when ffmpeg is missing and `sky-look`
+    /// knows the system's package manager.
+    pub ffmpeg_command: Option<String>,
+    /// The sentence for a star map that only whoever named it can supply: one an environment
+    /// variable names that is not there.
+    pub map: Option<String>,
     /// Whether the default star map is missing from its own place, which is the one piece the app
     /// can supply: `sky-look --fetch-map` downloads it.
     pub map_fetchable: bool,
@@ -542,35 +559,47 @@ pub struct Readiness {
 impl Readiness {
     /// Whether nothing is missing.
     pub fn complete(&self) -> bool {
-        self.missing.is_empty() && !self.map_fetchable
+        self.tools.is_none() && self.ffmpeg.is_none() && self.map.is_none() && !self.map_fetchable
     }
 
-    /// What the standard output of `sky-look --check` says. It is three lines, for `tools`,
+    /// What the standard output of `sky-look --check` says. It is a line for each of `tools`,
     /// `ffmpeg` and `map`: the word, a space, and `ok`, or `missing <sentence>`, or for a star map
     /// a download would supply, `fetchable <sentence>`, whose sentence is left out here because
-    /// the panel offers the download in its place.
+    /// the dialog offers the download in its place; and when ffmpeg is missing and the command
+    /// that installs it is known, a line `ffmpeg-install <command>`.
     ///
     /// A line that is none of these is passed over, and so is output that is not there at all,
     /// which is what a `sky-look` older than `--check` gives: the answer then is that nothing is
-    /// known to be missing, and a press finds out as it always did.
+    /// known to be missing, and the press goes ahead and finds out as it always did.
     pub fn of(check_output: &str) -> Readiness {
         let mut readiness = Readiness::default();
         for line in check_output.lines() {
-            let mut words = line.trim().splitn(3, ' ');
-            let (Some(_piece), Some(state)) = (words.next(), words.next()) else { continue };
-            match (state, words.next()) {
-                ("missing", Some(why)) => readiness.missing.push(why.to_string()),
-                ("fetchable", _) => readiness.map_fetchable = true,
+            let line = line.trim();
+            if let Some(command) = line.strip_prefix("ffmpeg-install ") {
+                readiness.ffmpeg_command = Some(command.trim().to_string());
+                continue;
+            }
+            let mut words = line.splitn(3, ' ');
+            let (Some(piece), Some(state)) = (words.next(), words.next()) else { continue };
+            let why = words.next().map(str::to_string);
+            match (piece, state, why) {
+                ("tools", "missing", Some(why)) => readiness.tools = Some(why),
+                ("ffmpeg", "missing", Some(why)) => readiness.ffmpeg = Some(why),
+                ("map", "missing", Some(why)) => readiness.map = Some(why),
+                ("map", "fetchable", _) => readiness.map_fetchable = true,
                 _ => {}
             }
+        }
+        // A command is for an ffmpeg that is missing, and for nothing else.
+        if readiness.ffmpeg.is_none() {
+            readiness.ffmpeg_command = None;
         }
         readiness
     }
 }
 
 /// Ask `program` what Look Around is missing, and wait for the answer: `sky-look --check`, which
-/// looks at a few files and exits. Called on a thread of its own and never on a frame
-/// (`SpacetimeApp::start_look_check`).
+/// looks at a few files and exits. Called on a press and never on a frame.
 ///
 /// A `sky-look` that cannot be started is itself the missing piece, and said to be.
 pub fn check(program: &Path) -> Readiness {
@@ -584,18 +613,9 @@ pub fn check(program: &Path) -> Readiness {
     match command.output() {
         Ok(output) => Readiness::of(&String::from_utf8_lossy(&output.stdout)),
         Err(cause) => Readiness {
-            missing: vec![format!("Could not start sky-look ({}): {cause}", program.display())],
-            map_fetchable: false,
+            tools: Some(format!("Could not start sky-look ({}): {cause}", program.display())),
+            ..Readiness::default()
         },
-    }
-}
-
-/// `check` for this process: on the `sky-look` that `locate` finds, or with the sentence saying
-/// that there is none.
-pub fn check_here() -> Readiness {
-    match locate() {
-        Ok(program) => check(&program),
-        Err(why) => Readiness { missing: vec![why], map_fetchable: false },
     }
 }
 

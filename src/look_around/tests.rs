@@ -694,28 +694,39 @@ fn test_the_card_whose_view_is_being_made_offers_cancel_where_look_around_was() 
 }
 
 #[test]
-fn test_the_check_output_becomes_the_sentences_to_show_and_whether_a_download_would_help() {
+fn test_the_check_output_becomes_what_is_missing_and_what_a_download_would_supply() {
     // Everything there: nothing to say.
     assert!(Readiness::of("tools ok\nffmpeg ok\nmap ok\n").complete());
 
-    // A missing piece gives its sentence, whole, spaces and all; a star map a download would
-    // supply gives the offer of the download in place of its sentence.
+    // Each missing piece gives its sentence, whole, spaces and all; a star map a download would
+    // supply gives the offer of the download in place of its sentence; and the command that
+    // installs ffmpeg comes on a line of its own.
     let readiness = Readiness::of(
-        "tools ok\r\nffmpeg missing ffmpeg.exe was not found on the PATH; install ffmpeg.\r\n\
-         map fetchable The star map is not there.\r\n",
+        "tools ok\r\nffmpeg missing ffmpeg was not found on the PATH; install ffmpeg.\r\n\
+         map fetchable The star map is not there.\r\nffmpeg-install sudo dnf install ffmpeg-free\r\n",
     );
     assert_eq!(
         readiness,
         Readiness {
-            missing: vec!["ffmpeg.exe was not found on the PATH; install ffmpeg.".to_string()],
+            tools: None,
+            ffmpeg: Some("ffmpeg was not found on the PATH; install ffmpeg.".to_string()),
+            ffmpeg_command: Some("sudo dnf install ffmpeg-free".to_string()),
+            map: None,
             map_fetchable: true,
         }
     );
+    assert!(!readiness.complete());
 
-    // A star map only its owner can supply is a sentence like any other.
-    let readiness = Readiness::of("tools ok\nffmpeg ok\nmap missing The variable names nothing.\n");
-    assert_eq!(readiness.missing, ["The variable names nothing."]);
-    assert!(!readiness.map_fetchable);
+    // A star map only its owner can supply is a sentence, and so is an incomplete copy.
+    let readiness =
+        Readiness::of("tools missing No tracer.\nffmpeg ok\nmap missing The variable is wrong.\n");
+    assert_eq!(readiness.tools.as_deref(), Some("No tracer."));
+    assert_eq!(readiness.map.as_deref(), Some("The variable is wrong."));
+    assert!(!readiness.map_fetchable && readiness.ffmpeg.is_none());
+
+    // A command without a missing ffmpeg is a command for nothing.
+    let readiness = Readiness::of("tools ok\nffmpeg ok\nmap ok\nffmpeg-install sudo apt install ffmpeg\n");
+    assert!(readiness.complete() && readiness.ffmpeg_command.is_none());
 
     // A sky-look older than --check prints nothing on standard output, and lines that are not the
     // report's are passed over: nothing is known to be missing.
@@ -724,27 +735,48 @@ fn test_the_check_output_becomes_the_sentences_to_show_and_whether_a_download_wo
     }
 }
 
-/// Write a stand-in for `sky-look --fetch-map --status <file>` into `dir`: it appends `first` to
-/// the status file, its third argument, waits for the file `go` to appear, appends `last`, and
-/// exits. The lines hold nothing either shell would read as syntax but `%`, which `cmd` has
-/// doubled.
-fn fetch_stand_in(dir: &Path, first: &str, go: &Path, last: &str) -> PathBuf {
+/// What `sky-look --check` is to say, for `setup_stand_in`'s `check.txt`.
+fn check_lines(ffmpeg: bool, map: bool) -> String {
+    let ffmpeg = if ffmpeg {
+        "ffmpeg ok"
+    } else {
+        "ffmpeg missing ffmpeg was not found.\nffmpeg-install sudo apt install ffmpeg"
+    };
+    let map = if map { "map ok" } else { "map fetchable The star map is not there." };
+    format!("tools ok\n{ffmpeg}\n{map}\n")
+}
+
+/// Write a stand-in for `sky-look` into `dir` that answers the three command lines the dialog's
+/// flow gives it:
+///
+/// - `--check` prints the file `check.txt` of `dir`, which the test rewrites as the pieces arrive;
+/// - `--fetch-map --status <file>` appends a line of progress to the status file, waits for the
+///   file `go` of `dir` to appear, appends `done the-map.exr`, and exits;
+/// - anything else, which is a view being asked for, exits at once and says nothing.
+fn setup_stand_in(dir: &Path) -> PathBuf {
+    let (check, go) = (dir.join("check.txt"), dir.join("go"));
     let script = if cfg!(windows) {
         format!(
-            "@echo off\r\n>>\"%~3\" echo {}\r\n:wait\r\nif not exist \"{}\" goto wait\r\n\
-             >>\"%~3\" echo {}\r\n",
-            first.replace('%', "%%"),
-            go.display(),
-            last.replace('%', "%%")
+            "@echo off\r\nif \"%~1\"==\"--check\" goto check\r\n\
+             if \"%~1\"==\"--fetch-map\" goto fetch\r\nexit /b 0\r\n\
+             :check\r\ntype \"{}\"\r\nexit /b 0\r\n\
+             :fetch\r\n>>\"%~3\" echo Downloading the star map from NASA: 40%%.\r\n\
+             :wait\r\nif not exist \"{}\" goto wait\r\n>>\"%~3\" echo done the-map.exr\r\n",
+            check.display(),
+            go.display()
         )
     } else {
         format!(
-            "#!/bin/sh\necho '{first}' >> \"$3\"\nwhile [ ! -e '{}' ]; do sleep 0.01; done\n\
-             echo '{last}' >> \"$3\"\n",
+            "#!/bin/sh\nif [ \"$1\" = \"--check\" ]; then cat '{}'; exit 0; fi\n\
+             if [ \"$1\" = \"--fetch-map\" ]; then\n\
+             echo 'Downloading the star map from NASA: 40%.' >> \"$3\"\n\
+             while [ ! -e '{}' ]; do sleep 0.01; done\n\
+             echo 'done the-map.exr' >> \"$3\"\nfi\nexit 0\n",
+            check.display(),
             go.display()
         )
     };
-    let name = if cfg!(windows) { "fetch-stand-in.cmd" } else { "fetch-stand-in" };
+    let name = if cfg!(windows) { "setup-stand-in.cmd" } else { "setup-stand-in" };
     let program = dir.join(name);
     std::fs::write(&program, script).expect("the stand-in");
     #[cfg(unix)]
@@ -756,81 +788,134 @@ fn fetch_stand_in(dir: &Path, first: &str, go: &Path, last: &str) -> PathBuf {
     program
 }
 
-/// Run the app's once-a-frame poll of the download until `done` says so, and fail the test rather
-/// than hang it.
-fn poll_setup_until(app: &mut SpacetimeApp, what: &str, done: impl Fn(&SpacetimeApp) -> bool) {
+/// Run the app's once-a-frame poll of the dialog's download until it has ended, the way frames
+/// would, and fail the test rather than hang it.
+fn poll_until_downloaded(app: &mut SpacetimeApp, program: &Path, dir: &Path) {
     let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        app.poll_look_setup();
-        if done(app) {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "waited 30 s for {what}; the setup is {:?}",
-            app.controls.look_setup
-        );
+    while app.poll_look_dialog(|| Ok(program.to_path_buf()), dir) {
+        assert!(Instant::now() < deadline, "waited 30 s for the download to end");
         std::thread::sleep(Duration::from_millis(5));
     }
 }
 
 #[test]
-fn test_the_star_map_download_shows_its_progress_then_its_verdict_and_cancel_stops_it() {
-    let progress = "Downloading the star map from NASA: 40%.";
-    let shows = |app: &SpacetimeApp, text: &str| {
-        app.controls.look_setup.fetch_status.as_ref().is_some_and(|status| status.text == text)
+fn test_a_missing_piece_puts_up_the_dialog_and_no_view_is_made_until_nothing_is_missing() {
+    let dir = scratch_dir("dialog");
+    let program = setup_stand_in(&dir);
+    let (check, go) = (dir.join("check.txt"), dir.join("go"));
+    let says = |ffmpeg: bool, map: bool| {
+        std::fs::write(&check, check_lines(ffmpeg, map)).expect("what the check says");
     };
-
-    // A download that succeeds: the panel follows the progress, then names the map, the button
-    // goes, and the question of what is missing is asked again.
-    let dir = scratch_dir("fetch-done");
-    let go = dir.join("go");
-    let program = fetch_stand_in(&dir, progress, &go, "done the-map.exr");
+    let dialog = |app: &SpacetimeApp| app.look_dialog.clone().expect("the dialog is up");
     let mut app = SpacetimeApp::default();
-    app.look_readiness.map_fetchable = true;
-    app.look_check_wanted = false;
-    app.fetch_star_map(Ok(program), &dir);
-    poll_setup_until(&mut app, "the progress line", |app| shows(app, progress));
-    let setup = &app.controls.look_setup;
-    assert!(setup.fetching && setup.map_wanted, "{setup:?}");
+
+    // ffmpeg and the star map are both missing. The press starts no view and downloads nothing:
+    // it asks.
+    says(false, false);
+    app.press_look_around(Who::Bob, Ok(program.clone()), &dir);
+    let asked = dialog(&app);
+    assert_eq!(asked.who, Who::Bob);
+    assert_eq!(asked.question(), "Download missing dependencies?");
+    assert_eq!(asked.needs.ffmpeg_command.as_deref(), Some("sudo apt install ffmpeg"));
+    assert!(asked.reminder().is_none(), "no reminder before OK");
+    assert!(app.look_around.is_none() && app.map_fetch.is_none());
+    assert!(app.controls.look_status.is_none(), "nothing is said on the card");
+
+    // Cancel: nothing was downloaded, no view is made, and the app is as it was.
+    app.look_dialog_cancel();
+    assert!(app.look_dialog.is_none() && app.look_around.is_none() && app.map_fetch.is_none());
+    assert!(nothing_left_in(&dir), "nothing was written");
+
+    // OK with ffmpeg still missing: the download of the star map starts all the same, the dialog
+    // stays, reminds, and makes no view.
+    app.press_look_around(Who::Bob, Ok(program.clone()), &dir);
+    app.look_dialog_ok(Ok(program.clone()), &dir);
+    let waiting = dialog(&app);
+    assert!(waiting.fetching && app.map_fetch.is_some(), "the map is being downloaded");
+    assert!(waiting.reminder().is_some_and(|text| text.contains("still not installed")));
+    assert_eq!(waiting.question(), "Press OK when ffmpeg is installed.");
+    assert!(app.look_around.is_none());
+
+    // The download ends, and ffmpeg is still missing: the dialog stays, and still no view.
+    says(false, true);
     std::fs::write(&go, b"").expect("the signal to finish");
-    poll_setup_until(&mut app, "the verdict", |app| !app.controls.look_setup.fetching);
-    assert!(shows(&app, "Downloaded the star map: the-map.exr"));
-    let setup = &app.controls.look_setup;
-    assert!(!setup.map_wanted && !setup.fetch_status.as_ref().is_some_and(|s| s.failed));
-    assert!(app.look_check_wanted, "the check is asked again");
+    poll_until_downloaded(&mut app, &program, &dir);
+    let waiting = dialog(&app);
+    assert!(!waiting.fetching && !waiting.needs.map_fetchable);
+    assert_eq!(
+        waiting.fetch.as_ref().map(|status| status.text.as_str()),
+        Some("Downloaded the star map: the-map.exr")
+    );
+    assert!(waiting.reminder().is_some() && app.look_around.is_none());
+
+    // Another OK without ffmpeg changes nothing, and starts no second download.
+    app.look_dialog_ok(Ok(program.clone()), &dir);
+    assert!(dialog(&app).reminder().is_some());
+    assert!(app.map_fetch.is_none() && app.look_around.is_none());
+
+    // ffmpeg installed, OK: the dialog goes and the view that was asked for is started.
+    says(true, true);
+    app.look_dialog_ok(Ok(program.clone()), &dir);
+    assert!(app.look_dialog.is_none());
+    assert_eq!(status(&app).who, Who::Bob);
+    assert!(!status(&app).failed, "{:?}", status(&app).text);
+    poll_until(&mut app, "the stand-in view to end", finished);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // Only the star map missing: after OK the dialog waits for the download, and makes the view
+    // by itself when the download ends.
+    let dir = scratch_dir("dialog-map");
+    let program = setup_stand_in(&dir);
+    let (check, go) = (dir.join("check.txt"), dir.join("go"));
+    std::fs::write(&check, check_lines(true, false)).expect("what the check says");
+    let mut app = SpacetimeApp::default();
+    app.press_look_around(Who::Alice, Ok(program.clone()), &dir);
+    assert!(app.map_fetch.is_none(), "nothing is downloaded before OK");
+    app.look_dialog_ok(Ok(program.clone()), &dir);
+    let waiting = dialog(&app);
+    assert!(waiting.fetching && waiting.reminder().is_none());
+    assert_eq!(
+        waiting.question(),
+        "Black Hole Lab makes Alice's view when the download ends."
+    );
+    std::fs::write(&check, check_lines(true, true)).expect("what the check says");
+    std::fs::write(&go, b"").expect("the signal to finish");
+    poll_until_downloaded(&mut app, &program, &dir);
+    assert!(app.look_dialog.is_none(), "the dialog is gone");
+    assert_eq!(status(&app).who, Who::Alice);
+    poll_until(&mut app, "the stand-in view to end", finished);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // Cancel while the star map is being downloaded stops the download and leaves no file.
+    let dir = scratch_dir("dialog-cancel");
+    let program = setup_stand_in(&dir);
+    std::fs::write(dir.join("check.txt"), check_lines(true, false)).expect("the check");
+    let mut app = SpacetimeApp::default();
+    app.press_look_around(Who::Bob, Ok(program.clone()), &dir);
+    app.look_dialog_ok(Ok(program.clone()), &dir);
+    assert!(app.map_fetch.is_some());
+    app.look_dialog_cancel();
+    assert!(app.look_dialog.is_none() && app.map_fetch.is_none() && app.look_around.is_none());
+    assert!(!app.poll_look_dialog(|| Ok(program.clone()), &dir));
     assert!(nothing_left_in(&dir), "the status file is gone");
     let _ = std::fs::remove_dir_all(&dir);
 
-    // A download that fails: sky-look's sentence, marked as a failure, and the button stays.
-    let dir = scratch_dir("fetch-failed");
-    let go = dir.join("go");
-    std::fs::write(&go, b"").expect("no waiting");
-    let program = fetch_stand_in(&dir, progress, &go, "failed The download failed; try again.");
+    // Nothing missing: the press makes the view, and no dialog is seen.
+    let dir = scratch_dir("dialog-none");
+    let program = setup_stand_in(&dir);
+    std::fs::write(dir.join("check.txt"), check_lines(true, true)).expect("the check");
     let mut app = SpacetimeApp::default();
-    app.look_readiness.map_fetchable = true;
-    app.fetch_star_map(Ok(program), &dir);
-    poll_setup_until(&mut app, "the verdict", |app| !app.controls.look_setup.fetching);
-    assert!(shows(&app, "Could not download the star map: The download failed; try again."));
-    let setup = &app.controls.look_setup;
-    assert!(setup.map_wanted && setup.fetch_status.as_ref().is_some_and(|s| s.failed));
+    app.press_look_around(Who::Bob, Ok(program), &dir);
+    assert!(app.look_dialog.is_none());
+    assert_eq!(status(&app).who, Who::Bob);
+    poll_until(&mut app, "the stand-in view to end", finished);
     let _ = std::fs::remove_dir_all(&dir);
 
-    // Cancel stops the download and says so, and leaves no status file.
-    let dir = scratch_dir("fetch-cancel");
-    let program = fetch_stand_in(&dir, progress, &dir.join("never"), "done nothing");
+    // No sky-look at all: the dialog, with the sentence saying so, and OK changes nothing.
     let mut app = SpacetimeApp::default();
-    app.fetch_star_map(Ok(program), &dir);
-    poll_setup_until(&mut app, "the progress line", |app| shows(app, progress));
-    app.cancel_map_fetch();
-    assert!(!app.poll_look_setup(), "no download is running");
-    assert!(shows(&app, "Cancelled the download of the star map."));
-    assert!(nothing_left_in(&dir), "the status file is gone");
-    let _ = std::fs::remove_dir_all(&dir);
-
-    // No sky-look to run: nothing is started, and the panel says why.
-    let mut app = SpacetimeApp::default();
-    app.fetch_star_map(Err("sky-look was not found.".to_string()), &std::env::temp_dir());
-    assert!(!app.poll_look_setup());
-    assert!(shows(&app, "Could not download the star map: sky-look was not found."));
+    let nowhere = || Err("sky-look was not found.".to_string());
+    app.press_look_around(Who::Bob, nowhere(), &std::env::temp_dir());
+    assert_eq!(dialog(&app).needs.tools.as_deref(), Some("sky-look was not found."));
+    app.look_dialog_ok(nowhere(), &std::env::temp_dir());
+    assert!(app.look_dialog.is_some() && app.map_fetch.is_none() && app.look_around.is_none());
 }
