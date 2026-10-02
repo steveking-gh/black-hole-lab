@@ -1,6 +1,6 @@
 ![GPL licensed](https://img.shields.io/badge/license-GPL-blue.svg)
 
-# BLACK HOLE LAB IS WORK IN PROGRESS
+# BLACK HOLE LAB
 
 ## Introduction
 
@@ -16,21 +16,26 @@ whenever Alice and Bob receive a signal from the other.
 The simulation takes pains to respect Einstein's equations of general
 relativity.  To the precision of the numerical integration, the effects shown in
 Black Hole Lab are really what the math of general relativity says will happen.
-We use the famous Kerr metric, which is an exact solution to Einstein's
-equations of general relativity for a rotating mass discovered in 1963 by Roy
-Kerr.  Sadly, his original article is paywalled, but brave readers can find a
-deeply mathematical introduction from Matt Visser
+For an excellent and very approachable introduction to the concepts and math of
+general relativity, you will not go wrong with [The Maths of General Relativity
+(1/8) - Spacetimes and Worldlines](The Maths of General Relativity (1/8) -
+Spacetime and Worldlines) by
+[ScienceClic](https://www.youtube.com/@ScienceClicEN).
+
+Black Hole Lab specifically uses the Kerr metric, which is an exact solution to
+Einstein's equations of general relativity for a rotating mass discovered in
+1963 by Roy Kerr.  Sadly, his original article is paywalled, but brave readers
+can find a deeply mathematical introduction from Matt Visser
 [here](https://arxiv.org/pdf/0706.0622).
 
 In some cases, the simulation stops calculations at a pre-defined limit, such as
 10 billion for the rate of the coordinate time relative to Alice or Bob's proper
 time. These limits are unphysical, but keep internal numerical errors under
-control.
-
-While the predictions of general relativity have been proven correct countless
-times, physicists agree that general relativity *cannot* be the final word on
-black holes.  *Nobody* can say what would *actually* happen to Alice and Bob
-inside a black hole.
+control.  In a practical sense, these limits also provide a hint as to where
+general relativity is about to break down.  While the predictions of general
+relativity have been proven correct countless times, physicists agree that
+general relativity *cannot* be the final word on black holes.  *Nobody* can say
+what would *actually* happen to Alice and Bob inside a black hole.
 
 ## Starting Up
 
@@ -140,6 +145,28 @@ perceive their *now*.
 
 ![Bob 1D+1](assets/images/bob_for_1d1.png)
 
+### Look Around
+
+Bob and Alice each have a `Look Around` button.  This button generates a large
+8192x4096 360-degree ray-traced view of their current location.  The view uses
+[Nasa Sky Map](https://svs.gsfc.nasa.gov/search/?keywords=Sky%20Map) as a
+background.
+
+Generating a star map requires installation of a couple of dependencies.  The
+first dependency is the NASA sky map image, which Black Hole Lab automatically
+downloads on first use.  The second dependency is the popular
+[ffmpeg](https://ffmpeg.org/) which the user must install themselves.  Black
+Hole Lab helpfully prompts the user if either dependency is missing.
+
+The generated image is a valid JPEG file that any viewer can show, but a
+360-capable viewer wraps the image into a sphere.  A viewer like
+[VLC](https://www.videolan.org/) supports this capability.
+
+Here's Alice's view from her default starting location at the innermost stable
+circular orbit (ISCO), but resized down to 1600 pixels wide.
+
+![Bob Look Around](assets/images/bob_look_around_small.jpg)
+
 ### Light Cones
 
 All the graphs above feature cone shapes centered on the observers.  These are
@@ -153,8 +180,8 @@ travels one unit of space horizontally per one unit of time vertically.
 
 We pick on "light from an event" here, but this really means *any*
 cause-and-effect influence whatsoever.  An event outside your light cone
-*cannot* affect your present reality.  Naturally as time goes by, an event
-outside your light cone *now* might be inside your light cone *later*.
+*cannot* affect your present reality.  As time goes by, an event outside your
+light cone *now* might be inside your light cone *later*.
 
 ### Light Cone Tilting
 
@@ -179,9 +206,9 @@ center of our galaxy.
 
 ### Outside the Black Hole
 
-Uncheck Alice, then let's watch Bob holding still some ways outside the black
-hole.  Enable Bob's "Transmit Signal", then set Bob to "Static" and "At rest
-here".
+Uncheck "Enable Observer" for Alice, then let's watch Bob holding still some
+ways outside the black hole.  Enable Bob's "Transmit Signal", then set Bob to
+"Static" and "At rest here".
 
 ![Bob Static 1](assets/images/bob_static_1.png)
 
@@ -479,14 +506,14 @@ the inner horizon, another fascinating infinity arises called *infinite
 blueshift*. Let's have a look.
 
 In the interior `region II` of a black hole, recall that *time itself* points
-inward from the outer horizon `r+` "down" to the inner horizon `r-`.  In region
-II, the `r+` and `r-` horizons are not *places*, they are *moments* in the past
+inward from the outer horizon `r+` "down" to the inner horizon `r-`.  In `region
+II`, the `r+` and `r-` horizons are not *places*, they are *moments* in the past
 and future respectively.  As Bob approaches the right branch of `r-`, we see his
 *inward* time-like progress asymptotically slow.  Bob makes rapid progress
-through space as he circles the `r-` horizon, but ever decreasing progress through
-time.  Specifically, we're referring here to Bob's stall in *coordinate time*,
-which is equivalent to a distant clock.  We must wait for time = infinity to see
-Bob finally cross the horizon.
+through space as he circles the `r-` horizon, but ever decreasing progress
+through time.  Specifically, we're referring here to Bob's stall in *coordinate
+time*, which is equivalent to a distant clock.  We must wait for time = infinity
+to see Bob finally cross the horizon.
 
 What about Bob's frame of reference in this scenario?  Relativity insists that
 Bob's FoR is just as real and valid as that of a distant clock in the outside

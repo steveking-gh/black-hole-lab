@@ -1,10 +1,11 @@
 # The sky pipeline
 
-This directory holds the programs that make a 360-degree video of what an observer near a black
-hole sees. It is a cargo workspace of its own. Black Hole Lab, at the repository root, does not
-depend on anything here, and nothing here can change how the app builds or runs; but every build
-of the app builds this workspace too, in release, so that the programs the app runs are never
-older than the app (see "Why a separate workspace").
+This directory holds the programs that make a 360-degree video of what an
+observer near a black hole sees. It is a cargo workspace of its own. Black Hole
+Lab, at the repository root, does not depend on anything here, and nothing here
+can change how the app builds or runs; but every build of the app builds this
+workspace too, in release, so that the programs the app runs are never older
+than the app (see "Why a separate workspace").
 
 ## The parts
 
@@ -17,8 +18,8 @@ older than the app (see "Why a separate workspace").
 | `sky-render` | program | Turns a sky bundle and a star map into a 360-degree AV1 video |
 | `maps` | data | The script that downloads NASA's star maps, and their description |
 
-The format of a sky bundle is defined in `physics_simulation_specification.md`, at the repository
-root.
+The format of a sky bundle is defined in `physics_simulation_specification.md`,
+at the repository root.
 
 ## How the parts connect
 
@@ -29,9 +30,10 @@ save.bhl  ─►  sky-trace    ─┘                        ▲
                                                  star map
 ```
 
-A *tracer* is any program that writes a sky bundle. `sky-testgen` is one, for flat space.
-`sky-trace` is the one for Kerr spacetime: it reads a save of Black Hole Lab, follows the chosen
-observer forward from the saved moment, and traces the light with `kerr-sky`.
+A *tracer* is any program that writes a sky bundle. `sky-testgen` is one, for
+flat space. `sky-trace` is the one for Kerr spacetime: it reads a save of Black
+Hole Lab, follows the chosen observer forward from the saved moment, and traces
+the light with `kerr-sky`.
 
 ## Running it
 
@@ -59,25 +61,29 @@ cargo fmt -p sky-format -p sky-testgen -p sky-render -p kerr-sky -p sky-trace
 
 ## Why a separate workspace
 
-Cargo builds the members of a workspace together. Sharing the app's workspace would let these
-crates change which features the app's dependencies are built with, add their dependencies to the
-app's lock file, and make `cargo run` at the repository root ambiguous between the app and the
-programs here. Kept apart, the app's manifest and lock file do not mention this directory.
+Cargo builds the members of a workspace together. Sharing the app's workspace
+would let these crates change which features the app's dependencies are built
+with, add their dependencies to the app's lock file, and make `cargo run` at the
+repository root ambiguous between the app and the programs here. Kept apart, the
+app's manifest and lock file do not mention this directory.
 
-The other direction is wanted, and cargo has no way to say it, so the app's build script says it:
-`../build.rs` runs `cargo build --release` here, into `sky/target`, whenever a manifest or a `src`
-directory of a crate here has changed since the last build of the app. Every build of the app,
-`cargo run --release` and `cargo perf-check` included, therefore leaves `sky/target/release`
-fresh. A crate here that does not compile fails the app's build, with cargo's own error. Set
-`BLACK_HOLE_LAB_NO_SKY_BUILD` to build the app without this. A running `sky-look` holds its
-executable locked on Windows, and a build during a Look Around fails at the link; wait or cancel.
+The other direction is wanted, and cargo has no way to say it, so the app's
+build script says it: `../build.rs` runs `cargo build --release` here, into
+`sky/target`, whenever a manifest or a `src` directory of a crate here has
+changed since the last build of the app. Every build of the app, `cargo run
+--release` and `cargo perf-check` included, therefore leaves
+`sky/target/release` fresh. A crate here that does not compile fails the app's
+build, with cargo's own error. Set `BLACK_HOLE_LAB_NO_SKY_BUILD` to build the
+app without this. A running `sky-look` holds its executable locked on Windows,
+and a build during a Look Around fails at the link; wait or cancel.
 
-Two crates in `../crates` are used from here, read-only: `kerr-equatorial`, so that the light
-traced here agrees with the app's geometry, and `readout`, so that numbers on the video are
-written as the app writes them.
+Two crates in `../crates` are used from here, read-only: `kerr-equatorial`, so
+that the light traced here agrees with the app's geometry, and `readout`, so
+that numbers on the video are written as the app writes them.
 
 ## Licences and credit
 
-The crates here are licensed as the app is, GPL-3.0-or-later. `THIRD-PARTY-NOTICES.md` in this
-directory lists what they are built from, and gives the credit line that a published video made
-from NASA's star maps must carry.
+The crates here are licensed as the app is, GPL-3.0-or-later.
+`THIRD-PARTY-NOTICES.md` in this directory lists what they are built from, and
+gives the credit line that a published video made from NASA's star maps must
+carry.
