@@ -1,0 +1,49 @@
+src/gui/mod.rs
+  s_eab993b6e839ea::t_66d59a4c5fc522 12
+src/look_around/tests.rs
+  s_eab993b6e839ea::t_91fcb818a358ad 697,701-703,705-706,711-714,718,720-729,738-757,760-766,770-775,779,791-793,795-796,802-807,809,811-840,842-862,865-870,872-886,889-892,894-899,903-914,916-920
+src/gui/look_dialog.rs
+  s_eab993b6e839ea::t_8e5debd7dccd85 1-171
+sky/sky-look/src/tests.rs
+  s_eab993b6e839ea::t_be2ad018b95972 1137-1187
+sky/sky-look/src/tests_run.rs
+  s_eab993b6e839ea::t_ba084822290c4c 186
+  s_eab993b6e839ea::t_be2ad018b95972 21,969,1018,1035-1047
+  s_eab993b6e839ea::t_153964945fa075 1048
+sky/sky-look/src/main.rs
+  s_eab993b6e839ea::t_ba084822290c4c 76-77
+sky/sky-look/src/find.rs
+  s_eab993b6e839ea::t_ba084822290c4c 32-48,56-85,126-127,162-164,179-180,191,195-199,206,209-212,281-284,287
+  s_eab993b6e839ea::t_be2ad018b95972 49-55
+sky/sky-look/src/fetch.rs
+  s_eab993b6e839ea::t_be2ad018b95972 8-10,37-75,81,102-107,110,155-173,185,191,208-209
+sky/sky-look/src/args.rs
+  s_eab993b6e839ea::t_ba084822290c4c 100-102
+src/app.rs
+  s_eab993b6e839ea::t_66d59a4c5fc522 11-12,63-68,100,454-455,457-470,472-476,478-484,488-496,501-508,516-522,524,526-537,540-542,544-556,558-574,811-812,858,1060-1070
+src/look_around.rs
+  s_eab993b6e839ea::t_e877f9bc627d21 57-75,538-540,543-553,562,565,568-569,573,577-589,593-596,602,616-617
+sky/sky-look/src/run.rs
+  s_eab993b6e839ea::t_ba084822290c4c 88-89,113,393,453
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "5479e81c6846801c5fc75c4498eebb400c1ffa2e",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_eab993b6e839ea": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "506a3453-7463-4d75-8088-b6596eca7307",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
