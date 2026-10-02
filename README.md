@@ -152,9 +152,13 @@ Bob and Alice each have a `Look Around` button.  This button generates a large
 [Nasa Sky Map](https://svs.gsfc.nasa.gov/search/?keywords=Sky%20Map) as a
 background.
 
-Generating a star map requires installation of a couple of dependencies.  The
-first dependency is the NASA sky map image, which Black Hole Lab automatically
-downloads on first use.  The second dependency is the popular
+Using the `Look Around` button kicks off a separate process using Black Hole Lab
+tools in the included `sky` workspace.  You can run these tools from any saved
+`.bhl` file and even generate videos.
+
+Generating a star map requires installation of a couple of dependencies.
+The first dependency is the NASA sky map image, which Black Hole Lab
+automatically downloads on first use.  The second dependency is the popular
 [ffmpeg](https://ffmpeg.org/) which the user must install themselves.  Black
 Hole Lab helpfully prompts the user if either dependency is missing.
 
@@ -162,8 +166,8 @@ The generated image is a valid JPEG file that any viewer can show, but a
 360-capable viewer wraps the image into a sphere.  A viewer like
 [VLC](https://www.videolan.org/) supports this capability.
 
-Here's Alice's view from her default starting location at the innermost stable
-circular orbit (ISCO), but resized down to 1600 pixels wide.
+Here's Bob's view from his default starting location at the innermost stable
+circular orbit (ISCO), though downsized at only 1600 pixels wide.
 
 ![Bob Look Around](assets/images/bob_look_around_small.jpg)
 
