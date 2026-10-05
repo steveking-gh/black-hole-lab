@@ -945,13 +945,13 @@ fn test_a_failure_in_the_rendering_terminal_is_the_programs_own_words_there_and_
     );
 }
 
-/// What the curl stand-in does to the disk: copies the file its third argument names, which the
-/// test passes as the address, to the path its second argument names.
+/// What the curl stand-in does: writes the file its third argument names, which the test passes
+/// as the address, to its standard output, as the real program writes a download there.
 fn curl_work() -> Vec<&'static str> {
     if cfg!(windows) {
-        vec!["copy /y \"%~3\" \"%~2\" >nul"]
+        vec!["type \"%~3\""]
     } else {
-        vec!["cp \"$3\" \"$2\""]
+        vec!["cat \"$3\""]
     }
 }
 
@@ -1043,7 +1043,7 @@ fn test_a_download_is_put_in_place_only_when_its_size_and_hash_are_the_ones_on_r
     assert_eq!(result, Ok(target.clone()));
     let wget_args = std::fs::read_to_string(root.join("wget.args")).expect("wget's arguments");
     assert!(
-        wget_args.starts_with("-O ") && wget_args.contains("--no-verbose"),
+        wget_args.starts_with("-O - ") && wget_args.contains("--no-verbose"),
         "{wget_args}"
     );
 

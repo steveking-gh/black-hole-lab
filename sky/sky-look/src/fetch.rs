@@ -12,13 +12,12 @@
 //! and its SHA-256 are the ones on record, so a download that was stopped, cut short or corrupted
 //! is never found by the search and taken for the map.
 //!
-//! Progress is the size of the partial file against the size on record, said as sentences in the
+//! Progress is the bytes written so far against the size on record, said as sentences in the
 //! way the tracer's and the renderer's percentages are, to the same status file.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
 
 use crate::find::{self, SKY_MAP_ENV, SKY_MAP_SIZE, SKY_MAP_URL};
 use crate::run::{Environment, Say};
@@ -72,9 +71,6 @@ impl Tool {
             .or_else(|| find("wget").map(Tool::Wget))
     }
 }
-
-/// How often the partial file's size is read while the download runs.
-const POLL: Duration = Duration::from_millis(200);
 
 /// One download: what to fetch, with what, to where, and what the file must turn out to be.
 #[derive(Debug, Clone)]
@@ -153,20 +149,25 @@ pub fn download(d: &Download, say: &mut Say) -> Result<PathBuf, String> {
         "Downloading the star map {name} ({SKY_MAP_SIZE}) from NASA into {}.",
         folder.display()
     ));
-    // The output's flag, the partial file and the address first, so that a stand-in for either
-    // program reads the last two as its second and third arguments whatever follows. curl's
-    // `--silent --show-error` and wget's `--no-verbose` leave standard error holding little but the
-    // reason for a failure, which is short enough to be read after the program has exited.
+    // The program writes the download to its standard output and this program writes the file.
+    // A program of the system's, such as Windows' own curl, sees the file system as it is, while
+    // this program, inside a Microsoft Store package, sees the user's data folder redirected into
+    // the package's private copy of it: the folder made here is not there for curl, which then
+    // fails to write (curl's error 23). So nothing of the system's writes a file of ours.
+    //
+    // The output's flag, `-` for standard output, and the address first, so that a stand-in for
+    // either program reads the address as its third argument whatever follows. curl's
+    // `--silent --show-error` and wget's `--no-verbose` leave standard error holding little but
+    // the reason for a failure.
     let tool = d.tool.name();
     let mut command = Command::new(d.tool.program());
     match &d.tool {
         Tool::Curl(_) => command
-            .arg("--output")
-            .arg(&partial)
+            .args(["--output", "-"])
             .arg(&d.url)
             .args(["--fail", "--location", "--silent", "--show-error"])
             .args(["--retry", "3", "--connect-timeout", "30"]),
-        Tool::Wget(_) => command.arg("-O").arg(&partial).arg(&d.url).args([
+        Tool::Wget(_) => command.args(["-O", "-"]).arg(&d.url).args([
             "--no-verbose",
             "--tries=3",
             "--timeout=30",
@@ -174,35 +175,73 @@ pub fn download(d: &Download, say: &mut Say) -> Result<PathBuf, String> {
     };
     command
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(crate::run::CREATE_NO_WINDOW);
     }
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("Could not start {} ({e})", d.tool.program().display()))?;
-    let mut shown = 0;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {}
-            Err(e) => return Err(discard(format!("Lost track of {tool} ({e})"))),
-        }
-        let percent = (size_of(&partial).saturating_mul(100) / d.bytes.max(1)).min(99);
-        if percent >= shown + PERCENT_STEP {
-            shown = percent;
-            say.line(&format!("Downloading the star map from NASA: {percent}%."));
-        }
-        std::thread::sleep(POLL);
-    };
-    if !status.success() {
-        let mut said = String::new();
-        if let Some(mut pipe) = child.stderr.take() {
+    let mut file = File::create(&partial)
+        .map_err(|e| format!("Could not create {} ({e})", partial.display()))?;
+    let mut child = command.spawn().map_err(|e| {
+        discard(format!(
+            "Could not start {} ({e})",
+            d.tool.program().display()
+        ))
+    })?;
+    // Standard error on a thread of its own, so that a program that fills that pipe while this
+    // one reads the other is never left waiting on it.
+    let complaint = child.stderr.take().map(|mut pipe| {
+        std::thread::spawn(move || {
+            let mut said = String::new();
             let _ = std::io::Read::read_to_string(&mut pipe, &mut said);
+            said
+        })
+    });
+    let mut written: u64 = 0;
+    let mut shown = 0;
+    let mut wrote = Ok(());
+    if let Some(mut out) = child.stdout.take() {
+        let mut buffer = vec![0u8; 1 << 16];
+        loop {
+            let read = match std::io::Read::read(&mut out, &mut buffer) {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            };
+            if let Err(e) = std::io::Write::write_all(&mut file, &buffer[..read]) {
+                wrote = Err(e);
+                break;
+            }
+            written += read as u64;
+            let percent = (written.saturating_mul(100) / d.bytes.max(1)).min(99);
+            if percent >= shown + PERCENT_STEP {
+                shown = percent;
+                say.line(&format!("Downloading the star map from NASA: {percent}%."));
+            }
         }
+    }
+    if let Err(e) = wrote {
+        let _ = child.kill();
+        let _ = child.wait();
+        drop(file);
+        return Err(discard(format!(
+            "Could not write {} ({e})",
+            partial.display()
+        )));
+    }
+    let status = child
+        .wait()
+        .map_err(|e| format!("Lost track of {tool} ({e})"));
+    let said = complaint
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
+    let flushed = file.sync_all();
+    drop(file);
+    let status = status.map_err(&discard)?;
+    if !status.success() {
         let said = said.lines().last().unwrap_or("").trim().to_string();
         let reason = if said.is_empty() {
             match status.code() {
@@ -215,6 +254,12 @@ pub fn download(d: &Download, say: &mut Say) -> Result<PathBuf, String> {
         return Err(discard(format!(
             "The download of {} failed ({reason})",
             d.url
+        )));
+    }
+    if let Err(e) = flushed {
+        return Err(discard(format!(
+            "Could not write {} ({e})",
+            partial.display()
         )));
     }
     let got = size_of(&partial);
