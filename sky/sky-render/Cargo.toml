@@ -27,3 +27,4 @@ readout = { path = "../../crates/readout" }
 # Rasterises the app's typefaces for the read-outs. Already in the lock file (the Wayland window
 # decorations of the GUI toolkit use it), at the version given, so the tree gains no crate.
 ab_glyph = "0.2.32"
+jpeg-encoder = "0.7"

@@ -49,7 +49,8 @@ cargo run --release -p sky-render -- --bundle ../../bundles/turn \
     --sky maps/starmap_2020_8k_gal.exr --out ../../turn.mp4
 ```
 
-Each program prints its options with `--help`. `sky-render` needs `ffmpeg` on the `PATH`.
+Each program prints its options with `--help`. `sky-render` needs `ffmpeg` on the `PATH` to
+write a film; a photograph (`--photo` with `--encoder none`) needs no ffmpeg.
 
 **Do not run `cargo fmt --all` here.** `--all` follows path dependencies out of this workspace:
 it reformats `../crates/kerr-equatorial` and `../crates/readout`, and through their workspace the

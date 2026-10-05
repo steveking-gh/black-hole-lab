@@ -14,9 +14,8 @@
 #
 # Each archive is one folder: the app; sky-look, sky-trace and sky-render beside it, where the
 # app's Look Around looks for sky-look first; a maps folder with fetch-sky.ps1 and the checksums,
-# for a user who fetches a map by hand; the demo saves; the licence and notices. The star map and
-# ffmpeg are not shipped: Look Around's dialog downloads the one into the user's own data folder
-# and gives the command that installs the other.
+# for a user who fetches a map by hand; the demo saves; the licence and notices. The star map is
+# not shipped: Look Around's dialog downloads it into the user's own data folder.
 
 name: Release
 
@@ -181,9 +180,8 @@ jobs:
           Black Hole Lab for Windows (x86-64), Linux (x86-64) and macOS (Apple silicon).
 
           Extract the archive and keep every file together: the sky tools beside the app are
-          what Look Around runs. Look Around also needs NASA's star map and ffmpeg. On the first
-          press, Black Hole Lab offers to download the star map (153 MB) and shows the command
-          that installs ffmpeg.
+          what Look Around runs. Look Around also needs NASA's star map: on the first press,
+          Black Hole Lab offers to download it (153 MB).
 
           **macOS:** this build is not signed. If macOS refuses to open the app, run this once
           in Terminal, in the folder you extracted:

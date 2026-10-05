@@ -1,5 +1,4 @@
-//! Where the pieces are: the two programs this one runs, the ffmpeg the renderer runs, and the star
-//! map.
+//! Where the pieces are: the two programs this one runs, and the star map.
 //!
 //! Every piece is looked for before any work is done, so that a missing one costs the user nothing
 //! but the sentence saying what to do about it, and not a trace thrown away when the renderer turns
@@ -29,61 +28,6 @@ pub const SKY_MAP_URL: &str =
 /// megabytes `fetch-sky.ps1` and a file manager both count in.
 pub const SKY_MAP_SIZE: &str = "153 MB";
 
-/// The command that installs ffmpeg on this system, as a user types it into a terminal, or `None`
-/// where this program cannot tell which package manager the system has.
-///
-/// A command that names another system's package manager sends its reader to look for a program
-/// that is not there, so the command is the one for the platform this program was built for, and
-/// on Linux for the distribution that `os_release`, the text of `/etc/os-release`, names: `ID`
-/// is the distribution and `ID_LIKE` the ones it derives from, so that Mint is taken for the
-/// Ubuntu it is built on and Rocky for the Fedora. Fedora's own repositories carry ffmpeg as
-/// `ffmpeg-free`; the package named `ffmpeg` there is RPM Fusion's, which a clean system has not
-/// been told about.
-pub fn ffmpeg_install_command(os_release: Option<&str>) -> Option<&'static str> {
-    if cfg!(windows) {
-        return Some("winget install Gyan.FFmpeg");
-    }
-    if cfg!(target_os = "macos") {
-        return Some("brew install ffmpeg");
-    }
-    linux_install_command(os_release?)
-}
-
-/// The command that installs ffmpeg on the Linux distribution `os_release` describes, or `None`
-/// for one whose package manager this program does not know.
-pub fn linux_install_command(os_release: &str) -> Option<&'static str> {
-    let family: Vec<String> = os_release
-        .lines()
-        .filter_map(|line| line.trim().split_once('='))
-        .filter(|(key, _)| matches!(*key, "ID" | "ID_LIKE"))
-        .flat_map(|(_, value)| {
-            value
-                .trim_matches(|c| c == '"' || c == '\'')
-                .split_whitespace()
-                .map(str::to_ascii_lowercase)
-                .collect::<Vec<_>>()
-        })
-        .collect();
-    let is = |names: &[&str]| family.iter().any(|name| names.contains(&name.as_str()));
-    if is(&["debian", "ubuntu"]) {
-        Some("sudo apt install ffmpeg")
-    } else if is(&["fedora", "rhel", "centos"]) {
-        Some("sudo dnf install ffmpeg-free")
-    } else if is(&["arch"]) {
-        Some("sudo pacman -S ffmpeg")
-    } else if is(&["suse", "opensuse"]) {
-        Some("sudo zypper install ffmpeg")
-    } else {
-        None
-    }
-}
-
-/// The text of `/etc/os-release`, which says which Linux distribution this is; `None` on a system
-/// that has no such file.
-pub fn os_release_here() -> Option<String> {
-    std::fs::read_to_string("/etc/os-release").ok()
-}
-
 /// The file names of the programs, as this platform spells them. The tests put scripts in their
 /// place, which on Windows cannot be named `.exe`, so the names are part of the search rather than
 /// constants inside it.
@@ -91,7 +35,6 @@ pub fn os_release_here() -> Option<String> {
 pub struct Names {
     pub trace: String,
     pub render: String,
-    pub ffmpeg: String,
 }
 
 impl Names {
@@ -101,7 +44,6 @@ impl Names {
         Self {
             trace: format!("sky-trace{exe}"),
             render: format!("sky-render{exe}"),
-            ffmpeg: format!("ffmpeg{exe}"),
         }
     }
 }
@@ -113,18 +55,10 @@ pub struct Search {
     pub exe_dir: Option<PathBuf>,
     /// `--tools <dir>`.
     pub tools: Option<PathBuf>,
-    /// `--ffmpeg <path>`.
-    pub ffmpeg: Option<PathBuf>,
-    /// The value of `PATH`.
-    pub path: Option<OsString>,
     /// `--sky <map.exr>`.
     pub sky: Option<PathBuf>,
     /// The value of [`SKY_MAP_ENV`].
     pub sky_env: Option<OsString>,
-    /// Directories ffmpeg is installed into, looked in after the PATH: [`ffmpeg_places_here`].
-    pub ffmpeg_places: Vec<PathBuf>,
-    /// The text of `/etc/os-release`, for the command that installs ffmpeg: [`os_release_here`].
-    pub os_release: Option<String>,
     /// This user's own data folder for Black Hole Lab, where the star map is downloaded to and
     /// looked for first: [`user_data_dir_here`].
     pub data_dir: Option<PathBuf>,
@@ -135,7 +69,6 @@ pub struct Search {
 pub struct Pieces {
     pub trace: PathBuf,
     pub render: PathBuf,
-    pub ffmpeg: PathBuf,
     pub sky: PathBuf,
 }
 
@@ -143,14 +76,8 @@ pub struct Pieces {
 /// looked for in the order the run needs them, and the first one missing is the one reported.
 pub fn find(search: &Search, names: &Names) -> Result<Pieces, String> {
     let (trace, render) = tools(search, names)?;
-    let ffmpeg = ffmpeg(search, names)?;
     let sky = sky_map(search).map_err(|no_map| no_map.why)?;
-    Ok(Pieces {
-        trace,
-        render,
-        ffmpeg,
-        sky,
-    })
+    Ok(Pieces { trace, render, sky })
 }
 
 /// What `--check` reports: for each piece, the sentence [`find`] would give for it if it were the
@@ -161,10 +88,6 @@ pub fn find(search: &Search, names: &Names) -> Result<Pieces, String> {
 pub struct Report {
     /// `sky-trace` and `sky-render`.
     pub tools: Option<String>,
-    pub ffmpeg: Option<String>,
-    /// The command that installs ffmpeg on this system, when ffmpeg is missing and the command is
-    /// known: for the app to show by itself, where it can be copied.
-    pub ffmpeg_command: Option<&'static str>,
     pub map: Option<String>,
     /// Whether the map that is missing is the default one in its own place, which `--fetch-map`
     /// puts there; false for a map `--sky` or the variable names, which only its owner can supply.
@@ -174,13 +97,12 @@ pub struct Report {
 impl Report {
     /// Whether every piece is there.
     pub fn complete(&self) -> bool {
-        self.tools.is_none() && self.ffmpeg.is_none() && self.map.is_none()
+        self.tools.is_none() && self.map.is_none()
     }
 
-    /// The report as `--check` prints it, a piece a line: the piece's word (`tools`, `ffmpeg`,
-    /// `map`), a space, and `ok`, or `missing` and the sentence, or for a map `--fetch-map` would
-    /// supply, `fetchable` and the sentence. A fourth line, `ffmpeg-install` and the command,
-    /// follows when ffmpeg is missing and the command that installs it here is known.
+    /// The report as `--check` prints it, a piece a line: the piece's word (`tools`, `map`), a
+    /// space, and `ok`, or `missing` and the sentence, or for a map `--fetch-map` would supply,
+    /// `fetchable` and the sentence.
     pub fn lines(&self) -> Vec<String> {
         let line = |piece: &str, missing: &Option<String>, word: &str| match missing {
             None => format!("{piece} ok"),
@@ -191,28 +113,18 @@ impl Report {
         } else {
             "missing"
         };
-        let mut lines = vec![
+        vec![
             line("tools", &self.tools, "missing"),
-            line("ffmpeg", &self.ffmpeg, "missing"),
             line("map", &self.map, map_word),
-        ];
-        if let Some(command) = self.ffmpeg_command {
-            lines.push(format!("ffmpeg-install {command}"));
-        }
-        lines
+        ]
     }
 }
 
 /// Looks for every piece and says of each whether it is there: see [`Report`].
 pub fn check(search: &Search, names: &Names) -> Report {
     let map = sky_map(search).err();
-    let ffmpeg = ffmpeg(search, names).err();
     Report {
         tools: tools(search, names).err(),
-        ffmpeg_command: ffmpeg
-            .as_ref()
-            .and_then(|_| ffmpeg_install_command(search.os_release.as_deref())),
-        ffmpeg,
         map_fetchable: map.as_ref().is_some_and(|no_map| no_map.fetchable),
         map: map.map(|no_map| no_map.why),
     }
@@ -257,97 +169,6 @@ fn tools(search: &Search, names: &Names) -> Result<(PathBuf, PathBuf), String> {
         }
     };
     Ok((program(&names.trace)?, program(&names.render)?))
-}
-
-/// ffmpeg: `--ffmpeg`, or the first on the PATH, or the first in `search.ffmpeg_places`.
-fn ffmpeg(search: &Search, names: &Names) -> Result<PathBuf, String> {
-    if let Some(named) = &search.ffmpeg {
-        return if named.is_file() {
-            Ok(named.clone())
-        } else {
-            Err(format!(
-                "--ffmpeg names {}, and there is no program there; give the full path of \
-                 ffmpeg, or leave --ffmpeg out to use the one on the PATH.",
-                named.display()
-            ))
-        };
-    }
-    search
-        .path
-        .as_deref()
-        .into_iter()
-        .flat_map(std::env::split_paths)
-        .chain(search.ffmpeg_places.iter().cloned())
-        .map(|dir| dir.join(&names.ffmpeg))
-        .find(|candidate| candidate.is_file())
-        .ok_or_else(|| {
-            let how = match ffmpeg_install_command(search.os_release.as_deref()) {
-                Some(command) => format!("with {command}"),
-                None => "with the system's package manager".to_string(),
-            };
-            format!(
-                "{} was not found on the PATH, and sky-render needs it to write the photograph; \
-                 install ffmpeg {how}, or name it with --ffmpeg <path>.",
-                names.ffmpeg
-            )
-        })
-}
-
-/// The directories ffmpeg is installed into on this platform by the means its missing sentence
-/// names, whether or not the PATH this program was given holds them.
-///
-/// It often does not. An installer adds its directory to the PATH of programs started afterwards,
-/// and the app that starts this program was started before: without these places a user who
-/// installs ffmpeg as the sentence says, and presses Look Around again, is told again that ffmpeg
-/// is missing, until they think to restart the app. On macOS a program started from the Finder is
-/// given a PATH without Homebrew's directory at all.
-///
-/// - Windows: winget's `Links` directory, and the `bin` of each version of the `Gyan.FFmpeg`
-///   package under winget's `Packages`, the newest name first;
-/// - macOS: Homebrew's two directories, for Apple silicon and for Intel, and MacPorts';
-/// - elsewhere: the directories a package manager and a local install put programs in.
-pub fn ffmpeg_places_here() -> Vec<PathBuf> {
-    if cfg!(windows) {
-        let Some(winget) = std::env::var_os("LOCALAPPDATA")
-            .filter(|v| !v.is_empty())
-            .map(|local| PathBuf::from(local).join("Microsoft").join("WinGet"))
-        else {
-            return Vec::new();
-        };
-        let mut versions: Vec<PathBuf> = subdirectories(&winget.join("Packages"))
-            .into_iter()
-            .filter(|package| {
-                package
-                    .file_name()
-                    .is_some_and(|name| name.to_string_lossy().starts_with("Gyan.FFmpeg"))
-            })
-            .flat_map(|package| subdirectories(&package))
-            .collect();
-        versions.sort();
-        versions.reverse();
-        std::iter::once(winget.join("Links"))
-            .chain(versions.into_iter().map(|version| version.join("bin")))
-            .collect()
-    } else if cfg!(target_os = "macos") {
-        ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"]
-            .map(PathBuf::from)
-            .to_vec()
-    } else {
-        ["/usr/bin", "/usr/local/bin", "/snap/bin"]
-            .map(PathBuf::from)
-            .to_vec()
-    }
-}
-
-/// The directories directly inside `dir`, or none when it cannot be read.
-fn subdirectories(dir: &Path) -> Vec<PathBuf> {
-    std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
-        .collect()
 }
 
 /// This user's own data folder for Black Hole Lab, whether or not it exists yet: where the star
@@ -468,7 +289,7 @@ fn sky_map(search: &Search) -> Result<PathBuf, NoMap> {
     Err(NoMap {
         why: format!(
             "The star map {} is not there; download it ({SKY_MAP_SIZE}, one of NASA's Deep Star \
-             Maps) with the Download Star Map button of Black Hole Lab or with sky-look \
+             Maps) with the OK of Black Hole Lab's Look Around dialog or with sky-look \
              --fetch-map, or {by_script}put {SKY_MAP_URL} into {} by hand, or name another map \
              with --sky <map.exr> or {SKY_MAP_ENV}.",
             target.display(),

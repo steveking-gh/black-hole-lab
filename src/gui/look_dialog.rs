@@ -22,15 +22,6 @@ const WIDTH_IN_EMS: f32 = 36.0;
 /// What the dialog says of a star map the app can download.
 const MAP_MISSING: &str = "The star map is missing. Look Around draws the stars from one of NASA's Deep Star Maps, which Black Hole Lab can download from NASA's server: one file of 153 MB.";
 
-/// What the dialog says of an ffmpeg that is missing, above the command that installs ffmpeg.
-const FFMPEG_MISSING: &str = "ffmpeg is missing. ffmpeg is the program that writes the photograph, and only you can install ffmpeg: the installation may ask for your password. Run this command in a terminal:";
-
-/// What the dialog says once OK has been pressed and ffmpeg is still missing.
-const FFMPEG_STILL_MISSING: &str = "ffmpeg is still not installed. Run the command above in a terminal, wait for the installation to finish, then press OK.";
-
-/// The same, on a system whose install command the app does not know.
-const FFMPEG_STILL_MISSING_NO_COMMAND: &str = "ffmpeg is still not installed. Install ffmpeg, wait for the installation to finish, then press OK.";
-
 /// What a button of the dialog asked for this frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DialogAction {
@@ -49,8 +40,8 @@ pub struct LookDialog {
     pub fetch: Option<FileStatus>,
     /// Whether the star map is being downloaded at this moment.
     pub fetching: bool,
-    /// Whether OK has been pressed: the user has agreed to the download and wants the view, so a
-    /// piece still missing is now one to be reminded of.
+    /// Whether OK has been pressed: the user has agreed to the download and wants the view, which
+    /// is made as soon as nothing is missing.
     pub asked: bool,
 }
 
@@ -69,24 +60,11 @@ impl LookDialog {
         let name = self.who.name();
         if self.needs.map_fetchable && !self.fetching {
             "Download missing dependencies?".to_string()
-        } else if self.needs.ffmpeg.is_some() {
-            "Press OK when ffmpeg is installed.".to_string()
         } else if self.fetching && self.asked {
             format!("Black Hole Lab makes {name}'s view when the download ends.")
         } else {
             "Press OK to check again.".to_string()
         }
-    }
-
-    /// The reminder for a user who pressed OK with ffmpeg still missing, or None.
-    pub fn reminder(&self) -> Option<&'static str> {
-        (self.asked && self.needs.ffmpeg.is_some()).then_some(
-            if self.needs.ffmpeg_command.is_some() {
-                FFMPEG_STILL_MISSING
-            } else {
-                FFMPEG_STILL_MISSING_NO_COMMAND
-            },
-        )
     }
 
     /// Draw the dialog over everything else, and return the button pressed this frame, if one
@@ -122,31 +100,6 @@ impl LookDialog {
                 if let Some(status) = &self.fetch {
                     let colour = if status.failed { Theme::WARNING_RED } else { Theme::HEADING };
                     ui.label(text(&status.text, colour));
-                }
-                ui.add_space(size * 0.5);
-            }
-            if let Some(why) = &self.needs.ffmpeg {
-                match &self.needs.ffmpeg_command {
-                    Some(command) => {
-                        ui.label(text(FFMPEG_MISSING, Theme::TEXT_BRIGHT));
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new(command)
-                                    .size(size)
-                                    .monospace()
-                                    .color(Theme::BOB_COLOR),
-                            );
-                            if ui.button(text("Copy", Theme::TEXT_BRIGHT)).clicked() {
-                                ui.ctx().copy_text(command.clone());
-                            }
-                        });
-                    }
-                    None => {
-                        ui.label(text(why, Theme::TEXT_BRIGHT));
-                    }
-                }
-                if let Some(reminder) = self.reminder() {
-                    ui.label(text(reminder, Theme::WARNING_RED).strong());
                 }
                 ui.add_space(size * 0.5);
             }

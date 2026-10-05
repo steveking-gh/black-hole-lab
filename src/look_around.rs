@@ -53,8 +53,8 @@
 //!
 //! # What a view needs, and the piece the app can supply
 //!
-//! A view needs `sky-look` and the two programs beside it, ffmpeg, and a star map, and a copy of
-//! the app that was downloaded has the first of those and neither of the others. So a press of
+//! A view needs `sky-look` and the two programs beside it, and a star map, and a copy of the app
+//! that was downloaded has the programs and not the map. So a press of
 //! Look Around first asks `sky-look --check` what is missing (`Readiness`), which looks at a few
 //! files and answers at once, and when something is, no view is started: the app puts up a dialog
 //! over the whole window, `gui::look_dialog`, which names each missing piece and asks whether to
@@ -64,10 +64,6 @@
 //! - The star map is the one piece the app can supply: OK starts `sky-look --fetch-map`
 //!   (`MapFetch`), which downloads the map from NASA, and the dialog follows the download. Nothing
 //!   is downloaded before OK, and Cancel downloads nothing and stops a download that is running.
-//! - ffmpeg is installed by the system's package manager, which is the user's to run and may ask
-//!   for a password. The dialog gives the command for this system, which `sky-look --check`
-//!   reports, and OK asks again whether ffmpeg is there: while ffmpeg is still missing the dialog
-//!   stays, says so, and no view is made. The star map is downloaded meanwhile.
 //! - Once OK has been pressed and nothing is missing any more, the dialog goes and the view that
 //!   was asked for is made, as if Look Around had been pressed then.
 //!
@@ -133,7 +129,7 @@ const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
 /// Windows' `BELOW_NORMAL_PRIORITY_CLASS`. The tracer runs on every core, and at normal priority
 /// it competes with the app's own frames and the rest of the desktop for all of them; one class
 /// below normal, those win whenever they want a core and the tracer has the rest. A child started
-/// without a class of its own inherits this one, so the tracer, the renderer and its ffmpeg all run
+/// without a class of its own inherits this one, so the tracer and the renderer both run
 /// below normal too.
 #[cfg(windows)]
 const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
@@ -543,11 +539,6 @@ pub struct Readiness {
     /// The sentence for `sky-trace` and `sky-render` when one is missing, or for a `sky-look` that
     /// could not be asked: a copy of the app that is incomplete, which no download here mends.
     pub tools: Option<String>,
-    /// The sentence for ffmpeg when ffmpeg is missing.
-    pub ffmpeg: Option<String>,
-    /// The command that installs ffmpeg on this system, when ffmpeg is missing and `sky-look`
-    /// knows the system's package manager.
-    pub ffmpeg_command: Option<String>,
     /// The sentence for a star map that only whoever named it can supply: one an environment
     /// variable names that is not there.
     pub map: Option<String>,
@@ -559,14 +550,13 @@ pub struct Readiness {
 impl Readiness {
     /// Whether nothing is missing.
     pub fn complete(&self) -> bool {
-        self.tools.is_none() && self.ffmpeg.is_none() && self.map.is_none() && !self.map_fetchable
+        self.tools.is_none() && self.map.is_none() && !self.map_fetchable
     }
 
-    /// What the standard output of `sky-look --check` says. It is a line for each of `tools`,
-    /// `ffmpeg` and `map`: the word, a space, and `ok`, or `missing <sentence>`, or for a star map
-    /// a download would supply, `fetchable <sentence>`, whose sentence is left out here because
-    /// the dialog offers the download in its place; and when ffmpeg is missing and the command
-    /// that installs it is known, a line `ffmpeg-install <command>`.
+    /// What the standard output of `sky-look --check` says. It is a line for each of `tools`
+    /// and `map`: the word, a space, and `ok`, or `missing <sentence>`, or for a star map a
+    /// download would supply, `fetchable <sentence>`, whose sentence is left out here because the
+    /// dialog offers the download in its place.
     ///
     /// A line that is none of these is passed over, and so is output that is not there at all,
     /// which is what a `sky-look` older than `--check` gives: the answer then is that nothing is
@@ -575,24 +565,15 @@ impl Readiness {
         let mut readiness = Readiness::default();
         for line in check_output.lines() {
             let line = line.trim();
-            if let Some(command) = line.strip_prefix("ffmpeg-install ") {
-                readiness.ffmpeg_command = Some(command.trim().to_string());
-                continue;
-            }
             let mut words = line.splitn(3, ' ');
             let (Some(piece), Some(state)) = (words.next(), words.next()) else { continue };
             let why = words.next().map(str::to_string);
             match (piece, state, why) {
                 ("tools", "missing", Some(why)) => readiness.tools = Some(why),
-                ("ffmpeg", "missing", Some(why)) => readiness.ffmpeg = Some(why),
                 ("map", "missing", Some(why)) => readiness.map = Some(why),
                 ("map", "fetchable", _) => readiness.map_fetchable = true,
                 _ => {}
             }
-        }
-        // A command is for an ffmpeg that is missing, and for nothing else.
-        if readiness.ffmpeg.is_none() {
-            readiness.ffmpeg_command = None;
         }
         readiness
     }

@@ -488,11 +488,8 @@ impl SpacetimeApp {
     /// The dialog's OK: start the download of the star map if the map is missing and no download
     /// is running, ask again what is missing, and make the view if nothing is.
     ///
-    /// The download starts whether or not ffmpeg is there: the map is needed either way, and OK
-    /// is the consent to fetch it. With ffmpeg still missing the dialog stays up and says so
-    /// (`LookDialog::reminder`), and no view is made until an OK finds ffmpeg installed. With only
-    /// the download outstanding the dialog stays up too, and `poll_look_dialog` makes the view
-    /// when the download ends.
+    /// OK is the consent to fetch the map. While the download runs the dialog stays up, and
+    /// `poll_look_dialog` makes the view when the download ends.
     pub(crate) fn look_dialog_ok(
         &mut self,
         program: Result<std::path::PathBuf, String>,

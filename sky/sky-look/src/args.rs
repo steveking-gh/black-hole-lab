@@ -25,7 +25,7 @@ diamond or a triangle as the panel names them, mark those directions of travel.
 
 USAGE
     sky-look <file.bhl> --observer bob|alice [options]
-    sky-look --check [--tools <dir>] [--ffmpeg <path>] [--sky <map.exr>]
+    sky-look --check [--tools <dir>] [--sky <map.exr>]
     sky-look --fetch-map [--status <file>]
 
     <file.bhl>              The save. It is copied into the view's folder and never changed,
@@ -53,8 +53,6 @@ USAGE
     --exposure <stops>      The exposure, passed to sky-render. Default: sky-render's.
     --tools <dir>           The directory holding sky-trace and sky-render. Default: this
                             program's own directory.
-    --ffmpeg <path>         The ffmpeg sky-render writes the photograph with. Default: ffmpeg
-                            on the PATH.
     --sky <map.exr>         The star map. Default: the file the environment variable
                             BLACK_HOLE_LAB_SKY_MAP names, else maps/starmap_2020_8k_gal.exr
                             in the user's data folder for Black Hole Lab (see --fetch-map),
@@ -74,9 +72,9 @@ USAGE
                             Terminal is ticked, and starts this program in a console window of
                             its own.
     --check                 Make no view: look for everything a view needs - sky-trace and
-                            sky-render, ffmpeg, the star map - and print what was found (see
-                            CHECK). The app runs this when it starts, to say what is missing
-                            before a view is asked for.
+                            sky-render, and the star map - and print what was found (see
+                            CHECK). The app runs this on a press of Look Around, to say what is
+                            missing before a view is started.
     --fetch-map             Make no view: download the default star map, 153 MB, one of NASA's
                             Deep Star Maps 2020 (https://svs.gsfc.nasa.gov/4851), with curl
                             or wget, into maps in the user's data folder for Black Hole Lab -
@@ -98,12 +96,10 @@ OUTPUT
     print, on standard output and standard error as they printed it.
 
 CHECK
-    --check prints three lines on standard output, one for each of tools (sky-trace and
-    sky-render), ffmpeg and map, in that order: the word, a space, and ok, or missing and one
-    sentence saying what to do, or, for a default star map that --fetch-map would supply,
-    fetchable and the sentence. When ffmpeg is missing and this program knows the command that
-    installs ffmpeg on this system, a fourth line gives it: ffmpeg-install and the command. It
-    exits with code 0 when all three are ok and with 1 otherwise.
+    --check prints two lines on standard output, one for each of tools (sky-trace and
+    sky-render) and map, in that order: the word, a space, and ok, or missing and one sentence
+    saying what to do, or, for a default star map that --fetch-map would supply, fetchable and
+    the sentence. It exits with code 0 when both are ok and with 1 otherwise.
 
 FETCHING THE MAP
     --fetch-map prints its progress as sentences on standard output, with the percentage
@@ -221,17 +217,15 @@ pub struct Options {
     pub grid: (u32, u32),
     pub exposure: Option<f64>,
     pub tools: Option<PathBuf>,
-    pub ffmpeg: Option<PathBuf>,
     pub sky: Option<PathBuf>,
     /// `--viewer <program>`: what `--open` starts on the photograph, ahead of every other choice.
     pub viewer: Option<PathBuf>,
 }
 
-/// `--check`, with the three places a person can name outright.
+/// `--check`, with the two places a person can name outright.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CheckOptions {
     pub tools: Option<PathBuf>,
-    pub ffmpeg: Option<PathBuf>,
     pub sky: Option<PathBuf>,
 }
 
@@ -249,7 +243,7 @@ pub enum Request {
 }
 
 /// The flags that take a value.
-const VALUED: [&str; 10] = [
+const VALUED: [&str; 9] = [
     "--observer",
     "--status",
     "--out-dir",
@@ -257,7 +251,6 @@ const VALUED: [&str; 10] = [
     "--units",
     "--exposure",
     "--tools",
-    "--ffmpeg",
     "--sky",
     "--viewer",
 ];
@@ -281,11 +274,10 @@ pub fn parse(args: &[OsString]) -> Result<Request, String> {
         return Ok(Request::Help);
     }
     if args.iter().any(|a| a == "--check") {
-        let given = alone("--check", &["--tools", "--ffmpeg", "--sky"], &args)?;
+        let given = alone("--check", &["--tools", "--sky"], &args)?;
         let value = |flag: &str| given.iter().find(|(f, _)| *f == flag).map(|(_, v)| *v);
         return Ok(Request::Check(CheckOptions {
             tools: value("--tools").map(PathBuf::from),
-            ffmpeg: value("--ffmpeg").map(PathBuf::from),
             sky: value("--sky").map(PathBuf::from),
         }));
     }
@@ -389,7 +381,6 @@ pub fn parse(args: &[OsString]) -> Result<Request, String> {
         grid,
         exposure,
         tools: value("--tools").map(PathBuf::from),
-        ffmpeg: value("--ffmpeg").map(PathBuf::from),
         sky: value("--sky").map(PathBuf::from),
         viewer: value("--viewer").map(PathBuf::from),
     })))

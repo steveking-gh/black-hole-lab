@@ -65,7 +65,7 @@ const COMMANDS_HEADER: &str = "\
 # The commands sky-look ran to make this view, in order, as PowerShell reads them: paste a line
 # into PowerShell to run it again. sky-trace will not write over the bundle folder that is here
 # (give it --resume, or another --out), and sky-render will not write over the photograph (give
-# it --overwrite, or another --photo). sky-render runs ffmpeg itself to write the photograph.
+# it --overwrite, or another --photo).
 ";
 
 /// Where this program is and what surrounds it: everything [`cli`] would otherwise read from the
@@ -83,10 +83,6 @@ pub struct Environment {
     pub viewer_env: Option<OsString>,
     /// Where VLC would be, in the order to try (`open::vlc_places`).
     pub vlc: Vec<PathBuf>,
-    /// Where ffmpeg is installed to, looked in after the PATH (`find::ffmpeg_places_here`).
-    pub ffmpeg_places: Vec<PathBuf>,
-    /// The text of `/etc/os-release`, where there is one (`find::os_release_here`).
-    pub os_release: Option<String>,
     /// This user's data folder for Black Hole Lab (`find::user_data_dir_here`).
     pub data_dir: Option<PathBuf>,
     pub videos: Option<PathBuf>,
@@ -111,8 +107,6 @@ impl Environment {
             views_env: std::env::var_os(names::VIEWS_ENV),
             viewer_env: std::env::var_os(open::VIEWER_ENV),
             vlc: open::vlc_places_here(),
-            ffmpeg_places: find::ffmpeg_places_here(),
-            os_release: find::os_release_here(),
             data_dir: find::user_data_dir_here(),
             videos: names::videos_folder(home.as_deref()),
             home,
@@ -388,12 +382,8 @@ fn check(o: &CheckOptions, env: &Environment, out: &mut dyn Write) -> i32 {
     let search = Search {
         exe_dir: env.exe_dir.clone(),
         tools: o.tools.clone(),
-        ffmpeg: o.ffmpeg.clone(),
-        path: env.path.clone(),
         sky: o.sky.clone(),
         sky_env: env.sky_env.clone(),
-        ffmpeg_places: env.ffmpeg_places.clone(),
-        os_release: env.os_release.clone(),
         data_dir: env.data_dir.clone(),
     };
     let report = find::check(&search, &env.names);
@@ -449,12 +439,8 @@ pub fn look(o: &Options, env: &Environment, say: &mut Say) -> Result<PathBuf, Fa
     let search = Search {
         exe_dir: env.exe_dir.clone(),
         tools: o.tools.clone(),
-        ffmpeg: o.ffmpeg.clone(),
-        path: env.path.clone(),
         sky: o.sky.clone(),
         sky_env: env.sky_env.clone(),
-        ffmpeg_places: env.ffmpeg_places.clone(),
-        os_release: env.os_release.clone(),
         data_dir: env.data_dir.clone(),
     };
     let pieces = find::find(&search, &env.names).map_err(Failure::Failed)?;
@@ -642,8 +628,6 @@ fn make(
         bundle.into(),
         "--sky".into(),
         pieces.sky.clone().into(),
-        "--ffmpeg".into(),
-        pieces.ffmpeg.clone().into(),
         "--size".into(),
         format!("{}x{}", PHOTO_SIZE.0, PHOTO_SIZE.1).into(),
         "--encoder".into(),

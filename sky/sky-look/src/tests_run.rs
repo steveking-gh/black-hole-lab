@@ -133,7 +133,7 @@ const REFUSAL: &str = "Bob is at r = 0.3 M, at or inside the inner horizon r- = 
                        there sees light that came through the ring and from the other sheet of r-, \
                        which this program cannot yet trace";
 
-/// A layout for one run: the tools, a map and an ffmpeg to be found, a save, a views directory,
+/// A layout for one run: the tools and a map to be found, a save, a views directory,
 /// and the status file a run is told to write when a test gives it `--status`.
 struct Case {
     root: PathBuf,
@@ -142,7 +142,6 @@ struct Case {
     out: PathBuf,
     status: PathBuf,
     map: PathBuf,
-    ffmpeg: PathBuf,
 }
 
 impl Case {
@@ -154,13 +153,11 @@ impl Case {
             out: root.join("views"),
             status: root.join("the run.status"),
             map: root.join("map.exr"),
-            ffmpeg: root.join("ffmpeg.exe"),
             root,
         };
         std::fs::create_dir_all(&case.tools).expect("a directory");
         std::fs::write(&case.save, save).expect("the save");
         std::fs::write(&case.map, b"").expect("a map");
-        std::fs::write(&case.ffmpeg, b"").expect("an ffmpeg");
         case
     }
 
@@ -182,21 +179,18 @@ impl Case {
             views_env: None,
             viewer_env: None,
             vlc: Vec::new(),
-            ffmpeg_places: Vec::new(),
-            os_release: None,
             data_dir: None,
             videos: None,
             home: None,
             names: Names {
                 trace: program("sky-trace"),
                 render: program("sky-render"),
-                ffmpeg: "ffmpeg.exe".into(),
             },
             prompt: prompt_stand_in,
         }
     }
 
-    /// Runs the program as the app would, with the map, ffmpeg and views directory named, and
+    /// Runs the program as the app would, with the map and views directory named, and
     /// `extra` after; returns the exit code and what it wrote to each stream.
     fn run(&self, extra: &[&str]) -> (i32, String, String) {
         let mut args: Vec<OsString> = vec![
@@ -207,8 +201,6 @@ impl Case {
             self.out.clone().into(),
             "--sky".into(),
             self.map.clone().into(),
-            "--ffmpeg".into(),
-            self.ffmpeg.clone().into(),
         ];
         args.extend(extra.iter().map(OsString::from));
         let (mut out, mut err) = (Vec::new(), Vec::new());
@@ -620,7 +612,7 @@ fn test_a_failure_of_the_renderer_comes_through_as_code_1_and_leaves_the_folder_
     case.renderer(&[
         Step::Say("progress 10%"),
         Step::Complain(
-            "sky-render: ffmpeg stopped while writing the photograph: There is not enough space \
+            "sky-render: could not write the photograph: There is not enough space \
              on the disk",
         ),
         Step::Exit(1),
@@ -629,7 +621,7 @@ fn test_a_failure_of_the_renderer_comes_through_as_code_1_and_leaves_the_folder_
     let status = case.status.display().to_string();
     let (code, out, err) = case.run(&["--status", &status]);
     assert_eq!(code, 1, "out: {out}\nerr: {err}");
-    let sentence = "sky-render could not make Bob's view: ffmpeg stopped while writing the \
+    let sentence = "sky-render could not make Bob's view: could not write the \
                     photograph: There is not enough space on the disk.";
     assert_eq!(err, format!("{sentence}\n"));
     assert_sentences(&progress_of(&out));
@@ -918,7 +910,7 @@ fn test_a_failure_in_the_rendering_terminal_is_the_programs_own_words_there_and_
  {
     let case = Case::new("terminal-fails", SAVE);
     case.tracer(&[Step::Exit(0)]);
-    let complaint = "sky-render: ffmpeg stopped while writing the photograph";
+    let complaint = "sky-render: could not write the photograph";
     case.renderer(&[Step::Complain(complaint), Step::Exit(1)]);
     let status = case.status.display().to_string();
     let (code, out, err) = case.run(&["--status", &status, "--shell"]);

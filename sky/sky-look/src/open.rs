@@ -31,8 +31,8 @@
 //! such handles, inherited from the caller. So the viewer is kept off them twice over: the viewer, or
 //! the shell that starts the system's default, is started with its standard streams set to null,
 //! and before that [`keep_own_pipes_to_ourselves`] has made this program's handles to the app's
-//! pipes uninheritable, so that no process started from here - the viewer, the tracer, the renderer
-//! or its ffmpeg - can hold the caller's pipes open after this program has exited.
+//! pipes uninheritable, so that no process started from here - the viewer, the tracer or the
+//! renderer - can hold the caller's pipes open after this program has exited.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

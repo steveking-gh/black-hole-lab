@@ -971,9 +971,7 @@ fn test_a_still_makes_a_held_video_and_a_360_degree_photograph() {
 #[test]
 fn test_a_photograph_alone_is_written_with_its_metadata_and_nothing_else_and_is_not_overwritten_unasked()
  {
-    if !have_ffmpeg("the photograph-only test") {
-        return;
-    }
+    // No ffmpeg: a photograph is encoded in this process, and is made on a machine without one.
     let scratch = Scratch::new("photo-only");
     let (bundle, map) = write_inputs(scratch.path());
     let jpg = scratch.path().join("look.jpg");

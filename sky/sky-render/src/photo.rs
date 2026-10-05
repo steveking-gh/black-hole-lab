@@ -12,12 +12,10 @@
 //! namespace `http://ns.adobe.com/xap/1.0/` and a zero byte, then the XMP packet. A segment holds
 //! at most 65,533 bytes after the marker's length, far more than these properties need. The
 //! segment goes straight after the start-of-image marker, or after the JFIF APP0 segment when
-//! the file begins with one, since JFIF requires its APP0 to come first. ffmpeg 8's encoder
-//! writes none (its file begins with a comment segment naming the encoder), so in practice the
-//! XMP comes straight after the start of image.
+//! the file begins with one, since JFIF requires its APP0 to come first. `jpeg-encoder` writes
+//! one, so in practice the XMP comes straight after it.
 //!
-//! The image itself is made by ffmpeg (`crate::encode::jpeg`), which already converts the
-//! frame's colours for the video; everything here is bytes.
+//! The image itself is made by `crate::encode::jpeg`; everything here is bytes.
 
 /// The namespace that opens an XMP APP1 segment, with its terminating zero.
 pub const XMP_NAMESPACE: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";

@@ -39,37 +39,31 @@ fn names() -> Names {
     Names {
         trace: "sky-trace.exe".into(),
         render: "sky-render.exe".into(),
-        ffmpeg: "ffmpeg.exe".into(),
     }
 }
 
-/// A repository with a release build of the sky tools, the star map and the script that fetches
-/// it in `sky/maps`, and ffmpeg in a directory of its own named by the returned PATH value.
-fn layout(root: &Path) -> (PathBuf, OsString) {
+/// A repository with a release build of the sky tools, and the star map and the script that
+/// fetches it in `sky/maps`. Returns the release directory.
+fn layout(root: &Path) -> PathBuf {
     let release = root.join("repo/sky/target/release");
     touch(&release.join("sky-trace.exe"));
     touch(&release.join("sky-render.exe"));
     touch(&root.join("repo/sky").join(SKY_MAP));
     touch(&root.join("repo/sky").join(FETCH_SCRIPT));
-    let bin = root.join("ffmpeg/bin");
-    touch(&bin.join("ffmpeg.exe"));
-    let path = std::env::join_paths([root.join("empty"), bin]).expect("a PATH");
-    (release, path)
+    release
 }
 
 #[test]
 fn test_every_piece_is_found_where_a_release_build_of_the_sky_tools_puts_it() {
     let root = scratch_dir("found");
-    let (release, path) = layout(&root);
+    let release = layout(&root);
     let search = Search {
         exe_dir: Some(release.clone()),
-        path: Some(path),
         ..Search::default()
     };
     let pieces = find::find(&search, &names()).expect("everything is there");
     assert_eq!(pieces.trace, release.join("sky-trace.exe"));
     assert_eq!(pieces.render, release.join("sky-render.exe"));
-    assert_eq!(pieces.ffmpeg, root.join("ffmpeg/bin/ffmpeg.exe"));
     assert_eq!(pieces.sky, root.join("repo/sky").join(SKY_MAP));
 
     // A program beside the app, in the repository's own target/release, finds the map in the
@@ -91,34 +85,30 @@ fn test_every_piece_is_found_where_a_release_build_of_the_sky_tools_puts_it() {
 #[test]
 fn test_a_piece_named_outright_comes_before_the_search_and_a_wrong_name_is_reported() {
     let root = scratch_dir("named");
-    let (release, path) = layout(&root);
+    let release = layout(&root);
     let base = Search {
         exe_dir: Some(release),
-        path: Some(path),
         ..Search::default()
     };
 
-    // --tools, --ffmpeg and --sky each win over the search.
+    // --tools and --sky each win over the search.
     let tools = root.join("other-tools");
     touch(&tools.join("sky-trace.exe"));
     touch(&tools.join("sky-render.exe"));
-    let ffmpeg = root.join("elsewhere/ffmpeg.exe");
-    touch(&ffmpeg);
     let map = root.join("maps/mine.exr");
     touch(&map);
     let env_map = root.join("maps/from-env.exr");
     touch(&env_map);
     let named = Search {
         tools: Some(tools.clone()),
-        ffmpeg: Some(ffmpeg.clone()),
         sky: Some(map.clone()),
         sky_env: Some(env_map.clone().into()),
         ..base.clone()
     };
     let pieces = find::find(&named, &names()).expect("everything is named");
     assert_eq!(
-        (pieces.trace, pieces.ffmpeg, pieces.sky),
-        (tools.join("sky-trace.exe"), ffmpeg, map)
+        (pieces.trace, pieces.sky),
+        (tools.join("sky-trace.exe"), map)
     );
     // The variable comes before the search, and a variable set to nothing is a variable not set.
     let from_env = Search {
@@ -137,15 +127,7 @@ fn test_a_piece_named_outright_comes_before_the_search_and_a_wrong_name_is_repor
 
     // A name that points at nothing is reported as such, not passed over for the search.
     let nowhere = root.join("nowhere/x.exe");
-    let cases: [(&str, Search, &[&str]); 4] = [
-        (
-            "--ffmpeg",
-            Search {
-                ffmpeg: Some(nowhere.clone()),
-                ..base.clone()
-            },
-            &["--ffmpeg names", "no program there"],
-        ),
+    let cases: [(&str, Search, &[&str]); 3] = [
         (
             "--sky",
             Search {
@@ -187,14 +169,13 @@ fn test_a_piece_named_outright_comes_before_the_search_and_a_wrong_name_is_repor
 #[test]
 fn test_each_missing_piece_has_its_own_sentence_saying_what_to_do() {
     let root = scratch_dir("missing");
-    let (release, path) = layout(&root);
+    let release = layout(&root);
     let search = Search {
         exe_dir: Some(release.clone()),
-        path: Some(path),
         ..Search::default()
     };
     let map = root.join("repo/sky").join(SKY_MAP);
-    let missing: [(PathBuf, &[&str]); 4] = [
+    let missing: [(PathBuf, &[&str]); 3] = [
         (
             release.join("sky-trace.exe"),
             &["sky-trace.exe was not found", "cargo build --release"],
@@ -202,10 +183,6 @@ fn test_each_missing_piece_has_its_own_sentence_saying_what_to_do() {
         (
             release.join("sky-render.exe"),
             &["sky-render.exe was not found", "cargo build --release"],
-        ),
-        (
-            root.join("ffmpeg/bin/ffmpeg.exe"),
-            &["ffmpeg.exe was not found on the PATH", "--ffmpeg <path>"],
         ),
         (
             map.clone(),
@@ -229,12 +206,12 @@ fn test_each_missing_piece_has_its_own_sentence_saying_what_to_do() {
     sentences.dedup();
     assert_eq!(
         sentences.len(),
-        4,
+        3,
         "each piece its own sentence: {sentences:#?}"
     );
     // The script is named where it is, in the sky directory that was found.
     assert!(
-        sentences[3].contains(
+        sentences[2].contains(
             &root
                 .join("repo/sky")
                 .join("maps")
@@ -1015,15 +992,14 @@ fn test_the_prompt_starts_in_the_views_folder() {
 #[test]
 fn test_the_check_reports_every_piece_and_says_which_map_a_download_would_supply() {
     let root = scratch_dir("check");
-    let (release, path) = layout(&root);
+    let release = layout(&root);
     let search = Search {
         exe_dir: Some(release),
-        path: Some(path),
         ..Search::default()
     };
     let report = find::check(&search, &names());
     assert!(report.complete(), "{report:?}");
-    assert_eq!(report.lines(), ["tools ok", "ffmpeg ok", "map ok"]);
+    assert_eq!(report.lines(), ["tools ok", "map ok"]);
 
     // Everything missing at once, where `find` would stop at the tools: each piece has its line,
     // and the default map in its own place is one a download would supply.
@@ -1041,11 +1017,7 @@ fn test_the_check_reports_every_piece_and_says_which_map_a_download_would_supply
         "{lines:#?}"
     );
     assert!(
-        lines[1].starts_with("ffmpeg missing ffmpeg.exe was not found"),
-        "{lines:#?}"
-    );
-    assert!(
-        lines[2].starts_with("map fetchable The star map"),
+        lines[1].starts_with("map fetchable The star map"),
         "{lines:#?}"
     );
     assert!(find::find(&bare, &names()).is_err());
@@ -1058,21 +1030,10 @@ fn test_the_check_reports_every_piece_and_says_which_map_a_download_would_supply
     let report = find::check(&named, &names());
     assert!(!report.map_fetchable, "{report:?}");
     assert!(
-        report.lines()[2].starts_with(&format!("map missing {SKY_MAP_ENV} names")),
+        report.lines()[1].starts_with(&format!("map missing {SKY_MAP_ENV} names")),
         "{report:?}"
     );
 
-    // ffmpeg that is on no PATH is found in a place it is installed to.
-    let installed = root.join("winget/bin");
-    touch(&installed.join("ffmpeg.exe"));
-    let report = find::check(
-        &Search {
-            ffmpeg_places: vec![root.join("empty"), installed],
-            ..named
-        },
-        &names(),
-    );
-    assert_eq!(report.ffmpeg, None);
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -1084,10 +1045,9 @@ fn test_the_two_command_lines_that_make_no_view_take_only_their_own_options() {
         Ok(Request::Check(args::CheckOptions::default()))
     );
     assert_eq!(
-        parse(&["--sky", "m.exr", "--check", "--ffmpeg", "f"]),
+        parse(&["--sky", "m.exr", "--check", "--tools", "t"]),
         Ok(Request::Check(args::CheckOptions {
-            tools: None,
-            ffmpeg: Some("f".into()),
+            tools: Some("t".into()),
             sky: Some("m.exr".into()),
         }))
     );
@@ -1136,64 +1096,12 @@ fn test_the_sha_256_is_the_standards_for_its_own_examples() {
 }
 
 #[test]
-fn test_the_command_that_installs_ffmpeg_is_the_distributions_own() {
-    let command = find::linux_install_command;
-    // Ubuntu and what derives from it or from Debian: apt.
-    let ubuntu = "PRETTY_NAME=\"Ubuntu 24.04.1 LTS\"\nNAME=\"Ubuntu\"\nID=ubuntu\nID_LIKE=debian\n";
-    assert_eq!(command(ubuntu), Some("sudo apt install ffmpeg"));
-    assert_eq!(command("ID=debian\n"), Some("sudo apt install ffmpeg"));
-    assert_eq!(
-        command("ID=linuxmint\nID_LIKE=\"ubuntu debian\"\n"),
-        Some("sudo apt install ffmpeg")
-    );
-    // Fedora and what derives from it: dnf, and the package Fedora's own repositories carry.
-    assert_eq!(
-        command("NAME=\"Fedora Linux\"\nID=fedora\nVERSION_ID=42\n"),
-        Some("sudo dnf install ffmpeg-free")
-    );
-    assert_eq!(
-        command("ID=\"rocky\"\nID_LIKE=\"rhel centos fedora\"\n"),
-        Some("sudo dnf install ffmpeg-free")
-    );
-    assert_eq!(command("ID=arch\n"), Some("sudo pacman -S ffmpeg"));
-    assert_eq!(
-        command("ID=\"opensuse-tumbleweed\"\nID_LIKE=\"opensuse suse\"\n"),
-        Some("sudo zypper install ffmpeg")
-    );
-    // A distribution this program does not know, and a name that only looks like one it does.
-    assert_eq!(command("ID=nixos\n"), None);
-    assert_eq!(command("NAME=fedora\nVERSION_ID=ubuntu\n"), None);
-    assert_eq!(command(""), None);
-
-    // The sentence carries the command, and the check gives it a line of its own.
-    let root = scratch_dir("install");
-    let search = Search {
-        exe_dir: Some(root.clone()),
-        os_release: Some("ID=fedora\n".into()),
-        ..Search::default()
-    };
-    let report = find::check(&search, &names());
-    let expected = find::ffmpeg_install_command(Some("ID=fedora\n")).expect("a command");
-    assert_eq!(report.ffmpeg_command, Some(expected));
-    assert!(
-        report
-            .ffmpeg
-            .as_ref()
-            .is_some_and(|why| why.contains(expected)),
-        "{report:?}"
-    );
-    assert_eq!(report.lines()[3], format!("ffmpeg-install {expected}"));
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-#[test]
 fn test_the_users_own_star_map_comes_first_and_is_where_a_download_goes() {
     let root = scratch_dir("data-dir");
-    let (release, path) = layout(&root);
+    let release = layout(&root);
     let data = root.join("user data/Black Hole Lab");
     let search = Search {
         exe_dir: Some(release),
-        path: Some(path),
         data_dir: Some(data.clone()),
         ..Search::default()
     };

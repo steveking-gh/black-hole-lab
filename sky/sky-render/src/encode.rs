@@ -1,4 +1,4 @@
-//! Handing frames to ffmpeg, and to PNG files.
+//! Handing frames to ffmpeg, to PNG files, and to the JPEG encoder for the photograph.
 //!
 //! Frames go to ffmpeg's standard input as raw 16-bit RGB (`rgb48le`), and ffmpeg converts them
 //! to 10-bit Y'CbCr 4:2:0 and encodes them. Converting in ffmpeg rather than here keeps one
@@ -357,48 +357,55 @@ fn run_once(
     ))
 }
 
-/// A frame of 16-bit RGB as a JPEG photograph at high quality, made by ffmpeg.
+/// The JPEG quality of the photograph, on the libjpeg scale `jpeg-encoder` takes (1 to 100).
+///
+/// Chosen 2026-10-05 against the photograph ffmpeg made before (`-q:v 2`, its MJPEG encoder's
+/// usual "high quality"), on the same 8192 x 4096 frame of demos/near_fall.bhl, both measured
+/// against the 16-bit frame they were made from: see the commit that brought this encoder in.
+pub const JPEG_QUALITY: u8 = 95;
+
+/// A frame of 16-bit RGB as a JPEG photograph at high quality.
 ///
 /// JPEG is 8-bit Y'CbCr with the BT.601 matrix at full range (the JFIF convention every decoder
 /// assumes), and the frame's codes are sRGB-encoded, which is what a JPEG without a colour profile
-/// is taken to hold. The chroma is kept at full resolution (4:4:4): a marker pixel one pixel wide
-/// would be smeared into its neighbours by halved chroma. `-q:v 2` is the MJPEG encoder's
-/// usual "high quality" (1 would roughly double the file for no visible gain).
-pub fn jpeg(program: &Path, frame: &[u16], width: usize, height: usize) -> Result<Vec<u8>, String> {
-    let args: Vec<String> = [
-        "-hide_banner",
-        "-nostats",
-        "-loglevel",
-        "error",
-        "-f",
-        "rawvideo",
-        "-pix_fmt",
-        "rgb48le",
-        "-video_size",
-        &format!("{width}x{height}"),
-        "-i",
-        "pipe:0",
-        "-frames:v",
-        "1",
-        "-vf",
-        // Full range stated twice, on the conversion and on the stream: the encoder takes plain
-        // yuv444p only when told its range is full (the older yuvj444p says so by its name,
-        // and is deprecated). Measured 2026-09-27, the two ways make the same bytes.
-        "scale=out_color_matrix=bt601:out_range=full,format=yuv444p",
-        "-color_range",
-        "pc",
-        "-c:v",
-        "mjpeg",
-        "-q:v",
-        "2",
-        "-f",
-        "mjpeg",
-        "pipe:1",
-    ]
-    .map(String::from)
-    .to_vec();
-    let input = frame.iter().flat_map(|v| v.to_le_bytes()).collect();
-    run_once(program, &args, input, "make the photograph")
+/// is taken to hold. The conversion is made here from the 16-bit frame (`ycbcr_of`), so the frame
+/// is rounded to 8 bits once, not once to 8-bit RGB and again to Y'CbCr. The chroma is kept at
+/// full resolution (4:4:4): a marker pixel one pixel wide, a red pixel the program could not
+/// determine, or a coloured star would be smeared into its black neighbours by halved chroma.
+/// The Huffman tables are made for the image, which costs a second pass and saves size.
+///
+/// The encoder is `jpeg-encoder`, in this process: ffmpeg is not needed for a photograph.
+pub fn jpeg(frame: &[u16], width: usize, height: usize) -> Result<Vec<u8>, String> {
+    let side = |n: usize, what: &str| {
+        u16::try_from(n).map_err(|_| {
+            format!("the photograph is {n} pixels {what}, more than a JPEG can be (65,535)")
+        })
+    };
+    let (w, h) = (side(width, "wide")?, side(height, "high")?);
+    let mut out = Vec::new();
+    let mut encoder = jpeg_encoder::Encoder::new(&mut out, JPEG_QUALITY);
+    encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::F_1_1);
+    encoder.set_optimized_huffman_tables(true);
+    encoder
+        .encode(&ycbcr_of(frame), w, h, jpeg_encoder::ColorType::Ycbcr)
+        .map_err(|e| format!("could not encode the photograph: {e}"))?;
+    Ok(out)
+}
+
+/// 16-bit sRGB-encoded RGB as 8-bit Y'CbCr, three bytes a pixel: the BT.601 matrix at full range,
+/// JFIF's, each value rounded to the nearest code once.
+pub fn ycbcr_of(frame: &[u16]) -> Vec<u8> {
+    let byte = |v: f64| v.round().clamp(0.0, 255.0) as u8;
+    let mut out = Vec::with_capacity(frame.len());
+    for rgb in frame.as_chunks::<3>().0 {
+        // 65535 is 255: a 16-bit code is the 8-bit one times 257.
+        let [r, g, b] = rgb.map(|v| f64::from(v) / 257.0);
+        let y = 0.299 * r + 0.587 * g + 0.114 * b;
+        let cb = 128.0 - 0.168_736 * r - 0.331_264 * g + 0.5 * b;
+        let cr = 128.0 + 0.5 * r - 0.418_688 * g - 0.081_312 * b;
+        out.extend([byte(y), byte(cb), byte(cr)]);
+    }
+    out
 }
 
 /// Copies the video of the tagged MP4 `video`, and the subtitles of the ASS file `subtitles` if

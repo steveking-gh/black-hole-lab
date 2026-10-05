@@ -70,11 +70,10 @@
 //! sky-look --fetch-map --status <file>
 //! ```
 //!
-//! - `--check` looks for every piece a view needs and prints three lines on standard output, for
-//!   `tools`, `ffmpeg` and `map` in that order: the word, a space, and `ok`, or `missing
-//!   <sentence>`, or for a default star map that `--fetch-map` would supply, `fetchable
-//!   <sentence>`; and when ffmpeg is missing and the command that installs it on this system is
-//!   known, a fourth line, `ffmpeg-install <command>`. It exits 0 when all three are `ok`, else 1;
+//! - `--check` looks for every piece a view needs and prints two lines on standard output, for
+//!   `tools` and `map` in that order: the word, a space, and `ok`, or `missing <sentence>`, or
+//!   for a default star map that `--fetch-map` would supply, `fetchable <sentence>`. It exits 0
+//!   when both are `ok`, else 1;
 //! - `--fetch-map` downloads the default star map with curl or wget into this user's data folder
 //!   for Black Hole Lab, where this program looks for it first, and checks its size and SHA-256
 //!   before putting it there (`fetch`, `find::user_data_dir_here`). Its status file is a

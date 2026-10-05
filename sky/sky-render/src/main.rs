@@ -40,7 +40,7 @@
 //! - `photo`: the Photo Sphere metadata of a 360-degree JPEG.
 //!
 //! `text` rasterises the app's typefaces and `overlay` composites the panels over a finished
-//! frame. The I/O is in `load` (the EXR map and the bundle's frames), `encode` (ffmpeg and PNG),
+//! frame. The I/O is in `load` (the EXR map and the bundle's frames), `encode` (ffmpeg, PNG, JPEG),
 //! `output` (which files a run writes, and how each reaches its name) and here.
 //!
 //! What a run prints is short by default: its progress every ten percent, anything unexpected
@@ -117,7 +117,8 @@ use values::Series;
 /// wall-clock time of a photograph rendered by `sky-look` that is behind each stage, measured
 /// 2026-09-27 on the owner's machine (8192 x 4096 from the default 4096 x 2048 grid, 3.9 s in
 /// all): reading the map 0.6 s, building its rip-map and the blackbody model's tables 1.9 s,
-/// loading the bundle's rays 0.3 s, drawing the picture 0.7 s, ffmpeg writing the JPEG 0.4 s. It
+/// loading the bundle's rays 0.3 s, drawing the picture 0.7 s, ffmpeg writing the JPEG 0.4 s
+/// (0.9 s since 2026-10-05, when the JPEG encoder became `jpeg-encoder`, in this process). It
 /// is rough on purpose - a larger map or a film shifts the shares - and says only that the
 /// render is moving and roughly how far along it is. A film's frames share the drawing stage by
 /// count, and its encoding finishes with the last stage.
@@ -221,8 +222,8 @@ struct WriterJob {
     /// How many times each frame is handed to ffmpeg: 1 for a film, more for a held still.
     repeats: u64,
     keep: Option<PathBuf>,
-    /// The ffmpeg that makes a still's photograph, and where the photograph goes.
-    photo: Option<(PathBuf, PathBuf)>,
+    /// Where a still's photograph goes.
+    photo: Option<PathBuf>,
     width: usize,
     height: usize,
 }
@@ -682,7 +683,7 @@ fn run(o: &Options) -> Result<(), String> {
         ffmpeg,
         repeats,
         keep: o.keep_frames.clone(),
-        photo: photo_path.clone().map(|p| (o.ffmpeg.clone(), p)),
+        photo: photo_path.clone(),
         width: size.width,
         height: size.height,
     };
@@ -967,9 +968,9 @@ fn write_frames(
             encode::write_png(&path, &frame.pixels, job.width, job.height)?;
             times.png += clock.elapsed();
         }
-        if let Some((program, path)) = &job.photo {
+        if let Some(path) = &job.photo {
             let clock = Instant::now();
-            let jpeg = encode::jpeg(program, &frame.pixels, job.width, job.height)?;
+            let jpeg = encode::jpeg(&frame.pixels, job.width, job.height)?;
             let jpeg = photo::with_photo_sphere(&jpeg)?;
             output::write_atomically(path, &jpeg)?;
             times.photo += clock.elapsed();
