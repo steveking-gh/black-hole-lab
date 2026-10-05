@@ -1,0 +1,63 @@
+sky/sky-look/src/run.rs
+  s_eab993b6e839ea::t_f93ba49100c9bc 68
+sky/sky-render/src/main.rs
+  s_eab993b6e839ea::t_a4d24703a5e281 120-121
+  s_eab993b6e839ea::t_477dd2b59bd5e9 43,225-226,686,971,973
+sky/sky-render/src/photo.rs
+  s_eab993b6e839ea::t_477dd2b59bd5e9 15-16,18
+.github/workflows/release.yml
+  s_eab993b6e839ea::t_a4d24703a5e281 17-18,183-184
+sky/sky-render/src/encode.rs
+  s_eab993b6e839ea::t_3f45d72feec1f5 400,402
+  s_eab993b6e839ea::t_477dd2b59bd5e9 1,360-367,371-399,401,403-408
+sky/sky-render/Cargo.toml
+  s_eab993b6e839ea::t_3f7c32181ed074 30
+sky/README.md
+  s_eab993b6e839ea::t_a4d24703a5e281 52-53
+src/app.rs
+  s_eab993b6e839ea::t_11371cc0e49ce2 491-492
+sky/sky-look/src/tests.rs
+  s_eab993b6e839ea::t_1e5a9720fdc875 45-47,53,59,88,94,110-111,130,172,178,209,214,995,1002,1020,1033,1048,1050,1101
+src/look_around/tests.rs
+  s_eab993b6e839ea::t_8c3a2bbde0117a 699-704,707,709-710,712,715-724,730,732,738,788-791,795,797,799,809,813,818-824,829,836,850,863
+src/look_around.rs
+  s_eab993b6e839ea::t_11371cc0e49ce2 56-57,132,553,556-559
+src/gui/look_dialog.rs
+  s_eab993b6e839ea::t_dc1ae8ffe9eb2c 43-44
+sky/sky-render/src/tests_output.rs
+  s_eab993b6e839ea::t_477dd2b59bd5e9 974
+sky/sky-look/src/tests_run.rs
+  s_eab993b6e839ea::t_d8bb5e5ed87dbc 615,624,913
+  s_eab993b6e839ea::t_992c05e7d45206 136,193
+sky/sky-look/src/main.rs
+  s_eab993b6e839ea::t_f93ba49100c9bc 73-76
+sky/sky-look/src/find.rs
+  s_eab993b6e839ea::t_4dc7b6165ab91f 1,80,100,103-105,116,119,292
+sky/sky-look/src/open.rs
+  s_eab993b6e839ea::t_f93ba49100c9bc 34-35
+sky/sky-look/src/args.rs
+  s_eab993b6e839ea::t_f93ba49100c9bc 28,75-77,99-102,225,246,277
+sky/Cargo.lock
+  s_eab993b6e839ea::t_a5dcb33b09feeb 111-116,283
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8729bb773e1ed9b6c02350b8ff5fe0139c0784ba",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_eab993b6e839ea": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "506a3453-7463-4d75-8088-b6596eca7307",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
