@@ -121,10 +121,14 @@ jobs:
             echo "ARCHIVE=dist/$name.tar.gz" >> "$GITHUB_ENV"
           fi
 
-      - uses: actions/upload-artifact@v6
+      # Uploaded as the archive itself rather than zipped again: the artifact is the file, named
+      # as the file is, and a download is the .zip or .tar.gz with nothing round it. The
+      # .tar.gz is what keeps the programs executable on Linux and macOS, which a zip made by
+      # the artifact store would not.
+      - uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.platform }}
           path: ${{ env.ARCHIVE }}
+          archive: false
           if-no-files-found: error
 
   # A draft release with the three archives, for a tag only. Draft, so that nothing is public
@@ -136,7 +140,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
