@@ -8,6 +8,10 @@
 #   - workflow_dispatch, run by hand from the Actions tab: builds the three archives and keeps
 #     them as workflow artifacts, with no version check and no release.
 #
+# Either way, the Windows job also makes the Microsoft Store package from the same files
+# (packaging/windows/make-msix.ps1) and keeps it as a workflow artifact, for upload to Partner
+# Center by hand; it is not attached to the release.
+#
 # Each archive is one folder: the app; sky-look, sky-trace and sky-render beside it, where the
 # app's Look Around looks for sky-look first; a maps folder with fetch-sky.ps1 and the checksums,
 # for a user who fetches a map by hand; the demo saves; the licence and notices. The star map and
@@ -112,6 +116,8 @@ jobs:
           cp demos/*.bhl "$dir/demos/"
           cp README.md LICENSE.TXT THIRD-PARTY-NOTICES.md "$dir/"
           cp sky/THIRD-PARTY-NOTICES.md "$dir/THIRD-PARTY-NOTICES-sky-tools.md"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "NAME=$name" >> "$GITHUB_ENV"
           cd dist
           if [ "${{ runner.os }}" = "Windows" ]; then
             7z a -tzip "$name.zip" "$name" > /dev/null
@@ -131,6 +137,23 @@ jobs:
           archive: false
           if-no-files-found: error
 
+      # The Microsoft Store package, from the same folder as the zip. It is a workflow artifact
+      # only, uploaded to Partner Center by hand: the Store signs it after review, and an
+      # unsigned package does not install for anybody else, so it has no place in the release.
+      - name: Pack the Microsoft Store package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          packaging/windows/make-msix.ps1 -Source "dist/$env:NAME" -Version "$env:VERSION.0" `
+            -Output "dist/$env:NAME.msix"
+
+      - uses: actions/upload-artifact@v7
+        if: runner.os == 'Windows'
+        with:
+          path: dist/${{ env.NAME }}.msix
+          archive: false
+          if-no-files-found: error
+
   # A draft release with the three archives, for a tag only. Draft, so that nothing is public
   # until it has been looked at and published by hand.
   release:
@@ -144,6 +167,10 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+
+      # The Store package goes to Partner Center, not to the release.
+      - name: Leave out the Store package
+        run: rm -f dist/*.msix
 
       - name: Create the draft release
         env:

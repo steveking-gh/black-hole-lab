@@ -1,0 +1,203 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!--
+  Black Hole Lab application icon, drawn after the Global Foliation Chart 1D+1 view: radius
+  across, time up, the hole's surfaces as vertical lines with the regions between them tinted,
+  and the two observers at "now", each with a future and a past light cone.
+
+  Each thing in the picture is a shape of its own, in its own group, as a person would draw it
+  in a drawing program. Colours are the app's own (src/gui/theme.rs).
+
+  Canvas 256 x 256; every size of the icon is rendered from this one drawing.
+-->
+
+<svg
+   width="256"
+   height="256"
+   viewBox="0 0 256 256"
+   version="1.1"
+   id="svg2"
+   sodipodi:docname="black_hole_lab_icon_1d1.svg"
+   inkscape:version="1.4.4 (dcaf3e7, 2026-05-05)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview2"
+     pagecolor="#505050"
+     bordercolor="#eeeeee"
+     borderopacity="1"
+     inkscape:showpageshadow="0"
+     inkscape:pageopacity="0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#505050"
+     showguides="true"
+     inkscape:zoom="7.078125"
+     inkscape:cx="127.92936"
+     inkscape:cy="128"
+     inkscape:window-width="3840"
+     inkscape:window-height="2054"
+     inkscape:window-x="3829"
+     inkscape:window-y="-11"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg2" />
+  <defs
+     id="defs1">
+    <clipPath
+       id="tile">
+      <rect
+         x="0"
+         y="0"
+         width="256"
+         height="256"
+         rx="48"
+         ry="48"
+         id="rect1" />
+    </clipPath>
+  </defs>
+  <!-- Backdrop: the app's canvas colour, as a rounded tile. -->
+  <g
+     id="backdrop">
+    <rect
+       x="0"
+       y="0"
+       width="256"
+       height="256"
+       rx="48"
+       ry="48"
+       fill="#0e1018"
+       id="rect2" />
+  </g>
+  <g
+     clip-path="url(#tile)"
+     id="g2">
+    <!-- The regions of the hole, from the singularity outward: tinted bands. -->
+    <g
+       id="regions">
+      <rect
+         id="region-inner-core"
+         x="0"
+         y="0"
+         width="36"
+         height="256"
+         fill="#2c0d1e" />
+      <rect
+         id="region-trapped"
+         x="36"
+         y="0"
+         width="42"
+         height="256"
+         fill="#3a1b4a" />
+      <rect
+         id="region-ergosphere"
+         x="78"
+         y="0"
+         width="34"
+         height="256"
+         fill="#3f3520" />
+    </g>
+    <!-- The surfaces, as the vertical lines the chart draws them as. -->
+    <g
+       id="surfaces">
+      <rect
+         id="singularity-line"
+         x="6"
+         y="0"
+         width="6"
+         height="256"
+         fill="#ff283c" />
+      <rect
+         id="cauchy-horizon-line"
+         x="33"
+         y="0"
+         width="6"
+         height="256"
+         fill="#ff0082" />
+      <rect
+         id="event-horizon-line"
+         x="75"
+         y="0"
+         width="6"
+         height="256"
+         fill="#be5aff" />
+      <rect
+         id="ergosphere-line"
+         x="109.5"
+         y="0"
+         width="5"
+         height="256"
+         fill="#ffb400" />
+    </g>
+    <!-- The "now" line, across the whole chart. -->
+    <g
+       id="now">
+      <rect
+         id="now-line"
+         x="0"
+         y="149"
+         width="256"
+         height="2"
+         fill="#7a88a8" />
+    </g>
+    <!-- Alice, near the hole: her cones lean toward it. -->
+    <g
+       id="alice">
+      <path
+         id="alice-future-cone"
+         d="M 146,150 98.640177,115.72627 155.78366,91.116998 Z"
+         fill="#c8a050"
+         fill-opacity="0.55"
+         stroke="#e0b060"
+         stroke-width="3"
+         stroke-linejoin="round"
+         sodipodi:nodetypes="cccc" />
+      <path
+         id="alice-past-cone"
+         d="m 146,150 -11.33775,59.84989 57.62031,-22.80353 z"
+         fill="#8a6a40"
+         fill-opacity="0.45"
+         stroke="#e0b060"
+         stroke-width="3"
+         stroke-linejoin="round"
+         sodipodi:nodetypes="cccc" />
+      <circle
+         id="alice-dot"
+         cx="146"
+         cy="150"
+         r="10"
+         fill="#ffa028"
+         stroke="#ffffff"
+         stroke-width="3" />
+    </g>
+    <!-- Bob, farther out: his cones stand nearer upright. -->
+    <g
+       id="bob">
+      <path
+         id="bob-future-cone"
+         d="m 214,150 -29.62031,-46.53422 56.27373,-5.412803 z"
+         fill="#4a6a96"
+         fill-opacity="0.7"
+         stroke="#7aa0d0"
+         stroke-width="3"
+         stroke-linejoin="round"
+         sodipodi:nodetypes="cccc" />
+      <path
+         id="bob-past-cone"
+         d="m 214,150 -25.83664,48.19868 58.28256,-1.59824 z"
+         fill="#5a4a8a"
+         fill-opacity="0.6"
+         stroke="#7aa0d0"
+         stroke-width="3"
+         stroke-linejoin="round"
+         sodipodi:nodetypes="cccc" />
+      <circle
+         id="bob-dot"
+         cx="214"
+         cy="150"
+         fill="#00ffc8"
+         stroke="#ffffff"
+         stroke-width="3.5"
+         r="10.598234" />
+    </g>
+  </g>
+</svg>

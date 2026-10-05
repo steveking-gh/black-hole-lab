@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The package manifest for the Microsoft Store: make-msix.ps1 puts the version in place of
+  {VERSION} and packs it with the app.
+
+  The identity values are the ones Partner Center reserved for the app (Product identity page),
+  and the Store refuses a package whose values differ. DisplayName is the reserved app name.
+
+  The app is a full-trust desktop program (runFullTrust): it starts sky-look, which starts the
+  tracer, the renderer and ffmpeg, writes views to the Videos folder, and downloads the star map
+  into the user's data folder, none of which a sandboxed app could do.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap rescap">
+
+  <Identity
+    Name="SteveKing.BlackHoleLab"
+    Publisher="CN=C097687F-D4E4-41FE-96EE-DCB10DAB73A0"
+    Version="{VERSION}"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>Black Hole Lab</DisplayName>
+    <PublisherDisplayName>Steve King</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="BlackHoleLab" Executable="black-hole-lab.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="Black Hole Lab"
+        Description="Watch two observers fall into a spinning black hole, in the exact geometry of general relativity."
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png" />
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <Capability Name="internetClient" />
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>
