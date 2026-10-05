@@ -1,0 +1,36 @@
+assets/icons/black_hole_lab_icon.svg
+  s_eab993b6e839ea::t_bd76aa1eaafb88 1-203
+packaging/windows/AppxManifest.xml
+  s_eab993b6e839ea::t_368d989a3a2e9b 1-54
+packaging/windows/make-msix.ps1
+  s_eab993b6e839ea::t_67768c906e07d9 62-67
+  s_eab993b6e839ea::t_b9145a4518edbd 1-61,68-75
+packaging/windows/make-icons.ps1
+  s_eab993b6e839ea::t_1c21aba461c056 1-52
+  s_eab993b6e839ea::t_04de94f3354030 53
+.github/workflows/release.yml
+  s_eab993b6e839ea::t_983447372b6145 11-13
+  s_eab993b6e839ea::t_c81d9c885756a0 119-120,140-156,171-173
+  s_eab993b6e839ea::t_8730755d05ef07 14,174
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a21c7d29acb53c1a5a5fad003e11cbf9d3510418",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_eab993b6e839ea": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "506a3453-7463-4d75-8088-b6596eca7307",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
