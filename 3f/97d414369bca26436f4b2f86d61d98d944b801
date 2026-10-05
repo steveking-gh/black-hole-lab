@@ -1,0 +1,25 @@
+.github/workflows/release.yml
+  s_eab993b6e839ea::t_cc42d6ee4f1f96 124-128,131
+  s_eab993b6e839ea::t_fe2eda26fdfa25 143
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3f97d414369bca26436f4b2f86d61d98d944b801",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_eab993b6e839ea": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "506a3453-7463-4d75-8088-b6596eca7307",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
