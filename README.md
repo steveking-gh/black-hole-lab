@@ -154,13 +154,8 @@ background.
 
 Using the `Look Around` button kicks off a separate process using Black Hole Lab
 tools in the included `sky` workspace.  You can run these tools from any saved
-`.bhl` file and even generate videos.
-
-Generating a star map requires installation of a couple of dependencies.
-The first dependency is the NASA sky map image, which Black Hole Lab
-automatically downloads on first use.  The second dependency is the popular
-[ffmpeg](https://ffmpeg.org/) which the user must install themselves.  Black
-Hole Lab helpfully prompts the user if either dependency is missing.
+`.bhl` file and even generate videos.  Generating a star map requires a NASA sky
+map image, which Black Hole Lab can automatically download on first use.
 
 The generated image is a valid JPEG file that any viewer can show, but a
 360-capable viewer wraps the image into a sphere.  A viewer like
