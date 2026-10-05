@@ -10,9 +10,9 @@
 #
 # Each archive is one folder: the app; sky-look, sky-trace and sky-render beside it, where the
 # app's Look Around looks for sky-look first; a maps folder with fetch-sky.ps1 and the checksums,
-# where sky-look looks for the star map first; the demo saves; the licence and notices. The star
-# map and ffmpeg are not shipped: Look Around's dialog downloads the one and gives the command
-# that installs the other.
+# for a user who fetches a map by hand; the demo saves; the licence and notices. The star map and
+# ffmpeg are not shipped: Look Around's dialog downloads the one into the user's own data folder
+# and gives the command that installs the other.
 
 name: Release
 

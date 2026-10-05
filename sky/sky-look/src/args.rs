@@ -57,8 +57,9 @@ USAGE
                             on the PATH.
     --sky <map.exr>         The star map. Default: the file the environment variable
                             BLACK_HOLE_LAB_SKY_MAP names, else maps/starmap_2020_8k_gal.exr
-                            beside this program, else that file in the nearest sky directory
-                            at or above this program's directory.
+                            in the user's data folder for Black Hole Lab (see --fetch-map),
+                            else that file beside this program, else in the nearest sky
+                            directory at or above this program's directory.
     --status <file>         Also append every progress sentence to this file, and at the end
                             one line saying how the run ended (see STATUS FILE). The app names
                             a file here and reads it while the view is being made.
@@ -77,10 +78,13 @@ USAGE
                             CHECK). The app runs this when it starts, to say what is missing
                             before a view is asked for.
     --fetch-map             Make no view: download the default star map, 153 MB, one of NASA's
-                            Deep Star Maps 2020 (https://svs.gsfc.nasa.gov/4851), with curl,
-                            to where this program looks for it, and check its size and its
-                            SHA-256 before putting it there. A map already there and whole is
-                            left alone. The app's Download Star Map button runs this.
+                            Deep Star Maps 2020 (https://svs.gsfc.nasa.gov/4851), with curl
+                            or wget, into maps in the user's data folder for Black Hole Lab -
+                            %LOCALAPPDATA%\\Black Hole Lab on Windows, ~/Library/Application
+                            Support/Black Hole Lab on macOS, ~/.local/share/black-hole-lab
+                            elsewhere - and check its size and its SHA-256 before putting it
+                            there. A map already there and whole is left alone. The app's
+                            Look Around dialog runs this.
     --help, -h              Print this and do nothing else.
 
 OUTPUT

@@ -1,4 +1,5 @@
-//! `--fetch-map`: download the default star map to where the search looks for it, and check it.
+//! `--fetch-map`: download the default star map into this user's data folder, where the search
+//! looks for it first, and check it.
 //!
 //! What `maps/fetch-sky.ps1` does for the one map this program uses by default, for a user who has
 //! no PowerShell and no checkout: the app's Download Star Map button starts this program so. The
@@ -85,19 +86,19 @@ pub struct Download {
     pub sha256: String,
 }
 
-/// Downloads the default star map to where [`find::default_map`] keeps it for this program, and
-/// returns its path; or says in one sentence what went wrong and what to do.
+/// Downloads the default star map to where [`find::fetch_target`] says it goes - this user's
+/// data folder - and returns its path; or says in one sentence what went wrong and what to do.
 pub fn fetch_default(env: &Environment, say: &mut Say) -> Result<PathBuf, String> {
-    let Some(exe_dir) = &env.exe_dir else {
+    let Some(target) = find::fetch_target(env.data_dir.as_deref(), env.exe_dir.as_deref()) else {
         return Err(format!(
-            "sky-look cannot tell which directory it is in, so it cannot tell where the star map \
-             goes; download {SKY_MAP_URL} by hand and name the file with {SKY_MAP_ENV}."
+            "sky-look cannot tell where this user's data folder or its own directory is, so it \
+             cannot tell where the star map goes; download {SKY_MAP_URL} by hand and name the \
+             file with {SKY_MAP_ENV}."
         ));
     };
-    let target = find::default_map(exe_dir);
     let by_hand = format!(
         "put {SKY_MAP_URL} into {} by hand",
-        target.parent().unwrap_or(exe_dir).display()
+        target.parent().unwrap_or(&target).display()
     );
     let tool = Tool::on(env.path.as_deref()).ok_or_else(|| {
         format!(

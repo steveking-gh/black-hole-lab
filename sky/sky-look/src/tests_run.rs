@@ -184,6 +184,7 @@ impl Case {
             vlc: Vec::new(),
             ffmpeg_places: Vec::new(),
             os_release: None,
+            data_dir: None,
             videos: None,
             home: None,
             names: Names {

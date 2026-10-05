@@ -1185,3 +1185,55 @@ fn test_the_command_that_installs_ffmpeg_is_the_distributions_own() {
     assert_eq!(report.lines()[3], format!("ffmpeg-install {expected}"));
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn test_the_users_own_star_map_comes_first_and_is_where_a_download_goes() {
+    let root = scratch_dir("data-dir");
+    let (release, path) = layout(&root);
+    let data = root.join("user data/Black Hole Lab");
+    let search = Search {
+        exe_dir: Some(release),
+        path: Some(path),
+        data_dir: Some(data.clone()),
+        ..Search::default()
+    };
+    // A checkout's own map is found while the user has none.
+    let repo_map = root.join("repo/sky").join(SKY_MAP);
+    assert_eq!(find::find(&search, &names()).expect("found").sky, repo_map);
+    // The user's own copy comes before it.
+    let user_map = data.join("maps").join("starmap_2020_8k_gal.exr");
+    touch(&user_map);
+    assert_eq!(find::find(&search, &names()).expect("found").sky, user_map);
+
+    // In a downloaded copy with no map anywhere, the download goes to the user's folder, and the
+    // sentence names that folder.
+    let copy = root.join("downloaded/Black Hole Lab");
+    touch(&copy.join("sky-trace.exe"));
+    touch(&copy.join("sky-render.exe"));
+    let empty = root.join("nobody/Black Hole Lab");
+    let installed = Search {
+        exe_dir: Some(copy.clone()),
+        data_dir: Some(empty.clone()),
+        ..search
+    };
+    let target = find::fetch_target(Some(&empty), Some(&copy)).expect("a target");
+    assert_eq!(target, empty.join("maps").join("starmap_2020_8k_gal.exr"));
+    let why = find::find(&installed, &names()).expect_err("no map anywhere");
+    assert!(
+        why.contains(&empty.join("maps").display().to_string()) && why.contains(SKY_MAP_URL),
+        "{why}"
+    );
+    // A map put beside the program by the fetch script is still found.
+    touch(&copy.join("maps").join("starmap_2020_8k_gal.exr"));
+    assert_eq!(
+        find::find(&installed, &names()).expect("found").sky,
+        copy.join("maps").join("starmap_2020_8k_gal.exr")
+    );
+    // With no data folder known, the download goes beside the program, as it did.
+    assert_eq!(
+        find::fetch_target(None, Some(&copy)),
+        Some(copy.join("maps").join("starmap_2020_8k_gal.exr"))
+    );
+    assert_eq!(find::fetch_target(None, None), None);
+    let _ = std::fs::remove_dir_all(&root);
+}

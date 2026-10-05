@@ -87,6 +87,8 @@ pub struct Environment {
     pub ffmpeg_places: Vec<PathBuf>,
     /// The text of `/etc/os-release`, where there is one (`find::os_release_here`).
     pub os_release: Option<String>,
+    /// This user's data folder for Black Hole Lab (`find::user_data_dir_here`).
+    pub data_dir: Option<PathBuf>,
     pub videos: Option<PathBuf>,
     pub home: Option<PathBuf>,
     pub names: Names,
@@ -111,6 +113,7 @@ impl Environment {
             vlc: open::vlc_places_here(),
             ffmpeg_places: find::ffmpeg_places_here(),
             os_release: find::os_release_here(),
+            data_dir: find::user_data_dir_here(),
             videos: names::videos_folder(home.as_deref()),
             home,
             names: Names::native(),
@@ -391,6 +394,7 @@ fn check(o: &CheckOptions, env: &Environment, out: &mut dyn Write) -> i32 {
         sky_env: env.sky_env.clone(),
         ffmpeg_places: env.ffmpeg_places.clone(),
         os_release: env.os_release.clone(),
+        data_dir: env.data_dir.clone(),
     };
     let report = find::check(&search, &env.names);
     for line in report.lines() {
@@ -451,6 +455,7 @@ pub fn look(o: &Options, env: &Environment, say: &mut Say) -> Result<PathBuf, Fa
         sky_env: env.sky_env.clone(),
         ffmpeg_places: env.ffmpeg_places.clone(),
         os_release: env.os_release.clone(),
+        data_dir: env.data_dir.clone(),
     };
     let pieces = find::find(&search, &env.names).map_err(Failure::Failed)?;
     if !o.save.is_file() {

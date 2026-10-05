@@ -125,6 +125,9 @@ pub struct Search {
     pub ffmpeg_places: Vec<PathBuf>,
     /// The text of `/etc/os-release`, for the command that installs ffmpeg: [`os_release_here`].
     pub os_release: Option<String>,
+    /// This user's own data folder for Black Hole Lab, where the star map is downloaded to and
+    /// looked for first: [`user_data_dir_here`].
+    pub data_dir: Option<PathBuf>,
 }
 
 /// The pieces, every one of them a file that is there.
@@ -347,6 +350,50 @@ fn subdirectories(dir: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// This user's own data folder for Black Hole Lab, whether or not it exists yet: where the star
+/// map is downloaded to.
+///
+/// A folder of the user's and not the program's own, because the program's may not be the
+/// user's to write in: a copy installed from the Microsoft Store is in a folder nobody can write
+/// to, and so is one installed under Program Files, /usr or /Applications. The place is each
+/// system's own for an application's data:
+///
+/// - Windows: `%LOCALAPPDATA%\Black Hole Lab`, which a Store app also writes to, in a folder of
+///   the package's that Windows keeps for it;
+/// - macOS: `~/Library/Application Support/Black Hole Lab`;
+/// - elsewhere: `$XDG_DATA_HOME/black-hole-lab`, or `~/.local/share/black-hole-lab` where the
+///   variable is not set to an absolute path, as the XDG Base Directory specification says.
+pub fn user_data_dir_here() -> Option<PathBuf> {
+    let var = |name: &str| {
+        std::env::var_os(name)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    };
+    if cfg!(windows) {
+        var("LOCALAPPDATA").map(|local| local.join("Black Hole Lab"))
+    } else if cfg!(target_os = "macos") {
+        var("HOME").map(|home| {
+            home.join("Library")
+                .join("Application Support")
+                .join("Black Hole Lab")
+        })
+    } else {
+        var("XDG_DATA_HOME")
+            .filter(|dir| dir.is_absolute())
+            .or_else(|| var("HOME").map(|home| home.join(".local").join("share")))
+            .map(|share| share.join("black-hole-lab"))
+    }
+}
+
+/// Where `--fetch-map` puts the default star map: in this user's data folder when there is one,
+/// and otherwise where [`default_map`] keeps it for a program in `exe_dir`. `None` when neither is
+/// known.
+pub fn fetch_target(data_dir: Option<&Path>, exe_dir: Option<&Path>) -> Option<PathBuf> {
+    data_dir
+        .map(|dir| under(dir, SKY_MAP))
+        .or_else(|| exe_dir.map(default_map))
+}
+
 /// A star map that is not there.
 struct NoMap {
     /// The sentence saying so, and what to do.
@@ -355,8 +402,8 @@ struct NoMap {
     fetchable: bool,
 }
 
-/// The star map: `--sky`, else the variable, else [`SKY_MAP`] where [`default_map`] says this
-/// layout keeps it.
+/// The star map: `--sky`, else the variable, else [`SKY_MAP`] in this user's data folder, else
+/// where [`default_map`] says this program's layout keeps it.
 fn sky_map(search: &Search) -> Result<PathBuf, NoMap> {
     let named_wrongly = |why: String| NoMap {
         why,
@@ -388,33 +435,44 @@ fn sky_map(search: &Search) -> Result<PathBuf, NoMap> {
             )))
         };
     }
-    let Some(exe_dir) = &search.exe_dir else {
+    // The user's own copy first, which is where a download puts it; then the program's, where a
+    // checkout keeps it and where the fetch script in a downloaded copy's maps folder puts it.
+    let user_map = search.data_dir.as_deref().map(|dir| under(dir, SKY_MAP));
+    let program_map = search.exe_dir.as_deref().map(default_map);
+    if let Some(found) = [&user_map, &program_map]
+        .into_iter()
+        .flatten()
+        .find(|map| map.is_file())
+    {
+        return Ok(found.clone());
+    }
+    let Some(target) = fetch_target(search.data_dir.as_deref(), search.exe_dir.as_deref()) else {
         return Err(named_wrongly(format!(
             "sky-look cannot tell which directory it is in, so it cannot find the star map; name \
              it with --sky <map.exr> or {SKY_MAP_ENV}."
         )));
     };
-    let map = default_map(exe_dir);
-    if map.is_file() {
-        return Ok(map);
-    }
     // The script is named only where it is: a copy that was downloaded may have been extracted
     // without it. The address serves a reader who has no PowerShell, script or no script.
-    let maps = map.parent().unwrap_or(exe_dir);
-    let script = under(maps.parent().unwrap_or(exe_dir), FETCH_SCRIPT);
-    let by_script = if script.is_file() {
-        format!("run pwsh {}, or ", script.display())
-    } else {
-        String::new()
+    let script = program_map
+        .as_deref()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .map(|base| under(base, FETCH_SCRIPT))
+        .filter(|script| script.is_file());
+    let by_script = match &script {
+        Some(script) => format!("run pwsh {}, or ", script.display()),
+        None => String::new(),
     };
+    let folder = target.parent().unwrap_or(&target);
     Err(NoMap {
         why: format!(
             "The star map {} is not there; download it ({SKY_MAP_SIZE}, one of NASA's Deep Star \
              Maps) with the Download Star Map button of Black Hole Lab or with sky-look \
              --fetch-map, or {by_script}put {SKY_MAP_URL} into {} by hand, or name another map \
              with --sky <map.exr> or {SKY_MAP_ENV}.",
-            map.display(),
-            maps.display()
+            target.display(),
+            folder.display()
         ),
         fetchable: true,
     })
@@ -434,6 +492,8 @@ fn sky_map(search: &Search) -> Result<PathBuf, NoMap> {
 ///   program: the archive is one folder, and its `maps` folder is where the fetch script is.
 ///
 /// A map beside the program is used wherever it is found, checkout or not, as the nearer one.
+/// Both come after this user's own copy ([`user_data_dir_here`]), which is where a download puts
+/// the map.
 pub fn default_map(exe_dir: &Path) -> PathBuf {
     let beside = under(exe_dir, SKY_MAP);
     if beside.is_file() {
