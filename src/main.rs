@@ -85,7 +85,8 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_title("Black Hole Lab")
             .with_inner_size([1280.0, 820.0])
-            .with_min_inner_size([900.0, 600.0]),
+            .with_min_inner_size([900.0, 600.0])
+            .with_icon(window_icon()),
         ..Default::default()
     };
 
@@ -109,6 +110,25 @@ fn main() -> eframe::Result<()> {
             Ok(Box::new(app))
         }),
     )
+}
+
+/// The icon of the title bar, the taskbar and Alt-Tab, which is otherwise egui's own logo. It is the
+/// Store package's largest unplated logo, drawn from `assets/icons/black_hole_lab_icon.svg` by
+/// `packaging/windows/make-icons.ps1`, so the window and the package show the same picture; the
+/// system scales it down to each size it needs.
+fn window_icon() -> egui::IconData {
+    let png = include_bytes!(
+        "../packaging/windows/Assets/Square44x44Logo.targetsize-256_altform-unplated.png"
+    );
+    eframe::icon_data::from_png_bytes(png).expect("the icon is a PNG (see the test below)")
+}
+
+#[cfg(test)]
+#[test]
+fn test_the_window_icon_is_a_square_png_with_transparency() {
+    let icon = window_icon();
+    assert_eq!((icon.width, icon.height), (256, 256));
+    assert!(icon.rgba.as_chunks::<4>().0.iter().any(|pixel| pixel[3] == 0), "unplated: a clear background");
 }
 
 /// Give a headless run somewhere to print. A windowed program on Windows starts with no standard
