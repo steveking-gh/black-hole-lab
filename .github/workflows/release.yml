@@ -2,7 +2,7 @@
 # archives to a draft GitHub release, to be checked and published by hand.
 #
 # Triggers:
-#   - a pushed tag such as v0.1.312. The tag must name the version the build stamps into the
+#   - a pushed tag such as v1.0.312. The tag must name the version the build stamps into the
 #     title, MAJOR.MINOR from Cargo.toml and the number of commits up to the tagged one as the
 #     third segment (build.rs, src/version/compose.rs); the check job refuses any other.
 #   - workflow_dispatch, run by hand from the Actions tab: builds the three archives and keeps

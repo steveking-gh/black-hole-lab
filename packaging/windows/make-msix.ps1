@@ -7,7 +7,7 @@
 #     Add-AppxPackage -Register <layout>\AppxManifest.xml
 #
 # Usage:
-#     pwsh packaging/windows/make-msix.ps1 -Source <built folder> -Version 0.1.279.0 `
+#     pwsh packaging/windows/make-msix.ps1 -Source <built folder> -Version 1.0.294.0 `
 #         -Output black-hole-lab.msix [-Layout <folder to keep the layout in>]
 #
 # -Source is the folder the workflow zips: black-hole-lab.exe with the sky tools beside it, the

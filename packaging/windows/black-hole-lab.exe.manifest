@@ -8,7 +8,7 @@
   Windows 10 and 11; and that it runs with the user's own rights and never asks for elevation.
 -->
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity type="win32" name="SteveKing.BlackHoleLab" version="0.1.0.0"/>
+  <assemblyIdentity type="win32" name="SteveKing.BlackHoleLab" version="1.0.0.0"/>
   <application xmlns="urn:schemas-microsoft-com:asm.v3">
     <windowsSettings>
       <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
