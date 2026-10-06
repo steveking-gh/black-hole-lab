@@ -162,10 +162,13 @@ jobs:
     permissions:
       contents: write
     steps:
+      # skip-decompress: each artifact is the archive itself, and the download would otherwise
+      # unpack the Windows .zip into a folder, which is not a file a release can take.
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
+          skip-decompress: true
 
       # The Store package goes to Partner Center, not to the release.
       - name: Leave out the Store package
