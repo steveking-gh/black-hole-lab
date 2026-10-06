@@ -61,9 +61,9 @@ the licence of the crates here, which is what allows the table to be included.
 The sky renderer draws its star background from NASA's Deep Star Maps 2020, made
 by the NASA Goddard Space Flight Center Scientific Visualization Studio
 (<https://svs.gsfc.nasa.gov/4851>). The maps are **not distributed with this
-repository**. Each user downloads them from NASA with `maps/fetch-sky.ps1`,
-which verifies them against `maps/checksums.sha256`; `maps/README.md` describes
-them.
+repository**. Each user downloads them from NASA: `sky-look --fetch-map` fetches
+the default map and verifies its SHA-256, and `maps/README.md` describes them
+all.
 
 | Maps | Source | Terms |
 | --- | --- | --- |

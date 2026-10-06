@@ -1,7 +1,6 @@
 /target
 
-# NASA star maps, fetched on demand by maps/fetch-sky.ps1 and never committed.
-# The script, its README and checksums.sha256 stay tracked.
+# NASA star maps, downloaded on demand and never committed. The README stays tracked.
 /maps/*.exr
 /maps/*.part
 

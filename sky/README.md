@@ -42,7 +42,7 @@ Run cargo from this directory, not from the repository root.
 ```sh
 cd sky
 cargo test                                   # every crate of the pipeline
-pwsh maps/fetch-sky.ps1                      # download the default star map, once
+cargo run --release -p sky-look -- --fetch-map   # download the default star map, once
 
 cargo run --release -p sky-testgen -- --case turn --out ../../bundles/turn
 cargo run --release -p sky-render -- --bundle ../../bundles/turn \

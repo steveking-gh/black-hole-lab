@@ -16,16 +16,13 @@ pub const SKY_MAP_ENV: &str = "BLACK_HOLE_LAB_SKY_MAP";
 /// the map the owner's approved films were made with.
 pub const SKY_MAP: &str = "maps/starmap_2020_8k_gal.exr";
 
-/// The script that fetches the maps, relative to the `sky` directory.
-pub const FETCH_SCRIPT: &str = "maps/fetch-sky.ps1";
-
-/// Where NASA serves the default star map: the address `fetch-sky.ps1` downloads it from, for a
-/// reader of a sentence who has no PowerShell to run that script with.
+/// Where NASA serves the default star map: the address `--fetch-map` downloads it from, and the
+/// one a sentence gives a reader who would rather fetch it by hand.
 pub const SKY_MAP_URL: &str =
     "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004851/starmap_2020_8k_gal.exr";
 
 /// The size of the default star map as a reader is told it: 160 735 772 bytes, in the binary
-/// megabytes `fetch-sky.ps1` and a file manager both count in.
+/// megabytes a file manager counts in.
 pub const SKY_MAP_SIZE: &str = "153 MB";
 
 /// The file names of the programs, as this platform spells them. The tests put scripts in their
@@ -257,7 +254,7 @@ fn sky_map(search: &Search) -> Result<PathBuf, NoMap> {
         };
     }
     // The user's own copy first, which is where a download puts it; then the program's, where a
-    // checkout keeps it and where the fetch script in a downloaded copy's maps folder puts it.
+    // checkout keeps it and where a map put by hand beside a downloaded copy goes.
     let user_map = search.data_dir.as_deref().map(|dir| under(dir, SKY_MAP));
     let program_map = search.exe_dir.as_deref().map(default_map);
     if let Some(found) = [&user_map, &program_map]
@@ -273,24 +270,12 @@ fn sky_map(search: &Search) -> Result<PathBuf, NoMap> {
              it with --sky <map.exr> or {SKY_MAP_ENV}."
         )));
     };
-    // The script is named only where it is: a copy that was downloaded may have been extracted
-    // without it. The address serves a reader who has no PowerShell, script or no script.
-    let script = program_map
-        .as_deref()
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .map(|base| under(base, FETCH_SCRIPT))
-        .filter(|script| script.is_file());
-    let by_script = match &script {
-        Some(script) => format!("run pwsh {}, or ", script.display()),
-        None => String::new(),
-    };
     let folder = target.parent().unwrap_or(&target);
     Err(NoMap {
         why: format!(
             "The star map {} is not there; download it ({SKY_MAP_SIZE}, one of NASA's Deep Star \
              Maps) with the OK of Black Hole Lab's Look Around dialog or with sky-look \
-             --fetch-map, or {by_script}put {SKY_MAP_URL} into {} by hand, or name another map \
+             --fetch-map, or put {SKY_MAP_URL} into {} by hand, or name another map \
              with --sky <map.exr> or {SKY_MAP_ENV}.",
             target.display(),
             folder.display()

@@ -59,7 +59,7 @@ fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
 }
 
 /// The SHA-256 of everything `from` yields, as 64 lowercase hexadecimal digits: the form
-/// `sha256sum` writes and `checksums.sha256` records.
+/// `sha256sum` writes.
 pub fn hex_of(from: &mut dyn Read) -> std::io::Result<String> {
     let mut state = INITIAL;
     let mut length: u64 = 0;

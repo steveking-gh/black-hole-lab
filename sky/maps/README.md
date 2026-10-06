@@ -1,14 +1,9 @@
 # Star maps for the sky renderer
 
-This directory holds the means to fetch the star background that `sky-render` draws behind
-everything else. The maps themselves are large, so they are downloaded on demand and are never
-committed: `.gitignore` excludes `*.exr` and `*.part` here. Three files are tracked:
-
-| File | Purpose |
-| --- | --- |
-| `fetch-sky.ps1` | Downloads one map and verifies its SHA-256 |
-| `checksums.sha256` | The SHA-256 of each map that has been downloaded and recorded |
-| `README.md` | This description |
+This directory is where a source checkout keeps the star background that `sky-render` draws
+behind everything else. The maps themselves are large, so they are downloaded on demand and are
+never committed: `.gitignore` excludes `*.exr` and `*.part` here, and this description is the
+only file tracked.
 
 ## Where the maps come from
 
@@ -37,7 +32,7 @@ faintest star that shows as its own dot at a given map size has not been measure
 
 ## Products and sizes
 
-A **product** is one kind of map. Two products are fetched by the script:
+A **product** is one kind of map. The renderer reads two products:
 
 - `starmap`: the full map, the Milky Way from Gaia DR2 plus the bright stars from Hipparcos-2
   and Tycho-2.
@@ -46,8 +41,8 @@ A **product** is one kind of map. Two products are fetched by the script:
   from `starmap` (see "Colour and values" below).
 
 Each product exists in two coordinate systems, **celestial** and **galactic**, and in five sizes.
-The script defaults to `starmap`, `galactic`, `8k`, because the owner chose to put the Milky Way
-along the video frame's equator.
+The default is `starmap`, `galactic`, `8k`, because the owner chose to put the Milky Way along
+the video frame's equator.
 
 | Size | Pixels | Degrees per pixel | File size |
 | --- | --- | ---: | --- |
@@ -57,35 +52,32 @@ along the video frame's equator.
 | 32k | 32768 x 16384 | 0.0110 | 1.2 to 1.4 GB |
 | 64k | 65536 x 32768 | 0.0055 | 3.0 to 3.8 GB |
 
-The script refuses 32k and 64k unless it is given `-Force`.
-
 The SVS page also offers a `hiptyc` product (the bright stars alone), constellation figures,
-constellation boundaries and a coordinate grid. The script does not fetch them.
+constellation boundaries and a coordinate grid. The renderer uses none of them.
 
 ## How to fetch a map
 
-From the repository root, in PowerShell 7 or any shell that can run `pwsh`:
+The default map, `starmap_2020_8k_gal.exr`, is downloaded by the OK of Black Hole Lab's Look
+Around dialog, or from a terminal:
 
 ```sh
-pwsh sky/maps/fetch-sky.ps1                                    # starmap, galactic, 8k
-pwsh sky/maps/fetch-sky.ps1 -Product milkyway -Coordinates celestial -Size 4k
-pwsh sky/maps/fetch-sky.ps1 -Size 32k -Force
+sky-look --fetch-map
 ```
 
-The script needs PowerShell 7 and `curl.exe`, and nothing else. It works as follows:
+The download goes to a file ending in `.part` in the user's data folder, and is renamed only when
+its byte count and its SHA-256 are the ones in the table below. On any failure the partial file is
+deleted and one sentence says what went wrong.
 
-1. It builds the file name, for example `starmap_2020_8k_gal.exr`, and the URL
-   `https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004851/<file name>`.
-2. If the file is already in this directory and its SHA-256 matches `checksums.sha256`, the
-   script stops there and downloads nothing.
-3. Otherwise it downloads to `<file name>.part`, checks the byte count against the size the
-   server reported in 2026-09, and checks the SHA-256 against `checksums.sha256`. Only when both
-   agree does it rename the `.part` file to its real name.
-4. When `checksums.sha256` has no entry for the file, the script keeps the file, prints the hash
-   it computed together with the line to add to `checksums.sha256`, and exits with success and a
-   warning.
-5. On any failure it deletes the partial file, prints one sentence saying what went wrong, and
-   exits with code 1.
+Any other map is a download by hand. Every file is served at
+`https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004851/<file name>`, for example:
+
+```sh
+curl --fail --location --remote-name \
+    https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004851/milkyway_2020_4k.exr
+```
+
+Check the file against the table with `sha256sum`, or `Get-FileHash` on Windows, and name it to
+the renderer with `--sky <map.exr>` or the environment variable `BLACK_HOLE_LAB_SKY_MAP`.
 
 A checksum mismatch after a complete download most likely means that NASA replaced the file, as
 it did for the galactic maps in January 2021. Look at the SVS page before changing the record.
@@ -336,5 +328,5 @@ The last sentence concerns the constellation figures, which the renderer does no
 the credit line whole, as NASA gives it, is the safe choice. The SVS page links NASA's
 reproduction guidelines (<https://www.nasa.gov/multimedia/guidelines/index.html>), which govern
 the use of the maps; the owner should read them before publishing. The maps are not
-distributed with Black Hole Lab: each user downloads them with `fetch-sky.ps1`.
+distributed with Black Hole Lab: each user downloads them from NASA.
 `THIRD-PARTY-NOTICES.md` records the same.

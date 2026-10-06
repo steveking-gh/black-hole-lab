@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, UNIX_EPOCH};
 
 use crate::args::{self, Request, Units, Who};
-use crate::find::{self, FETCH_SCRIPT, Names, SKY_MAP, SKY_MAP_ENV, SKY_MAP_URL, Search};
+use crate::find::{self, Names, SKY_MAP, SKY_MAP_ENV, SKY_MAP_URL, Search};
 use crate::names;
 use crate::open::{self, Viewer};
 use crate::run::{Tally, parse_tally, percent_sentence, powershell_line, red_sentence};
@@ -42,14 +42,13 @@ fn names() -> Names {
     }
 }
 
-/// A repository with a release build of the sky tools, and the star map and the script that
-/// fetches it in `sky/maps`. Returns the release directory.
+/// A repository with a release build of the sky tools, and the star map in `sky/maps`. Returns
+/// the release directory.
 fn layout(root: &Path) -> PathBuf {
     let release = root.join("repo/sky/target/release");
     touch(&release.join("sky-trace.exe"));
     touch(&release.join("sky-render.exe"));
     touch(&root.join("repo/sky").join(SKY_MAP));
-    touch(&root.join("repo/sky").join(FETCH_SCRIPT));
     release
 }
 
@@ -186,7 +185,7 @@ fn test_each_missing_piece_has_its_own_sentence_saying_what_to_do() {
         ),
         (
             map.clone(),
-            &["star map", "fetch-sky.ps1", "--sky <map.exr>", SKY_MAP_ENV],
+            &["star map", "--fetch-map", "--sky <map.exr>", SKY_MAP_ENV],
         ),
     ];
     let mut sentences = Vec::new();
@@ -209,21 +208,10 @@ fn test_each_missing_piece_has_its_own_sentence_saying_what_to_do() {
         3,
         "each piece its own sentence: {sentences:#?}"
     );
-    // The script is named where it is, in the sky directory that was found.
-    assert!(
-        sentences[2].contains(
-            &root
-                .join("repo/sky")
-                .join("maps")
-                .join("fetch-sky.ps1")
-                .display()
-                .to_string()
-        )
-    );
 
     // A downloaded copy, with no sky directory anywhere above: the map is looked for beside the
     // program, and the sentence gives the address to download it from and the folder to put it
-    // in, and names no script, since none is there.
+    // in.
     let copy = root.join("downloaded/Black Hole Lab");
     touch(&copy.join("sky-trace.exe"));
     touch(&copy.join("sky-render.exe"));
@@ -233,23 +221,7 @@ fn test_each_missing_piece_has_its_own_sentence_saying_what_to_do() {
     };
     let why = find::find(&installed, &names()).expect_err("no map anywhere");
     let maps = copy.join("maps").display().to_string();
-    assert!(
-        why.contains(SKY_MAP_URL) && why.contains(&maps) && !why.contains("fetch-sky.ps1"),
-        "{why}"
-    );
-    // With the script extracted beside the map's place, the sentence names it where it is.
-    touch(&copy.join(FETCH_SCRIPT));
-    let why = find::find(&installed, &names()).expect_err("no map anywhere");
-    assert!(
-        why.contains(
-            &copy
-                .join("maps")
-                .join("fetch-sky.ps1")
-                .display()
-                .to_string()
-        ) && why.contains(SKY_MAP_URL),
-        "{why}"
-    );
+    assert!(why.contains(SKY_MAP_URL) && why.contains(&maps), "{why}");
     // The map, once it is there, is found.
     touch(&copy.join(SKY_MAP));
     assert_eq!(

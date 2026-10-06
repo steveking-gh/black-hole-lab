@@ -13,8 +13,8 @@
 # Center by hand; it is not attached to the release.
 #
 # Each archive is one folder: the app; sky-look, sky-trace and sky-render beside it, where the
-# app's Look Around looks for sky-look first; a maps folder with fetch-sky.ps1 and the checksums,
-# for a user who fetches a map by hand; the demo saves; the licence and notices. The star map is
+# app's Look Around looks for sky-look first; a maps folder with the README on NASA's maps,
+# for a user who fetches one by hand; the demo saves; the licence and notices. The star map is
 # not shipped: Look Around's dialog downloads it into the user's own data folder.
 
 name: Release
@@ -111,7 +111,7 @@ jobs:
           for tool in sky-look sky-trace sky-render; do
             cp "sky/target/release/$tool${{ matrix.exe }}" "$dir/"
           done
-          cp sky/maps/fetch-sky.ps1 sky/maps/checksums.sha256 sky/maps/README.md "$dir/maps/"
+          cp sky/maps/README.md "$dir/maps/"
           cp demos/*.bhl "$dir/demos/"
           cp README.md LICENSE.TXT THIRD-PARTY-NOTICES.md "$dir/"
           cp sky/THIRD-PARTY-NOTICES.md "$dir/THIRD-PARTY-NOTICES-sky-tools.md"

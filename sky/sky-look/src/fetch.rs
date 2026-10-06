@@ -1,9 +1,9 @@
 //! `--fetch-map`: download the default star map into this user's data folder, where the search
 //! looks for it first, and check it.
 //!
-//! What `maps/fetch-sky.ps1` does for the one map this program uses by default, for a user who has
-//! no PowerShell and no checkout: the app's Download Star Map button starts this program so. The
-//! script remains the way to the other maps and sizes.
+//! This is the one map this program uses by default; the OK of the app's Look Around dialog starts
+//! this program so. The other maps and sizes are a download by hand, which `maps/README.md`
+//! describes.
 //!
 //! The download is curl's, started as a child: curl is part of Windows 10 and 11 and of macOS, and
 //! it brings its own TLS, which this program would otherwise have to link. Where there is no curl,
@@ -23,11 +23,10 @@ use crate::find::{self, SKY_MAP_ENV, SKY_MAP_SIZE, SKY_MAP_URL};
 use crate::run::{Environment, Say};
 use crate::sha256;
 
-/// The size of the default star map in bytes, as NASA's server reported it on 2026-09-27: the
-/// figure `maps/fetch-sky.ps1` holds for the same file.
+/// The size of the default star map in bytes, as NASA's server reported it on 2026-09-27.
 pub const SKY_MAP_BYTES: u64 = 160_735_772;
 
-/// The SHA-256 of the default star map: its line of `maps/checksums.sha256`.
+/// The SHA-256 of the default star map: its row of the table in `maps/README.md`.
 pub const SKY_MAP_SHA256: &str = "d70924422d3e0159764b16a19658784befcf73b97e06e5c16614860c1514bb58";
 
 /// The least rise in the percentage downloaded that is said as a sentence: the step the tracer's
