@@ -1,0 +1,26 @@
+src/main.rs
+  s_eab993b6e839ea::t_469fdc5876e71a 114-139
+  s_eab993b6e839ea::t_55b4dd5232d0d3 56-58
+  s_eab993b6e839ea::t_04f6538a9cac44 22-25
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3bbe56c446306b9d1659663a97379b90aea981c5",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_eab993b6e839ea": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "506a3453-7463-4d75-8088-b6596eca7307",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
