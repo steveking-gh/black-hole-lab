@@ -1,0 +1,52 @@
+.github/workflows/release.yml
+  s_eab993b6e839ea::t_61f40502f06ffc 16-17
+  s_eab993b6e839ea::t_cb3d0de18b1ab8 114
+sky/sky-look/src/find.rs
+  s_eab993b6e839ea::t_3668a89ab88d3f 19-20,25
+  s_eab993b6e839ea::t_70f4f33a3f37bf 257
+  s_eab993b6e839ea::t_947edf0c73aa9a 278
+sky/sky-look/src/fetch.rs
+  s_eab993b6e839ea::t_50e5ef7306b2e0 26,29
+  s_eab993b6e839ea::t_91c22a83791818 4-6
+sky/README.md
+  s_eab993b6e839ea::t_06ccceac6df133 45
+sky/sky-look/src/tests.rs
+  s_eab993b6e839ea::t_9660b7b66ee7f8 214
+  s_eab993b6e839ea::t_edf2d32a6081d1 224
+  s_eab993b6e839ea::t_e81de53c86c1e9 188
+  s_eab993b6e839ea::t_b7ff28bcbb7ed4 12
+  s_eab993b6e839ea::t_6f6e24ba09fc28 45-46
+sky/sky-look/src/sha256.rs
+  s_eab993b6e839ea::t_afe5ce3ca6e60e 62
+sky/THIRD-PARTY-NOTICES.md
+  s_eab993b6e839ea::t_7351b8864e2644 64-66
+sky/maps/README.md
+  s_eab993b6e839ea::t_5ebc9401dc7298 35
+  s_eab993b6e839ea::t_49a8d997a931ad 3-6
+  s_eab993b6e839ea::t_e556d720a7b1e2 56,60-72,75-76,79-80
+  s_eab993b6e839ea::t_775ceafdf1f7d9 331
+  s_eab993b6e839ea::t_20f98defec7ee3 44-45
+sky/.gitignore
+  s_eab993b6e839ea::t_cbb126156eac06 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c461523294d157312eae2d0a1aedb746efad9df1",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_eab993b6e839ea": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "506a3453-7463-4d75-8088-b6596eca7307",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
