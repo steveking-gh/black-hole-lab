@@ -1,0 +1,32 @@
+.github/workflows/release.yml
+  s_eab993b6e839ea::t_606743cfaf831d 5
+Cargo.toml
+  s_eab993b6e839ea::t_9ee6fb813b0b32 3
+packaging/windows/black-hole-lab.exe.manifest
+  s_eab993b6e839ea::t_c08ef8c685214c 11
+packaging/windows/make-msix.ps1
+  s_eab993b6e839ea::t_89d99fb895b6b8 10
+Cargo.lock
+  s_eab993b6e839ea::t_71bdd05a70a760 458
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5ca72b90b416576434f6761c5482da19cfd0b160",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_eab993b6e839ea": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "506a3453-7463-4d75-8088-b6596eca7307",
+        "model": "unknown"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
