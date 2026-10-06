@@ -1,10 +1,10 @@
 //! Prints the numbers the documentation quotes, for a reviewer to repeat:
 //!
-//!     cargo test -p sky-colour --release --test report -- --ignored --nocapture
+//!     cargo test -p sky-color --release --test report -- --ignored --nocapture
 
-use sky_colour::colorimetry::{delta_u_prime_v_prime, rgb_to_xyz, xy, xyz_to_rgb};
-use sky_colour::model;
-use sky_colour::planck::K_M;
+use sky_color::colorimetry::{delta_u_prime_v_prime, rgb_to_xyz, xy, xyz_to_rgb};
+use sky_color::model;
+use sky_color::planck::K_M;
 
 #[test]
 #[ignore]
@@ -90,7 +90,7 @@ fn report() {
 
     println!("Timing");
     let start = std::time::Instant::now();
-    let fresh = sky_colour::Model::new();
+    let fresh = sky_color::Model::new();
     println!(
         "  Model::new: {:.1} ms",
         start.elapsed().as_secs_f64() * 1e3

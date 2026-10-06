@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use sky_colour::colorimetry::{BT709_WHITE, delta_u_prime_v_prime, luminance, rgb_to_xyz, xy};
+use sky_color::colorimetry::{BT709_WHITE, delta_u_prime_v_prime, luminance, rgb_to_xyz, xy};
 use sky_format::{Axes, FarSky, Frame, Grid, Num, fate};
 
 use crate::colour::{
@@ -135,7 +135,7 @@ fn rgb(shade: Shade) -> [f32; 3] {
 
 /// The BT.709 RGB of a blackbody at `t`, scaled to luminance `y`: a texel of that colour.
 fn blackbody_texel(t: f64, y: f64) -> [f64; 3] {
-    let b = sky_colour::model().blackbody_rgb(t);
+    let b = sky_color::model().blackbody_rgb(t);
     let scale = y / luminance(b);
     b.map(|c| c * scale)
 }
@@ -195,7 +195,7 @@ fn test_a_map_of_blackbody_colours_comes_out_as_the_blackbody_at_g_t_at_the_libr
     // at 30000 K where the locus moves slowest, and a shifted texel by the difference of the
     // slopes d ln B / d ln T at g T and T times that (below 5 here); the stored ln T and tint add
     // below 5e-6 (`crate::sky`, `shift_forms`), and the f32 output 6e-8.
-    let model = sky_colour::model();
+    let model = sky_color::model();
     for t in [2500.0, 4000.0, 5778.0, 10_000.0, 30_000.0] {
         let texel = blackbody_texel(t, 0.1).map(|c| c as f32);
         let texel64 = texel.map(f64::from);
@@ -420,7 +420,7 @@ fn test_a_shifted_colour_with_a_negative_channel_is_brought_in_with_its_luminanc
     // gives.
     let texel = blackbody_texel(2500.0, 0.2).map(|c| c as f32);
     let sky = SkyMap::with_colour(64, 32, vec![texel; 64 * 32], 4, ColourRule::Blackbody);
-    let raw = sky_colour::model().shift(texel.map(f64::from), 0.5);
+    let raw = sky_color::model().shift(texel.map(f64::from), 0.5);
     assert!(raw[2] < 0.0, "{raw:?}");
     let gain = 1e4f32;
     for s in light_of(Fields::One(&field(64, 32, 0.5)), &sky, size(64), gain) {
@@ -567,9 +567,9 @@ fn test_shifting_each_texel_read_is_exact_at_level_0_and_errs_as_the_model_does_
  {
     // A checkerboard of 3500 K and 10000 K texels of equal luminance: every 2 x 2 block, and so
     // every texel of the rip-map's level (1, 1), is exactly the library's documented mixture
-    // (`test_the_two_temperature_mixture_errs_as_documented` in sky-colour). The truth is the
+    // (`test_the_two_temperature_mixture_errs_as_documented` in sky-color). The truth is the
     // mean of the two shifted texels.
-    let model = sky_colour::model();
+    let model = sky_color::model();
     let (a, b) = (blackbody_texel(3500.0, 0.1), blackbody_texel(10_000.0, 0.1));
     let (mw, mh) = (256usize, 128usize);
     let texels: Vec<[f32; 3]> = (0..mw * mh)
@@ -662,7 +662,7 @@ fn test_the_renderers_blackbody_table_is_the_librarys_ratio() {
     // library's spacing differs slightly, 1474 steps over its range); each is within 3e-9 of the
     // sum above 300 K and 3e-8 at 10 K, so the ratio, a difference of two lookups each way, within
     // about 1e-7.
-    let model = sky_colour::model();
+    let model = sky_color::model();
     let table = ln_blackbody();
     let mut t = 300.0f64;
     while t < 1e6 {
@@ -727,7 +727,7 @@ fn test_the_microwave_background_is_reported_past_the_shift_at_which_an_eye_woul
     // K_M Y(2.7255 K x g) reaches 0.005 cd/m^2 at g = 288.7: between the library's 0.015 cd/m^2
     // at g = 300 and its 2e-8 at 200.
     let g = background_visible_g();
-    let seen = sky_colour::planck::K_M * sky_colour::model().blackbody_xyz(2.7255 * g)[1];
+    let seen = sky_color::planck::K_M * sky_color::model().blackbody_xyz(2.7255 * g)[1];
     assert!((seen / VISIBLE_LUMINANCE - 1.0).abs() < 1e-9, "{seen}");
     assert!((g - 288.7).abs() < 0.05, "{g}");
     assert!(background_note(g * 0.999).is_none());
@@ -746,7 +746,7 @@ fn test_the_microwave_background_is_reported_past_the_shift_at_which_an_eye_woul
 fn test_bench_the_per_tap_costs() {
     use std::hint::black_box;
     use std::time::Instant;
-    let m = sky_colour::model();
+    let m = sky_color::model();
     let n = 2_000_000;
     let ts: Vec<f64> = (0..n).map(|k| 2000.0 + (k % 9000) as f64).collect();
     let clock = Instant::now();
@@ -1003,7 +1003,7 @@ fn test_measure_the_filter_order_on_the_real_map() {
             100.0 * *n as f64 / all as f64
         );
     }
-    let model = sky_colour::model();
+    let model = sky_color::model();
     // Visible: at the default exposure (2.5 stops) at least 1e-3 of white, about 13 codes of a
     // 10-bit sRGB-encoded video.
     let gain = 2f64.powf(2.5);

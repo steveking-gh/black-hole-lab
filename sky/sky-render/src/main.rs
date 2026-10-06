@@ -4,7 +4,7 @@
 //! of an observer's watch and each direction on the observer's sky, where on the distant sky the
 //! light came from, how its frequency was shifted, and whether it came from the sky at all. This
 //! program knows no geometry: it looks each direction up on a star map, colours and brightens or
-//! dims it as the shift makes an eye see it (by the model of the crate `sky-colour`, `colour`),
+//! dims it as the shift makes an eye see it (by the model of the crate `sky-color`, `colour`),
 //! and hands the frames to ffmpeg, which encodes them as AV1. Then it marks the file as an
 //! equirectangular 360-degree video, so that a player lets the viewer look around.
 //!

@@ -10,7 +10,7 @@ publish = false
 sky-format = { path = "../sky-format" }
 # What shifted starlight looks like to an eye (`--colour blackbody`): a crate of this workspace,
 # with no dependencies of its own, so the tree gains nothing.
-sky-colour = { path = "../sky-colour" }
+sky-color = { path = "../sky-color" }
 # The OpenEXR reader for NASA's star maps (half-float B, G, R, ZIP-compressed scanlines). `image`
 # is already in the tree, but built without its EXR decoder, which is this crate anyway. Default
 # features off: they add `rayon-core` for parallel decompression, and a map is read once per run.

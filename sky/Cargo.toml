@@ -25,7 +25,7 @@
 # source: forty-one files of the app, the one time it was done. Format one crate at a time, with
 # `cargo fmt -p <crate>`, or every crate of this workspace and nothing else with
 #
-#     cargo fmt -p sky-format -p sky-testgen -p sky-render -p kerr-sky -p sky-trace -p sky-colour -p sky-look
+#     cargo fmt -p sky-format -p sky-testgen -p sky-render -p kerr-sky -p sky-trace -p sky-color -p sky-look
 [workspace]
 resolver = "3"
-members = ["sky-format", "sky-testgen", "sky-render", "kerr-sky", "sky-trace", "sky-colour", "sky-look"]
+members = ["sky-format", "sky-testgen", "sky-render", "kerr-sky", "sky-trace", "sky-color", "sky-look"]

@@ -3,7 +3,7 @@
 //!
 //! # The two rules
 //!
-//! `--colour blackbody` (the default) is the model of the crate `sky-colour`: each texel of the
+//! `--colour blackbody` (the default) is the model of the crate `sky-color`: each texel of the
 //! map is taken to be a blackbody at the temperature its colour implies, times a tint, and light
 //! seen with shift g is the blackbody at g T with the same tint, as a standard human observer sees
 //! it. Hue and visible brightness both follow the shift, and there is no separate g^4: the
@@ -14,7 +14,7 @@
 //!
 //! Under either rule a pixel whose g is exactly 1 goes through [`crate::tone::shade`] as it always
 //! did, so a flat-space film at rest is the same to the bit. The library provides for this
-//! (`sky_colour::needs_shift`); the renderer skips the model there rather than calling it, because
+//! (`sky_color::needs_shift`); the renderer skips the model there rather than calling it, because
 //! its own path at g = 1 must also skip the display step below, which the old renderer did not
 //! have.
 //!
@@ -151,10 +151,10 @@
 //! scale"). It is left out, at the marked place in [`light`], and the run says so when the film's
 //! largest g is past [`background_visible_g`].
 
-use sky_colour::colorimetry::xy;
-use sky_colour::planck::{K_M, ln_blackbody_xyz};
-use sky_colour::table::T_TABLE_MIN;
-use sky_colour::{into_display_gamut, needs_shift};
+use sky_color::colorimetry::xy;
+use sky_color::planck::{K_M, ln_blackbody_xyz};
+use sky_color::table::T_TABLE_MIN;
+use sky_color::{into_display_gamut, needs_shift};
 
 use crate::sky::{Footprint, SkyMap};
 use crate::tone::shade;
@@ -164,7 +164,7 @@ use crate::tone::shade;
 pub enum ColourRule {
     /// The map's colour times g^4: the renderer's old rule.
     Map,
-    /// The blackbody model of the crate `sky-colour`.
+    /// The blackbody model of the crate `sky-color`.
     Blackbody,
 }
 
@@ -178,7 +178,7 @@ impl ColourRule {
 }
 
 /// The range of g in which the model is good for a single star: brightness within about 20 % and
-/// colour within about 0.015 u'v' for both the Sun and Vega. From the crate `sky-colour`'s
+/// colour within about 0.015 u'v' for both the Sun and Vega. From the crate `sky-color`'s
 /// documentation, "Where the model is good" ("For individual stars, g from 0.9 to 2"), which
 /// states it only in prose. Both ends included.
 pub const STAR_RANGE: (f64, f64) = (0.9, 2.0);
@@ -321,8 +321,8 @@ impl Class {
 /// all, measured (`test_bench_the_per_tap_costs`); a frame of the film reads about ten texels a
 /// pixel, 33.5 million pixels. This table is read at w directly (the texel's ln T is stored, and
 /// ln g is found once a pixel) and returns values only. It is built as the library builds its own
-/// (`sky_colour::table`): the exact logarithms and slopes of the direct sum,
-/// `sky_colour::planck::ln_blackbody_xyz`, at 128 nodes per e-fold of T, read by cubic Hermite
+/// (`sky_color::table`): the exact logarithms and slopes of the direct sum,
+/// `sky_color::planck::ln_blackbody_xyz`, at 128 nodes per e-fold of T, read by cubic Hermite
 /// interpolation, whose error at that step is below 3e-8 of the value at 10 K and 3e-9 above
 /// 300 K (the library's measurement of the same scheme on the same function). It runs from
 /// [`T_TABLE_MIN`] (10 K), below which the library's own shift is black, to 10^10 K, beyond the
@@ -397,7 +397,7 @@ pub fn light(sky: &SkyMap, f: Footprint, g: f64, gain: f32) -> [f32; 3] {
         ColourRule::Blackbody => {
             let shifted = sky.sample_shifted(f, g);
             // ---- MICROWAVE BACKGROUND GOES HERE ---------------------------------------------
-            // The sky behind the map's light: `sky_colour::model().shifted_background_rgb(
+            // The sky behind the map's light: `sky_color::model().shifted_background_rgb(
             // BACKGROUND_KELVIN, g, scale)` added to `shifted`, in map units, where `scale` turns
             // absolute radiance (W m^-2 sr^-1) into the map's units. That scale is not known (the
             // maps carry no photometric calibration), so the term is left out and the run says so
@@ -434,7 +434,7 @@ pub fn lift_negatives(rgb: [f64; 3]) -> [f64; 3] {
 /// [`VISIBLE_LUMINANCE`]: g = 288.7, a 787 K blackbody
 /// (`test_the_microwave_background_is_reported_past_the_shift_at_which_an_eye_would_see_it`).
 pub fn background_visible_g() -> f64 {
-    let luminance = |g: f64| K_M * sky_colour::model().blackbody_xyz(BACKGROUND_KELVIN * g)[1];
+    let luminance = |g: f64| K_M * sky_color::model().blackbody_xyz(BACKGROUND_KELVIN * g)[1];
     // The luminance rises monotonically with g; bisect in ln g between 1 and 10^4.
     let (mut lo, mut hi) = (0.0f64, 4.0 * std::f64::consts::LN_10);
     for _ in 0..80 {
@@ -457,7 +457,7 @@ pub fn background_note(largest_g: f64) -> Option<String> {
         return None;
     }
     let kelvin = BACKGROUND_KELVIN * largest_g;
-    let xyz = sky_colour::model().blackbody_xyz(kelvin);
+    let xyz = sky_color::model().blackbody_xyz(kelvin);
     let (x, y) = xy(xyz);
     let luminance = K_M * xyz[1];
     Some(format!(
@@ -529,7 +529,7 @@ pub fn explain(rule: ColourRule) -> Vec<String> {
              their cores the wrong temperature, and the map's colours are plausible rather than \
              measured. The model is good for single stars from g = 0.9 to 2 (brightness within \
              about 20 %, colour within about 0.015 u'v') and for the diffuse glow only from 0.8 \
-             to 1.25. (From the crate sky-colour, \"The model, for the viewer\".)"
+             to 1.25. (From the crate sky-color, \"The model, for the viewer\".)"
                 .into(),
         ],
     }

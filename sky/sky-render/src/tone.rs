@@ -8,7 +8,7 @@
 //!
 //! How the shift colours light is chosen by `--colour` (`crate::colour`). Under `blackbody`, the
 //! default, the colour and the visible brightness both follow the shift, by the model of the
-//! crate `sky-colour`, formed in `crate::sky` and brought into the display's gamut below by
+//! crate `sky-color`, formed in `crate::sky` and brought into the display's gamut below by
 //! `crate::colour::lift_negatives`. Under `map`, the old rule, and under either at g = 1, it is
 //! [`shade`] here: light arriving with shift g carries g^4 times the bolometric intensity of the
 //! map at the point it came from (the specification, section 4.6: I_nu / nu^3 is invariant along

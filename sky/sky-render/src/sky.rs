@@ -89,7 +89,7 @@
 
 use std::f64::consts::PI;
 
-use sky_colour::colorimetry::{rgb_to_xyz, xyz_to_rgb};
+use sky_color::colorimetry::{rgb_to_xyz, xyz_to_rgb};
 
 use crate::bilinear::taps;
 use crate::colour::{ColourRule, ln_blackbody};
@@ -443,7 +443,7 @@ impl SkyMap {
     /// are blended with `sample`'s weights. Only for a map built for `ColourRule::Blackbody`.
     ///
     /// Why texel by texel and not the blend: the model is not linear in colour (the shift of a
-    /// mean of two colours is not the mean of their shifts; the crate `sky-colour`'s item 2), and
+    /// mean of two colours is not the mean of their shifts; the crate `sky-color`'s item 2), and
     /// each texel of the map is the smallest patch whose colour the map states. Shifting each
     /// texel the filter reads and then blending is the true order for every texel it reads; what
     /// remains of the other order is inside a coarse level's texels, each the mean of the level-0
@@ -501,7 +501,7 @@ impl SkyMap {
                     let ln_gt = ln_t + ln_g;
                     if ln_gt < w_min {
                         // g T below 10 K: below e^-1675 of the texel, zero in f64, the library's
-                        // own rule (`sky_colour::shift`, "Units and the table's ends"). It also
+                        // own rule (`sky_color::shift`, "Units and the table's ends"). It also
                         // takes g = 0, whose logarithm is -infinity.
                         continue;
                     }
@@ -515,7 +515,7 @@ impl SkyMap {
                         std::array::from_fn(|c| (a[c] + b[c]).exp())
                     } else {
                         // Past the table's top (g T above 10^10 K): the library, slower.
-                        let b = sky_colour::model().blackbody_xyz(ln_gt.exp());
+                        let b = sky_color::model().blackbody_xyz(ln_gt.exp());
                         std::array::from_fn(|c| a[c].exp() * b[c])
                     };
                     for c in 0..3 {
@@ -549,7 +549,7 @@ impl SkyMap {
 /// -55 at 300 K to +25 at 10^6 K, and the map's values are at most 1), where f32 rounds to 2e-6 of
 /// the texel's light at most. Against the output's step, 1.5e-5 of full scale, these are nothing.
 fn shift_forms(texels: &[[f32; 3]], threads: usize) -> Vec<ShiftForm> {
-    let model = sky_colour::model();
+    let model = sky_color::model();
     let table = ln_blackbody();
     let (_, w_max) = table.domain();
     let mut out = vec![[0.0f32; 4]; texels.len()];

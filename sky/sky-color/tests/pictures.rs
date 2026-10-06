@@ -1,17 +1,17 @@
 //! Pictures for a reviewer: the Planckian locus, and what a shift does to a star's colour and
 //! brightness under this model and under the renderer's old rule (the map's colour times g^4).
 //!
-//!     cargo test -p sky-colour --release --test pictures -- --ignored
+//!     cargo test -p sky-color --release --test pictures -- --ignored
 //!
-//! writes PPM files into the directory named by `SKY_COLOUR_PICTURES` (default: the system's
+//! writes PPM files into the directory named by `sky_color_PICTURES` (default: the system's
 //! temporary directory) and converts each to PNG with ffmpeg, which must be on the PATH.
 //!
 //! Every picture is display-referred sRGB: linear BT.709 values brought into [0, 1] by
 //! `into_display_gamut` (luminance kept, then hue), except the old rule's chart, which is clipped
 //! channel by channel as the renderer clips. Then the sRGB transfer function, 8 bits.
 
-use sky_colour::colorimetry::luminance;
-use sky_colour::{into_display_gamut, model};
+use sky_color::colorimetry::luminance;
+use sky_color::{into_display_gamut, model};
 use std::path::{Path, PathBuf};
 
 fn srgb(linear: f64) -> u8 {
@@ -113,7 +113,7 @@ fn glyph(c: char) -> [u8; 5] {
 }
 
 fn out_dir() -> PathBuf {
-    let dir = std::env::var_os("SKY_COLOUR_PICTURES")
+    let dir = std::env::var_os("sky_color_PICTURES")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
     std::fs::create_dir_all(&dir).unwrap();

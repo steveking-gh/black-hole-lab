@@ -1,9 +1,10 @@
 # Third-party notices for the sky pipeline
 
-The crates in this directory are licensed under GPL-3.0-or-later, as Black Hole Lab is. This file
-lists what they are built from and what they use when they run. Black Hole Lab's own notices are
-in `THIRD-PARTY-NOTICES.md` at the repository root; this workspace's dependencies are not part of
-the app and are not listed there.
+The crates in this directory are licensed under GPL-3.0-or-later, as Black Hole
+Lab is. This file lists what they are built from and what they use when they
+run. Black Hole Lab's own notices are in `THIRD-PARTY-NOTICES.md` at the
+repository root; this workspace's dependencies are not part of the app and are
+not listed there.
 
 ## Rust crates
 
@@ -19,8 +20,8 @@ The crates of this workspace name these dependencies directly:
 
 `kerr-equatorial` and `readout` are this repository's own crates, in `../crates`.
 
-The full resolved graph, with every crate those bring with them, is in `Cargo.lock` in this
-directory. To list it with each crate's licence:
+The full resolved graph, with every crate those bring with them, is in
+`Cargo.lock` in this directory. To list it with each crate's licence:
 
 ```sh
 cd sky
@@ -29,43 +30,47 @@ cargo tree -e normal --target all --prefix none --format "{p} {l}" | sed 's/ (\*
 
 ## Fonts
 
-`sky-render` embeds two typefaces from `../assets/fonts` for the read-outs: Atkinson Hyperlegible
-(SIL Open Font License 1.1) and DejaVu Sans (Bitstream Vera licence). Their licence texts are in
-`../assets/fonts`, and the repository root's `THIRD-PARTY-NOTICES.md` describes them.
+`sky-render` embeds two typefaces from `../assets/fonts` for the read-outs:
+Atkinson Hyperlegible (SIL Open Font License 1.1) and DejaVu Sans (Bitstream
+Vera licence). Their licence texts are in `../assets/fonts`, and the repository
+root's `THIRD-PARTY-NOTICES.md` describes them.
 
-The panel uses them, and only with `--readouts panel`. The default overlay embeds no typeface: it
-names one, Consolas, and the player draws it from the fonts of the machine it runs on.
+The panel uses them, and only with `--readouts panel`. The default overlay
+embeds no typeface: it names one, Consolas, and the player draws it from the
+fonts of the machine it runs on.
 
 ## The CIE standard observer
 
-`sky-colour` contains the colour-matching functions of the CIE 1931 standard colorimetric
-observer, at 1 nm from 360 nm to 830 nm, in `sky-colour/src/cie1931.rs`. They say how an eye
-answers to light of each wavelength, and the colour and visible brightness of shifted starlight
-are computed from them.
+`sky-color` contains the color-matching functions of the CIE 1931 standard
+colorimetric observer, at 1 nm from 360 nm to 830 nm, in
+`sky-color/src/cie1931.rs`. They say how an eye answers to light of each
+wavelength, and the color and visible brightness of shifted starlight are
+computed from them.
 
 | Data | Source | Licence |
 | --- | --- | --- |
-| "Colour-matching functions of CIE 1931 standard colorimetric observer", International Commission on Illumination (CIE), Vienna, 2019 | <https://cie.co.at/datatable/cie-1931-colour-matching-functions-2-degree-observer>, DOI 10.25039/CIE.DS.xvudnb9b | CC BY-SA 4.0 |
+| "Color-matching functions of CIE 1931 standard colorimetric observer", International Commission on Illumination (CIE), Vienna, 2019 | <https://cie.co.at/datatable/cie-1931-color-matching-functions-2-degree-observer>, DOI 10.25039/CIE.DS.xvudnb9b | CC BY-SA 4.0 |
 
-The table is the CIE's, copied digit for digit and changed in format only; the file records the
-date it was fetched and the checksum it was verified against. Creative Commons lists CC BY-SA 4.0
-as one-way compatible with GPL version 3, the licence of the crates here, which is what allows
-the table to be included.
+The table is the CIE's, copied digit for digit and changed in format only; the
+file records the date it was fetched and the checksum it was verified against.
+Creative Commons lists CC BY-SA 4.0 as one-way compatible with GPL version 3,
+the licence of the crates here, which is what allows the table to be included.
 
 ## Star maps
 
-The sky renderer draws its star background from NASA's Deep Star Maps 2020, made by the NASA
-Goddard Space Flight Center Scientific Visualization Studio (<https://svs.gsfc.nasa.gov/4851>).
-The maps are **not distributed with this repository**. Each user downloads them from NASA with
-`maps/fetch-sky.ps1`, which verifies them against `maps/checksums.sha256`; `maps/README.md`
-describes them.
+The sky renderer draws its star background from NASA's Deep Star Maps 2020, made
+by the NASA Goddard Space Flight Center Scientific Visualization Studio
+(<https://svs.gsfc.nasa.gov/4851>). The maps are **not distributed with this
+repository**. Each user downloads them from NASA with `maps/fetch-sky.ps1`,
+which verifies them against `maps/checksums.sha256`; `maps/README.md` describes
+them.
 
 | Maps | Source | Terms |
 | --- | --- | --- |
 | `starmap_2020_*.exr`, `milkyway_2020_*.exr` (celestial and galactic, 4k to 64k) | NASA SVS entry 4851, built from Hipparcos-2, Tycho-2, Gaia DR2 and UCAC3 | NASA's media usage guidelines, <https://www.nasa.gov/nasa-brand-center/images-and-media/>, with the credit line below |
 
-Any video or image published with these maps must carry NASA's credit line, as the SVS page
-gives it:
+Any video or image published with these maps must carry NASA's credit line, as
+the SVS page gives it:
 
 > NASA/Goddard Space Flight Center Scientific Visualization Studio. Gaia DR2: ESA/Gaia/DPAC.
 > Constellation figures based on those developed for the IAU by Alan MacRobert of Sky and
@@ -73,18 +78,24 @@ gives it:
 
 ### What NASA's guidelines ask
 
-Read on 2026-09-27. They hold no obstacle to publishing a video made from these maps. In NASA's
-words:
+Read on 2026-09-27. They hold no obstacle to publishing a video made from these
+maps. In NASA's words:
 
-- NASA content is "generally ... not subject to copyright in the United States", and "you may use
-  this material for educational or informational purposes, including photo collections,
-  textbooks, public exhibits, computer graphical simulations and Internet Web pages".
-- "NASA should be acknowledged as the source of the material." The credit line above does that.
-- Material used commercially "must not explicitly or implicitly convey NASA's endorsement".
-- The NASA insignia and logotype are protected by law. This pipeline does not use them.
-- Material of third parties that NASA publishes is marked with its holder's name. For these maps
-  that is the Gaia data, credited to ESA/Gaia/DPAC in the line above.
-- "To promote transparency, NASA strongly encourages AI-generated products maintain a marking
-  indicating the product is AI generated." A video made here is computed by a deterministic
-  program from NASA's image and is not generated by a model. The program was written with the
-  help of an AI model; whether to say so beside a published video is the publisher's decision.
+- NASA content is "generally ... not subject to copyright in the United States",
+  and "you may use this material for educational or informational purposes,
+  including photo collections, textbooks, public exhibits, computer graphical
+  simulations and Internet Web pages".
+- "NASA should be acknowledged as the source of the material." The credit line
+  above does that.
+- Material used commercially "must not explicitly or implicitly convey NASA's
+  endorsement".
+- The NASA insignia and logotype are protected by law. This pipeline does not
+  use them.
+- Material of third parties that NASA publishes is marked with its holder's
+  name. For these maps that is the Gaia data, credited to ESA/Gaia/DPAC in the
+  line above.
+- "To promote transparency, NASA strongly encourages AI-generated products
+  maintain a marking indicating the product is AI generated." A video made here
+  is computed by a deterministic program from NASA's image and is not generated
+  by a model. The program was written with the help of an AI model; whether to
+  say so beside a published video is the publisher's decision.
