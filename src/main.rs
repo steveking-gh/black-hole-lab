@@ -19,6 +19,10 @@
 // 4-velocity. Every one of these loops runs over the same fixed range 0..3, the equatorial
 // (t, r, phi) chart, so there is no bounds-checking argument for the rewrite either.
 #![allow(clippy::needless_range_loop)]
+// A windowed program on Windows, so that a launch from the Start menu, the Store or Explorer opens
+// the window alone and no console beside it. `--perf` and `--save-info` print, and they reach the
+// terminal they were started from through `attach_console`.
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod app;
 mod gui;
@@ -49,6 +53,9 @@ fn main() -> eframe::Result<()> {
     // is a path to one. A save that will not load is reported on stderr and the app opens as it
     // otherwise would, because a bad path is not a reason to refuse to run.
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|arg| arg == "--perf" || arg == "--save-info") {
+        attach_console();
+    }
     if args.iter().any(|arg| arg == "--perf") {
         std::process::exit(perf::run(&args));
     }
@@ -103,6 +110,32 @@ fn main() -> eframe::Result<()> {
         }),
     )
 }
+
+/// Give a headless run somewhere to print. A windowed program on Windows starts with no standard
+/// output unless its parent hands it one: `cargo run` and a redirect to a file both do, and those
+/// are left alone. Typed at a prompt, the program has none, so it attaches to the prompt's console.
+/// The shell does not wait for a windowed program, so there the prompt comes back before the
+/// output and the exit code is lost; `cargo perf-check` waits and keeps both.
+#[cfg(windows)]
+fn attach_console() {
+    use std::os::windows::io::AsRawHandle;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn AttachConsole(process_id: u32) -> i32;
+    }
+    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+    if std::io::stdout().as_raw_handle().is_null() {
+        // SAFETY: no pointers are passed; a failure (no parent console) leaves output unseen,
+        // as it was.
+        unsafe {
+            AttachConsole(ATTACH_PARENT_PROCESS);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn attach_console() {}
 
 /// egui's bundled proportional font has no subscripts, Greek or maths symbols, so r₋, τ, ν, ξ
 /// and friends rendered as boxes. Atkinson Hyperlegible (SIL OFL) is the primary text face;
