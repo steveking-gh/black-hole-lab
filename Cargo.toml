@@ -31,6 +31,12 @@ serde = { version = "1.0.229", features = ["derive"] }
 # same run to the bit: see `crate::save::v1::Num`.
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 
+# Builds on Windows only: compiles the icon, the manifest and the version details into
+# black-hole-lab.exe with the Windows SDK's resource compiler. See `embed_windows_resources` in
+# build.rs.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
 # Tests are numerics: long f64 integrations of geodesics and null rays, with no I/O and no waiting
 # on anything. Unoptimised they run at a small fraction of speed, and the whole suite took nearly
 # ten minutes of pure arithmetic. Optimising the test build changes nothing about what is checked -

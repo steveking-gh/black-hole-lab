@@ -36,8 +36,45 @@ fn main() {
     let version = compose::compose(env!("CARGO_PKG_VERSION"), count);
     println!("cargo::rustc-env=BLACK_HOLE_LAB_VERSION={version}");
 
+    embed_windows_resources(&root, &version);
     build_sky(&root);
 }
+
+/// Compile into `black-hole-lab.exe` what Windows reads out of the file itself, from
+/// `packaging/windows`: the icon Explorer shows for it (`black-hole-lab.ico`, written by
+/// `make-icons.ps1`), the manifest that declares per-monitor DPI awareness
+/// (`black-hole-lab.exe.manifest`), and the name and version of its Properties page.
+///
+/// Best effort, as the version is: a machine without the Windows SDK's resource compiler gets a
+/// `cargo::warning` and a program that runs the same, with a generic icon.
+#[cfg(windows)]
+fn embed_windows_resources(root: &Path, version: &str) {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+    let dir = root.join("packaging/windows");
+    let (icon, manifest) = (dir.join("black-hole-lab.ico"), dir.join("black-hole-lab.exe.manifest"));
+    for file in [&icon, &manifest] {
+        println!("cargo::rerun-if-changed={}", file.display());
+    }
+    let mut resources = winresource::WindowsResource::new();
+    resources
+        .set_icon(&icon.to_string_lossy())
+        .set_manifest_file(&manifest.to_string_lossy())
+        .set("ProductName", "Black Hole Lab")
+        .set("FileDescription", "Black Hole Lab")
+        .set("LegalCopyright", "Copyright (C) 2026 Steve King. GPL-3.0-or-later.")
+        .set("ProductVersion", version)
+        .set("FileVersion", version);
+    if let Err(why) = resources.compile() {
+        println!(
+            "cargo::warning=the icon and manifest were not embedded in black-hole-lab.exe: {why}"
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn embed_windows_resources(_root: &Path, _version: &str) {}
 
 /// The environment variable that, when set to anything, keeps this script from building the sky
 /// tools: for a machine that only ever builds the app, or a tool that checks the app on every

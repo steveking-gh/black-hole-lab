@@ -51,3 +51,26 @@ foreach ($render in $renders) {
     if ($LASTEXITCODE -ne 0) { throw "Inkscape failed on $name." }
     Write-Host "$name ($pixels px)"
 }
+
+# The program's own icon, which build.rs embeds in black-hole-lab.exe and Explorer shows for the
+# file: the five unplated target sizes in one .ico. An .ico is a six-byte header, a sixteen-byte
+# directory entry for each image, and then the images, which may be PNG files as they stand.
+$sizes = 16, 24, 32, 48, 256
+$images = foreach ($size in $sizes) {
+    , [IO.File]::ReadAllBytes((Join-Path $out "Square44x44Logo.targetsize-${size}_altform-unplated.png"))
+}
+$ico = [IO.MemoryStream]::new()
+$writer = [IO.BinaryWriter]::new($ico)
+$writer.Write([uint16]0); $writer.Write([uint16]1); $writer.Write([uint16]$sizes.Count)
+$offset = 6 + 16 * $sizes.Count
+for ($i = 0; $i -lt $sizes.Count; $i++) {
+    # Width and height, where 0 stands for 256; no palette; reserved; one plane; 32 bits a pixel.
+    $side = [byte]($sizes[$i] % 256)
+    $writer.Write($side); $writer.Write($side); $writer.Write([byte]0); $writer.Write([byte]0)
+    $writer.Write([uint16]1); $writer.Write([uint16]32)
+    $writer.Write([uint32]$images[$i].Length); $writer.Write([uint32]$offset)
+    $offset += $images[$i].Length
+}
+foreach ($image in $images) { $writer.Write($image) }
+[IO.File]::WriteAllBytes((Join-Path $PSScriptRoot 'black-hole-lab.ico'), $ico.ToArray())
+Write-Host "black-hole-lab.ico ($($sizes -join ', ') px)"
