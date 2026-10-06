@@ -1,0 +1,25 @@
+PRIVACY.md
+  s_eab993b6e839ea::t_226b05a47652c9 1-10,15-17,20-29,32-36,41-48,50-54
+  h_5b3f31968f5853 11-14,18-19,30-31,37-40,49
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d0b2c9474dc1895394904d0761f7df100b9dc79b",
+  "prompts": {},
+  "humans": {
+    "h_5b3f31968f5853": {
+      "author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_eab993b6e839ea": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "506a3453-7463-4d75-8088-b6596eca7307",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Steve King <12994437+steveking-gh@users.noreply.github.com>"
+    }
+  }
+}
